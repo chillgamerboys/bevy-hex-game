@@ -16,10 +16,15 @@ pub const MAX_ZOOM_IN: f32 = 5.;
 pub const MAX_ZOOM_OUT: f32 = 50.;
 
 
-// Sun
-pub const SUN_INTENSITY: f32 = 50_000.;
-pub const SUN_ROTATION: (f32, f32, f32) = (11.4,0.3,0.);
-pub const SUN_AMBIENT_LIGHT: f32 = 1.;
+// Sun & sky brightness (Bevy 0.18 uses physical units)
+// - Illuminance is in lux: ~100_000 = direct noon sun, ~10_000 = overcast.
+// - Ambient brightness is in lux as well; a small fill light below the sun.
+// - Skybox brightness is in cd/m². The cubemap PNG already encodes a bright sky,
+//   so this stays low to avoid blowing the scene out.
+pub const SUN_INTENSITY: f32 = 10_000.;
+pub const SUN_ROTATION: (f32, f32, f32) = (11.4, 0.3, 0.);
+pub const SUN_AMBIENT_LIGHT: f32 = 80.;
+pub const SKYBOX_BRIGHTNESS: f32 = 300.;
 
 // Player
 pub const PLAYER_SCALE: f32 = 0.25;
