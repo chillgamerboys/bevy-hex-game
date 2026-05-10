@@ -23,8 +23,7 @@ pub fn now() -> f64 {
 pub struct TransformationPlugin;
 impl Plugin for TransformationPlugin {
     fn build(&self, app: &mut App) {
-        app
-        .add_system(transformation_driver);
+        app.add_systems(Update, transformation_driver);
     }
 }
 
@@ -76,9 +75,9 @@ impl<T: Transformer> From<T> for Transformation {
 
 pub trait Transformer: Send + Sync + 'static {
     /// Edits a transform based on a time.
-    /// 
+    ///
     /// time: unix_time in ms
-    /// 
+    ///
     /// If a time that is passed in is after the ending time of this transformer then
     /// the transformer should update the transformer to min(time, transformer.end_time)
     /// rather than going past its desired ending position
@@ -179,10 +178,10 @@ impl HexPathingLine {
         let move_duration = (HEX_SMALL_DIAMETER / speed) as f64;
         let line = start.line_between(end);
         let mut transformers = TransformerSeries::new();
-    
+
         for (i, this_coord) in line.iter().enumerate() {
             let this_pos = this_coord.to_world(Some(map));
-    
+
             if let Some(next_coord) = line.get(i + 1) {
                 let next_pos = next_coord.to_world(Some(map));
 
