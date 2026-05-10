@@ -22,14 +22,7 @@ impl Plugin for HexPlugin {
 }
 
 fn init_height_map(mut commands: Commands) {
-    commands
-        // .insert_resource(HeightMap::new(height_map::FlatGenerator::new(1)))
-        // .insert_resource(HeightMap::new(height_map::RandGenerator::new(1, 10, None)))
-        // .insert_resource(HeightMap::new(height_map::PerlinGenerator::dunes(None)))
-        // .insert_resource(HeightMap::new(height_map::PerlinGenerator::hills(None)))
-        // .insert_resource(HeightMap::new(height_map::PerlinGenerator::slopes(None)))
-        // .insert_resource(HeightMap::new(height_map::PerlinGenerator::crags(None)))
-        .insert_resource(HeightMap::new(height_map::PerlinGenerator::lowlands(None)));
+    commands.insert_resource(HeightMap::new(height_map::PerlinGenerator::lowlands(None)));
 }
 
 #[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
