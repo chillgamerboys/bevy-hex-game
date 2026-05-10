@@ -32,7 +32,7 @@ fn init_height_map(mut commands: Commands) {
         .insert_resource(HeightMap::new(height_map::PerlinGenerator::lowlands(None)));
 }
 
-#[derive(Component, Reflect, Default, Debug, Copy, Clone)]
+#[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 /// Coordinates in axial space
 /// see: https://www.redblobgames.com/grids/hexagons/#coordinates-axial
@@ -117,12 +117,6 @@ impl HexCoord {
             }
         }
         within
-    }
-}
-
-impl PartialEq for HexCoord {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.1 == other.1
     }
 }
 
