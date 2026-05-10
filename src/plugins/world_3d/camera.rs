@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::core_pipeline::Skybox;
-use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::input::mouse::MouseWheel;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorMoved, PrimaryWindow};
 
 use crate::plugins::world_3d::config::*;
 
@@ -120,25 +120,43 @@ fn pan_camera(
 }
 
 
-/// Pan the camera with middle mouse click, zoom with scroll wheel, orbit with right mouse click.
+/// Pan the camera with WASD, zoom with scroll wheel, orbit with right mouse drag.
+///
+/// Uses `CursorMoved` rather than raw `MouseMotion` because Wayland (and therefore
+/// WSL2's default WSLg session) does not deliver `MouseMotion` events while a button
+/// is held. `CursorMoved` is button-state-independent on every backend we care about.
 fn orbit_camera(
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut ev_motion: MessageReader<MouseMotion>,
+    mut ev_cursor: MessageReader<CursorMoved>,
     mut ev_scroll: MessageReader<MouseWheel>,
     input_mouse: Res<ButtonInput<MouseButton>>,
+    mut last_cursor: Local<Option<Vec2>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
-    // change input mapping for orbit and panning here
     let orbit_button = MouseButton::Right;
+    let pressed = input_mouse.pressed(orbit_button);
 
     let mut rotation_move = Vec2::ZERO;
     let mut scroll = 0.0;
 
-    if input_mouse.pressed(orbit_button) {
-        for ev in ev_motion.read() {
-            rotation_move += ev.delta;
+    if pressed {
+        // Initialize the baseline on the first frame of the press so we don't
+        // get a huge jump from wherever the cursor was last frame.
+        if last_cursor.is_none() {
+            *last_cursor = windows.single().ok().and_then(|w| w.cursor_position());
         }
+        for ev in ev_cursor.read() {
+            if let Some(prev) = *last_cursor {
+                rotation_move += ev.position - prev;
+            }
+            *last_cursor = Some(ev.position);
+        }
+    } else {
+        // Drop accumulated events so the next press starts clean.
+        ev_cursor.clear();
+        *last_cursor = None;
     }
+
     for ev in ev_scroll.read() {
         scroll += ev.y;
     }
