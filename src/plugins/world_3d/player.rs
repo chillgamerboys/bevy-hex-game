@@ -1,132 +1,96 @@
 // Bevy Imports
+use bevy::gltf::GltfAssetLabel;
+use bevy::picking::Pickable;
+use bevy::picking::events::{Click, Pointer};
 use bevy::prelude::*;
-use bevy_inspector_egui::Inspectable;
-use bevy_mod_picking::{
-    PickableBundle,
-    PickingEvent,
-    SelectionEvent
-};
 
 use crate::plugins::world_3d::{
-    transformation::{
-        Transformation,
-        HexPathingLine,
-    },
-    config::{
-        PLAYER_SCALE,
-        PLAYER_SPEED,
-    },
-    hex::{
-        HexCoord,
-        HexTile,
-        height_map::HeightMap,
-    }
+    transformation::{HexPathingLine, Transformation},
+    config::{PLAYER_SCALE, PLAYER_SPEED},
+    hex::{HexCoord, HexTile, height_map::HeightMap},
 };
 
 pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app
-        .add_startup_system(spawn_player)
-        .add_system(player_mover)
-        ;
+        app.register_type::<Player>()
+            .add_systems(Startup, spawn_player)
+            .add_observer(on_tile_clicked);
     }
 }
 
-fn player_mover(
+/// Global picking observer: when any `HexTile` is clicked, animate the player
+/// over to that tile along a hex-by-hex straight line.
+fn on_tile_clicked(
+    event: On<Pointer<Click>>,
     mut commands: Commands,
-    mut events: EventReader<PickingEvent>,
-    player_query: Query<(Entity, &Transform, &Children), With<Player>>,
     tile_query: Query<&HexCoord, With<HexTile>>,
-    height_map: Res<HeightMap>
+    player_query: Query<(Entity, &Transform), With<Player>>,
+    height_map: Res<HeightMap>,
 ) {
-    let mut player_to_move: Option<Entity> = None;
-    let mut move_to: Option<HexCoord> = None;
-    // first check all events
-    // looking for player deselected and tile selected
-    for event in events.iter() {
-        if let PickingEvent::Selection(selection) = event {
-            match selection {
-                SelectionEvent::JustSelected(e) => {
-                    if let Ok(tile_coord) = tile_query.get(*e) {
-                        move_to = Some(tile_coord.clone());
-                    }
-                },
-                SelectionEvent::JustDeselected(picked_entity) => {
-                    // pickable bundle is on the child entity of player so check children
-                    // TODO: just select tile and then check if any player is on tile
-                    for (e, _, children) in player_query.iter() {
-                        if children.contains(picked_entity) {
-                            player_to_move = Some(e.clone())
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let clicked = event.event_target();
+    let Ok(tile_coord) = tile_query.get(clicked) else { return };
 
-
-    // now if both player deselected and tile selected, move player to tile
-    if let (Some(tile_coord), Some(player_e)) = (move_to, player_to_move) {
-        let player = player_query.get(player_e);
-        if let Ok((entity, transform, _)) = player {
-            let animation: Transformation = HexPathingLine::new(
-                HexCoord::from_world(transform.translation),
-                tile_coord,
-                PLAYER_SPEED,
-                &height_map
-            ).into();
-            commands.entity(entity).insert(animation);
-        }
+    for (entity, transform) in player_query.iter() {
+        let animation: Transformation = HexPathingLine::new(
+            HexCoord::from_world(transform.translation),
+            *tile_coord,
+            PLAYER_SPEED,
+            &height_map,
+        )
+        .into();
+        commands.entity(entity).insert(animation);
     }
 }
 
-#[derive(Component, Inspectable)]
+#[derive(Component, Reflect, Default)]
+#[reflect(Component)]
 pub struct Player;
 
 fn spawn_player(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    height_map: Res<HeightMap>
+    height_map: Res<HeightMap>,
 ) {
-    let material = materials.add(Color::rgb(1., 0.2, 0.2).into());
+    let material = materials.add(StandardMaterial::from(Color::srgb(1., 0.2, 0.2)));
 
-    let coord = HexCoord(0,0);
+    let coord = HexCoord(0, 0);
     let position = coord.to_world(Some(&height_map));
     let scale = Vec3::splat(PLAYER_SCALE);
+
+    let mesh_a: Handle<Mesh> =
+        asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset("meshes/pieces.glb"));
+    let mesh_b: Handle<Mesh> =
+        asset_server.load(GltfAssetLabel::Primitive { mesh: 1, primitive: 0 }.from_asset("meshes/pieces.glb"));
+
+    let child_transform = Transform {
+        translation: Vec3::new(-PLAYER_SCALE, -PLAYER_SCALE, -10. * PLAYER_SCALE),
+        scale,
+        ..default()
+    };
+
     commands
-        .spawn(PbrBundle {
-            transform: Transform {
-                translation: position,
-                ..default()
-            },
-            ..default()
-        })
-        .insert(Player)
-        .insert(Name::new("Player"))
+        .spawn((
+            Transform::from_translation(position),
+            Visibility::default(),
+            Player,
+            Name::new("Player"),
+        ))
         .with_children(|parent| {
-            parent.spawn(PbrBundle {
-                mesh: asset_server.load("meshes/pieces.glb#Mesh0/Primitive0"),
-                material: material.clone(),
-                transform: Transform {
-                    translation: Vec3::new(- PLAYER_SCALE, - PLAYER_SCALE, - 10.*PLAYER_SCALE),
-                    scale,
-                    ..default()
-                },
-                ..default()
-            })
-            .insert(PickableBundle::default());
-            parent.spawn(PbrBundle {
-                mesh: asset_server.load("meshes/pieces.glb#Mesh1/Primitive0"),
-                material,
-                transform: Transform {
-                    translation: Vec3::new(- PLAYER_SCALE, - PLAYER_SCALE, - 10.*PLAYER_SCALE),
-                    scale,
-                    ..default()
-                },
-                ..default()
-            });
+            // Mark player meshes as Pickable::IGNORE so clicks pass through to tiles below.
+            parent.spawn((
+                Mesh3d(mesh_a),
+                MeshMaterial3d(material.clone()),
+                child_transform,
+                Pickable::IGNORE,
+            ));
+            parent.spawn((
+                Mesh3d(mesh_b),
+                MeshMaterial3d(material),
+                child_transform,
+                Pickable::IGNORE,
+            ));
         });
 }

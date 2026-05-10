@@ -1,58 +1,94 @@
 use bevy::prelude::*;
+use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::{MouseMotion, MouseWheel};
-use bevy_inspector_egui::Inspectable;
-use bevy_mod_picking::PickingCameraBundle;
+use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
+use bevy::window::PrimaryWindow;
 
 use crate::plugins::world_3d::config::*;
+
+const SKYBOX_PATH: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
 pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app
-        .add_startup_system(spawn_camera)
-        .add_system(orbit_camera)
-        .add_system(pan_camera);
+        app.register_type::<PanOrbitCamera>()
+            .add_systems(Startup, spawn_camera)
+            .add_systems(Update, (reinterpret_skybox_when_loaded, orbit_camera, pan_camera));
     }
 }
 
 
 /// Tags an entity as capable of panning and orbiting.
-#[derive(Component, Inspectable)]
-struct PanOrbitCamera {
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+pub struct PanOrbitCamera {
     /// The "focus point" to orbit around. It is automatically updated when panning the camera
     pub focus: Vec3,
-    pub radius: f32
+    pub radius: f32,
 }
 
 impl Default for PanOrbitCamera {
     fn default() -> Self {
         PanOrbitCamera {
             focus: Vec3::ZERO,
-            radius: 5.0
+            radius: 5.0,
         }
     }
 }
 
-/// Spawn a camera like this
-fn spawn_camera(mut commands: Commands) {
+/// Tracks whether the stacked-2D skybox PNG has been reinterpreted as a cubemap yet.
+#[derive(Component)]
+struct SkyboxNeedsReinterpret;
+
+/// Spawn the game camera with a built-in cubemap skybox.
+fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
     let translation = Vec3::new(0., 20., 10.0);
     let radius = translation.length();
 
-    commands
-    .spawn(Camera3dBundle {
-        transform: Transform::from_translation(translation)
-            .looking_at(Vec3::ZERO, Vec3::Y),
-        ..Default::default()})
-    .insert(PanOrbitCamera {
-        radius,
-        ..Default::default()})
-    .insert(Name::new("Game Camera"))
-    .insert(PickingCameraBundle::default());
+    let skybox_handle: Handle<Image> = asset_server.load(SKYBOX_PATH);
+
+    commands.spawn((
+        Camera3d::default(),
+        Transform::from_translation(translation).looking_at(Vec3::ZERO, Vec3::Y),
+        PanOrbitCamera {
+            radius,
+            ..Default::default()
+        },
+        Name::new("Game Camera"),
+        Skybox {
+            image: skybox_handle,
+            brightness: 1000.0,
+            ..default()
+        },
+        SkyboxNeedsReinterpret,
+    ));
+}
+
+/// PNGs do not carry cubemap metadata, so they load as a single stacked 2D texture.
+/// Once the asset finishes loading, reinterpret it as a cube array texture.
+fn reinterpret_skybox_when_loaded(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    cameras: Query<(Entity, &Skybox), With<SkyboxNeedsReinterpret>>,
+) {
+    for (entity, skybox) in cameras.iter() {
+        let Some(image) = images.get_mut(&skybox.image) else { continue };
+        if image.texture_descriptor.array_layer_count() == 1 {
+            image
+                .reinterpret_stacked_2d_as_array(image.height() / image.width())
+                .expect("skybox PNG should be a vertical stack of cube faces");
+            image.texture_view_descriptor = Some(TextureViewDescriptor {
+                dimension: Some(TextureViewDimension::Cube),
+                ..default()
+            });
+        }
+        commands.entity(entity).remove::<SkyboxNeedsReinterpret>();
+    }
 }
 
 // Camera Pan using WASD
 fn pan_camera(
-    keys: Res<Input<KeyCode>>,
+    keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut query: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
@@ -64,17 +100,17 @@ fn pan_camera(
 
         for key in keys.get_pressed() {
             match key {
-                KeyCode::W => velocity += forward,
-                KeyCode::S => velocity -= forward,
-                KeyCode::A => velocity -= right,
-                KeyCode::D => velocity += right,
+                KeyCode::KeyW => velocity += forward,
+                KeyCode::KeyS => velocity -= forward,
+                KeyCode::KeyA => velocity -= right,
+                KeyCode::KeyD => velocity += right,
                 _ => (),
             }
         }
 
         velocity = velocity.normalize_or_zero();
 
-        let mut change = velocity * time.delta_seconds() * CAMERA_SPEED;
+        let mut change = velocity * time.delta_secs() * CAMERA_SPEED;
         // scale velocity with zoom radius
         change *= camera.radius + CAMERA_SPEED_OFFSET;
 
@@ -86,10 +122,10 @@ fn pan_camera(
 
 /// Pan the camera with middle mouse click, zoom with scroll wheel, orbit with right mouse click.
 fn orbit_camera(
-    windows: Res<Windows>,
-    mut ev_motion: EventReader<MouseMotion>,
-    mut ev_scroll: EventReader<MouseWheel>,
-    input_mouse: Res<Input<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut ev_motion: MessageReader<MouseMotion>,
+    mut ev_scroll: MessageReader<MouseWheel>,
+    input_mouse: Res<ButtonInput<MouseButton>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
     // change input mapping for orbit and panning here
@@ -99,11 +135,11 @@ fn orbit_camera(
     let mut scroll = 0.0;
 
     if input_mouse.pressed(orbit_button) {
-        for ev in ev_motion.iter() {
+        for ev in ev_motion.read() {
             rotation_move += ev.delta;
         }
     }
-    for ev in ev_scroll.iter() {
+    for ev in ev_scroll.read() {
         scroll += ev.y;
     }
 
@@ -147,8 +183,7 @@ fn orbit_camera(
     }
 }
 
-fn get_primary_window_size(windows: &Res<Windows>) -> Vec2 {
-    let window = windows.get_primary().unwrap();
-    let window = Vec2::new(window.width() as f32, window.height() as f32);
-    window
+fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec2 {
+    let window = windows.single().expect("expected exactly one primary window");
+    Vec2::new(window.width(), window.height())
 }
