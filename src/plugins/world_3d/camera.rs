@@ -154,7 +154,7 @@ fn orbit_camera(
             let yaw = Quat::from_rotation_y(-delta_x);
             let pitch = Quat::from_rotation_x(-delta_y);
             transform.rotation = yaw * transform.rotation; // rotate around global y axis
-            transform.rotation = transform.rotation * pitch; // rotate around local x axis
+            transform.rotation *= pitch; // rotate around local x axis
 
             // assert pitch limits
             let mut tilt = (transform.rotation * Vec3::Y).y;
@@ -167,7 +167,7 @@ fn orbit_camera(
                 adjustment = MAX_PITCH - tilt;
             } //TODO: max down tilt is a little buggy
             let adjustment = Quat::from_rotation_x(adjustment);
-            transform.rotation = transform.rotation * adjustment;
+            transform.rotation *= adjustment;
         } else if scroll.abs() > 0.0 {
             any = true;
             pan_orbit.radius -= scroll * pan_orbit.radius * 0.2;
