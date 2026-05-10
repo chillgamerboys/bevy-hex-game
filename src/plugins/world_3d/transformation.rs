@@ -126,13 +126,14 @@ impl Transformer for LinearMovement {
 }
 
 
+#[derive(Default)]
 pub struct TransformerSeries {
-    transformers: Vec<Box<dyn Transformer>>
+    transformers: Vec<Box<dyn Transformer>>,
 }
 
 impl TransformerSeries {
     pub fn new() -> Self {
-        Self { transformers: Vec::new() }
+        Self::default()
     }
 
     pub fn push(&mut self, transformer: impl Transformer) {
