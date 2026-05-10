@@ -57,7 +57,7 @@ fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
         Name::new("Game Camera"),
         Skybox {
             image: skybox_handle,
-            brightness: 1000.0,
+            brightness: SKYBOX_BRIGHTNESS,
             ..default()
         },
         SkyboxNeedsReinterpret,
