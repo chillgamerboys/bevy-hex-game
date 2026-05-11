@@ -2,7 +2,7 @@
 
 ## Context
 
-The Bevy 0.9 → 0.18 migration shipped as **PR #1**. The migration preserved many 0.9-era patterns verbatim, leaving the codebase littered with anachronisms (custom unix-time clock, `Box<dyn Trait>` components, commented-out feature toggles). Two user-visible bugs surfaced during the first run on Bevy 0.18 and have been fixed (orbit camera, lighting). A perf baseline measurement (PR #9) confirmed software-rendering FPS at ~11. Phase 3 perf work is partially done and currently blocked on WSL2 GPU passthrough; Phase 4 architecture rewrites are pending.
+The Bevy 0.9 → 0.18 migration shipped as **PR #1**. The migration preserved many 0.9-era patterns verbatim, leaving the codebase littered with anachronisms (custom unix-time clock, `Box<dyn Trait>` components, commented-out feature toggles). Two user-visible bugs surfaced during the first run on Bevy 0.18 and have been fixed (orbit camera, lighting). A perf baseline measurement (PR #9) confirmed software-rendering FPS at ~11 on WSL2 + llvmpipe. After installing kisak-mesa on Ubuntu 24.04 and shipping `fix/allow-dozen-adapter` (PR #11), real-GPU rendering came online and FPS jumped to **60 (V-sync locked)** with shadows on. Most of Phase 3 perf work was downstream of software rendering being the bottleneck and is now hygiene rather than emergency. Phase 4 architecture rewrites are pending and are the highest-leverage remaining work.
 
 Scope (approved 2026-05-10): full rewrite. Touch every audit finding. Code + WSL2 environment investigation. Long-running `refactor` branch with separate small PRs ordered quick → intense. Final umbrella PR `refactor → main` when everything's verified.
 
@@ -25,18 +25,19 @@ Scope (approved 2026-05-10): full rewrite. Touch every audit finding. Code + WSL
 
 - ✅ **PR 2.1** `fix/orbit-camera` — #7. Right-drag orbit did nothing on Wayland because `MouseMotion` doesn't fire while a button is held. Switched to `CursorMoved` deltas with a `Local<Option<Vec2>>` baseline. **Do not reintroduce `MouseMotion` for drag.**
 - ✅ **PR 2.2** `fix/lighting-lux-units` — #8. Rebalanced for Bevy 0.18 physical units. `SUN_INTENSITY: 50_000 → 10_000`, `SUN_AMBIENT_LIGHT: 1 → 80`, new `SKYBOX_BRIGHTNESS: 300`. All in `src/plugins/world_3d/config.rs`.
-- ⏳ **PR 2.3** `fix/skybox-grain` — **pending, gated on GPU passthrough**. Cubemap looks noisy under llvmpipe; expected to disappear on real GPU. If it persists: likely missing mipmaps on the reinterpreted stacked-2D texture. Investigate by computing mipmaps after `reinterpret_stacked_2d_as_array` in `src/plugins/world_3d/camera.rs::reinterpret_skybox_when_loaded`, OR verify the sampler filter mode (`mipmap_filter: FilterMode::Linear`).
+- ⏳ **PR 2.3** `fix/skybox-grain` — **pending, re-check needed on real GPU**. Cubemap looked noisy under llvmpipe. Likely cleared up post-PR #11 (Dozen → NVIDIA). Take a visual look on real GPU first; if the noise is still there, the fix path is computing mipmaps after `reinterpret_stacked_2d_as_array` in `src/plugins/world_3d/camera.rs::reinterpret_skybox_when_loaded` OR verifying the sampler filter mode (`mipmap_filter: FilterMode::Linear`).
 
 ## Phase 3 — Performance
 
-**Approach**: measure first, fix second. The baseline (Phase 3.1) showed ~11 FPS steady state on llvmpipe. WSL2 GPU passthrough fix is happening separately; once a real GPU is in play, most of Phase 3 may be unnecessary or its priority drops dramatically.
+**Status after PR #11**: real-GPU rendering is online. Steady state on a host RTX 3080 via Dozen is **60 FPS V-sync locked, 16.6 ms/frame, shadows on**. Most of Phase 3 is now hygiene work; do it for code quality, not perf.
 
-- ✅ **PR 3.1** `perf/measure-baseline` — #9. Added `FrameTimeDiagnosticsPlugin`, `EntityCountDiagnosticsPlugin`, `LogDiagnosticsPlugin` in `main.rs`. Always-on (release-observable). Baseline on llvmpipe / WSL2: `~11.2 FPS avg, ~88 ms/frame, 1286 entities (1261 hex tiles + 25 other)`.
-- ⏳ **PR 3.2** `perf/inspector-toggle` — pending. `bevy_inspector_egui::quick::WorldInspectorPlugin` reflects every entity every frame for the inspector UI even when the panel isn't visible. With 1286 entities that's measurable in debug builds. Replace with `DefaultInspectorConfigPlugin` + manual `bevy_inspector::ui_for_world` system gated on a `Res<InspectorOpen>` toggled by F12. Files: `src/plugins/world_3d/debug.rs`.
-- ⏳ **PR 3.3** `perf/perlin-no-string-alloc` — pending. `PerlinGenerator::gradient` in `src/plugins/world_3d/hex/height_map.rs:143-147` allocates a `String` twice per gradient lookup via `vec.to_string()`. With 1261 tiles × 4 gradients × 2 = ~10k allocations at spawn (plus more during path generation). Replace with direct f32 byte hashing (`bytemuck::bytes_of(&vec)` or concatenated `to_ne_bytes`). Output must be bit-identical for same seed. One-shot spawn cost; doesn't affect steady-state FPS.
-- ⏳ **PR 3.4** `perf/cached-height-map` — pending. `HeightMap::get_world_height` recomputes perlin each call: once per tile at spawn (1261), again for each waypoint in `HexPathingLine::new`. Precompute `HashMap<HexCoord, f32>` inside `HeightMap::new`. Hash derive on HexCoord landed in PR 1.2. Files: `src/plugins/world_3d/hex/height_map.rs`.
-- ⏳ **PR 3.5** `perf/skybox-asset-event` — pending. `src/plugins/world_3d/camera.rs::reinterpret_skybox_when_loaded` runs every Update, querying for the `SkyboxNeedsReinterpret` marker. Even after the marker is removed the query still scans every frame. Replace with an `AssetEvent::LoadedWithDependencies` observer that fires once.
-- ⏳ **PR 3.6** `perf/shadows-and-draws` — gated on baseline + GPU work. Experimentally measured (shadows off): `~22 FPS avg` vs. `~11 FPS` with shadows on — directional shadows over 1261 tiles cost ~half the frame time on llvmpipe. **On real GPU this is trivial work; don't disable shadows in production.** If perf is still bad post-GPU-fix, options are (a) single-cascade `CascadeShadowConfig` with tight `maximum_distance ≈ 50`, (b) lower shadow map size, (c) `ShadowFilteringMethod::Hardware2x2`. A `SUN_SHADOWS_ENABLED` const exists in a stashed branch and can be reintroduced as a config knob.
+- ✅ **PR 3.1** `perf/measure-baseline` — #9. Added `FrameTimeDiagnosticsPlugin`, `EntityCountDiagnosticsPlugin`, `LogDiagnosticsPlugin` in `main.rs`. Always-on (release-observable). Baseline on llvmpipe / WSL2: `~11.2 FPS avg, ~88 ms/frame, 1286 entities (1261 hex tiles + 25 other)`. Post-Dozen baseline: `~60 FPS, ~16.6 ms/frame`.
+- ✅ **PR 3.x** `fix/allow-dozen-adapter` — #11. Pass `InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` through `RenderPlugin`'s `WgpuSettings` so wgpu picks Mesa Dozen (D3D12 translation) on WSL2 + Mesa instead of falling back to llvmpipe. Single-handedly fixed the perf problem.
+- ⏳ **PR 3.2** `perf/inspector-toggle` — pending, low priority. `bevy_inspector_egui::quick::WorldInspectorPlugin` reflects every entity every frame for the inspector UI even when the panel isn't visible. With 1286 entities that's measurable in debug builds, but invisible at 60 FPS V-sync. Useful for debug-build comfort; not a release-perf concern. Replace with `DefaultInspectorConfigPlugin` + manual `bevy_inspector::ui_for_world` system gated on a `Res<InspectorOpen>` toggled by F12. Files: `src/plugins/world_3d/debug.rs`.
+- ⏳ **PR 3.3** `perf/perlin-no-string-alloc` — pending, hygiene. `PerlinGenerator::gradient` in `src/plugins/world_3d/hex/height_map.rs:143-147` allocates a `String` twice per gradient lookup via `vec.to_string()`. With 1261 tiles × 4 gradients × 2 = ~10k allocations at spawn (plus more during path generation). Replace with direct f32 byte hashing (`bytemuck::bytes_of(&vec)` or concatenated `to_ne_bytes`). Output must be bit-identical for same seed. One-shot spawn cost; doesn't affect steady-state FPS.
+- ⏳ **PR 3.4** `perf/cached-height-map` — pending, hygiene. `HeightMap::get_world_height` recomputes perlin each call: once per tile at spawn (1261), again for each waypoint in `HexPathingLine::new`. Precompute `HashMap<HexCoord, f32>` inside `HeightMap::new`. Hash derive on HexCoord landed in PR 1.2. Files: `src/plugins/world_3d/hex/height_map.rs`.
+- ⏳ **PR 3.5** `perf/skybox-asset-event` — pending, code-quality. `src/plugins/world_3d/camera.rs::reinterpret_skybox_when_loaded` runs every Update, querying for the `SkyboxNeedsReinterpret` marker. Even after the marker is removed the query still scans every frame. Replace with an `AssetEvent::LoadedWithDependencies` observer that fires once.
+- ❌ **PR 3.6** `perf/shadows-and-draws` — **dropped**. Experimentally measured on llvmpipe: shadows-off gave `~22 FPS` vs. `~11 FPS` with shadows on, halving render cost. On real GPU shadows are trivial work — the post-Dozen 60 FPS baseline includes them. Don't disable shadows in production. If a future perf cliff appears under busier scenes, options are (a) single-cascade `CascadeShadowConfig` with tight `maximum_distance ≈ 50`, (b) lower shadow map size, (c) `ShadowFilteringMethod::Hardware2x2`.
 
 ## Phase 4 — Architecture / anachronism rewrites
 
@@ -87,30 +88,27 @@ Kept here so the answer is one search away when reading old gists or migrating o
 
 ## Critical files (across the roadmap)
 
-- `Cargo.toml` — diagnostics features for Phase 3.x.
-- `src/main.rs` — Phase 3.x plugin wiring.
-- `src/plugins/world_3d/camera.rs` — Phases 3.5, 3.6.
-- `src/plugins/world_3d/hex.rs` — Phase 4.1.
+- `src/main.rs` — Phase 3.x plugin wiring (already houses diagnostics + Dozen flag).
+- `src/plugins/world_3d/camera.rs` — Phase 3.5.
+- `src/plugins/world_3d/hex.rs` — Phase 4.1 (deferred).
 - `src/plugins/world_3d/hex/height_map.rs` — Phases 3.3, 3.4.
 - `src/plugins/world_3d/player.rs` — Phase 4.4.
-- `src/plugins/world_3d/sky.rs` — Phase 3.6 (shadow knob).
 - `src/plugins/world_3d/transformation.rs` — Phases 4.2, 4.3.
 - `src/plugins/world_3d/debug.rs` — Phase 3.2.
-- `src/plugins/world_3d/config.rs` — Phase 3.6 (shadow const).
-- New `src/hex/mod.rs` — Phase 4.1.
+- New `src/hex/mod.rs` — Phase 4.1 (deferred).
 
 ## Verification (post-roadmap)
 
-End-to-end manual checklist run after the final PR opens:
+End-to-end manual checklist run after the final PR opens. ✅ marks items already passing on `refactor` HEAD.
 
-- `cargo build --release` clean. `cargo clippy --all-targets -- -D warnings` clean.
-- Frame time at steady state ≥ 60 FPS on a real GPU.
-- Hex grid renders with height variation; sun direction unchanged; skybox visible without grain.
-- **Right-drag rotates the camera**; WASD pans; scroll zooms.
-- Clicking a hex tile moves the player along the hex path animation; path math uses `Res<Time>` not `SystemTime`.
-- F12 toggles the inspector (Phase 3.2); FPS recovers when hidden.
-- No `unwrap()` / `.expect()` outside genuine "this cannot fail at runtime" spots.
-- No commented-out alternative code blocks remain in source files.
+- ✅ `cargo build --release` clean. `cargo clippy --all-targets -- -D warnings` clean.
+- ✅ Frame time at steady state ≥ 60 FPS on a real GPU (measured: 60 FPS V-sync locked on RTX 3080 via Dozen).
+- ✅ Hex grid renders with height variation; sun direction unchanged; skybox visible. *(Grain check pending — Phase 2.3.)*
+- ✅ **Right-drag rotates the camera**; WASD pans; scroll zooms.
+- ⏳ Clicking a hex tile moves the player along the hex path animation; path math uses `Res<Time>` not `SystemTime`. *(Currently uses `SystemTime` — Phase 4.2 fix.)*
+- ⏳ F12 toggles the inspector (Phase 3.2); FPS recovers when hidden.
+- ⏳ No `unwrap()` / `.expect()` outside genuine "this cannot fail at runtime" spots.
+- ⏳ No commented-out alternative code blocks remain in source files.
 
 ## What this roadmap does NOT do
 
@@ -118,4 +116,4 @@ End-to-end manual checklist run after the final PR opens:
 - Replace the perlin generator with a different terrain algorithm. Perf-fixed (Phase 3.3, 3.4) but kept algorithmically.
 - Introduce ECS-state-machine crates or external animation libraries.
 - Add tests. (No tests exist today; adding test infrastructure is its own decision the user can take after this lands.)
-- Mid-refactor distro / OS migrations. Environment work (WSL2 GPU passthrough, switching to Ubuntu 24.04) is tracked separately in the README and in conversation, not as PRs in this roadmap.
+- Document host-OS or distro setup. That lives in `README.md` (see the WSL2 section for the Ubuntu 24.04 + kisak-mesa + Dozen path that we landed on).
