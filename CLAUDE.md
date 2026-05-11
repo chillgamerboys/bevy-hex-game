@@ -70,26 +70,27 @@ docs/
 
 ## Current state
 
-The migration from Bevy 0.9 to 0.18 is **shipped**. The refactor is mid-stream:
+The migration from Bevy 0.9 to 0.18 is **shipped**. WSL2 GPU passthrough is **solved**: on Ubuntu 24.04 + kisak-mesa PPA + the `ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` flag in `main.rs`, `cargo run --release` selects Dozen → NVIDIA D3D12 and reports **60 FPS (V-sync locked)** at 16.6 ms/frame with shadows on. Compare to ~11 FPS on llvmpipe. Most of Phase 3's perf work was downstream of software rendering being the bottleneck and is now optional polish, not urgent.
 
 - **Phase 1 (quick wins)** — fully shipped: clippy cleanup, Eq/Hash derives on HexCoord, dead-comment removal, world_2d strip, README expansion.
 - **Phase 2 (bug fixes)** — fully shipped: orbit camera (CursorMoved fix for Wayland), lighting (lux unit rebalance).
-- **Phase 3 (perf)** — partially shipped: baseline diagnostics (PR #9) confirm ~11 FPS on llvmpipe / WSL2 software rendering. Remaining: inspector toggle, perlin alloc fix, cached height map, skybox asset-event, shadows-and-draws investigation.
-- **Phase 4 (architecture refactors)** — pending: shared HexCoord module, `Res<Time>` instead of `SystemTime`, replace `Box<dyn Transformer>` with concrete components, picking cleanup, plugin-group cleanup.
+- **Phase 3 (perf)** — baseline shipped (PR #9). `fix/allow-dozen-adapter` (PR #11) unblocked real-GPU rendering — that change alone moved FPS 11 → 60. The remaining Phase 3 PRs (inspector toggle, perlin alloc, cached height map, skybox asset-event) are hygiene rather than emergency. Phase 3.6 (shadow tuning) is no longer needed.
+- **Phase 4 (architecture refactors)** — pending. Now the highest-leverage remaining work. `Res<Time>` instead of `SystemTime` and replacing `Box<dyn Transformer>` with concrete components are the main ones. `refactor/shared-hexcoord-module` (Phase 4.1) is **skippable** — world_2d was stripped, no duplication remains to dedupe.
 - **Phase 5 (umbrella PR)** — pending.
 
-See **`docs/ROADMAP.md`** for the per-PR detail.
+See **`docs/ROADMAP.md`** for the per-PR detail and updated priorities.
 
 ## Next pending PR
 
-**PR 3.2 — `perf/inspector-toggle`**, OR if a real-GPU passthrough has just landed, the first task is to verify `cargo run --release` hits 60+ FPS with `SUN_SHADOWS_ENABLED = true` (see "Known issues" below) and revert any shadows-off stop-gap.
+**PR 4.2 — `refactor/res-time`** (replace `SystemTime`-based clock in `src/plugins/world_3d/transformation.rs` with `Res<Time>`). Highest-impact remaining work on the merits, independent of perf.
+
+Optional warm-up alternatives if you want a smaller first PR back: `perf/inspector-toggle` (3.2), `perf/perlin-no-string-alloc` (3.3), or revisit `fix/skybox-grain` (2.3) after a visual check on real GPU.
 
 ## Known issues / open threads
 
-- **Skybox grain**: cubemap looks visibly noisy under llvmpipe. Expected to disappear on real GPU; if not, file `fix/skybox-grain` per the roadmap (likely missing mipmaps on the reinterpreted stacked-2D texture).
-- **WSL2 GPU passthrough**: Ubuntu 22.04's stock Mesa ships no Vulkan ICD for NVIDIA and no Dozen (D3D12 translation). `wgpu` falls back to `llvmpipe` software rendering. Fix is moving to Ubuntu 24.04 in WSL (Mesa 24+ includes Dozen) or running natively on Windows. Diagnosed in conversation 2026-05-10.
-- **Shadow stop-gap**: while running on llvmpipe, `DirectionalLight::shadows_enabled` was experimented set to `false` (doubles FPS, sacrifices visual depth). The current `refactor` HEAD still has `shadows_enabled: true`. Once GPU passthrough works, leave it `true`.
+- **Skybox grain** (2.3): visible noise in the cubemap under llvmpipe; expected to disappear on real GPU but should be re-verified visually. If it persists on Dozen → NVIDIA, the fix path is computing mipmaps in `reinterpret_skybox_when_loaded` (`src/plugins/world_3d/camera.rs`).
 - **WSL2 + Wayland gotcha**: raw `MouseMotion` events are *not* delivered while a mouse button is held. We hit this on orbit-drag and fixed it by switching to `CursorMoved` deltas. Don't reintroduce `MouseMotion` for drag-style input.
+- **Dozen non-conformance** (`fix/allow-dozen-adapter`, PR #11): `main.rs` passes `InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER` through `RenderPlugin`'s `WgpuSettings`. Don't remove it — without that flag, wgpu silently picks llvmpipe over the Dozen-wrapped GPU on WSL2 because Dozen self-reports as non-conformant. No effect on native Linux/Windows/macOS.
 
 ## Process notes
 
