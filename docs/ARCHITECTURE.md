@@ -10,11 +10,11 @@ contact with the next change.
                        │
                    hex_assets
                        │
-      ┌────────────────┼────────────────┐
-      │                │                │
-  hex_world      hex_gameplay        hex_dev
-      │                │                │
-      └────────────────┼────────────────┘
+      ┌───────────┬────┴────┬───────────┐
+      │           │         │           │
+  hex_world   hex_gameplay  hex_map   hex_dev
+      │           │         │           │
+      └───────────┴────┬────┴───────────┘
                        │
                     hex_game
 ```
@@ -29,24 +29,60 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on |
 |---|---|---|
-| `hex_core` | Hex coordinates, terrain generation, app states, system-ordering sets, shared marker components | Bevy sub-crates only — no renderer |
+| `hex_core` | Hex coordinates, columns, app states, system-ordering sets, shared marker components | Bevy sub-crates only — no renderer |
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
-| `hex_world` | Presentation: grid spawning, terrain meshes, sky, camera | `hex_core`, `hex_assets` |
+| `hex_map` | **The map**: terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
+| `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
 | `hex_gameplay` | Player, picking, movement, animation | `hex_core`, `hex_assets` |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy only |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
 
+### `hex_map` is a leaf, on purpose
+
+Nothing depends on it except the binary. It is owned by one person, and bounding the
+blast radius is what makes that ownership safe: work there cannot break gameplay, the
+camera, the sky, the screens or the menus, because none of them can see it.
+
+The map reaches the rest of the game **only through components**. Tiles are spawned
+carrying a `HexCoord` and a `HexSpan`; `hex_gameplay` queries those. Nothing outside
+`hex_map` references `HeightMap` or any generator, so terrain storage and generation
+can be replaced wholesale without anyone noticing.
+
+`hex_gameplay`'s integration tests spawn their own stand-in terrain, which is the
+clearest available demonstration that the separation is real.
+
 ### The rule that carries the most weight
 
-**`hex_world` and `hex_gameplay` must never depend on each other.**
+**`hex_world`, `hex_gameplay` and `hex_map` must never depend on each other.**
 
-Presentation and rules are the two things that most want to reach into each other,
-and the pair that becomes most painful to separate once they have. Before the
-split, `player.rs` imported from three foreign modules to do its one job.
+Presentation, rules and content are the three things that most want to reach into
+each other, and the ones that become most painful to separate once they have. Before
+the split, `player.rs` imported from three foreign modules to do its one job.
 
-Anything they both need goes in `hex_core`. That is why `HexTile` and `HexGrid` —
-which look like presentation concerns — live there: gameplay has to query tiles
-without depending on how they are drawn.
+Anything they share goes in `hex_core`. That is why `HexTile`, `HexGrid` and
+`HexSpan` — which look like presentation concerns — live there: gameplay has to
+query tiles without depending on how they are generated or drawn.
+
+## Positions are tiles, not coordinates
+
+A unit is not *at* `HexCoord(3, -1)`. It is on a **specific column** there. Two
+columns sharing a coordinate are unrelated places that happen to share an address.
+
+> **Columns stacked at the same coordinate are not connected.** A unit on a bridge
+> cannot step down to the ground beneath it. Reaching it means a ramp or spiral of
+> adjacent columns descending gradually, or an ability that explicitly bypasses the
+> rule — teleporting, tunnelling.
+
+This is a game-design decision, and it decides a type. The practical consequence:
+**never key a map by `HexCoord` in a way that collapses a stack.** A
+`HashMap<HexCoord, f32>` keeping "the highest column" silently makes every lower
+column unreachable, and a unit crossing a bridge teleports to the ground.
+
+That exact abstraction existed briefly during the refactor and was deleted rather
+than fixed — an abstraction that *can* express the forbidden thing eventually will.
+
+What counts as an acceptable step, and which abilities ignore the rule, is movement
+design and lives in `hex_gameplay`.
 
 ### Why `hex_core` avoids the `bevy` facade
 
@@ -79,14 +115,25 @@ sets make the intended order explicit:
 
 - **`AppSystems`** — `TickTimers → RecordInput → Update`, for the `Update`
   schedule. Configured once in `main.rs`.
-- **`GameplaySetup`** — `Resources → Entities`, for `OnEnter(Screen::Gameplay)`.
+- **`GameplaySetup`** — `Resources → Terrain → Actors`, for `OnEnter(Screen::Gameplay)`.
 
-`GameplaySetup` exists because of a bug worth not repeating. `hex_world` inserts
-`HeightMap`; `hex_gameplay` spawns the player that reads it. Both run in the same
-`OnEnter` schedule, and the two crates cannot see each other, so `.chain()` could
-not express the dependency. A local chain looked correct and raced in practice —
-a nondeterministic panic that would most likely have shown up first on someone
-else's machine, with a different core count.
+`GameplaySetup` exists because of two bugs worth not repeating.
+
+The first: `hex_map` inserts `HeightMap`; `hex_gameplay` spawns the player that
+stands on the tiles built from it. Both run in the same `OnEnter` schedule, and the
+crates cannot see each other, so `.chain()` could not express the dependency. A local
+chain looked correct and raced in practice — a nondeterministic panic that would most
+likely have appeared first on someone else's machine with a different core count.
+
+The second is subtler and produced a visible bug: the player spawned at ground level
+and **sank into the terrain**. It read tile entities in the same set that created
+them, and **entities spawned via `Commands` are not queryable until the queue is
+applied**. Ordering alone would not have fixed it — a set boundary also supplies a
+sync point, which is what makes the tiles *visible* rather than merely earlier.
+
+The names carry that: `Terrain` is the map, `Actors` are the things standing on it.
+The old `Resources → Entities` gave nowhere to say "entities that depend on other
+entities", which is why the mistake was easy to make.
 
 **Ordering that spans a crate boundary has to go through a shared set in
 `hex_core`.**
@@ -180,25 +227,36 @@ evidence that a change worked — **look at the window**.
 
 ## Testing
 
-`hex_core` carries the suite, because it is pure and needs no GPU. 17 tests cover
-coordinate round-tripping, the cube invariant, line drawing including the
-degenerate zero-length case, radius tile counts, and terrain determinism.
+Two layers.
 
-Presentation and gameplay crates have no tests yet. Adding them means either a
-headless `App` harness or extracting more logic down into `hex_core` — the latter
-being generally the better answer.
+**Unit tests** live in `hex_core` and `hex_map`, which are pure and need no GPU:
+coordinate round-tripping, the cube invariant, line drawing including the degenerate
+zero-length case, radius tile counts, span geometry, and terrain determinism.
+
+**Integration tests** run a headless `App` with `MinimalPlugins` and inspect the
+world afterwards — `crates/hex_map/tests/` and `crates/hex_gameplay/tests/`. They
+exist because every bug found in this codebase was found by a person clicking, and
+both of the worst were green across compiler, clippy, unit tests and CI.
+
+They cover tile counts, that a tile's transform agrees with its `HexSpan`, clean
+teardown and re-entry, and the two specific regressions: the player must spawn *on*
+the surface, and clicking before settings load must not panic.
+
+Both regression tests were verified by reintroducing their bug. That is worth doing
+rather than assuming: the crash test initially **passed** with the bug restored,
+because the shared harness inserted the resource whose absence caused the crash. A
+test that cannot fail reports safety it does not provide.
+
+**These are headless.** A black skybox, a wrong colour, or a mesh at the wrong scale
+still only show up by looking at the window.
 
 ## Not yet done
 
 - **`bevy_lint`** is wired (`cfg(bevy_lint)` is declared, the `register_tool`
   attribute is in place) but unusable: it supports Bevy 0.18 at most, and this is
   0.19. Adopting it later costs no source changes.
-- **Bevy feature trimming.** The `bevy` dependency still uses default features.
-  Moving to `default-features = false` with the `3d` collection would cut compile
-  time and binary size, but risks silently dropping capability, so it wants doing
-  deliberately and verifying by running.
-- **`missing_docs`** is set to `allow` in `[workspace.lints]`. Worth raising once
-  the public API settles.
+- **Bevy feature trimming.** `default-features = true` still. The `3d` collection
+  would cut compile time and binary size but risks silently dropping capability.
 - **The animation system** is still `Box<dyn Transformer>` trait objects, which is
   why `Transformation` cannot derive `Reflect` and is invisible in the inspector.
   It works and is correctly frame-timed; it is the most likely thing to be

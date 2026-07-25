@@ -1,0 +1,32 @@
+# Who reviews what.
+#
+# The point is not to block work — it is to make a change that crosses a boundary
+# *visible*. Editing your own crate needs no ceremony; editing shared vocabulary or
+# the app wiring should be seen by whoever depends on it.
+#
+# Replace the placeholders with real GitHub usernames before this does anything.
+
+# Default: anything not matched below.
+*                       @chillgamerboys
+
+# The map. Terrain, tile spawning, and the settings that drive them.
+/crates/hex_map/        @chillgamerboys
+/assets/config/world.ron @chillgamerboys
+
+# Gameplay: the player, movement, and whatever turn system arrives.
+/crates/hex_gameplay/   @chillgamerboys
+
+# Shared vocabulary. A change here affects everyone by definition — HexCoord,
+# HexSpan, the screen states, and the ordering sets all live here.
+/crates/hex_core/       @chillgamerboys
+
+# App wiring. The only crate that can see every other one.
+/crates/hex_game/       @chillgamerboys
+
+# Build, lint, and CI configuration. These are the guardrails themselves; a change
+# that weakens one should be deliberate rather than incidental.
+/Cargo.toml             @chillgamerboys
+/clippy.toml            @chillgamerboys
+/deny.toml              @chillgamerboys
+/rust-toolchain.toml    @chillgamerboys
+/.github/               @chillgamerboys
