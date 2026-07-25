@@ -11,6 +11,7 @@ use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
+use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
 mod menus;
@@ -90,7 +91,27 @@ impl Plugin for AppPlugin {
             menus::plugin,
         ));
 
+        app.add_systems(Update, apply_display_settings);
+
         #[cfg(feature = "dev")]
         app.add_plugins(hex_dev::plugin);
+    }
+}
+
+/// Applies presentation settings to the window.
+///
+/// Runs continuously rather than once because the file can be edited while the
+/// game is running; `is_changed` keeps it to actual changes. Vsync is left as the
+/// default: it caps the frame rate to the display without capping it *below* the
+/// display, and on an adaptive-refresh panel the driver already drops the rate
+/// when nothing is moving. A fixed cap would cost input latency to save power the
+/// hardware is already saving.
+fn apply_display_settings(settings: Option<Res<DisplaySettings>>, mut windows: Query<&mut Window>) {
+    let Some(settings) = settings else { return };
+    if !settings.is_changed() {
+        return;
+    }
+    for mut window in &mut windows {
+        window.present_mode = settings.present_mode.into();
     }
 }

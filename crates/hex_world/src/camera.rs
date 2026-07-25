@@ -4,11 +4,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use hex_assets::GameAssets;
-use hex_core::config::{
-    CAMERA_SPEED, CAMERA_SPEED_OFFSET, MAX_PITCH, MAX_ZOOM_IN, MAX_ZOOM_OUT, MIN_PITCH,
-    SKYBOX_BRIGHTNESS,
-};
+use hex_assets::{CameraSettings, GameAssets, LightingSettings};
 use hex_core::{AppSystems, Screen};
 
 pub fn plugin(app: &mut App) {
@@ -16,6 +12,7 @@ pub fn plugin(app: &mut App) {
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the skybox behind them.
         .add_systems(Startup, spawn_camera)
+        .add_systems(Update, apply_skybox_brightness.in_set(AppSystems::Update))
         .add_systems(
             Update,
             reinterpret_skybox_when_loaded.in_set(AppSystems::Update),
@@ -63,12 +60,28 @@ fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
             ..Default::default()
         },
         Name::new("Game Camera"),
+        // Brightness is set by `apply_skybox_brightness` once settings load; the
+        // camera itself has to exist from startup as the UI's render target.
         Skybox {
             image: Some(skybox_handle),
-            brightness: SKYBOX_BRIGHTNESS,
             ..default()
         },
     ));
+}
+
+/// Applies skybox brightness from settings, and keeps it in step if the file is
+/// edited while running.
+fn apply_skybox_brightness(
+    settings: Option<Res<LightingSettings>>,
+    mut skyboxes: Query<&mut Skybox>,
+) {
+    let Some(settings) = settings else { return };
+    if !settings.is_changed() {
+        return;
+    }
+    for mut skybox in &mut skyboxes {
+        skybox.brightness = settings.skybox_brightness;
+    }
 }
 
 /// PNGs do not carry cubemap metadata, so they load as a single stacked 2D texture.
@@ -121,6 +134,7 @@ fn reinterpret_skybox_when_loaded(
 fn pan_camera(
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    settings: Res<CameraSettings>,
     mut query: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
     for (mut transform, mut camera) in query.iter_mut() {
@@ -141,9 +155,9 @@ fn pan_camera(
 
         velocity = velocity.normalize_or_zero();
 
-        let mut change = velocity * time.delta_secs() * CAMERA_SPEED;
+        let mut change = velocity * time.delta_secs() * settings.pan_speed;
         // scale velocity with zoom radius
-        change *= camera.radius + CAMERA_SPEED_OFFSET;
+        change *= camera.radius + settings.pan_speed_offset;
 
         transform.translation += change;
         camera.focus += change;
@@ -160,6 +174,7 @@ fn orbit_camera(
     mut ev_cursor: MessageReader<CursorMoved>,
     mut ev_scroll: MessageReader<MouseWheel>,
     input_mouse: Res<ButtonInput<MouseButton>>,
+    settings: Res<CameraSettings>,
     mut last_cursor: Local<Option<Vec2>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
@@ -210,19 +225,19 @@ fn orbit_camera(
                 tilt = 2. - tilt;
             }
             let mut adjustment = 0.0;
-            if tilt < MIN_PITCH {
-                adjustment = MIN_PITCH - tilt;
-            } else if tilt > MAX_PITCH {
-                adjustment = MAX_PITCH - tilt;
+            if tilt < settings.min_pitch {
+                adjustment = settings.min_pitch - tilt;
+            } else if tilt > settings.max_pitch {
+                adjustment = settings.max_pitch - tilt;
             } //TODO: max down tilt is a little buggy
             let adjustment = Quat::from_rotation_x(adjustment);
             transform.rotation *= adjustment;
         } else if scroll.abs() > 0.0 {
             any = true;
-            pan_orbit.radius -= scroll * pan_orbit.radius * 0.2;
+            pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
             // dont allow zoom to reach zero or you get stuck
-            pan_orbit.radius = f32::max(pan_orbit.radius, MAX_ZOOM_IN);
-            pan_orbit.radius = f32::min(pan_orbit.radius, MAX_ZOOM_OUT);
+            pan_orbit.radius = f32::max(pan_orbit.radius, settings.min_zoom);
+            pan_orbit.radius = f32::min(pan_orbit.radius, settings.max_zoom);
         }
 
         if any {

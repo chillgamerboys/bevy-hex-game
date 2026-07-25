@@ -17,8 +17,9 @@ hex_dev = { workspace = true, optional = true }
 # Empty by default so `cargo build --release` ships without the inspector. Use
 # `cargo dev` (aliased in .cargo/config.toml) for a build with dev tooling.
 default = []
-# Development tooling: world inspector, debug overlays.
-dev = ["dep:hex_dev"]
+# Development tooling: world inspector, debug overlays, and live asset reload so
+# editing a file under assets/config/ takes effect without restarting.
+dev = ["dep:hex_dev", "bevy/file_watcher"]
 
 [lints]
 workspace = true

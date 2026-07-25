@@ -1,0 +1,20 @@
+// Sun, ambient light, and sky.
+//
+// These use real physical units. Illuminance is in lux: around 100000 is direct
+// noon sun, 10000 is overcast. Skybox brightness is in candela per square metre.
+(
+    sun_illuminance: 10000.0,
+
+    // Sun direction, as XYZ rotation in radians.
+    sun_rotation: (11.4, 0.3, 0.0),
+
+    // Fill light applied everywhere, so shadows are not pure black.
+    ambient_brightness: 80.0,
+
+    // The cubemap already encodes a bright sky, so this stays low to avoid
+    // blowing out the scene.
+    skybox_brightness: 300.0,
+
+    // Background colour, visible anywhere the skybox is not.
+    sky_color: (0.5294, 0.8087, 0.9216),
+)

@@ -15,12 +15,38 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+pub mod loader;
+pub mod settings;
+
+pub use loader::LoadSettings;
+pub use settings::{
+    to_color, CameraSettings, DisplaySettings, LightingSettings, PlayerSettings,
+    PresentModeSetting, WorldSettings,
+};
+
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
 const SKYBOX: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
+/// RON files carry a `.ron` extension, but are matched here by their full
+/// double extension so an ordinary `.ron` elsewhere is not claimed by the wrong
+/// loader.
+const CONFIG_EXTENSIONS: &[&str] = &["ron"];
+
 pub fn plugin(app: &mut App) {
     app.add_systems(PreStartup, load_assets);
+
+    app.register_type::<WorldSettings>()
+        .register_type::<CameraSettings>()
+        .register_type::<LightingSettings>()
+        .register_type::<PlayerSettings>()
+        .register_type::<DisplaySettings>();
+
+    app.load_settings::<WorldSettings>("config/world.ron", CONFIG_EXTENSIONS)
+        .load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
+        .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
+        .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
+        .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.

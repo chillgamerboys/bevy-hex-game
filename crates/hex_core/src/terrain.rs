@@ -5,7 +5,6 @@ use bevy_math::Vec2;
 use bevy_platform::collections::HashMap;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
-use crate::config::{HEX_GRID_RADIUS, HEX_HEIGHT_SCALE};
 use crate::hex::HexCoord;
 
 /// hashes bytes with seed using msg
@@ -18,9 +17,9 @@ pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
     xxh3_64_with_seed(vec.as_slice(), seed)
 }
 
-/// Convert quantized height to height in world space
-pub fn to_world(height: u32) -> f32 {
-    (height as f32) * HEX_HEIGHT_SCALE
+/// Convert quantized height to height in world space.
+pub fn to_world(height: u32, height_scale: f32) -> f32 {
+    (height as f32) * height_scale
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Wrapper Struct ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -28,6 +27,9 @@ pub fn to_world(height: u32) -> f32 {
 #[derive(Resource)]
 pub struct HeightMap {
     generator: Box<dyn HeightGenerator>,
+    /// World units per unit of quantized height. Comes from settings rather than
+    /// a constant, so terrain drama is tunable without a rebuild.
+    height_scale: f32,
     /// Heights for every coord in the spawned grid, precomputed once in [`Self::new`].
     /// Coords outside the grid fall through to the generator.
     cache: HashMap<HexCoord, u32>,
@@ -45,21 +47,26 @@ impl HeightMap {
     /// gets height of coord in world space. To get quantized height use `get_height`
     pub fn get_world_height(&self, coord: HexCoord) -> f32 {
         let q_height = self.get_height(coord);
-        to_world(q_height)
+        to_world(q_height, self.height_scale)
     }
 
-    pub fn new(generator: impl HeightGenerator) -> Self {
+    /// Builds a height map, precomputing every coord within `grid_radius`.
+    pub fn new(generator: impl HeightGenerator, grid_radius: u32, height_scale: f32) -> Self {
         let generator: Box<dyn HeightGenerator> = Box::new(generator);
         // The perlin generator is pure but not cheap, and callers hit it constantly:
         // once per tile at spawn, then again for every waypoint of every click-to-move
         // path. The playable grid is a fixed, known set of coords, so evaluate it once
         // up front and read from the map thereafter.
         let cache = HexCoord::ORIGIN
-            .within_radius(HEX_GRID_RADIUS)
+            .within_radius(grid_radius)
             .into_iter()
             .map(|coord| (coord, Self::generate(generator.as_ref(), coord)))
             .collect();
-        Self { generator, cache }
+        Self {
+            generator,
+            height_scale,
+            cache,
+        }
     }
 
     /// The uncached height for a coord. Floors at 1 so no tile is scaled to zero.
@@ -225,6 +232,9 @@ impl PerlinStep {
 mod tests {
     use super::*;
 
+    const TEST_RADIUS: u32 = 20;
+    const TEST_HEIGHT_SCALE: f32 = 0.4;
+
     /// Sample coordinates spread across and beyond the playable grid, so the
     /// cached and uncached paths are both exercised.
     fn sample_coords() -> Vec<HexCoord> {
@@ -234,15 +244,23 @@ mod tests {
             HexCoord::new_cubic(7, -3, -4),
             HexCoord::new_cubic(-12, 5, 7),
             HexCoord::new_cubic(19, -19, 0),
-            // Outside HEX_GRID_RADIUS, so this misses the cache.
+            // Outside the test grid radius, so this misses the cache.
             HexCoord::new_cubic(64, -32, -32),
         ]
     }
 
     #[test]
     fn same_seed_produces_the_same_terrain() {
-        let a = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)));
-        let b = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)));
+        let a = HeightMap::new(
+            PerlinGenerator::lowlands(Some(20260725)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        let b = HeightMap::new(
+            PerlinGenerator::lowlands(Some(20260725)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
         for coord in sample_coords() {
             assert_eq!(
                 a.get_height(coord),
@@ -254,8 +272,16 @@ mod tests {
 
     #[test]
     fn different_seeds_produce_different_terrain() {
-        let a = HeightMap::new(PerlinGenerator::lowlands(Some(1)));
-        let b = HeightMap::new(PerlinGenerator::lowlands(Some(2)));
+        let a = HeightMap::new(
+            PerlinGenerator::lowlands(Some(1)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        let b = HeightMap::new(
+            PerlinGenerator::lowlands(Some(2)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
         let differs = HexCoord::ORIGIN
             .within_radius(20)
             .into_iter()
@@ -273,7 +299,11 @@ mod tests {
             .map(|coord| std::cmp::max(generator.generate_height(coord), 1))
             .collect();
 
-        let map = HeightMap::new(PerlinGenerator::lowlands(Some(7)));
+        let map = HeightMap::new(
+            PerlinGenerator::lowlands(Some(7)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
         for (coord, want) in sample_coords().into_iter().zip(expected) {
             assert_eq!(map.get_height(coord), want, "mismatch at {coord:?}");
         }
@@ -282,17 +312,17 @@ mod tests {
     /// Tile meshes are scaled by height, so a zero would collapse a tile.
     #[test]
     fn height_never_falls_below_one() {
-        let map = HeightMap::new(FlatGenerator::new(0));
+        let map = HeightMap::new(FlatGenerator::new(0), TEST_RADIUS, TEST_HEIGHT_SCALE);
         assert_eq!(map.get_height(HexCoord::ORIGIN), 1);
         assert_eq!(map.get_height(HexCoord::new_cubic(99, -99, 0)), 1);
     }
 
     #[test]
     fn world_height_scales_the_quantized_height() {
-        let map = HeightMap::new(FlatGenerator::new(3));
+        let map = HeightMap::new(FlatGenerator::new(3), TEST_RADIUS, TEST_HEIGHT_SCALE);
         assert_eq!(
             map.get_world_height(HexCoord::ORIGIN),
-            3.0 * HEX_HEIGHT_SCALE
+            3.0 * TEST_HEIGHT_SCALE
         );
     }
 }
