@@ -12,7 +12,7 @@ use crate::hex::HexCoord;
 /// to distinguish it from other hashes on same bytes
 pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
     let mut vec = bytes.to_vec();
-    let msg_bytes =  msg.as_bytes();
+    let msg_bytes = msg.as_bytes();
     let mut msg_vec = msg_bytes.to_vec();
     vec.append(&mut msg_vec);
     xxh3_64_with_seed(vec.as_slice(), seed)
@@ -75,12 +75,12 @@ pub trait HeightGenerator: Send + Sync + 'static {
 }
 
 pub struct FlatGenerator {
-    height: u32
+    height: u32,
 }
 
 impl FlatGenerator {
     pub fn new(height: u32) -> Self {
-        Self {height}
+        Self { height }
     }
 }
 
@@ -90,18 +90,17 @@ impl HeightGenerator for FlatGenerator {
     }
 }
 
-
 pub struct RandGenerator {
     min: u32,
     max: u32,
-    seed: u64
+    seed: u64,
 }
 
 // generates height randomly. White Noise
 impl RandGenerator {
     pub fn new(min: u32, max: u32, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or(rand::random());
-        Self {min, max, seed}
+        Self { min, max, seed }
     }
 }
 
@@ -112,52 +111,45 @@ impl HeightGenerator for RandGenerator {
     }
 }
 
-
 // generate terrain height with fractal perlin noise
 pub struct PerlinGenerator {
     steps: Vec<PerlinStep>,
-    seed: u64
+    seed: u64,
 }
 
 impl PerlinGenerator {
-
     // For creating custom perlin height maps
     pub fn new(steps: Vec<PerlinStep>, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or(rand::random());
-        Self{steps,seed}
+        Self { steps, seed }
     }
 
     // ~~~~~~~~~~~~~~ Prefabs ~~~~~~~~~~~~~~ //
 
     pub fn dunes(seed: Option<u64>) -> Self {
-        Self::new(vec![
-            PerlinStep::new(0.05, 0.01, 30.),
-            PerlinStep::new(0.5, 0.1, 1.)
-            ], seed)
+        Self::new(
+            vec![
+                PerlinStep::new(0.05, 0.01, 30.),
+                PerlinStep::new(0.5, 0.1, 1.),
+            ],
+            seed,
+        )
     }
 
     pub fn hills(seed: Option<u64>) -> Self {
-        Self::new(vec![
-            PerlinStep::new(0.05, 0.05, 30.),
-            ], seed)
+        Self::new(vec![PerlinStep::new(0.05, 0.05, 30.)], seed)
     }
 
     pub fn slopes(seed: Option<u64>) -> Self {
-        Self::new(vec![
-            PerlinStep::new(0.01, 0.01, 50.)
-        ], seed)
+        Self::new(vec![PerlinStep::new(0.01, 0.01, 50.)], seed)
     }
 
     pub fn crags(seed: Option<u64>) -> Self {
-        Self::new(vec![
-            PerlinStep::new(0.15,0.15,35.)
-        ], seed)
+        Self::new(vec![PerlinStep::new(0.15, 0.15, 35.)], seed)
     }
 
     pub fn lowlands(seed: Option<u64>) -> Self {
-        Self::new(vec![
-            PerlinStep::new(0.035, 0.05, 3.)
-        ], seed)
+        Self::new(vec![PerlinStep::new(0.035, 0.05, 3.)], seed)
     }
 
     // ~~~~~~~~~~~ Internal Funcs ~~~~~~~~~~~ //
@@ -170,14 +162,14 @@ impl PerlinGenerator {
     }
 
     fn fade(p: f32) -> f32 {
-        p*p*p*(p*(p*6. - 15.) + 10.)
+        p * p * p * (p * (p * 6. - 15.) + 10.)
     }
 
     fn noise(&self, v: Vec2) -> f32 {
         let v0 = v.floor();
-        let v1 = v0 + Vec2::new(1.,0.);
-        let v2 = v0 + Vec2::new(0.,1.);
-        let v3 = v0 + Vec2::new(1.,1.);
+        let v1 = v0 + Vec2::new(1., 0.);
+        let v2 = v0 + Vec2::new(0., 1.);
+        let v3 = v0 + Vec2::new(1., 1.);
 
         let g0 = self.gradient(v0);
         let g1 = self.gradient(v1);
@@ -216,11 +208,15 @@ impl HeightGenerator for PerlinGenerator {
 pub struct PerlinStep {
     x_freq: f32,
     y_freq: f32,
-    magnitude: f32
+    magnitude: f32,
 }
 
 impl PerlinStep {
     pub fn new(x_freq: f32, y_freq: f32, magnitude: f32) -> Self {
-        Self {x_freq, y_freq, magnitude}
+        Self {
+            x_freq,
+            y_freq,
+            magnitude,
+        }
     }
 }

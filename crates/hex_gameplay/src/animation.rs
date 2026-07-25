@@ -19,7 +19,7 @@ pub fn plugin(app: &mut App) {
 fn transformation_driver(
     mut commands: Commands,
     time: Res<Time>,
-    mut query: Query<(Entity, &mut Transform, &mut Transformation)>
+    mut query: Query<(Entity, &mut Transform, &mut Transformation)>,
 ) {
     let now = time.elapsed_secs_f64();
     for (entity, mut transform, mut transformation) in query.iter_mut() {
@@ -45,7 +45,6 @@ fn transformation_driver(
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Wrapper Struct ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
-
 #[derive(Component)]
 /// Wrapper Struct for Transformer which allows Transformers to be queried as a component
 pub struct Transformation {
@@ -56,9 +55,11 @@ pub struct Transformation {
 }
 
 impl Transformation {
-
     pub fn new(transformer: impl Transformer) -> Self {
-        Self { transformer: Box::new(transformer), started_at: None }
+        Self {
+            transformer: Box::new(transformer),
+            started_at: None,
+        }
     }
 
     /// `elapsed` is seconds since this transformation started.
@@ -70,7 +71,6 @@ impl Transformation {
     pub fn is_finished(&self, elapsed: f64) -> bool {
         self.transformer.is_finished(elapsed)
     }
-
 }
 
 impl<T: Transformer> From<T> for Transformation {
@@ -101,7 +101,7 @@ pub struct LinearMovement {
     start_time: f64,
     end_time: f64,
     start_pos: Vec3,
-    velocity: Vec3
+    velocity: Vec3,
 }
 
 impl LinearMovement {
@@ -117,13 +117,12 @@ impl LinearMovement {
             start_time,
             end_time,
             start_pos,
-            velocity
+            velocity,
         }
     }
 }
 
 impl Transformer for LinearMovement {
-
     fn update(&self, transform: &mut Transform, time: f64) {
         let time = f64::min(time, self.end_time);
         let dur = time - self.start_time;
@@ -135,7 +134,6 @@ impl Transformer for LinearMovement {
         time >= self.end_time
     }
 }
-
 
 #[derive(Default)]
 pub struct TransformerSeries {
@@ -157,13 +155,12 @@ impl Transformer for TransformerSeries {
         for transformer in &self.transformers {
             // if finished go to next
             if transformer.is_finished(time) {
-                continue
+                continue;
             } else {
                 // if not finished, update and return
                 transformer.update(transform, time);
-                return
+                return;
             }
-
         }
         // here all finished. so update last to get to final state
         if let Some(transformer) = self.transformers.last() {
@@ -174,7 +171,7 @@ impl Transformer for TransformerSeries {
     fn is_finished(&self, time: f64) -> bool {
         match self.transformers.last() {
             Some(transformer) => transformer.is_finished(time),
-            None => true
+            None => true,
         }
     }
 }

@@ -1,3 +1,9 @@
+// Lets `bevy_lint`'s attributes be written in source without breaking a normal build.
+#![cfg_attr(bevy_lint, feature(register_tool), register_tool(bevy))]
+// Without this, launching the shipped game on Windows opens a console window
+// behind it. Kept off for dev builds, where stdout is the log.
+#![cfg_attr(not(feature = "dev"), windows_subsystem = "windows")]
+
 use bevy::diagnostic::{
     EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin,
 };
@@ -23,15 +29,17 @@ impl Plugin for AppPlugin {
         // of falling back to llvmpipe software rendering. Without the flag, wgpu
         // filters Dozen out and renders on CPU: single-digit FPS even on a discrete
         // NVIDIA card. Don't remove it; it costs nothing on other platforms.
-        app.add_plugins(DefaultPlugins.set(RenderPlugin {
-            render_creation: WgpuSettings {
-                instance_flags: InstanceFlags::default()
-                    | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+        app.add_plugins(
+            DefaultPlugins.set(RenderPlugin {
+                render_creation: WgpuSettings {
+                    instance_flags: InstanceFlags::default()
+                        | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+                    ..default()
+                }
+                .into(),
                 ..default()
-            }
-            .into(),
-            ..default()
-        }));
+            }),
+        );
 
         app.add_plugins(MeshPickingPlugin);
 
@@ -44,11 +52,7 @@ impl Plugin for AppPlugin {
             LogDiagnosticsPlugin::default(),
         ));
 
-        app.add_plugins((
-            hex_assets::plugin,
-            hex_world::plugin,
-            hex_gameplay::plugin,
-        ));
+        app.add_plugins((hex_assets::plugin, hex_world::plugin, hex_gameplay::plugin));
 
         #[cfg(feature = "dev")]
         app.add_plugins(hex_dev::plugin);

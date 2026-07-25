@@ -2,6 +2,7 @@
 name = "hex_dev"
 version.workspace = true
 edition.workspace = true
+publish = false
 description = "Development tooling: world inspector and diagnostics. Compiled only when the `dev` feature is on."
 
 # Isolated here so bevy-inspector-egui — historically the slowest crate in the
@@ -9,3 +10,6 @@ description = "Development tooling: world inspector and diagnostics. Compiled on
 [dependencies]
 bevy = { workspace = true }
 bevy-inspector-egui = { workspace = true }
+
+[lints]
+workspace = true

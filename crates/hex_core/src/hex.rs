@@ -23,7 +23,11 @@ impl HexCoord {
     /// Otherwise just set height to 0
     pub fn to_world(&self, map: Option<&HeightMap>) -> Vec3 {
         let x = HEX_CIRCUMRADIUS * f32::sqrt(3.0) * ((self.0 as f32) + (self.1 as f32) / 2.0);
-        let y = if let Some(map) = map { map.get_world_height(*self) } else { 0. };
+        let y = if let Some(map) = map {
+            map.get_world_height(*self)
+        } else {
+            0.
+        };
         let z = HEX_CIRCUMRADIUS * (3.0 / 2.0) * (self.1 as f32);
         Vec3 { x, y, z }
     }

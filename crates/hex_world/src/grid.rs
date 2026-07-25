@@ -26,7 +26,11 @@ fn spawn_grid(
 ) {
     let tile_material = materials.add(StandardMaterial::from(Color::srgb(1., 0.8, 0.8)));
     let hex_tile_mesh: Handle<Mesh> = assets.load(
-        GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset("meshes/hex.glb"),
+        GltfAssetLabel::Primitive {
+            mesh: 0,
+            primitive: 0,
+        }
+        .from_asset("meshes/hex.glb"),
     );
 
     let mut tiles = Vec::new();

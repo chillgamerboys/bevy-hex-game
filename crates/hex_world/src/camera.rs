@@ -1,6 +1,6 @@
-use bevy::prelude::*;
 use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::MouseWheel;
+use bevy::prelude::*;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
@@ -19,7 +19,6 @@ pub fn plugin(app: &mut App) {
             (reinterpret_skybox_when_loaded, orbit_camera, pan_camera),
         );
 }
-
 
 /// Tags an entity as capable of panning and orbiting.
 #[derive(Component, Reflect)]
@@ -74,17 +73,24 @@ fn reinterpret_skybox_when_loaded(
     cameras: Query<&Skybox>,
 ) {
     for event in asset_events.read() {
-        let AssetEvent::LoadedWithDependencies { id } = event else { continue };
+        let AssetEvent::LoadedWithDependencies { id } = event else {
+            continue;
+        };
 
         // Images load for all sorts of reasons; only touch one a camera uses as a skybox.
-        let is_skybox = cameras
-            .iter()
-            .any(|skybox| skybox.image.as_ref().is_some_and(|handle| handle.id() == *id));
+        let is_skybox = cameras.iter().any(|skybox| {
+            skybox
+                .image
+                .as_ref()
+                .is_some_and(|handle| handle.id() == *id)
+        });
         if !is_skybox {
             continue;
         }
 
-        let Some(mut image) = images.get_mut(*id) else { continue };
+        let Some(mut image) = images.get_mut(*id) else {
+            continue;
+        };
         if image.texture_descriptor.array_layer_count() == 1 {
             // Bind the layer count first: `Assets::get_mut` hands back a change-detection
             // `AssetMut` wrapper, so reading `image` inside the call's argument list would
@@ -134,7 +140,6 @@ fn pan_camera(
     }
 }
 
-
 /// Pan the camera with WASD, zoom with scroll wheel, orbit with right mouse drag.
 ///
 /// Uses `CursorMoved` rather than raw `MouseMotion` because Wayland (and therefore
@@ -177,7 +182,6 @@ fn orbit_camera(
     }
 
     for (mut pan_orbit, mut transform) in query.iter_mut() {
-
         let mut any = false;
         if rotation_move.length_squared() > 0.0 {
             any = true;
@@ -192,7 +196,9 @@ fn orbit_camera(
             // assert pitch limits
             let mut tilt = (transform.rotation * Vec3::Y).y;
             let below_board = (transform.rotation * Vec3::Z).y < 0.0;
-            if below_board {tilt = 2. - tilt;}
+            if below_board {
+                tilt = 2. - tilt;
+            }
             let mut adjustment = 0.0;
             if tilt < MIN_PITCH {
                 adjustment = MIN_PITCH - tilt;
@@ -211,12 +217,15 @@ fn orbit_camera(
 
         if any {
             let rot_matrix = Mat3::from_quat(transform.rotation);
-            transform.translation = pan_orbit.focus + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, pan_orbit.radius));
+            transform.translation =
+                pan_orbit.focus + rot_matrix.mul_vec3(Vec3::new(0.0, 0.0, pan_orbit.radius));
         }
     }
 }
 
 fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec2 {
-    let window = windows.single().expect("expected exactly one primary window");
+    let window = windows
+        .single()
+        .expect("expected exactly one primary window");
     Vec2::new(window.width(), window.height())
 }
