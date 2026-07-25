@@ -61,6 +61,7 @@ fn route(from: PathStep, to: PathStep, tiles: &TileQuery) -> Vec<PathStep> {
     steps
 }
 
+/// Registers the player, its spawning, and click-to-move.
 pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
         // `Actors` runs after `Terrain`, where `hex_map` spawns the tiles this
@@ -121,6 +122,7 @@ fn on_tile_clicked(
     }
 }
 
+/// Marks the piece the player controls.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct Player;

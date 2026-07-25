@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use hex_assets::{to_color, LightingSettings};
 use hex_core::{GameplaySetup, Screen};
 
+/// Registers the sun, ambient light, and sky colour.
 pub fn plugin(app: &mut App) {
     // Lighting is applied once settings have loaded rather than at startup, since
     // the values now come from a file that is still loading at that point.

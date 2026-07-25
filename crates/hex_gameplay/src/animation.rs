@@ -8,6 +8,7 @@ use hex_core::{AppSystems, PausableSystems};
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ System ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
+/// Registers the transform-animation driver.
 pub fn plugin(app: &mut App) {
     // Pausable: movement should stop when the game is paused. Because timings come
     // from `Res<Time>` rather than a wall clock, a paused animation resumes where
@@ -57,6 +58,10 @@ fn transformation_driver(
 
 #[derive(Component)]
 /// Wrapper Struct for Transformer which allows Transformers to be queried as a component
+/// An in-flight animation attached to an entity.
+///
+/// Removed automatically once finished, so the presence of this component means
+/// "currently moving".
 pub struct Transformation {
     transformer: Box<dyn Transformer>,
     /// Engine-clock reading of the first frame this component was driven, or `None`
@@ -65,6 +70,7 @@ pub struct Transformation {
 }
 
 impl Transformation {
+    /// Wraps a transformer so it can be attached to an entity.
     pub fn new(transformer: impl Transformer) -> Self {
         Self {
             transformer: Box::new(transformer),
@@ -73,11 +79,13 @@ impl Transformation {
     }
 
     /// `elapsed` is seconds since this transformation started.
+    /// Advances the transform to where it should be at `elapsed`.
     pub fn update(&self, transform: &mut Transform, elapsed: f64) {
         self.transformer.update(transform, elapsed);
     }
 
     /// `elapsed` is seconds since this transformation started.
+    /// Whether the animation has run to completion.
     pub fn is_finished(&self, elapsed: f64) -> bool {
         self.transformer.is_finished(elapsed)
     }
@@ -91,6 +99,12 @@ impl<T: Transformer> From<T> for Transformation {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Inner Trait ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
+/// Something that drives a [`Transform`] over time.
+///
+/// Implementations must be **pure functions of elapsed time** — calling `update`
+/// with the same time twice must give the same result. The driver may call it more
+/// than once per logical instant, and a transformer that accumulates state instead
+/// of computing from `time` will drift.
 pub trait Transformer: Send + Sync + 'static {
     /// Edits a transform based on a time.
     ///
@@ -101,12 +115,18 @@ pub trait Transformer: Send + Sync + 'static {
     /// the transformer should update the transformer to min(time, transformer.end_time)
     /// rather than going past its desired ending position
     fn update(&self, transform: &mut Transform, time: f64);
+
+    /// Whether this transformer has reached its end state by `time`.
+    ///
+    /// Once true, the driver removes the animation. It must stay true for all
+    /// larger times.
     fn is_finished(&self, time: f64) -> bool;
 }
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~ Trait Implementors ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
 #[derive(Debug)]
+/// Moves an entity in a straight line at constant speed.
 pub struct LinearMovement {
     start_time: f64,
     end_time: f64,
@@ -136,6 +156,11 @@ impl Transformer for LinearMovement {
     fn update(&self, transform: &mut Transform, time: f64) {
         let time = f64::min(time, self.end_time);
         let dur = time - self.start_time;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "seconds since an animation started; f32 is ample and the \
+                      result feeds a f32 transform anyway"
+        )]
         let curr_pos = self.start_pos + self.velocity * dur as f32;
         transform.translation = curr_pos;
     }
@@ -146,15 +171,20 @@ impl Transformer for LinearMovement {
 }
 
 #[derive(Default)]
+/// Runs transformers one after another, each starting where its own schedule says.
+///
+/// Used to chain the hex-by-hex legs of a path into one animation.
 pub struct TransformerSeries {
     transformers: Vec<Box<dyn Transformer>>,
 }
 
 impl TransformerSeries {
+    /// An empty series, which is finished immediately.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Appends a transformer to the end of the series.
     pub fn push(&mut self, transformer: impl Transformer) {
         self.transformers.push(Box::new(transformer))
     }

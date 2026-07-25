@@ -17,6 +17,7 @@ use hex_core::{GameplaySetup, HexCoord, HexGrid, HexSpan, HexTile, Screen};
 use crate::generator::{HeightMap, PerlinGenerator, PerlinStep};
 use crate::settings::MapSettings;
 
+/// Registers terrain construction and tile spawning.
 pub fn plugin(app: &mut App) {
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()

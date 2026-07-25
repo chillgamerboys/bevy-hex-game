@@ -9,7 +9,9 @@
 
 use bevy::prelude::*;
 
+/// Pan/orbit camera and the skybox.
 pub mod camera;
+/// Sun, ambient light, and sky colour.
 pub mod sky;
 
 pub use camera::PanOrbitCamera;

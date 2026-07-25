@@ -7,6 +7,7 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 use hex_assets::{CameraSettings, GameAssets, LightingSettings};
 use hex_core::{AppSystems, Screen};
 
+/// Registers the pan/orbit camera and the skybox.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
         // Spawned once at startup rather than per screen: it is the render target
@@ -31,8 +32,9 @@ pub fn plugin(app: &mut App) {
 #[derive(Component, Reflect)]
 #[reflect(Component)]
 pub struct PanOrbitCamera {
-    /// The "focus point" to orbit around. It is automatically updated when panning the camera
+    /// The point the camera orbits around. Updated automatically when panning.
     pub focus: Vec3,
+    /// Distance from the focus point, in world units. Clamped by camera settings.
     pub radius: f32,
 }
 
@@ -119,6 +121,13 @@ fn reinterpret_skybox_when_loaded(
             // `AssetMut` wrapper, so reading `image` inside the call's argument list would
             // overlap with the mutable borrow the call itself takes.
             let layers = image.height() / image.width();
+            #[expect(
+                clippy::expect_used,
+                reason = "the skybox asset ships with the game; a PNG that is not a \
+                          vertical stack of six square faces is a broken build, and \
+                          failing loudly beats rendering a black sky with no \
+                          explanation"
+            )]
             image
                 .reinterpret_stacked_2d_as_array(layers)
                 .expect("skybox PNG should be a vertical stack of cube faces");
@@ -249,6 +258,11 @@ fn orbit_camera(
 }
 
 fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec2 {
+    #[expect(
+        clippy::expect_used,
+        reason = "the primary window is created by DefaultPlugins before any system \
+                  runs; its absence means the app is not running at all"
+    )]
     let window = windows
         .single()
         .expect("expected exactly one primary window");

@@ -143,6 +143,11 @@ impl HexCoord {
     /// different elevations. The caller knows which one it means; this function
     /// only converts hex space to world space.
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "hex coordinates are small integers; f32 is exact below 2^24, and a \
+                  grid that large would be 800 billion tiles"
+    )]
     pub fn to_world(&self, y: f32) -> Vec3 {
         let x = HEX_CIRCUMRADIUS * f32::sqrt(3.0) * ((self.x as f32) + (self.y as f32) / 2.0);
         let z = HEX_CIRCUMRADIUS * (3.0 / 2.0) * (self.y as f32);
@@ -349,7 +354,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "cube coordinates must sum to zero")]
     fn new_cubic_panics_on_invalid_triple() {
-        let _ = HexCoord::new_cubic(1, 1, 1);
+        let _coord = HexCoord::new_cubic(1, 1, 1);
     }
 
     #[test]
@@ -373,8 +378,8 @@ mod tests {
         let target = HexCoord::new_cubic(3, -5, 2);
         // The line includes both endpoints, so it is one longer than the distance.
         assert_eq!(
-            HexCoord::ORIGIN.line_between(target).len() as u32,
-            HexCoord::ORIGIN.distance(target) + 1
+            HexCoord::ORIGIN.line_between(target).len(),
+            HexCoord::ORIGIN.distance(target) as usize + 1
         );
     }
 
@@ -399,7 +404,10 @@ mod tests {
     fn line_steps_are_contiguous() {
         let line = HexCoord::ORIGIN.line_between(HexCoord::new_cubic(4, -7, 3));
         for pair in line.windows(2) {
-            assert_eq!(pair[0].distance(pair[1]), 1, "gap between {pair:?}");
+            let [from, to] = pair else {
+                unreachable!("windows(2) yields pairs")
+            };
+            assert_eq!(from.distance(*to), 1, "gap between {from:?} and {to:?}");
         }
     }
 
@@ -409,8 +417,8 @@ mod tests {
         for radius in 0..=20u32 {
             let expected = 3 * radius * radius + 3 * radius + 1;
             assert_eq!(
-                HexCoord::ORIGIN.within_radius(radius).len() as u32,
-                expected,
+                HexCoord::ORIGIN.within_radius(radius).len(),
+                expected as usize,
                 "wrong tile count at radius {radius}"
             );
         }
@@ -448,13 +456,13 @@ mod tests {
     #[test]
     #[should_panic(expected = "must be above its bottom")]
     fn zero_height_spans_are_rejected() {
-        let _ = HexSpan::new(3.0, 3.0);
+        let _span = HexSpan::new(3.0, 3.0);
     }
 
     #[test]
     #[should_panic(expected = "must be above its bottom")]
     fn inverted_spans_are_rejected() {
-        let _ = HexSpan::new(10.0, 2.0);
+        let _span = HexSpan::new(10.0, 2.0);
     }
 
     /// Two columns at one coordinate is how an overhang or a bridge gets expressed,
@@ -507,19 +515,24 @@ mod stacking_rule {
     /// exactly what distinguishes a legal route from stepping off the edge.
     #[test]
     fn a_gradual_descent_has_small_steps_throughout() {
-        let ramp: Vec<HexSpan> = (0..8i32)
-            .map(|i| HexSpan::from_ground(8.0 - i as f32))
+        let ramp: Vec<HexSpan> = (0..8u8)
+            .map(|i| HexSpan::from_ground(8.0 - f32::from(i)))
             .collect();
 
-        let total = ramp[0].step_to(ramp[ramp.len() - 1]).abs();
+        let (Some(first), Some(last)) = (ramp.first(), ramp.last()) else {
+            unreachable!("the ramp is not empty")
+        };
         assert!(
-            (total - 7.0).abs() < 1e-6,
+            (first.step_to(*last).abs() - 7.0).abs() < 1e-6,
             "the ramp should descend 7 units"
         );
 
         for pair in ramp.windows(2) {
+            let [from, to] = pair else {
+                unreachable!("windows(2) yields pairs")
+            };
             assert!(
-                pair[0].step_to(pair[1]).abs() <= 1.0,
+                from.step_to(*to).abs() <= 1.0,
                 "each step of a ramp should be small"
             );
         }

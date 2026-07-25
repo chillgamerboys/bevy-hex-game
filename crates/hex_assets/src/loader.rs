@@ -95,6 +95,10 @@ impl SettingsRegistry {
 
     /// Loading progress in the range 0.0 to 1.0, for a progress bar.
     #[must_use]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "counts of settings files, which number in the single digits"
+    )]
     pub fn progress(&self) -> f32 {
         if self.registered == 0 {
             return 1.0;
