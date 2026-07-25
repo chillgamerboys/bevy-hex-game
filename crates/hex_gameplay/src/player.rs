@@ -4,20 +4,16 @@ use bevy::picking::Pickable;
 use bevy::picking::events::{Click, Pointer};
 use bevy::prelude::*;
 
-use crate::plugins::world_3d::{
-    transformation::{HexPathingLine, Transformation},
-    config::{PLAYER_SCALE, PLAYER_SPEED},
-    hex::{HexCoord, HexTile, height_map::HeightMap},
-};
+use hex_core::config::{PLAYER_SCALE, PLAYER_SPEED};
+use hex_core::{HeightMap, HexCoord, HexTile};
 
-pub struct PlayerPlugin;
+use crate::animation::Transformation;
+use crate::pathing::HexPathingLine;
 
-impl Plugin for PlayerPlugin {
-    fn build(&self, app: &mut App) {
-        app.register_type::<Player>()
-            .add_systems(Startup, spawn_player)
-            .add_observer(on_tile_clicked);
-    }
+pub fn plugin(app: &mut App) {
+    app.register_type::<Player>()
+        .add_systems(Startup, spawn_player)
+        .add_observer(on_tile_clicked);
 }
 
 /// Global picking observer: when any `HexTile` is clicked, animate the player

@@ -1,5 +1,26 @@
-[package]
-name = "magic_game"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Dependency versions live here so the crates can't drift apart. Each crate
+# opts in with `foo = { workspace = true }` and states its own features.
+[workspace.dependencies]
+hex_core = { path = "crates/hex_core" }
+hex_assets = { path = "crates/hex_assets" }
+hex_world = { path = "crates/hex_world" }
+hex_gameplay = { path = "crates/hex_gameplay" }
+hex_dev = { path = "crates/hex_dev" }
+
+bevy = "0.19"
+bevy_ecs = "0.19"
+bevy_math = "0.19"
+bevy_platform = "0.19"
+bevy_reflect = "0.19"
+bevy-inspector-egui = "0.37"
+rand = "0.8.5"
+xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 
@@ -10,9 +31,3 @@ opt-level = 1
 # Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]
 opt-level = 3
-
-[dependencies]
-bevy = "0.19"
-bevy-inspector-egui = "0.37"
-xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
-rand = "0.8.5"

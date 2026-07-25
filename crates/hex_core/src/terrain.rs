@@ -1,11 +1,12 @@
-use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
+//! Terrain height generation.
+
+use bevy_ecs::resource::Resource;
+use bevy_math::Vec2;
+use bevy_platform::collections::HashMap;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
-use crate::plugins::world_3d::{
-    config::{HEX_GRID_RADIUS, HEX_HEIGHT_SCALE},
-    hex::HexCoord
-};
+use crate::config::{HEX_GRID_RADIUS, HEX_HEIGHT_SCALE};
+use crate::hex::HexCoord;
 
 /// hashes bytes with seed using msg
 /// to distinguish it from other hashes on same bytes

@@ -1,0 +1,17 @@
+//! Shared vocabulary and pure domain logic for the game.
+//!
+//! This crate is the bottom of the dependency graph: everything else may depend
+//! on it, and it depends on nothing in the workspace. It carries no rendering
+//! and builds no [`App`](bevy_ecs), which is what keeps it fast to compile and
+//! testable without a GPU.
+//!
+//! Types shared between `hex_world` (presentation) and `hex_gameplay` (rules)
+//! live here. Those two crates must not depend on each other, so this is where
+//! their common language belongs.
+
+pub mod config;
+pub mod hex;
+pub mod terrain;
+
+pub use hex::{HexCoord, HexGrid, HexTile};
+pub use terrain::HeightMap;
