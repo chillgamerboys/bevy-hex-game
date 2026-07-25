@@ -1,0 +1,95 @@
+name: Release
+
+# Builds the three shipping platforms and attaches archives to a GitHub release.
+# These artefacts are the input to a Steam depot upload; nothing here talks to
+# Steam directly, so it stays useful for playtest builds too.
+on:
+  push:
+    tags: ["v*"]
+  # Lets you produce a build from any branch without cutting a tag.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: hex_game
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: hex_game.exe
+          - platform: macos-aarch64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: hex_game
+          - platform: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            binary: hex_game
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+
+      # Default features deliberately: no `dev`, so no inspector and no console
+      # window on Windows.
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --package hex_game
+
+      # Assets sit beside the binary because a standalone executable resolves its
+      # asset root from its own directory, not from a manifest.
+      - name: Stage
+        shell: bash
+        run: |
+          mkdir -p "dist/hex_game"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/hex_game/"
+          cp -r assets "dist/hex_game/"
+          cp README.md "dist/hex_game/" 2>/dev/null || true
+
+      - name: Archive
+        shell: bash
+        working-directory: dist
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "hex_game-${{ matrix.platform }}.zip" hex_game
+          else
+            tar -czf "hex_game-${{ matrix.platform }}.tar.gz" hex_game
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hex_game-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.tar.gz

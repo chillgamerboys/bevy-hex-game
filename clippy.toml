@@ -1,0 +1,3 @@
+# Require `bevy_ecs::children!` to use `[]` braces rather than `()` or `{}`,
+# matching the macro's documented form.
+standard-macro-braces = [{ name = "children", brace = "[" }]

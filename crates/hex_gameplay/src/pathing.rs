@@ -9,7 +9,7 @@ use crate::animation::{LinearMovement, Transformer, TransformerSeries};
 /// Moves piece from its starting coord to another coord,
 /// moving to intermediate tiles along a straight line bewteen the two
 pub struct HexPathingLine {
-    transformers: TransformerSeries
+    transformers: TransformerSeries,
 }
 
 impl HexPathingLine {
@@ -31,7 +31,8 @@ impl HexPathingLine {
 
                 // Segment i starts `i` hex-crossings in, measured from when the whole
                 // path starts rather than from an absolute timestamp.
-                let transformer = LinearMovement::new(this_pos, next_pos, speed, move_duration * i as f64);
+                let transformer =
+                    LinearMovement::new(this_pos, next_pos, speed, move_duration * i as f64);
                 transformers.push(transformer)
             }
         }

@@ -24,6 +24,30 @@ xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 version = "0.1.0"
 edition = "2021"
 
+[workspace.lints.rust]
+# `bevy_lint` sets this cfg when it runs. Declaring it keeps the compiler from
+# warning about an unknown cfg, and means the linter can be switched on with no
+# source changes. It does not support Bevy 0.19 yet (0.18 is its ceiling), so it
+# is not wired into CI; this is here so it costs nothing to adopt when it lands.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
+# TODO: raise to "warn" in the docs PR. It currently fires 55 times, mostly in
+# hex_core, whose public API is about to be rewritten around hexx — documenting
+# it now would be writing docs for code that is about to change.
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+# Bevy injects system arguments by dependency injection, so systems routinely and
+# correctly take more than seven parameters.
+too_many_arguments = "allow"
+# Queries are type-heavy by construction; the lint fires on ordinary Bevy code.
+type_complexity = "allow"
+nonstandard_macro_braces = "warn"
+
+# Warning levels for individual Bevy lints go here once bevy_lint supports 0.19.
+# <https://thebevyflock.github.io/bevy_cli/api/bevy_lint/lints/>
+[workspace.metadata.bevy_lint]
+# panicking_methods = "deny"
+
 # Enable a small amount of optimization in debug mode
 [profile.dev]
 opt-level = 1
@@ -31,3 +55,24 @@ opt-level = 1
 # Enable high optimizations for dependencies (incl. Bevy), but not for our code:
 [profile.dev.package."*"]
 opt-level = 3
+
+# wgpu's debug assertions are expensive enough to distort dev-build profiling.
+# <https://github.com/bevyengine/bevy/issues/14291>
+[profile.dev.package.wgpu-types]
+debug-assertions = false
+
+[profile.release]
+# Whole-program optimization. Costs compile time; this is the profile we ship,
+# so that trade is the right way round.
+codegen-units = 1
+lto = "thin"
+
+# Fast to compile, since CI only needs to know the code builds and passes.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = "line-tables-only"
+codegen-units = 4
+
+[profile.ci.package."*"]
+opt-level = 0

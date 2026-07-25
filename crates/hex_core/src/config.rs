@@ -6,7 +6,6 @@ pub const HEX_LARGE_DIAMETER: f32 = 2.0 * HEX_CIRCUMRADIUS;
 pub const HEX_GRID_RADIUS: i32 = 20;
 pub const HEX_HEIGHT_SCALE: f32 = 0.4;
 
-
 // Camera
 pub const CAMERA_SPEED: f32 = 0.4;
 pub const CAMERA_SPEED_OFFSET: f32 = 10.;
@@ -14,7 +13,6 @@ pub const MAX_PITCH: f32 = 0.95;
 pub const MIN_PITCH: f32 = 0.25;
 pub const MAX_ZOOM_IN: f32 = 5.;
 pub const MAX_ZOOM_OUT: f32 = 50.;
-
 
 // Sun & sky brightness (Bevy 0.18 uses physical units)
 // - Illuminance is in lux: ~100_000 = direct noon sun, ~10_000 = overcast.

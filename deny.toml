@@ -1,0 +1,62 @@
+# cargo-deny configuration.
+#
+# The licence check is the one that matters commercially: shipping on Steam means
+# being able to state the licence of every transitive dependency, and Bevy pulls in
+# several hundred. Catching a problem when it enters the tree is enormously cheaper
+# than discovering it during release prep.
+
+[advisories]
+version = 2
+yanked = "deny"
+# Only flag unmaintained crates we could actually act on. Today's sole hit is
+# `ttf-parser`, reached through winit's Wayland decorations and through egui —
+# both several layers up, with no safe upgrade published. Failing CI on something
+# no one here can fix trains people to ignore CI.
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+# Permissive licences compatible with shipping a closed-source binary. Anything
+# outside this list should be a deliberate, recorded decision rather than an
+# accident of `cargo add`.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OFL-1.1",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+# Our own crates carry no licence field and are never published.
+private = { ignore = true }
+
+# egui bundles the Ubuntu font, whose licence carries naming and derivative-work
+# conditions we do not want to accept wholesale across the tree. It is reachable
+# only through bevy-inspector-egui -> hex_dev, which is behind the `dev` feature
+# and therefore absent from shipping builds. Scoped to this one crate so that if
+# the same licence ever appears on a path that *does* ship, CI fails.
+[[licenses.exceptions]]
+name = "epaint_default_fonts"
+allow = ["Ubuntu-font-1.0"]
+
+[bans]
+# Bevy's dependency tree legitimately carries several duplicated versions
+# (windows-sys, redox_syscall, font crates). Worth seeing, not worth blocking.
+multiple-versions = "warn"
+# A wildcard on a real registry dependency means an unpinned upgrade surface, so
+# it stays denied. Our own path dependencies are wildcards by construction and
+# are exempted rather than blanket-allowing the lint away.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

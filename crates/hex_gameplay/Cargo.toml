@@ -2,6 +2,7 @@
 name = "hex_gameplay"
 version.workspace = true
 edition.workspace = true
+publish = false
 description = "Player, input, picking, and animation."
 
 # Must NOT depend on hex_world. The two talk through components and states
@@ -9,3 +10,6 @@ description = "Player, input, picking, and animation."
 [dependencies]
 bevy = { workspace = true }
 hex_core = { workspace = true }
+
+[lints]
+workspace = true

@@ -2,8 +2,12 @@
 name = "hex_assets"
 version.workspace = true
 edition.workspace = true
+publish = false
 description = "RON asset definitions, loaders, and load tracking."
 
 [dependencies]
 bevy = { workspace = true }
 hex_core = { workspace = true }
+
+[lints]
+workspace = true

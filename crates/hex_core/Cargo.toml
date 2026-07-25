@@ -2,6 +2,7 @@
 name = "hex_core"
 version.workspace = true
 edition.workspace = true
+publish = false
 description = "Shared vocabulary and pure domain logic: hex coordinates, terrain generation, app states."
 
 # Deliberately depends on Bevy's sub-crates rather than the `bevy` facade: this
@@ -15,3 +16,6 @@ bevy_platform = { workspace = true }
 bevy_reflect = { workspace = true }
 rand = { workspace = true }
 xxhash-rust = { workspace = true }
+
+[lints]
+workspace = true

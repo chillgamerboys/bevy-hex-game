@@ -2,6 +2,7 @@
 name = "hex_game"
 version.workspace = true
 edition.workspace = true
+publish = false
 description = "The game binary: app setup, plugin wiring, screens and menus."
 
 [dependencies]
@@ -18,3 +19,6 @@ hex_dev = { workspace = true, optional = true }
 default = []
 # Development tooling: world inspector, debug overlays.
 dev = ["dep:hex_dev"]
+
+[lints]
+workspace = true

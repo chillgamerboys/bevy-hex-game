@@ -1,7 +1,7 @@
 // Bevy Imports
 use bevy::gltf::GltfAssetLabel;
-use bevy::picking::Pickable;
 use bevy::picking::events::{Click, Pointer};
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_core::config::{PLAYER_SCALE, PLAYER_SPEED};
@@ -26,7 +26,9 @@ fn on_tile_clicked(
     height_map: Res<HeightMap>,
 ) {
     let clicked = event.event_target();
-    let Ok(tile_coord) = tile_query.get(clicked) else { return };
+    let Ok(tile_coord) = tile_query.get(clicked) else {
+        return;
+    };
 
     for (entity, transform) in player_query.iter() {
         let animation: Transformation = HexPathingLine::new(
@@ -56,10 +58,20 @@ fn spawn_player(
     let position = coord.to_world(Some(&height_map));
     let scale = Vec3::splat(PLAYER_SCALE);
 
-    let mesh_a: Handle<Mesh> =
-        asset_server.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset("meshes/pieces.glb"));
-    let mesh_b: Handle<Mesh> =
-        asset_server.load(GltfAssetLabel::Primitive { mesh: 1, primitive: 0 }.from_asset("meshes/pieces.glb"));
+    let mesh_a: Handle<Mesh> = asset_server.load(
+        GltfAssetLabel::Primitive {
+            mesh: 0,
+            primitive: 0,
+        }
+        .from_asset("meshes/pieces.glb"),
+    );
+    let mesh_b: Handle<Mesh> = asset_server.load(
+        GltfAssetLabel::Primitive {
+            mesh: 1,
+            primitive: 0,
+        }
+        .from_asset("meshes/pieces.glb"),
+    );
 
     let child_transform = Transform {
         translation: Vec3::new(-PLAYER_SCALE, -PLAYER_SCALE, -10. * PLAYER_SCALE),
