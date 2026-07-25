@@ -56,7 +56,7 @@ fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
         },
         Name::new("Game Camera"),
         Skybox {
-            image: skybox_handle,
+            image: Some(skybox_handle),
             brightness: SKYBOX_BRIGHTNESS,
             ..default()
         },
@@ -72,10 +72,15 @@ fn reinterpret_skybox_when_loaded(
     cameras: Query<(Entity, &Skybox), With<SkyboxNeedsReinterpret>>,
 ) {
     for (entity, skybox) in cameras.iter() {
-        let Some(image) = images.get_mut(&skybox.image) else { continue };
+        let Some(handle) = skybox.image.as_ref() else { continue };
+        let Some(mut image) = images.get_mut(handle) else { continue };
         if image.texture_descriptor.array_layer_count() == 1 {
+            // Bind the layer count first: `Assets::get_mut` hands back a change-detection
+            // `AssetMut` wrapper, so reading `image` inside the call's argument list would
+            // overlap with the mutable borrow the call itself takes.
+            let layers = image.height() / image.width();
             image
-                .reinterpret_stacked_2d_as_array(image.height() / image.width())
+                .reinterpret_stacked_2d_as_array(layers)
                 .expect("skybox PNG should be a vertical stack of cube faces");
             image.texture_view_descriptor = Some(TextureViewDescriptor {
                 dimension: Some(TextureViewDimension::Cube),

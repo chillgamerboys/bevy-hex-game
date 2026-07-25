@@ -19,7 +19,7 @@ fn spawn_sun(mut commands: Commands) {
     commands.spawn((
         DirectionalLight {
             illuminance: SUN_INTENSITY,
-            shadows_enabled: true,
+            shadow_maps_enabled: true,
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(
