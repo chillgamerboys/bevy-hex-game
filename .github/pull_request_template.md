@@ -1,0 +1,29 @@
+## What and why
+
+<!-- The diff says what changed. Say why. -->
+
+## Checks
+
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [ ] `cargo test --workspace`
+- [ ] **I ran the game and looked at it**
+
+<!--
+That last one is not a formality. Several failure modes here produce a clean log
+and a wrong window: missing assets render a plain blue screen, a missed skybox
+event renders a black sky, a wrong speed unit just looks slightly off, and a tile
+whose transform disagrees with its span floats or sinks. All of them pass CI.
+
+If the change touches rendering, movement, or state transitions, walk it:
+splash -> title -> ENTER -> gameplay, orbit, click a tile, click the tile you are
+standing on, ESC to pause and resume, BACKSPACE to the title, ENTER to rebuild.
+-->
+
+## Boundaries
+
+- [ ] I stayed inside my crate, **or** I have said below why a shared crate needed changing
+
+<!--
+`hex_core` and `hex_game` are shared. Changing them is fine and sometimes
+necessary — it is worth a sentence so the people who depend on them know.
+-->

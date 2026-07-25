@@ -35,11 +35,15 @@ a plain blue window with only `Path not found` in the log.
 ## Workspace
 
 ```
-hex_core → hex_assets → {hex_world, hex_gameplay, hex_dev} → hex_game
+hex_core → hex_assets → {hex_map, hex_world, hex_gameplay, hex_dev} → hex_game
 ```
 
-**`hex_world` and `hex_gameplay` must not depend on each other.** Shared types go
-in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
+**`hex_map`, `hex_world` and `hex_gameplay` must not depend on each other.** Shared
+types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
+
+**`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
+person, and the map reaches the rest of the game only through `HexCoord` and
+`HexSpan` components on tile entities. See `crates/hex_map/CLAUDE.md`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the test suite (17 tests).
@@ -49,9 +53,13 @@ and tests without a renderer. It holds the test suite (17 tests).
 - **Modules expose `pub fn plugin(app: &mut App)`**, not a `Plugin` struct.
 - **Each plugin registers its own reflected types.** Never a central list.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders `Update`;
-  **`GameplaySetup`** (`Resources → Entities`) orders `OnEnter(Screen::Gameplay)`.
-  Ordering across a crate boundary *must* use a shared set — `.chain()` cannot
-  express it, and a local chain that looks correct will race.
+  **`GameplaySetup`** (`Resources → Terrain → Actors`) orders
+  `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
+  set — `.chain()` cannot express it, and a local chain that looks correct will race.
+  The set boundary also supplies a sync point: `Commands`-spawned entities are not
+  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made.
+- **A position is a tile, not a coordinate.** Stacked columns at one coordinate are
+  not connected. Never key a map by `HexCoord` in a way that collapses a stack.
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.
@@ -108,8 +116,8 @@ screen.
 
 - Long-running **`refactor`** branch off `main`; work targets `refactor`.
 - Prefixes: `chore/`, `fix/`, `perf/`, `feat/`, `docs/`.
-- **`refactor/*` names are unusable** while a branch named `refactor` exists — a
-  git ref can't be both a file and a directory.
+- `refactor/*` names are usable again now the `refactor` branch is gone; a git ref
+  can't be both a file and a directory, so they clashed while it existed.
 - Merge with merge commits (`gh pr merge N --merge`), not squash.
 - CI runs fmt, clippy, tests, `cargo deny`, and builds on all three platforms.
 
@@ -130,10 +138,13 @@ walks between tiles. The design doc is what comes next.
   later costs no source changes.
 - **Bevy features untrimmed.** Still `default-features = true`. The `3d` collection
   would cut compile time and binary size but risks silently dropping capability.
-- **`missing_docs` is `allow`** in `[workspace.lints]`. Worth raising once the API
-  settles.
+- **Lints are strict, deliberately.** `#[allow]` is banned — use
+  `#[expect(lint, reason = "…")]`. `unwrap`, `panic!`, slice indexing, `dbg!`,
+  `println!`, float `==` and undocumented public items are all denied. Restriction
+  lints are relaxed in `#[test]` functions.
 - **Animation is still `Box<dyn Transformer>`**, which is why `Transformation`
   can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
   rewritten when gameplay lands.
-- **No tests outside `hex_core`.** Presentation and gameplay need either a headless
-  `App` harness or more logic pushed down into `hex_core` — usually the better answer.
+- **Headless integration tests** live in `crates/hex_map/tests/` and
+  `crates/hex_gameplay/tests/`. They cannot see anything visual — a black sky or a
+  mistransformed tile still needs a human looking at the window.
