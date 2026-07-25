@@ -1,9 +1,17 @@
 // Window and frame presentation.
+//
+// NOTE: on macOS this has no visible effect in a window. The system compositor
+// vsyncs every windowed app to the display regardless of what the game asks for,
+// so the frame rate stays pinned to the refresh rate (and on a ProMotion display
+// varies between 60 and 120 on its own). Verified by measurement, not assumed.
+// The setting still matters on Windows and Linux.
 (
     // Vsync   - capped to your display's refresh rate, no tearing. Recommended.
-    //           On an adaptive-refresh display (ProMotion, FreeSync, G-Sync) this
-    //           already drops the rate when nothing is moving.
+    //           On an adaptive-refresh display (ProMotion, FreeSync, G-Sync) the
+    //           driver already drops the rate when nothing is moving, which is
+    //           better than a fixed cap: full smoothness while you are dragging
+    //           the camera, low power when you are not.
     // NoVsync - uncapped. Lowest input latency, may tear, works the GPU hardest.
-    // Mailbox - vsync without the frame cap, where supported.
+    // Mailbox - vsync without the frame cap, where the platform supports it.
     present_mode: Vsync,
 )
