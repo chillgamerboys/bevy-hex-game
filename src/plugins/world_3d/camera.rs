@@ -36,10 +36,6 @@ impl Default for PanOrbitCamera {
     }
 }
 
-/// Tracks whether the stacked-2D skybox PNG has been reinterpreted as a cubemap yet.
-#[derive(Component)]
-struct SkyboxNeedsReinterpret;
-
 /// Spawn the game camera with a built-in cubemap skybox.
 fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
     let translation = Vec3::new(0., 20., 10.0);
@@ -60,20 +56,32 @@ fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
             brightness: SKYBOX_BRIGHTNESS,
             ..default()
         },
-        SkyboxNeedsReinterpret,
     ));
 }
 
 /// PNGs do not carry cubemap metadata, so they load as a single stacked 2D texture.
-/// Once the asset finishes loading, reinterpret it as a cube array texture.
+/// Reinterpret it as a cube array texture the moment the image finishes loading.
+///
+/// Driven by `AssetEvent` rather than by polling a marker component: the load happens
+/// once, but the old query-every-frame version kept scanning for the rest of the run.
+/// Reacting to the event means the body only executes on the frame the asset lands.
 fn reinterpret_skybox_when_loaded(
-    mut commands: Commands,
+    mut asset_events: MessageReader<AssetEvent<Image>>,
     mut images: ResMut<Assets<Image>>,
-    cameras: Query<(Entity, &Skybox), With<SkyboxNeedsReinterpret>>,
+    cameras: Query<&Skybox>,
 ) {
-    for (entity, skybox) in cameras.iter() {
-        let Some(handle) = skybox.image.as_ref() else { continue };
-        let Some(mut image) = images.get_mut(handle) else { continue };
+    for event in asset_events.read() {
+        let AssetEvent::LoadedWithDependencies { id } = event else { continue };
+
+        // Images load for all sorts of reasons; only touch one a camera uses as a skybox.
+        let is_skybox = cameras
+            .iter()
+            .any(|skybox| skybox.image.as_ref().is_some_and(|handle| handle.id() == *id));
+        if !is_skybox {
+            continue;
+        }
+
+        let Some(mut image) = images.get_mut(*id) else { continue };
         if image.texture_descriptor.array_layer_count() == 1 {
             // Bind the layer count first: `Assets::get_mut` hands back a change-detection
             // `AssetMut` wrapper, so reading `image` inside the call's argument list would
@@ -87,7 +95,6 @@ fn reinterpret_skybox_when_loaded(
                 ..default()
             });
         }
-        commands.entity(entity).remove::<SkyboxNeedsReinterpret>();
     }
 }
 
