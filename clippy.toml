@@ -1,3 +1,16 @@
 # Require `bevy_ecs::children!` to use `[]` braces rather than `()` or `{}`,
 # matching the macro's documented form.
 standard-macro-braces = [{ name = "children", brace = "[" }]
+
+# Restriction lints exist to stop the shipped game panicking mid-frame. In a test a
+# panic *is* the failure signal, so applying them there produces noise rather than
+# safety — and noise is what teaches people to ignore lints.
+#
+# `indexing_slicing` has no test-scoped switch, so tests destructure instead of
+# indexing. That is better test code anyway: `let [a, b] = pair else { ... }` says
+# what shape it expects.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true

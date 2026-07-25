@@ -33,6 +33,7 @@ const SKYBOX: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 /// loader.
 pub const CONFIG_EXTENSIONS: &[&str] = &["ron"];
 
+/// Registers asset loading and the settings shared across the game.
 pub fn plugin(app: &mut App) {
     app.add_systems(PreStartup, load_assets);
 

@@ -57,7 +57,9 @@ impl HexPathingLine {
         let mut transformers = TransformerSeries::new();
 
         for (i, pair) in steps.windows(2).enumerate() {
-            let (from, to) = (pair[0], pair[1]);
+            let [from, to] = pair else {
+                unreachable!("windows(2) always yields pairs")
+            };
 
             // TODO: height differences are traversed as a straight diagonal, so a
             // piece clips through the corner of a tall column. Splitting into a
@@ -70,7 +72,13 @@ impl HexPathingLine {
                 from.world_position(),
                 to.world_position(),
                 speed,
-                move_duration * i as f64,
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a path index, bounded by the grid diameter"
+                )]
+                {
+                    move_duration * i as f64
+                },
             ));
         }
 

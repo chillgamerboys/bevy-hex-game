@@ -5,8 +5,11 @@
 
 use bevy::prelude::*;
 
+/// Generic transform animation, independent of hexes.
 pub mod animation;
+/// Hex-specific movement along a route of columns.
 pub mod pathing;
+/// The player piece and click-to-move.
 pub mod player;
 
 pub use player::Player;

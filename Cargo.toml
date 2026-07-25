@@ -31,12 +31,80 @@ edition = "2021"
 # source changes. It does not support Bevy 0.19 yet (0.18 is its ceiling), so it
 # is not wired into CI; this is here so it costs nothing to adopt when it lands.
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
-# TODO: raise to "warn" in the docs PR. It currently fires 55 times, mostly in
-# hex_core, whose public API is about to be rewritten around hexx — documenting
-# it now would be writing docs for code that is about to change.
-missing_docs = "allow"
+# Public API has to be documented. This is a game whose map is owned by someone
+# who does not write Rust, working through an AI agent -- undocumented public
+# items are the difference between a boundary they can use and one they have to
+# reverse-engineer.
+missing_docs = "deny"
+# Nothing here needs unsafe, and an agent reaching for it is a red flag rather
+# than an optimisation. `forbid` cannot be overridden by an attribute.
+unsafe_code = "forbid"
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Clippy
+#
+# These are calibrated for a codebase substantially written by AI agents. An
+# agent produces code sequentially, without the accumulated sense of a codebase
+# that stops a human reaching for `unwrap()` in a system that runs every frame.
+# Lints are cheaper than review for exactly that class of mistake.
+#
+# See <https://emschwartz.me/your-clippy-config-should-be-stricter/>.
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 [workspace.lints.clippy]
+
+# --- The two that make the rest enforceable -----------------------------------
+#
+# Without these, an agent that cannot satisfy a lint silences it and moves on,
+# and every rule below becomes advisory. Together they require every suppression
+# to be `#[expect(lint, reason = "...")]` with a real justification.
+#
+# `#[expect]` also warns when the lint stops firing, so a suppression that has
+# outlived its cause surfaces instead of quietly accumulating.
+allow_attributes = "deny"
+allow_attributes_without_reason = "deny"
+
+# --- Don't panic --------------------------------------------------------------
+#
+# A panic in a Bevy system takes the whole app down mid-frame. `indexing_slicing`
+# matters most for grid code, which is full of array access.
+unwrap_used = "deny"
+get_unwrap = "deny"
+unwrap_in_result = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+panic_in_result_fn = "deny"
+# `expect` stays a warning rather than an error: there are honest uses (an asset
+# whose shape is guaranteed by the build), and denying it only pushes people back
+# to `unwrap`, which is worse because it says nothing about why.
+expect_used = "warn"
+
+# --- Don't get numbers wrong --------------------------------------------------
+#
+# Terrain and transforms are float-heavy, and quantized heights cross to and from
+# floats constantly. `float_cmp` catches the classic `height == 0.0`.
+float_cmp = "deny"
+lossy_float_literal = "deny"
+cast_possible_truncation = "warn"
+cast_precision_loss = "warn"
+cast_sign_loss = "warn"
+
+# --- Don't fail silently ------------------------------------------------------
+let_underscore_must_use = "deny"
+unused_result_ok = "deny"
+map_err_ignore = "deny"
+
+# --- Don't leave debris -------------------------------------------------------
+#
+# The codebase logs through Bevy's `info!`/`warn!`, which respect log levels and
+# show up in release builds. `println!` does neither.
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+
+# --- Bevy-shaped exceptions ---------------------------------------------------
+#
 # Bevy injects system arguments by dependency injection, so systems routinely and
 # correctly take more than seven parameters.
 too_many_arguments = "allow"

@@ -1,3 +1,10 @@
+//! The game binary: app setup, plugin wiring, screens, and menus.
+//!
+//! Everything the game does hangs off `AppPlugin` here, so the composition of the
+//! app is readable end to end without chasing plugin groups. This is also the only
+//! crate that can see every other one — it is the wiring, and deliberately holds no
+//! game logic of its own.
+
 // Lets `bevy_lint`'s attributes be written in source without breaking a normal build.
 #![cfg_attr(bevy_lint, feature(register_tool), register_tool(bevy))]
 // Without this, launching the shipped game on Windows opens a console window

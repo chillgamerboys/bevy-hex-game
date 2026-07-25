@@ -12,8 +12,11 @@ use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 use hex_core::HexCoord;
 
-/// hashes bytes with seed using msg
-/// to distinguish it from other hashes on same bytes
+/// Hashes bytes with a seed, salted by `msg`.
+///
+/// The salt lets one seed produce independent noise fields — the x and y components
+/// of a gradient hash the same coordinate but with different messages, so they do
+/// not correlate.
 pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
     let mut vec = bytes.to_vec();
     let msg_bytes = msg.as_bytes();
@@ -22,7 +25,11 @@ pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
     xxh3_64_with_seed(vec.as_slice(), seed)
 }
 
-/// Convert quantized height to height in world space.
+/// Converts a quantized height to world units.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "quantized tile heights are small; f32 is exact below 2^24"
+)]
 pub fn to_world(height: u32, height_scale: f32) -> f32 {
     (height as f32) * height_scale
 }
@@ -30,6 +37,12 @@ pub fn to_world(height: u32, height_scale: f32) -> f32 {
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Wrapper Struct ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
 #[derive(Resource)]
+/// A generated height field: how tall the ground is at each coordinate.
+///
+/// Private to this crate. The rest of the game never sees it — terrain reaches
+/// gameplay as [`HexSpan`](hex_core::HexSpan) components on tile entities, so this
+/// can be replaced wholesale (multiple columns per coordinate, chunked storage,
+/// streamed regions) without anything outside `hex_map` noticing.
 pub struct HeightMap {
     generator: Box<dyn HeightGenerator>,
     /// World units per unit of quantized height. Comes from settings rather than
@@ -41,7 +54,7 @@ pub struct HeightMap {
 }
 
 impl HeightMap {
-    /// returns as a quantized integer. To get this as height in world space. Use `get_world_height`
+    /// Height at a coordinate, in quantized units. Never below 1.
     pub fn get_height(&self, coord: HexCoord) -> u32 {
         if let Some(height) = self.cache.get(&coord) {
             return *height;
@@ -49,13 +62,16 @@ impl HeightMap {
         Self::generate(self.generator.as_ref(), coord)
     }
 
-    /// gets height of coord in world space. To get quantized height use `get_height`
+    /// Height at a coordinate, in world units.
     pub fn get_world_height(&self, coord: HexCoord) -> f32 {
         let q_height = self.get_height(coord);
         to_world(q_height, self.height_scale)
     }
 
-    /// Builds a height map, precomputing every coord within `grid_radius`.
+    /// Builds a height map, precomputing every coordinate within `grid_radius`.
+    ///
+    /// Coordinates outside that radius still work; they fall through to the
+    /// generator instead of being served from the cache.
     pub fn new(generator: impl HeightGenerator, grid_radius: u32, height_scale: f32) -> Self {
         let generator: Box<dyn HeightGenerator> = Box::new(generator);
         // The perlin generator is pure but not cheap, and callers hit it constantly:
@@ -82,15 +98,25 @@ impl HeightMap {
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Inner Trait  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
+/// Produces a height for any coordinate.
+///
+/// Implement this to add a new kind of terrain. Implementations must be **pure** —
+/// the same coordinate must always give the same height — because results are
+/// cached, so an inconsistent generator produces terrain that changes depending on
+/// what has been looked at.
 pub trait HeightGenerator: Send + Sync + 'static {
+    /// Height at `coord`, in quantized units.
     fn generate_height(&self, coord: HexCoord) -> u32;
 }
 
+/// Flat ground everywhere. Useful for tests and for isolating a change from
+/// terrain noise.
 pub struct FlatGenerator {
     height: u32,
 }
 
 impl FlatGenerator {
+    /// A generator returning `height` everywhere.
     pub fn new(height: u32) -> Self {
         Self { height }
     }
@@ -102,14 +128,21 @@ impl HeightGenerator for FlatGenerator {
     }
 }
 
+/// Uniform random heights — white noise, with no correlation between neighbours.
+///
+/// Produces jagged, unwalkable terrain; kept because it is the simplest way to prove
+/// something works regardless of terrain shape.
 pub struct RandGenerator {
     min: u32,
     max: u32,
     seed: u64,
 }
 
-// generates height randomly. White Noise
 impl RandGenerator {
+    /// Heights uniformly distributed in `min..max`.
+    ///
+    /// `None` for the seed picks a new one each run, so the world is different every
+    /// launch.
     pub fn new(min: u32, max: u32, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or(rand::random());
         Self { min, max, seed }
@@ -118,19 +151,28 @@ impl RandGenerator {
 
 impl HeightGenerator for RandGenerator {
     fn generate_height(&self, coord: HexCoord) -> u32 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "discarding the high half of a hash is the intent; any bits do"
+        )]
         let hash = seeded_hash(&coord.to_bytes(), self.seed, "Random Height Map") as u32;
         hash % (self.max - self.min) + self.min
     }
 }
 
-// generate terrain height with fractal perlin noise
+/// Fractal Perlin noise — the generator the game actually uses.
+///
+/// Sums several [`PerlinStep`] octaves. Neighbouring coordinates get similar
+/// heights, which is what makes the result walkable rather than jagged.
 pub struct PerlinGenerator {
     steps: Vec<PerlinStep>,
     seed: u64,
 }
 
 impl PerlinGenerator {
-    // For creating custom perlin height maps
+    /// A generator summing the given octaves.
+    ///
+    /// `None` for the seed picks a new one each run.
     pub fn new(steps: Vec<PerlinStep>, seed: Option<u64>) -> Self {
         let seed = seed.unwrap_or(rand::random());
         Self { steps, seed }
@@ -138,6 +180,7 @@ impl PerlinGenerator {
 
     // ~~~~~~~~~~~~~~ Prefabs ~~~~~~~~~~~~~~ //
 
+    /// Long, smooth ridges with fine ripples over them.
     pub fn dunes(seed: Option<u64>) -> Self {
         Self::new(
             vec![
@@ -148,18 +191,22 @@ impl PerlinGenerator {
         )
     }
 
+    /// Rolling hills.
     pub fn hills(seed: Option<u64>) -> Self {
         Self::new(vec![PerlinStep::new(0.05, 0.05, 30.)], seed)
     }
 
+    /// Broad, gentle gradients across the whole map.
     pub fn slopes(seed: Option<u64>) -> Self {
         Self::new(vec![PerlinStep::new(0.01, 0.01, 50.)], seed)
     }
 
+    /// Sharp, high-frequency peaks.
     pub fn crags(seed: Option<u64>) -> Self {
         Self::new(vec![PerlinStep::new(0.15, 0.15, 35.)], seed)
     }
 
+    /// Shallow terrain with gentle variation. The default in `world.ron`.
     pub fn lowlands(seed: Option<u64>) -> Self {
         Self::new(vec![PerlinStep::new(0.035, 0.05, 3.)], seed)
     }
@@ -168,7 +215,17 @@ impl PerlinGenerator {
     // These were created by following https://gpfault.net/posts/perlin-noise.txt.html
 
     fn gradient(&self, vec: Vec2) -> Vec2 {
+        // Precision is irrelevant here: these two hashes are only a direction, and
+        // are immediately normalized. Any spread of values does the job.
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "hash bits used only as a direction"
+        )]
         let x_dir = seeded_hash(vec.to_string().as_bytes(), self.seed, "Perlin X Dir") as f32;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "hash bits used only as a direction"
+        )]
         let y_dir = seeded_hash(vec.to_string().as_bytes(), self.seed, "Perlin Y Dir") as f32;
         Vec2::new(x_dir, y_dir).normalize()
     }
@@ -205,18 +262,42 @@ impl HeightGenerator for PerlinGenerator {
     fn generate_height(&self, coord: HexCoord) -> u32 {
         let mut height = 0.;
         for step in self.steps.iter() {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "hex coordinates are small integers, exact in f32"
+            )]
             let x = (coord.x() as f32) * step.x_freq;
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "hex coordinates are small integers, exact in f32"
+            )]
             let y = (coord.y() as f32) * step.y_freq;
             let noise = self.noise(Vec2::new(x, y));
             height += (noise * 2. + 0.7) * step.magnitude;
             height += noise * step.magnitude;
         }
-        height as u32
+        // Noise can go negative. Clamping first makes the floor explicit rather
+        // than relying on `as u32` saturating, and `HeightMap::generate` then lifts
+        // it to at least 1 so no tile is scaled to nothing.
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped non-negative on the line above; the fractional part is \
+                      what we mean to discard"
+        )]
+        let quantized = height.max(0.0) as u32;
+        quantized
     }
 }
 
 // For adding a level in the perlin noise generation.
 // Can add any number of these to the perlin noise generator
+/// One octave of Perlin noise.
+///
+/// Higher frequencies give finer detail; magnitude is how much this octave
+/// contributes to the total height. Stacking a low-frequency, high-magnitude step
+/// with higher-frequency, lower-magnitude ones gives broad shapes with detail on
+/// top.
 pub struct PerlinStep {
     x_freq: f32,
     y_freq: f32,
@@ -224,6 +305,7 @@ pub struct PerlinStep {
 }
 
 impl PerlinStep {
+    /// An octave with the given frequencies and magnitude.
     pub fn new(x_freq: f32, y_freq: f32, magnitude: f32) -> Self {
         Self {
             x_freq,
@@ -325,9 +407,7 @@ mod tests {
     #[test]
     fn world_height_scales_the_quantized_height() {
         let map = HeightMap::new(FlatGenerator::new(3), TEST_RADIUS, TEST_HEIGHT_SCALE);
-        assert_eq!(
-            map.get_world_height(HexCoord::ORIGIN),
-            3.0 * TEST_HEIGHT_SCALE
-        );
+        let expected = 3.0 * TEST_HEIGHT_SCALE;
+        assert!((map.get_world_height(HexCoord::ORIGIN) - expected).abs() < f32::EPSILON);
     }
 }
