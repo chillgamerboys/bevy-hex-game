@@ -34,8 +34,11 @@
 
 use bevy::prelude::*;
 
+/// Terrain height generation.
 pub mod generator;
+/// Turning generated terrain into tile entities.
 pub mod grid;
+/// Designer-facing map settings, loaded from RON.
 pub mod settings;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};

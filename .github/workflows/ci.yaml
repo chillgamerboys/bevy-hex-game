@@ -45,6 +45,11 @@ jobs:
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
       - run: cargo test --workspace --all-features --profile ci
+      # Docs are a deliverable here, not a nicety: the map is owned by someone who
+      # does not write Rust. A broken intra-doc link is a broken handoff.
+      - run: cargo doc --workspace --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   # The three platforms we intend to ship. Catches target-specific breakage —
   # notably the Windows console subsystem attribute — before it reaches a release.

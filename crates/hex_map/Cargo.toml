@@ -20,5 +20,8 @@ rand = { workspace = true }
 serde = { version = "1.0.229", features = ["derive"] }
 xxhash-rust = { workspace = true }
 
+[dev-dependencies]
+hex_assets = { workspace = true }
+
 [lints]
 workspace = true
