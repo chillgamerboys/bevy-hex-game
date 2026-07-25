@@ -1,8 +1,9 @@
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
 use crate::plugins::world_3d::{
-    config::HEX_HEIGHT_SCALE,
+    config::{HEX_GRID_RADIUS, HEX_HEIGHT_SCALE},
     hex::HexCoord
 };
 
@@ -25,13 +26,19 @@ pub fn to_world(height: u32) -> f32 {
 
 #[derive(Resource)]
 pub struct HeightMap {
-    generator: Box<dyn HeightGenerator>
+    generator: Box<dyn HeightGenerator>,
+    /// Heights for every coord in the spawned grid, precomputed once in [`Self::new`].
+    /// Coords outside the grid fall through to the generator.
+    cache: HashMap<HexCoord, u32>,
 }
 
 impl HeightMap {
     /// returns as a quantized integer. To get this as height in world space. Use `get_world_height`
     pub fn get_height(&self, coord: HexCoord) -> u32 {
-        std::cmp::max(self.generator.generate_height(coord), 1)
+        if let Some(height) = self.cache.get(&coord) {
+            return *height;
+        }
+        Self::generate(self.generator.as_ref(), coord)
     }
 
     /// gets height of coord in world space. To get quantized height use `get_height`
@@ -41,7 +48,22 @@ impl HeightMap {
     }
 
     pub fn new(generator: impl HeightGenerator) -> Self {
-        Self {generator: Box::new(generator)}
+        let generator: Box<dyn HeightGenerator> = Box::new(generator);
+        // The perlin generator is pure but not cheap, and callers hit it constantly:
+        // once per tile at spawn, then again for every waypoint of every click-to-move
+        // path. The playable grid is a fixed, known set of coords, so evaluate it once
+        // up front and read from the map thereafter.
+        let cache = HexCoord(0, 0)
+            .within_radius(HEX_GRID_RADIUS)
+            .into_iter()
+            .map(|coord| (coord, Self::generate(generator.as_ref(), coord)))
+            .collect();
+        Self { generator, cache }
+    }
+
+    /// The uncached height for a coord. Floors at 1 so no tile is scaled to zero.
+    fn generate(generator: &dyn HeightGenerator, coord: HexCoord) -> u32 {
+        std::cmp::max(generator.generate_height(coord), 1)
     }
 }
 
