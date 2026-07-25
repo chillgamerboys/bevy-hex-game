@@ -1,11 +1,16 @@
 //! Terrain height generation.
+//!
+//! Entirely internal to `hex_map`. Nothing outside this crate reads [`HeightMap`]
+//! or the generators — the map's output reaches the rest of the game as
+//! [`HexSpan`](hex_core::HexSpan) components on tile entities. That means this file
+//! can be rewritten freely, including changing what a map *is*, without touching a
+//! crate anyone else owns.
 
-use bevy_ecs::resource::Resource;
-use bevy_math::Vec2;
-use bevy_platform::collections::HashMap;
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
-use crate::hex::HexCoord;
+use hex_core::HexCoord;
 
 /// hashes bytes with seed using msg
 /// to distinguish it from other hashes on same bytes

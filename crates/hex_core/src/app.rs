@@ -47,20 +47,29 @@ pub struct PausableSystems;
 
 /// Ordering for world construction on entering [`Screen::Gameplay`].
 ///
-/// Entities need the resources they read to exist already, and those two steps
-/// live in different crates — the height map is inserted by `hex_world`, while
-/// `hex_gameplay` spawns the player that reads it. Systems added to the same
-/// `OnEnter` schedule run in **unspecified order**, so without this the two would
-/// race and the app would panic intermittently on a missing resource.
+/// Building a world has a dependency chain — resources, then the terrain, then the
+/// things standing on the terrain — and each step lives in a different crate.
+/// `hex_map` builds the map; `hex_gameplay` spawns the player onto it. Systems added
+/// to the same `OnEnter` schedule otherwise run in **unspecified order**, and
+/// `.chain()` cannot express ordering across a crate boundary because neither crate
+/// can see the other's systems.
 ///
-/// This replaced an earlier arrangement where the only thing sequencing them was
-/// that one happened to be registered in `PreStartup` and the other in `Startup`.
+/// Bevy inserts a sync point between ordered sets, which matters here beyond mere
+/// ordering: entities spawned through `Commands` in one set are not queryable until
+/// those commands are applied. Placing [`Self::Actors`] in a later set than
+/// [`Self::Terrain`] is what makes the terrain *visible* to the systems that need
+/// it, not just earlier.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum GameplaySetup {
-    /// Insert resources the world is built from, such as the height map.
+    /// Insert resources the world is built from, such as generator configuration.
     Resources,
-    /// Spawn entities. May read anything inserted during [`Self::Resources`].
-    Entities,
+    /// Spawn the map itself — the terrain everything else stands on.
+    Terrain,
+    /// Spawn entities that need the terrain to already exist, such as the player.
+    ///
+    /// Systems here can query tiles and read their
+    /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
+    Actors,
 }
 
 /// Coarse ordering for everything in `Update`.

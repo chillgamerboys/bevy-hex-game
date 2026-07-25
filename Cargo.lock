@@ -3233,6 +3233,7 @@ dependencies = [
  "hex_core",
  "hex_dev",
  "hex_gameplay",
+ "hex_map",
  "hex_world",
 ]
 
@@ -3243,6 +3244,18 @@ dependencies = [
  "bevy",
  "hex_assets",
  "hex_core",
+]
+
+[[package]]
+name = "hex_map"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "hex_assets",
+ "hex_core",
+ "rand 0.8.7",
+ "serde",
+ "xxhash-rust",
 ]
 
 [[package]]

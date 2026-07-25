@@ -1,17 +1,20 @@
-//! Presentation of the 3D world: the hex grid, terrain meshes, sky, and camera.
+//! Presentation of the world that is not the map: the sky and the camera.
 //!
-//! This crate must not depend on `hex_gameplay`. Anything the two need to share
+//! The hex grid used to live here. It moved to `hex_map`, which owns terrain
+//! generation, tile spawning, and map settings together — so the map can be worked
+//! on in one place without reaching across crates.
+//!
+//! This crate must not depend on `hex_gameplay` or `hex_map`. Anything shared
 //! belongs in `hex_core`.
 
 use bevy::prelude::*;
 
 pub mod camera;
-pub mod grid;
 pub mod sky;
 
 pub use camera::PanOrbitCamera;
 
 /// Adds every world-presentation system.
 pub fn plugin(app: &mut App) {
-    app.add_plugins((camera::plugin, grid::plugin, sky::plugin));
+    app.add_plugins((camera::plugin, sky::plugin));
 }

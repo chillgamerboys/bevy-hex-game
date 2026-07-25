@@ -7,7 +7,7 @@
 //! undocumented, unenforced, and one refactor away from a panic.
 
 use bevy::prelude::*;
-use hex_assets::{CameraSettings, GameAssets, LightingSettings, PlayerSettings, WorldSettings};
+use hex_assets::{GameAssets, SettingsRegistry};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
@@ -33,25 +33,19 @@ fn spawn_loading(mut commands: Commands) {
         });
 }
 
-/// Gameplay may only start once **both** the meshes and the settings are present.
+/// Gameplay may only start once **both** the meshes and every settings file are
+/// present.
 ///
-/// The settings resources are inserted by `hex_assets` when their RON files
-/// finish parsing, so taking them as `Option` here is what actually enforces the
-/// wait — every gameplay system can then take them as a plain `Res`.
-#[allow(clippy::too_many_arguments)]
+/// Asking the registry rather than listing settings types keeps this screen ignorant
+/// of which crates define what — `MapSettings` lives in `hex_map`, and naming it here
+/// would put a dependency on the map into the binary's screen code.
 fn enter_gameplay_when_ready(
     assets: Res<GameAssets>,
     asset_server: Res<AssetServer>,
-    world: Option<Res<WorldSettings>>,
-    camera: Option<Res<CameraSettings>>,
-    lighting: Option<Res<LightingSettings>>,
-    player: Option<Res<PlayerSettings>>,
+    settings: Res<SettingsRegistry>,
     mut next: ResMut<NextState<Screen>>,
 ) {
-    let settings_ready =
-        world.is_some() && camera.is_some() && lighting.is_some() && player.is_some();
-
-    if assets.is_ready(&asset_server) && settings_ready {
+    if assets.is_ready(&asset_server) && settings.all_loaded() {
         next.set(Screen::Gameplay);
     }
 }

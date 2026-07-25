@@ -8,7 +8,7 @@ pub fn plugin(app: &mut App) {
     // the values now come from a file that is still loading at that point.
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        (apply_sky_settings, spawn_sun).in_set(GameplaySetup::Entities),
+        (apply_sky_settings, spawn_sun).in_set(GameplaySetup::Terrain),
     )
     .add_systems(OnExit(Screen::Gameplay), despawn_sun);
 }

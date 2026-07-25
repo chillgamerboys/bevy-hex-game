@@ -73,6 +73,36 @@ where
 #[derive(Resource)]
 struct SettingsHandle<T: Asset>(Handle<T>);
 
+/// Tracks how many settings files have been registered and how many have arrived.
+///
+/// Exists so the loading screen can ask "is everything ready?" without naming a
+/// single settings type. That matters for separation: `MapSettings` lives in
+/// `hex_map`, and a loading screen that named it would drag a dependency on the map
+/// into the binary's screen code — and break the moment the map's settings were
+/// renamed.
+#[derive(Resource, Debug, Default)]
+pub struct SettingsRegistry {
+    registered: usize,
+    loaded: usize,
+}
+
+impl SettingsRegistry {
+    /// Whether every registered settings file has been parsed and inserted.
+    #[must_use]
+    pub fn all_loaded(&self) -> bool {
+        self.loaded >= self.registered
+    }
+
+    /// Loading progress in the range 0.0 to 1.0, for a progress bar.
+    #[must_use]
+    pub fn progress(&self) -> f32 {
+        if self.registered == 0 {
+            return 1.0;
+        }
+        self.loaded as f32 / self.registered as f32
+    }
+}
+
 /// Registers settings types loaded from RON.
 pub trait LoadSettings {
     /// Registers `T` as a RON asset, starts loading `path`, and inserts the
@@ -103,6 +133,11 @@ impl LoadSettings for App {
         self.init_asset::<T>();
         self.register_asset_loader(RonAssetLoader::<T>::new(extensions));
 
+        self.init_resource::<SettingsRegistry>();
+        self.world_mut()
+            .resource_mut::<SettingsRegistry>()
+            .registered += 1;
+
         self.add_systems(
             PreStartup,
             move |mut commands: Commands, asset_server: Res<AssetServer>| {
@@ -124,6 +159,7 @@ fn insert_settings<T: Asset + Resource + Clone>(
     handle: Option<Res<SettingsHandle<T>>>,
     assets: Res<Assets<T>>,
     mut events: MessageReader<AssetEvent<T>>,
+    mut registry: ResMut<SettingsRegistry>,
     current: Option<Res<T>>,
 ) {
     let Some(handle) = handle else { return };
@@ -132,6 +168,7 @@ fn insert_settings<T: Asset + Resource + Clone>(
     if current.is_none() {
         if let Some(value) = assets.get(&handle.0) {
             commands.insert_resource(value.clone());
+            registry.loaded += 1;
         }
         return;
     }

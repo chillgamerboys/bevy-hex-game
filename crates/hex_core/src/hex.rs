@@ -22,8 +22,41 @@
 //! `hexx` is depended on **without its Bevy features**, so it pins only `glam` and
 //! can never gate a Bevy upgrade. Every `hexx` entry point used here takes and
 //! returns plain scalars and arrays, so its `glam` version never meets Bevy's.
-//! Hex↔world conversion stays ours, because it has to account for the height map
-//! and the dimensions of `hex.glb`.
+//! Hex↔world conversion stays ours, because it has to account for the dimensions of
+//! `hex.glb`.
+//!
+//! # Columns, not heights
+//!
+//! A coordinate does not have *a* height. It carries one or more [`HexSpan`]s — each
+//! a column with a bottom and a top — so floating platforms, overhangs and caves are
+//! representable rather than being special cases bolted onto a single elevation.
+//! Terrain generation lives in `hex_map`; this crate only defines the vocabulary.
+//!
+//! # A position is a tile, not a coordinate
+//!
+//! This is the rule the rest of the game is built on, and the one most likely to be
+//! violated by accident:
+//!
+//! > **Columns stacked at the same coordinate are not connected.** A unit standing on
+//! > a bridge cannot step down to the ground beneath it. Reaching the lower column
+//! > means travelling — a ramp or spiral of adjacent columns descending gradually —
+//! > or an ability that explicitly bypasses the rule, such as teleporting or
+//! > tunnelling.
+//!
+//! So a unit is not *at* `HexCoord(3, -1)`. It is on a **specific column** there.
+//! Two columns sharing a coordinate are unrelated places that happen to share an
+//! address, exactly as two flats in a building share a street number.
+//!
+//! The practical consequence for anything that moves: **identify positions by tile
+//! entity, never by [`HexCoord`] alone.** A `HashMap<HexCoord, _>` keyed on
+//! coordinate silently collapses a stack down to one entry, and whichever column
+//! loses that race becomes unreachable — or worse, a unit crossing a bridge
+//! teleports to the ground. Adjacency between columns is
+//! [`HexCoord::neighbors`] *plus* an acceptable [`HexSpan::step_to`]; the
+//! coordinate on its own is only half the answer.
+//!
+//! What counts as an acceptable step, and which abilities may ignore the rule, is
+//! movement design and lives in `hex_gameplay`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
@@ -31,7 +64,6 @@ use bevy_reflect::prelude::*;
 use hexx::Hex;
 
 use crate::config::HEX_CIRCUMRADIUS;
-use crate::terrain::HeightMap;
 
 /// A position on the hex grid, in cube coordinates.
 ///
@@ -104,14 +136,15 @@ impl HexCoord {
         [self.x, self.y, self.z()]
     }
 
-    /// Position of this tile's centre in world space.
+    /// Position of this tile's centre in world space, at the given height.
     ///
-    /// Pass a height map to sit the position on top of the tile; without one the
-    /// `y` component is zero.
+    /// `y` is supplied by the caller rather than looked up, because a coordinate
+    /// does not have a single height: it may carry several [`HexSpan`]s at
+    /// different elevations. The caller knows which one it means; this function
+    /// only converts hex space to world space.
     #[must_use]
-    pub fn to_world(&self, map: Option<&HeightMap>) -> Vec3 {
+    pub fn to_world(&self, y: f32) -> Vec3 {
         let x = HEX_CIRCUMRADIUS * f32::sqrt(3.0) * ((self.x as f32) + (self.y as f32) / 2.0);
-        let y = map.map_or(0., |map| map.get_world_height(*self));
         let z = HEX_CIRCUMRADIUS * (3.0 / 2.0) * (self.y as f32);
         Vec3 { x, y, z }
     }
@@ -180,6 +213,98 @@ impl HexCoord {
     }
 }
 
+/// The vertical extent a hex occupies, in **world units**.
+///
+/// A hex is a **column**, not a height. It has a bottom and a top, so terrain that
+/// does not start at ground level is expressible: a platform floating over a valley
+/// is `{ bottom: 8.0, top: 10.0 }`, and an overhang or a bridge over open ground is
+/// two tile entities sharing one [`HexCoord`] with disjoint spans.
+///
+/// Ordinary ground is `{ bottom: 0.0, top: h }`, which is what the whole map is
+/// today.
+///
+/// # Why world units rather than the generator's quantized ones
+///
+/// So the type is self-describing. A quantized span would only mean something
+/// alongside the map's height scale, which lives in `hex_map` — and needing that
+/// scale to interpret a span would put a hidden dependency on the map right back
+/// into gameplay, defeating the separation this type exists to create.
+///
+/// The generator works in whatever units suit it and converts when it spawns.
+///
+/// # The contract
+///
+/// This is how the map talks to everything else. `hex_map` decides what spans exist
+/// and how they are drawn; `hex_gameplay` reads them off tile entities. Neither
+/// crate can see the other.
+#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq)]
+#[reflect(Component)]
+pub struct HexSpan {
+    /// Underside of the column.
+    pub bottom: f32,
+    /// Upper surface of the column — the height something standing here sits at.
+    pub top: f32,
+}
+
+impl HexSpan {
+    /// A column resting on the ground, `height` tall.
+    #[must_use]
+    pub fn from_ground(height: f32) -> Self {
+        Self::new(0.0, height)
+    }
+
+    /// A column between two elevations.
+    ///
+    /// # Panics
+    ///
+    /// Panics unless `top` is above `bottom`. A zero-height or inverted column has
+    /// no sensible geometry, and accepting one silently produces a tile scaled to
+    /// nothing or turned inside out — both of which render without complaint, which
+    /// is precisely the kind of failure worth refusing early.
+    #[must_use]
+    pub fn new(bottom: f32, top: f32) -> Self {
+        assert!(
+            top > bottom,
+            "a span's top ({top}) must be above its bottom ({bottom})"
+        );
+        Self { bottom, top }
+    }
+
+    /// Height of the column. Always positive.
+    #[must_use]
+    pub fn height(self) -> f32 {
+        self.top - self.bottom
+    }
+
+    /// Midpoint of the column.
+    ///
+    /// Where a centre-origin mesh has to sit for its extents to match the span.
+    #[must_use]
+    pub fn centre(self) -> f32 {
+        (self.bottom + self.top) * 0.5
+    }
+
+    /// Whether two columns at the same coordinate overlap vertically.
+    ///
+    /// Touching end to end does not count: a column ending at 5.0 and another
+    /// starting at 5.0 are stacked, not colliding.
+    #[must_use]
+    pub fn overlaps(self, other: Self) -> bool {
+        self.bottom < other.top && other.bottom < self.top
+    }
+
+    /// Height difference between this column's surface and another's.
+    ///
+    /// Positive when `other` is higher. This is the quantity a traversability rule
+    /// compares against a maximum step height — but *what* that maximum is, and
+    /// whether stairs or a slope change the answer, is a movement-design question
+    /// and deliberately not decided here.
+    #[must_use]
+    pub fn step_to(self, other: Self) -> f32 {
+        other.top - self.top
+    }
+}
+
 /// Marks the parent entity that owns every spawned tile.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
@@ -232,7 +357,7 @@ mod tests {
         for x in -15..=15 {
             for y in -15..=15 {
                 let coord = HexCoord::from_axial(x, y);
-                let back = HexCoord::from_world(coord.to_world(None));
+                let back = HexCoord::from_world(coord.to_world(0.0));
                 assert_eq!(coord, back, "round trip failed for {coord:?}");
             }
         }
@@ -297,5 +422,119 @@ mod tests {
         for neighbor in coord.neighbors() {
             assert_eq!(coord.distance(neighbor), 1);
         }
+    }
+
+    #[test]
+    fn ground_spans_start_at_zero() {
+        let span = HexSpan::from_ground(5.0);
+        assert!((span.bottom - 0.0).abs() < f32::EPSILON);
+        assert!((span.top - 5.0).abs() < f32::EPSILON);
+        assert!((span.height() - 5.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn floating_spans_do_not_touch_the_ground() {
+        let platform = HexSpan::new(8.0, 10.0);
+        assert!((platform.height() - 2.0).abs() < f32::EPSILON);
+        assert!((platform.bottom - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn spans_may_sit_below_ground() {
+        let cave_floor = HexSpan::new(-4.0, -1.0);
+        assert!((cave_floor.height() - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be above its bottom")]
+    fn zero_height_spans_are_rejected() {
+        let _ = HexSpan::new(3.0, 3.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be above its bottom")]
+    fn inverted_spans_are_rejected() {
+        let _ = HexSpan::new(10.0, 2.0);
+    }
+
+    /// Two columns at one coordinate is how an overhang or a bridge gets expressed,
+    /// so detecting when they collide is the map's basic sanity check.
+    #[test]
+    fn overlap_detects_colliding_columns() {
+        let ground = HexSpan::from_ground(5.0);
+        let overlapping = HexSpan::new(4.0, 9.0);
+        let stacked = HexSpan::new(5.0, 9.0);
+
+        assert!(ground.overlaps(overlapping));
+        assert!(overlapping.overlaps(ground));
+        // Touching end to end is stacking, not colliding.
+        assert!(!ground.overlaps(stacked));
+        assert!(!stacked.overlaps(ground));
+    }
+
+    /// A centre-origin mesh scaled to the span's height must land exactly on the
+    /// span. This is the invariant tile spawning depends on, and the one a
+    /// multi-span rewrite is most likely to break silently.
+    #[test]
+    fn centre_sits_halfway_between_bottom_and_top() {
+        let span = HexSpan::new(2.0, 6.0);
+        let half = span.height() / 2.0;
+
+        assert!((span.centre() - half - span.bottom).abs() < 1e-6);
+        assert!((span.centre() + half - span.top).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod stacking_rule {
+    use super::*;
+
+    /// Columns stacked at one coordinate are separate places. A bridge over ground
+    /// is two spans that do not overlap, and the step between them is the full drop
+    /// — which is what a movement rule measures to reject it.
+    #[test]
+    fn a_bridge_and_the_ground_beneath_it_are_far_apart() {
+        let ground = HexSpan::from_ground(1.0);
+        let bridge = HexSpan::new(6.0, 7.0);
+
+        assert!(!ground.overlaps(bridge), "a bridge should clear the ground");
+        assert!((ground.step_to(bridge) - 6.0).abs() < 1e-6);
+        assert!((bridge.step_to(ground) + 6.0).abs() < 1e-6);
+    }
+
+    /// A spiral descent is a run of adjacent columns whose surfaces change gently.
+    /// Each individual step is small even though the total drop is large — which is
+    /// exactly what distinguishes a legal route from stepping off the edge.
+    #[test]
+    fn a_gradual_descent_has_small_steps_throughout() {
+        let ramp: Vec<HexSpan> = (0..8i32)
+            .map(|i| HexSpan::from_ground(8.0 - i as f32))
+            .collect();
+
+        let total = ramp[0].step_to(ramp[ramp.len() - 1]).abs();
+        assert!(
+            (total - 7.0).abs() < 1e-6,
+            "the ramp should descend 7 units"
+        );
+
+        for pair in ramp.windows(2) {
+            assert!(
+                pair[0].step_to(pair[1]).abs() <= 1.0,
+                "each step of a ramp should be small"
+            );
+        }
+    }
+
+    /// `step_to` is signed and antisymmetric: stepping up by n is stepping down by n
+    /// the other way. A rule comparing against a maximum needs the magnitude, so
+    /// getting the sign convention wrong silently permits falls it should refuse.
+    #[test]
+    fn step_is_signed_and_antisymmetric() {
+        let low = HexSpan::from_ground(2.0);
+        let high = HexSpan::from_ground(5.0);
+
+        assert!(low.step_to(high) > 0.0, "stepping up is positive");
+        assert!(high.step_to(low) < 0.0, "stepping down is negative");
+        assert!((low.step_to(high) + high.step_to(low)).abs() < 1e-6);
     }
 }

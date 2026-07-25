@@ -12,8 +12,6 @@
 pub mod app;
 pub mod config;
 pub mod hex;
-pub mod terrain;
 
 pub use app::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
-pub use hex::{HexCoord, HexGrid, HexTile};
-pub use terrain::HeightMap;
+pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};

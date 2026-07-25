@@ -1,0 +1,24 @@
+[package]
+name = "hex_map"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The map: terrain generation, tile spawning, and map settings."
+
+# A leaf crate. Nothing depends on it except the binary, which means work here
+# cannot break gameplay, the camera, the sky, or the screens — those crates
+# cannot see it. That is deliberate: this is the crate the map owner works in.
+#
+# It talks to the rest of the game through `hex_core`'s vocabulary: it spawns
+# entities carrying `HexCoord` and `HexSpan`, and `hex_gameplay` reads those
+# components off the entities rather than reaching for anything defined here.
+[dependencies]
+bevy = { workspace = true }
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+rand = { workspace = true }
+serde = { version = "1.0.229", features = ["derive"] }
+xxhash-rust = { workspace = true }
+
+[lints]
+workspace = true
