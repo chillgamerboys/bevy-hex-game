@@ -1,37 +1,48 @@
 //! Spawns the hex grid: one parent entity owning a tile entity per coordinate.
 
-use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+use hex_assets::GameAssets;
 use hex_core::config::HEX_GRID_RADIUS;
 use hex_core::terrain::{HeightMap, PerlinGenerator};
-use hex_core::{HexCoord, HexGrid, HexTile};
+use hex_core::{GameplaySetup, HexCoord, HexGrid, HexTile, Screen};
 
 pub fn plugin(app: &mut App) {
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
         .register_type::<HexTile>()
-        .add_systems(PreStartup, (init_height_map, spawn_grid).chain());
+        // The height map has to exist before anything reads it, including
+        // `hex_gameplay`'s player spawn — hence a shared set rather than a local
+        // `.chain()`, which would only order these two.
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            init_height_map.in_set(GameplaySetup::Resources),
+        )
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            spawn_grid.in_set(GameplaySetup::Entities),
+        )
+        .add_systems(OnExit(Screen::Gameplay), despawn_grid);
 }
 
 fn init_height_map(mut commands: Commands) {
     commands.insert_resource(HeightMap::new(PerlinGenerator::lowlands(None)));
 }
 
+fn despawn_grid(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
+    for entity in &grids {
+        commands.entity(entity).despawn();
+    }
+}
+
 fn spawn_grid(
     mut commands: Commands,
-    assets: Res<AssetServer>,
+    assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     height_map: Res<HeightMap>,
 ) {
     let tile_material = materials.add(StandardMaterial::from(Color::srgb(1., 0.8, 0.8)));
-    let hex_tile_mesh: Handle<Mesh> = assets.load(
-        GltfAssetLabel::Primitive {
-            mesh: 0,
-            primitive: 0,
-        }
-        .from_asset("meshes/hex.glb"),
-    );
+    let hex_tile_mesh = assets.hex_tile.clone();
 
     let mut tiles = Vec::new();
     for hex_coord in HexCoord::ORIGIN.within_radius(HEX_GRID_RADIUS) {

@@ -14,6 +14,7 @@ bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
 bevy_math = { workspace = true }
 bevy_platform = { workspace = true }
 bevy_reflect = { workspace = true }
+bevy_state = { version = "0.19", default-features = false, features = ["bevy_app", "bevy_reflect"] }
 hexx = { version = "0.24", default-features = false, features = ["algorithms", "grid"] }
 rand = { workspace = true }
 xxhash-rust = { workspace = true }

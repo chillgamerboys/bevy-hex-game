@@ -4,10 +4,20 @@
 //! [`crate::pathing`], which composes the primitives defined here.
 use bevy::prelude::*;
 
+use hex_core::{AppSystems, PausableSystems};
+
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ System ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
 pub fn plugin(app: &mut App) {
-    app.add_systems(Update, transformation_driver);
+    // Pausable: movement should stop when the game is paused. Because timings come
+    // from `Res<Time>` rather than a wall clock, a paused animation resumes where
+    // it left off instead of jumping forward by the length of the pause.
+    app.add_systems(
+        Update,
+        transformation_driver
+            .in_set(AppSystems::Update)
+            .in_set(PausableSystems),
+    );
 }
 
 /// Advances every in-flight [`Transformation`] and drops the ones that have finished.

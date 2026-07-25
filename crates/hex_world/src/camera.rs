@@ -4,19 +4,29 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
+use hex_assets::GameAssets;
 use hex_core::config::{
     CAMERA_SPEED, CAMERA_SPEED_OFFSET, MAX_PITCH, MAX_ZOOM_IN, MAX_ZOOM_OUT, MIN_PITCH,
     SKYBOX_BRIGHTNESS,
 };
-
-const SKYBOX_PATH: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
+use hex_core::{AppSystems, Screen};
 
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
+        // Spawned once at startup rather than per screen: it is the render target
+        // the UI screens draw through, and the skybox behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(
             Update,
-            (reinterpret_skybox_when_loaded, orbit_camera, pan_camera),
+            reinterpret_skybox_when_loaded.in_set(AppSystems::Update),
+        )
+        // Camera control is gameplay-only, so dragging over a menu does not
+        // silently move the world behind it.
+        .add_systems(
+            Update,
+            (orbit_camera, pan_camera)
+                .in_set(AppSystems::RecordInput)
+                .run_if(in_state(Screen::Gameplay)),
         );
 }
 
@@ -39,11 +49,11 @@ impl Default for PanOrbitCamera {
 }
 
 /// Spawn the game camera with a built-in cubemap skybox.
-fn spawn_camera(mut commands: Commands, asset_server: Res<AssetServer>) {
+fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
     let translation = Vec3::new(0., 20., 10.0);
     let radius = translation.length();
 
-    let skybox_handle: Handle<Image> = asset_server.load(SKYBOX_PATH);
+    let skybox_handle = assets.skybox.clone();
 
     commands.spawn((
         Camera3d::default(),

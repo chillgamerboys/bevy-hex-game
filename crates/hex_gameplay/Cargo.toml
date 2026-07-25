@@ -9,6 +9,7 @@ description = "Player, input, picking, and animation."
 # defined in hex_core; cargo is what enforces that.
 [dependencies]
 bevy = { workspace = true }
+hex_assets = { version = "0.1.0", path = "../hex_assets" }
 hex_core = { workspace = true }
 
 [lints]
