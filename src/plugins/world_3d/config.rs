@@ -28,4 +28,7 @@ pub const SKYBOX_BRIGHTNESS: f32 = 300.;
 
 // Player
 pub const PLAYER_SCALE: f32 = 0.25;
-pub const PLAYER_SPEED: f32 = 0.005;
+/// World units per second. Was 0.005 units/ms back when animation ran off a
+/// wall-clock in milliseconds; 5.0 units/s is the same speed in the units the
+/// `Res<Time>`-driven transformation system now uses.
+pub const PLAYER_SPEED: f32 = 5.0;

@@ -1,6 +1,5 @@
 //! Plugin for handling entity movement
 use bevy::prelude::*;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::plugins::world_3d::{
     hex::{
@@ -9,14 +8,6 @@ use crate::plugins::world_3d::{
     },
     config::HEX_SMALL_DIAMETER,
 };
-
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Utils ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-
-#[inline]
-/// unix time in ms
-pub fn now() -> f64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as f64
-}
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ System ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
@@ -27,14 +18,34 @@ impl Plugin for TransformationPlugin {
     }
 }
 
+/// Advances every in-flight [`Transformation`] and drops the ones that have finished.
+///
+/// Timings come from [`Res<Time>`], so animations follow the engine clock: they respect
+/// pausing, `Time::set_relative_speed`, and step correctly when the app is throttled.
+/// Each transformer is fed *seconds since its own component was attached*, not an
+/// absolute timestamp, which keeps transformers independent of when they were built.
 fn transformation_driver(
     mut commands: Commands,
+    time: Res<Time>,
     mut query: Query<(Entity, &mut Transform, &mut Transformation)>
 ) {
-    let curr_time = now();
-    for (entity, mut transform, transformation) in query.iter_mut() {
-        transformation.update(&mut transform, curr_time);
-        if transformation.is_finished(curr_time) {
+    let now = time.elapsed_secs_f64();
+    for (entity, mut transform, mut transformation) in query.iter_mut() {
+        // Anchor on the first frame this component is seen rather than at construction
+        // time, so an animation queued during a pause doesn't burn through its duration
+        // before it ever renders. Assigning through `Mut` here also means change
+        // detection only fires on that first frame.
+        let start = match transformation.started_at {
+            Some(start) => start,
+            None => {
+                transformation.started_at = Some(now);
+                now
+            }
+        };
+
+        let elapsed = now - start;
+        transformation.update(&mut transform, elapsed);
+        if transformation.is_finished(elapsed) {
             commands.entity(entity).remove::<Transformation>();
         }
     }
@@ -46,21 +57,26 @@ fn transformation_driver(
 #[derive(Component)]
 /// Wrapper Struct for Transformer which allows Transformers to be queried as a component
 pub struct Transformation {
-    transformer: Box<dyn Transformer>
+    transformer: Box<dyn Transformer>,
+    /// Engine-clock reading of the first frame this component was driven, or `None`
+    /// until then. All times handed to the inner transformer are relative to it.
+    started_at: Option<f64>,
 }
 
 impl Transformation {
 
     pub fn new(transformer: impl Transformer) -> Self {
-        Self { transformer: Box::new(transformer) }
+        Self { transformer: Box::new(transformer), started_at: None }
     }
 
-    pub fn update(&self, transform: &mut Transform, curr_time: f64) {
-        self.transformer.update(transform, curr_time);
+    /// `elapsed` is seconds since this transformation started.
+    pub fn update(&self, transform: &mut Transform, elapsed: f64) {
+        self.transformer.update(transform, elapsed);
     }
 
-    pub fn is_finished(&self, curr_time: f64) -> bool {
-        self.transformer.is_finished(curr_time)
+    /// `elapsed` is seconds since this transformation started.
+    pub fn is_finished(&self, elapsed: f64) -> bool {
+        self.transformer.is_finished(elapsed)
     }
 
 }
@@ -76,7 +92,8 @@ impl<T: Transformer> From<T> for Transformation {
 pub trait Transformer: Send + Sync + 'static {
     /// Edits a transform based on a time.
     ///
-    /// time: unix_time in ms
+    /// `time`: seconds elapsed since this transformer's [`Transformation`] started.
+    /// Always relative — never a wall-clock or unix timestamp.
     ///
     /// If a time that is passed in is after the ending time of this transformer then
     /// the transformer should update the transformer to min(time, transformer.end_time)
@@ -96,6 +113,8 @@ pub struct LinearMovement {
 }
 
 impl LinearMovement {
+    /// `speed` is world units per second; `start_time` is seconds after the owning
+    /// [`Transformation`] starts that this movement should begin.
     pub fn new(start_pos: Vec3, end_pos: Vec3, speed: f32, start_time: f64) -> Self {
         let path = end_pos - start_pos;
         let dir = path.normalize();
@@ -191,7 +210,9 @@ impl HexPathingLine {
                 // Either do a horizontal and vertical movement seperately
                 // or add some kind of bezier curve jump to get over height difference
 
-                let transformer = LinearMovement::new(this_pos, next_pos, speed, now() + move_duration * i as f64);
+                // Segment i starts `i` hex-crossings in, measured from when the whole
+                // path starts rather than from an absolute timestamp.
+                let transformer = LinearMovement::new(this_pos, next_pos, speed, move_duration * i as f64);
                 transformers.push(transformer)
             }
         }
