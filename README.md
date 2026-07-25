@@ -7,16 +7,17 @@ A hex-based magic game built with [Bevy](https://bevy.org/) 0.19.
 ## Build & run
 
 ```sh
-cargo run --release
+cargo dev            # with the world inspector and live asset reload
+cargo run --release  # as it ships
 ```
 
 That's the whole setup on macOS and Windows. The repo pins its toolchain in `rust-toolchain.toml`, so rustup fetches the right compiler on first build — you don't need to match it by hand. A cold build takes 10–20 minutes; incremental builds after that are seconds.
 
 Two things worth knowing:
 
-**`--release` matters.** The dev profile compiles game code at `opt-level = 1` (dependencies at `3`), which is dramatically slower for anything per-frame. Use `cargo run` only when you're iterating on compile errors.
+**`--release` matters for playing.** The dev profile compiles game code at `opt-level = 1` (dependencies at `3`), which is dramatically slower for anything per-frame. `cargo dev` is for iterating; `--release` is for playing.
 
-**Run it through cargo, not by invoking the binary.** Bevy resolves the asset root relative to `CARGO_MANIFEST_DIR` when that's set, and relative to the executable otherwise — so `./target/release/magic_game` looks in `target/release/assets/` and finds nothing. The symptom is a plain blue window: that's `ClearColor` with no meshes drawn, not a crash. If you ever ship a standalone binary, the `assets/` directory has to sit beside it.
+**Run it through cargo, not by invoking the binary.** Bevy resolves its asset root from `BEVY_ASSET_ROOT` (set for you in `.cargo/config.toml`), then `CARGO_MANIFEST_DIR`, then the executable's own directory. Run `./target/release/hex_game` directly and it looks in `target/release/assets/`, finds nothing, and renders a plain blue window — `ClearColor` with no meshes, not a crash. If you ever ship a standalone binary, `assets/` has to sit beside it.
 
 ## Controls
 
@@ -26,6 +27,9 @@ Two things worth knowing:
 | `W` `A` `S` `D` | Pan camera |
 | Mouse wheel | Zoom |
 | Left-click a hex tile | Animate the player to that tile |
+| `ESC` | Pause (or quit, on the title screen) |
+| `BACKSPACE` | Return to the title screen |
+| `ENTER` | Start the game, from the title screen |
 
 ## Diagnostics
 
@@ -41,28 +45,31 @@ If `device_type` ever reads `Cpu`, you're on a software rasteriser, and any fram
 
 ## Project layout
 
+A cargo workspace. Cargo enforces the dependency direction, so a module cannot
+reach across a boundary it should not — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+for the reasoning.
+
 ```
-src/
-  main.rs                          # App entry point, plugin wiring, diagnostics
-  lib.rs                           # pub mod plugins
-  plugins.rs                       # pub mod world_3d
-  plugins/
-    world_3d.rs                    # PluginGroup wiring
-    world_3d/
-      camera.rs                    # PanOrbitCamera + Skybox
-      hex.rs                       # HexCoord, HexGrid, HexTile
-      hex/height_map.rs            # Perlin terrain generation
-      player.rs                    # Player + click-to-move observer
-      sky.rs                       # Sun (DirectionalLight) + ambient
-      transformation.rs            # Animation driver
-      debug.rs                     # Inspector wiring (debug builds only)
-      config.rs                    # Hex / camera / sun constants
+crates/
+  hex_core/       # hex coordinates, terrain, app states, shared components
+  hex_assets/     # asset handles, RON settings and their loader
+  hex_world/      # presentation: grid, terrain meshes, sky, camera
+  hex_gameplay/   # player, picking, movement, animation
+  hex_dev/        # world inspector (dev feature only)
+  hex_game/       # the binary: app setup, screens, menus
 assets/
-  meshes/        # hex.glb, pieces.glb
-  textures/      # sprite hex tiles, sky_boxes/Ryfjallet_cubemap.png
-docs/
-  ROADMAP.md     # State of the codebase and open work
+  config/         # designer-editable settings -- see docs/CONTENT.md
+  meshes/         # hex.glb, pieces.glb
+  textures/       # sky_boxes/Ryfjallet_cubemap.png
 ```
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/CONTENT.md](docs/CONTENT.md) | Changing the game without writing code |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the code is organised and why |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Working on the code |
 
 ---
 
