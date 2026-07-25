@@ -34,7 +34,7 @@ fn spawn_grid(
     );
 
     let mut tiles = Vec::new();
-    for hex_coord in HexCoord(0, 0).within_radius(HEX_GRID_RADIUS).into_iter() {
+    for hex_coord in HexCoord::ORIGIN.within_radius(HEX_GRID_RADIUS) {
         let tile = spawn_tile(
             hex_coord,
             &height_map,
