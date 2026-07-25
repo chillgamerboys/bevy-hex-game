@@ -1,30 +1,51 @@
-// Bevy Imports
-use bevy::gltf::GltfAssetLabel;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
+use hex_assets::GameAssets;
 use hex_core::config::{PLAYER_SCALE, PLAYER_SPEED};
-use hex_core::{HeightMap, HexCoord, HexTile};
+use hex_core::{GameplaySetup, HeightMap, HexCoord, HexTile, Screen};
 
 use crate::animation::Transformation;
 use crate::pathing::HexPathingLine;
 
 pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
-        .add_systems(Startup, spawn_player)
+        // `GameplaySetup::Entities` runs after `GameplaySetup::Resources`, which is
+        // where `hex_world` inserts the height map this system reads. Ordering has
+        // to be expressed through a shared set because the two systems live in
+        // different crates and would otherwise race.
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            spawn_player.in_set(GameplaySetup::Entities),
+        )
+        .add_systems(OnExit(Screen::Gameplay), despawn_player)
         .add_observer(on_tile_clicked);
+}
+
+fn despawn_player(mut commands: Commands, players: Query<Entity, With<Player>>) {
+    for entity in &players {
+        commands.entity(entity).despawn();
+    }
 }
 
 /// Global picking observer: when any `HexTile` is clicked, animate the player
 /// over to that tile along a hex-by-hex straight line.
+///
+/// `HeightMap` is taken as an `Option` because observers are global and fire on
+/// every click, including clicks on menus, where the map does not exist. A plain
+/// `Res<HeightMap>` panics there — parameter validation runs *before* the body, so
+/// the "is this a tile?" check below never gets the chance to reject it.
 fn on_tile_clicked(
     event: On<Pointer<Click>>,
     mut commands: Commands,
     tile_query: Query<&HexCoord, With<HexTile>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
-    height_map: Res<HeightMap>,
+    height_map: Option<Res<HeightMap>>,
 ) {
+    let Some(height_map) = height_map else {
+        return;
+    };
     let clicked = event.event_target();
     let Ok(tile_coord) = tile_query.get(clicked) else {
         return;
@@ -48,7 +69,7 @@ pub struct Player;
 
 fn spawn_player(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
+    assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     height_map: Res<HeightMap>,
 ) {
@@ -58,20 +79,7 @@ fn spawn_player(
     let position = coord.to_world(Some(&height_map));
     let scale = Vec3::splat(PLAYER_SCALE);
 
-    let mesh_a: Handle<Mesh> = asset_server.load(
-        GltfAssetLabel::Primitive {
-            mesh: 0,
-            primitive: 0,
-        }
-        .from_asset("meshes/pieces.glb"),
-    );
-    let mesh_b: Handle<Mesh> = asset_server.load(
-        GltfAssetLabel::Primitive {
-            mesh: 1,
-            primitive: 0,
-        }
-        .from_asset("meshes/pieces.glb"),
-    );
+    let [mesh_a, mesh_b] = assets.player_pieces.clone();
 
     let child_transform = Transform {
         translation: Vec3::new(-PLAYER_SCALE, -PLAYER_SCALE, -10. * PLAYER_SCALE),

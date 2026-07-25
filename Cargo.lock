@@ -3188,6 +3188,7 @@ dependencies = [
  "bevy_math",
  "bevy_platform",
  "bevy_reflect",
+ "bevy_state",
  "hexx",
  "rand 0.8.7",
  "xxhash-rust",
@@ -3218,6 +3219,7 @@ name = "hex_gameplay"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "hex_assets",
  "hex_core",
 ]
 
@@ -3226,6 +3228,7 @@ name = "hex_world"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "hex_assets",
  "hex_core",
 ]
 

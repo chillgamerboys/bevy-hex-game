@@ -9,9 +9,11 @@
 //! live here. Those two crates must not depend on each other, so this is where
 //! their common language belongs.
 
+pub mod app;
 pub mod config;
 pub mod hex;
 pub mod terrain;
 
+pub use app::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 pub use hex::{HexCoord, HexGrid, HexTile};
 pub use terrain::HeightMap;

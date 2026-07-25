@@ -11,6 +11,10 @@ use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
+use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
+
+mod menus;
+mod screens;
 
 fn main() -> AppExit {
     App::new().add_plugins(AppPlugin).run()
@@ -52,7 +56,39 @@ impl Plugin for AppPlugin {
             LogDiagnosticsPlugin::default(),
         ));
 
-        app.add_plugins((hex_assets::plugin, hex_world::plugin, hex_gameplay::plugin));
+        // Order the `Update` schedule once, here. Every system in the workspace
+        // declares which of these sets it belongs to, so the shape of a frame is
+        // stated rather than left to whatever order the scheduler happens to pick.
+        app.configure_sets(
+            Update,
+            (
+                AppSystems::TickTimers,
+                AppSystems::RecordInput,
+                AppSystems::Update,
+            )
+                .chain(),
+        );
+
+        // One gate for everything that must stop while paused. `Pause` is a
+        // sub-state of `Screen::Gameplay`, so it does not exist in menus and this
+        // condition is false there too.
+        app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
+
+        // World construction is split across crates — `hex_world` inserts the
+        // height map, `hex_gameplay` spawns the player that reads it — and systems
+        // in the same `OnEnter` schedule otherwise run in unspecified order.
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (GameplaySetup::Resources, GameplaySetup::Entities).chain(),
+        );
+
+        app.add_plugins((
+            hex_assets::plugin,
+            hex_world::plugin,
+            hex_gameplay::plugin,
+            screens::plugin,
+            menus::plugin,
+        ));
 
         #[cfg(feature = "dev")]
         app.add_plugins(hex_dev::plugin);
