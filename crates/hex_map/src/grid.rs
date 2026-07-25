@@ -1,9 +1,9 @@
 //! Turns generated terrain into tile entities.
 //!
 //! This is the seam between the map and the rest of the game. Everything upstream
-//! of [`spawn_tile`] — the height map, the generators, the settings — is private to
+//! of tile spawning — the height map, the generators, the settings — is private to
 //! this crate. Everything downstream sees only entities carrying a
-//! [`HexCoord`] and a [`HexSpan`].
+//! [`HexCoord`](hex_core::HexCoord) and a [`HexSpan`](hex_core::HexSpan).
 //!
 //! Keeping that seam narrow is what lets the map be rebuilt without touching
 //! gameplay. A richer map means producing different spans here; it does not mean

@@ -6,7 +6,7 @@
 //! [`hex_core::hex`]. A path is therefore a list of the specific columns a unit
 //! passes over, and a coordinate on its own is not enough to say where it went.
 //!
-//! An earlier version of this module keyed surface heights by [`HexCoord`], taking
+//! An earlier version of this module keyed surface heights by [`HexCoord`](hex_core::HexCoord), taking
 //! the highest column at each. That silently collapsed every stack, so a unit
 //! crossing a bridge would have snapped to the ground beneath it. The lookup is gone
 //! rather than fixed: an abstraction that *can* express the wrong thing eventually
