@@ -75,16 +75,24 @@ impl Plugin for AppPlugin {
         // condition is false there too.
         app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
 
-        // World construction is split across crates — `hex_world` inserts the
-        // height map, `hex_gameplay` spawns the player that reads it — and systems
-        // in the same `OnEnter` schedule otherwise run in unspecified order.
+        // World construction is split across crates — `hex_map` builds the terrain,
+        // `hex_gameplay` spawns the player onto it — and systems in the same
+        // `OnEnter` schedule otherwise run in unspecified order. Chaining also gives
+        // each step a sync point, so entities spawned by one set are queryable by
+        // the next.
         app.configure_sets(
             OnEnter(Screen::Gameplay),
-            (GameplaySetup::Resources, GameplaySetup::Entities).chain(),
+            (
+                GameplaySetup::Resources,
+                GameplaySetup::Terrain,
+                GameplaySetup::Actors,
+            )
+                .chain(),
         );
 
         app.add_plugins((
             hex_assets::plugin,
+            hex_map::plugin,
             hex_world::plugin,
             hex_gameplay::plugin,
             screens::plugin,

@@ -1,30 +1,42 @@
-//! Spawns the hex grid: one parent entity owning a tile entity per coordinate.
+//! Turns generated terrain into tile entities.
+//!
+//! This is the seam between the map and the rest of the game. Everything upstream
+//! of [`spawn_tile`] — the height map, the generators, the settings — is private to
+//! this crate. Everything downstream sees only entities carrying a
+//! [`HexCoord`] and a [`HexSpan`].
+//!
+//! Keeping that seam narrow is what lets the map be rebuilt without touching
+//! gameplay. A richer map means producing different spans here; it does not mean
+//! changing what a tile *is* to anyone else.
 
 use bevy::prelude::*;
 
-use hex_assets::{to_color, GameAssets, WorldSettings};
-use hex_core::terrain::{HeightMap, PerlinGenerator, PerlinStep};
-use hex_core::{GameplaySetup, HexCoord, HexGrid, HexTile, Screen};
+use hex_assets::{to_color, GameAssets};
+use hex_core::{GameplaySetup, HexCoord, HexGrid, HexSpan, HexTile, Screen};
+
+use crate::generator::{HeightMap, PerlinGenerator, PerlinStep};
+use crate::settings::MapSettings;
 
 pub fn plugin(app: &mut App) {
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
+        .register_type::<HexSpan>()
         .register_type::<HexTile>()
-        // The height map has to exist before anything reads it, including
-        // `hex_gameplay`'s player spawn — hence a shared set rather than a local
-        // `.chain()`, which would only order these two.
+        // Split across two sets rather than chained locally: `hex_gameplay` spawns
+        // the player into `Actors`, which must come after the tiles here, and a
+        // local `.chain()` cannot order systems in another crate.
         .add_systems(
             OnEnter(Screen::Gameplay),
             init_height_map.in_set(GameplaySetup::Resources),
         )
         .add_systems(
             OnEnter(Screen::Gameplay),
-            spawn_grid.in_set(GameplaySetup::Entities),
+            spawn_grid.in_set(GameplaySetup::Terrain),
         )
         .add_systems(OnExit(Screen::Gameplay), despawn_grid);
 }
 
-fn init_height_map(mut commands: Commands, settings: Res<WorldSettings>) {
+fn init_height_map(mut commands: Commands, settings: Res<MapSettings>) {
     let steps = settings
         .terrain
         .steps
@@ -50,22 +62,28 @@ fn spawn_grid(
     assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     height_map: Res<HeightMap>,
-    settings: Res<WorldSettings>,
+    settings: Res<MapSettings>,
 ) {
     let tile_material = materials.add(StandardMaterial::from(to_color(settings.tile_color)));
     let hex_tile_mesh = assets.hex_tile.clone();
 
     let mut tiles = Vec::new();
     for hex_coord in HexCoord::ORIGIN.within_radius(settings.grid_radius) {
-        let tile = spawn_tile(
+        // Today's terrain is a height field, so every column rests on the ground.
+        // A generator that returns several spans per coordinate — floating
+        // platforms, overhangs — would push more entities here and nothing else in
+        // the game would need to change.
+        let span = HexSpan::from_ground(height_map.get_world_height(hex_coord));
+
+        tiles.push(spawn_tile(
             hex_coord,
-            &height_map,
+            span,
             &mut commands,
             &hex_tile_mesh,
             &tile_material,
-        );
-        tiles.push(tile);
+        ));
     }
+
     commands
         .spawn((
             Transform::default(),
@@ -76,17 +94,22 @@ fn spawn_grid(
         .add_children(&tiles);
 }
 
+/// Spawns one tile occupying `span`.
+///
+/// The mesh has its origin at its centre, so it is placed at the span's midpoint and
+/// scaled to the span's height. That is what makes the entity's transform agree with
+/// its `HexSpan` — an invariant gameplay relies on when it reads a tile's surface,
+/// and one covered by a test.
 fn spawn_tile(
     hex_coord: HexCoord,
-    height_map: &HeightMap,
+    span: HexSpan,
     commands: &mut Commands,
     mesh: &Handle<Mesh>,
     material: &Handle<StandardMaterial>,
 ) -> Entity {
-    let height = height_map.get_world_height(hex_coord);
-    let mut position = hex_coord.to_world(None);
-    position.y = height / 2.;
-    let scale = Vec3::new(1., height, 1.);
+    let position = hex_coord.to_world(span.centre());
+    let scale = Vec3::new(1., span.height(), 1.);
+
     commands
         .spawn((
             Mesh3d(mesh.clone()),
@@ -99,6 +122,7 @@ fn spawn_tile(
             Name::new("HexTile"),
             HexTile,
             hex_coord,
+            span,
         ))
         .id()
 }

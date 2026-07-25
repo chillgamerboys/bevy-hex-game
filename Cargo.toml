@@ -9,6 +9,7 @@ hex_core = { path = "crates/hex_core" }
 hex_assets = { path = "crates/hex_assets" }
 hex_world = { path = "crates/hex_world" }
 hex_gameplay = { path = "crates/hex_gameplay" }
+hex_map = { path = "crates/hex_map" }
 hex_dev = { path = "crates/hex_dev" }
 
 bevy = "0.19"

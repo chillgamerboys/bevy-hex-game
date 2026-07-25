@@ -3,8 +3,11 @@
 //! Every value here can be changed without touching Rust, and with the
 //! `dev_native` feature on, without restarting the game. See `docs/CONTENT.md`.
 //!
-//! What is deliberately *not* here: the hex geometry constants in
-//! [`hex_core::config`]. Those describe the dimensions of `hex.glb` rather than
+//! Map settings are deliberately *not* here — they live in `hex_map`, alongside the
+//! generation and rendering they configure, so the whole map is owned in one crate.
+//! Only the loader is shared.
+//!
+//! Also not here: the hex geometry constants in [`hex_core::config`]. Those describe the dimensions of `hex.glb` rather than
 //! any preference — editing them without editing the mesh produces silently
 //! overlapping or gapped tiles, so they are not a knob worth exposing.
 
@@ -20,45 +23,6 @@ pub type Rgb = (f32, f32, f32);
 /// Converts a settings colour to a Bevy one.
 pub fn to_color((r, g, b): Rgb) -> Color {
     Color::srgb(r, g, b)
-}
-
-/// `assets/config/world.ron` — grid shape and terrain generation.
-#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
-#[reflect(Resource)]
-pub struct WorldSettings {
-    /// Tiles from the centre to the edge. The grid holds `3r² + 3r + 1` tiles,
-    /// so this grows quadratically: 20 is 1261 tiles, 40 would be 4921.
-    pub grid_radius: u32,
-    /// World units per unit of quantized tile height.
-    pub height_scale: f32,
-    /// Colour of the tiles.
-    pub tile_color: Rgb,
-    /// Terrain generation.
-    pub terrain: TerrainSettings,
-}
-
-/// Perlin terrain configuration.
-#[derive(Reflect, Debug, Clone, Deserialize)]
-pub struct TerrainSettings {
-    /// Fixed seed for reproducible worlds, or `None` to randomise per launch.
-    ///
-    /// Previously hardcoded to random, so no two runs produced the same map and
-    /// there was no way to reproduce one you liked without editing source.
-    pub seed: Option<u64>,
-    /// Octaves of noise, summed. More steps with higher frequencies and smaller
-    /// magnitudes give finer detail on top of the broad shape.
-    pub steps: Vec<PerlinStepSettings>,
-}
-
-/// One octave of Perlin noise.
-#[derive(Reflect, Debug, Clone, Deserialize)]
-pub struct PerlinStepSettings {
-    /// Noise frequency along x. Higher is bumpier.
-    pub x_freq: f32,
-    /// Noise frequency along y. Higher is bumpier.
-    pub y_freq: f32,
-    /// How much height this octave contributes.
-    pub magnitude: f32,
 }
 
 /// `assets/config/camera.ron` — pan, orbit, and zoom feel.
