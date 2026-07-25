@@ -1,0 +1,20 @@
+[package]
+name = "hex_game"
+version.workspace = true
+edition.workspace = true
+description = "The game binary: app setup, plugin wiring, screens and menus."
+
+[dependencies]
+bevy = { workspace = true }
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+hex_gameplay = { workspace = true }
+hex_world = { workspace = true }
+hex_dev = { workspace = true, optional = true }
+
+[features]
+# Empty by default so `cargo build --release` ships without the inspector. Use
+# `cargo dev` (aliased in .cargo/config.toml) for a build with dev tooling.
+default = []
+# Development tooling: world inspector, debug overlays.
+dev = ["dep:hex_dev"]

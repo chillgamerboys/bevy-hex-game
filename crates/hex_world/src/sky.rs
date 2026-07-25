@@ -1,18 +1,14 @@
 use bevy::prelude::*;
 
-use crate::plugins::world_3d::config::*;
+use hex_core::config::{SUN_AMBIENT_LIGHT, SUN_INTENSITY, SUN_ROTATION};
 
-pub struct SkyPlugin;
-
-impl Plugin for SkyPlugin {
-    fn build(&self, app: &mut App) {
-        app.insert_resource(ClearColor(Color::srgb(0.5294, 0.8087, 0.9216)))
-            .insert_resource(GlobalAmbientLight {
-                brightness: SUN_AMBIENT_LIGHT,
-                ..default()
-            })
-            .add_systems(Startup, spawn_sun);
-    }
+pub fn plugin(app: &mut App) {
+    app.insert_resource(ClearColor(Color::srgb(0.5294, 0.8087, 0.9216)))
+        .insert_resource(GlobalAmbientLight {
+            brightness: SUN_AMBIENT_LIGHT,
+            ..default()
+        })
+        .add_systems(Startup, spawn_sun);
 }
 
 fn spawn_sun(mut commands: Commands) {

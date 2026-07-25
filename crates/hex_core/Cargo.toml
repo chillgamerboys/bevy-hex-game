@@ -1,0 +1,17 @@
+[package]
+name = "hex_core"
+version.workspace = true
+edition.workspace = true
+description = "Shared vocabulary and pure domain logic: hex coordinates, terrain generation, app states."
+
+# Deliberately depends on Bevy's sub-crates rather than the `bevy` facade: this
+# crate has no rendering and no `App`, so it must stay buildable and testable
+# without pulling in a renderer. Anything needing `bevy::prelude` belongs in
+# hex_world or hex_gameplay instead.
+[dependencies]
+bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
+bevy_math = { workspace = true }
+bevy_platform = { workspace = true }
+bevy_reflect = { workspace = true }
+rand = { workspace = true }
+xxhash-rust = { workspace = true }

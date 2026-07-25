@@ -1,0 +1,11 @@
+[package]
+name = "hex_gameplay"
+version.workspace = true
+edition.workspace = true
+description = "Player, input, picking, and animation."
+
+# Must NOT depend on hex_world. The two talk through components and states
+# defined in hex_core; cargo is what enforces that.
+[dependencies]
+bevy = { workspace = true }
+hex_core = { workspace = true }

@@ -4,17 +4,20 @@ use bevy::input::mouse::MouseWheel;
 use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use crate::plugins::world_3d::config::*;
+use hex_core::config::{
+    CAMERA_SPEED, CAMERA_SPEED_OFFSET, MAX_PITCH, MAX_ZOOM_IN, MAX_ZOOM_OUT, MIN_PITCH,
+    SKYBOX_BRIGHTNESS,
+};
 
 const SKYBOX_PATH: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
-pub struct CameraPlugin;
-impl Plugin for CameraPlugin {
-    fn build(&self, app: &mut App) {
-        app.register_type::<PanOrbitCamera>()
-            .add_systems(Startup, spawn_camera)
-            .add_systems(Update, (reinterpret_skybox_when_loaded, orbit_camera, pan_camera));
-    }
+pub fn plugin(app: &mut App) {
+    app.register_type::<PanOrbitCamera>()
+        .add_systems(Startup, spawn_camera)
+        .add_systems(
+            Update,
+            (reinterpret_skybox_when_loaded, orbit_camera, pan_camera),
+        );
 }
 
 

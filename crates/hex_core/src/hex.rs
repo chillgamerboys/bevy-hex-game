@@ -1,29 +1,13 @@
-pub mod height_map;
+//! Hex coordinates and the marker components that identify grid entities.
 
-// Standard Lib Imports
 use std::cmp::{max, min};
 
-// Bevy Imports
-use bevy::gltf::GltfAssetLabel;
-use bevy::prelude::*;
+use bevy_ecs::prelude::*;
+use bevy_math::Vec3;
+use bevy_reflect::prelude::*;
 
-use crate::plugins::world_3d::config::{HEX_CIRCUMRADIUS, HEX_GRID_RADIUS};
-use height_map::HeightMap;
-
-pub struct HexPlugin;
-
-impl Plugin for HexPlugin {
-    fn build(&self, app: &mut App) {
-        app.register_type::<HexCoord>()
-            .register_type::<HexGrid>()
-            .register_type::<HexTile>()
-            .add_systems(PreStartup, (init_height_map, HexGrid::spawn).chain());
-    }
-}
-
-fn init_height_map(mut commands: Commands) {
-    commands.insert_resource(HeightMap::new(height_map::PerlinGenerator::lowlands(None)));
-}
+use crate::config::HEX_CIRCUMRADIUS;
+use crate::terrain::HeightMap;
 
 #[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[reflect(Component)]
@@ -113,67 +97,13 @@ impl HexCoord {
     }
 }
 
+/// Marks the parent entity that owns every spawned tile.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct HexGrid;
 
-impl HexGrid {
-    fn spawn(
-        mut commands: Commands,
-        assets: Res<AssetServer>,
-        mut materials: ResMut<Assets<StandardMaterial>>,
-        height_map: Res<HeightMap>,
-    ) {
-        let tile_material = materials.add(StandardMaterial::from(Color::srgb(1., 0.8, 0.8)));
-        let hex_tile_mesh: Handle<Mesh> =
-            assets.load(GltfAssetLabel::Primitive { mesh: 0, primitive: 0 }.from_asset("meshes/hex.glb"));
-
-        let mut tiles = Vec::new();
-        for hex_coord in HexCoord(0, 0).within_radius(HEX_GRID_RADIUS).into_iter() {
-            let tile = HexTile::spawn(hex_coord, &height_map, &mut commands, &hex_tile_mesh, &tile_material);
-            tiles.push(tile);
-        }
-        commands
-            .spawn((
-                Transform::default(),
-                Visibility::default(),
-                Name::new("HexGrid"),
-                HexGrid,
-            ))
-            .add_children(&tiles);
-    }
-}
-
-
+/// Marks a single tile of the grid. Lives here rather than in `hex_world` so
+/// that gameplay can query tiles without depending on the presentation crate.
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct HexTile;
-
-impl HexTile {
-    fn spawn(
-        hex_coord: HexCoord,
-        height_map: &HeightMap,
-        commands: &mut Commands,
-        mesh: &Handle<Mesh>,
-        material: &Handle<StandardMaterial>,
-    ) -> Entity {
-        let height = height_map.get_world_height(hex_coord);
-        let mut position = hex_coord.to_world(None);
-        position.y = height / 2.;
-        let scale = Vec3::new(1., height, 1.);
-        commands
-            .spawn((
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform {
-                    translation: position,
-                    scale,
-                    ..default()
-                },
-                Name::new("HexTile"),
-                HexTile,
-                hex_coord,
-            ))
-            .id()
-    }
-}

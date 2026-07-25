@@ -1,0 +1,15 @@
+# Bevy resolves its asset root from BEVY_ASSET_ROOT first, then CARGO_MANIFEST_DIR,
+# then the executable's directory. In a workspace, CARGO_MANIFEST_DIR is the *binary
+# crate's* directory, so without this the game looks in crates/hex_game/assets/ and
+# finds nothing — which renders as a plain blue window (ClearColor, no meshes) with
+# only `Path not found` lines in the log to explain it.
+#
+# `relative = true` resolves the value against this file's parent, i.e. the workspace
+# root, so `assets/` stays where content authors expect it.
+[env]
+BEVY_ASSET_ROOT = { value = ".", relative = true }
+
+[alias]
+# The inspector is behind the `dev` feature and off by default, so release builds
+# never link egui. This is the everyday run command.
+dev = "run --features dev"
