@@ -2,8 +2,7 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
-use hex_assets::GameAssets;
-use hex_core::config::{PLAYER_SCALE, PLAYER_SPEED};
+use hex_assets::{to_color, GameAssets, PlayerSettings};
 use hex_core::{GameplaySetup, HeightMap, HexCoord, HexTile, Screen};
 
 use crate::animation::Transformation;
@@ -42,8 +41,9 @@ fn on_tile_clicked(
     tile_query: Query<&HexCoord, With<HexTile>>,
     player_query: Query<(Entity, &Transform), With<Player>>,
     height_map: Option<Res<HeightMap>>,
+    settings: Option<Res<PlayerSettings>>,
 ) {
-    let Some(height_map) = height_map else {
+    let (Some(height_map), Some(settings)) = (height_map, settings) else {
         return;
     };
     let clicked = event.event_target();
@@ -55,7 +55,7 @@ fn on_tile_clicked(
         let animation: Transformation = HexPathingLine::new(
             HexCoord::from_world(transform.translation),
             *tile_coord,
-            PLAYER_SPEED,
+            settings.speed,
             &height_map,
         )
         .into();
@@ -72,17 +72,19 @@ fn spawn_player(
     assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     height_map: Res<HeightMap>,
+    settings: Res<PlayerSettings>,
 ) {
-    let material = materials.add(StandardMaterial::from(Color::srgb(1., 0.2, 0.2)));
+    let material = materials.add(StandardMaterial::from(to_color(settings.color)));
 
     let coord = HexCoord::ORIGIN;
     let position = coord.to_world(Some(&height_map));
-    let scale = Vec3::splat(PLAYER_SCALE);
+    let scale = Vec3::splat(settings.scale);
 
     let [mesh_a, mesh_b] = assets.player_pieces.clone();
 
     let child_transform = Transform {
-        translation: Vec3::new(-PLAYER_SCALE, -PLAYER_SCALE, -10. * PLAYER_SCALE),
+        // Offsets the mesh so its origin sits on the tile centre.
+        translation: Vec3::new(-settings.scale, -settings.scale, -10. * settings.scale),
         scale,
         ..default()
     };

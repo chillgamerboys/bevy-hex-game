@@ -1,0 +1,9 @@
+// Window and frame presentation.
+(
+    // Vsync   - capped to your display's refresh rate, no tearing. Recommended.
+    //           On an adaptive-refresh display (ProMotion, FreeSync, G-Sync) this
+    //           already drops the rate when nothing is moving.
+    // NoVsync - uncapped. Lowest input latency, may tear, works the GPU hardest.
+    // Mailbox - vsync without the frame cap, where supported.
+    present_mode: Vsync,
+)

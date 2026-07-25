@@ -1,29 +1,47 @@
 use bevy::prelude::*;
 
-use hex_core::config::{SUN_AMBIENT_LIGHT, SUN_INTENSITY, SUN_ROTATION};
+use hex_assets::{to_color, LightingSettings};
+use hex_core::{GameplaySetup, Screen};
 
 pub fn plugin(app: &mut App) {
-    app.insert_resource(ClearColor(Color::srgb(0.5294, 0.8087, 0.9216)))
-        .insert_resource(GlobalAmbientLight {
-            brightness: SUN_AMBIENT_LIGHT,
-            ..default()
-        })
-        .add_systems(Startup, spawn_sun);
+    // Lighting is applied once settings have loaded rather than at startup, since
+    // the values now come from a file that is still loading at that point.
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        (apply_sky_settings, spawn_sun).in_set(GameplaySetup::Entities),
+    )
+    .add_systems(OnExit(Screen::Gameplay), despawn_sun);
 }
 
-fn spawn_sun(mut commands: Commands) {
+fn apply_sky_settings(
+    mut commands: Commands,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    settings: Res<LightingSettings>,
+) {
+    commands.insert_resource(ClearColor(to_color(settings.sky_color)));
+    ambient.brightness = settings.ambient_brightness;
+}
+
+fn despawn_sun(mut commands: Commands, suns: Query<Entity, With<Sun>>) {
+    for entity in &suns {
+        commands.entity(entity).despawn();
+    }
+}
+
+/// Marks the directional light acting as the sun.
+#[derive(Component)]
+struct Sun;
+
+fn spawn_sun(mut commands: Commands, settings: Res<LightingSettings>) {
+    let (x, y, z) = settings.sun_rotation;
     commands.spawn((
         DirectionalLight {
-            illuminance: SUN_INTENSITY,
+            illuminance: settings.sun_illuminance,
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_rotation(Quat::from_euler(
-            EulerRot::XYZ,
-            SUN_ROTATION.0,
-            SUN_ROTATION.1,
-            SUN_ROTATION.2,
-        )),
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, x, y, z)),
         Name::new("Sun"),
+        Sun,
     ));
 }
