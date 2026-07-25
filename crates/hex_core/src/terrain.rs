@@ -54,7 +54,7 @@ impl HeightMap {
         // once per tile at spawn, then again for every waypoint of every click-to-move
         // path. The playable grid is a fixed, known set of coords, so evaluate it once
         // up front and read from the map thereafter.
-        let cache = HexCoord(0, 0)
+        let cache = HexCoord::ORIGIN
             .within_radius(HEX_GRID_RADIUS)
             .into_iter()
             .map(|coord| (coord, Self::generate(generator.as_ref(), coord)))
@@ -193,8 +193,8 @@ impl HeightGenerator for PerlinGenerator {
     fn generate_height(&self, coord: HexCoord) -> u32 {
         let mut height = 0.;
         for step in self.steps.iter() {
-            let x = (coord.0 as f32) * step.x_freq;
-            let y = (coord.1 as f32) * step.y_freq;
+            let x = (coord.x() as f32) * step.x_freq;
+            let y = (coord.y() as f32) * step.y_freq;
             let noise = self.noise(Vec2::new(x, y));
             height += (noise * 2. + 0.7) * step.magnitude;
             height += noise * step.magnitude;
@@ -218,5 +218,81 @@ impl PerlinStep {
             y_freq,
             magnitude,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sample coordinates spread across and beyond the playable grid, so the
+    /// cached and uncached paths are both exercised.
+    fn sample_coords() -> Vec<HexCoord> {
+        vec![
+            HexCoord::ORIGIN,
+            HexCoord::new_cubic(1, -1, 0),
+            HexCoord::new_cubic(7, -3, -4),
+            HexCoord::new_cubic(-12, 5, 7),
+            HexCoord::new_cubic(19, -19, 0),
+            // Outside HEX_GRID_RADIUS, so this misses the cache.
+            HexCoord::new_cubic(64, -32, -32),
+        ]
+    }
+
+    #[test]
+    fn same_seed_produces_the_same_terrain() {
+        let a = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)));
+        let b = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)));
+        for coord in sample_coords() {
+            assert_eq!(
+                a.get_height(coord),
+                b.get_height(coord),
+                "terrain diverged at {coord:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn different_seeds_produce_different_terrain() {
+        let a = HeightMap::new(PerlinGenerator::lowlands(Some(1)));
+        let b = HeightMap::new(PerlinGenerator::lowlands(Some(2)));
+        let differs = HexCoord::ORIGIN
+            .within_radius(20)
+            .into_iter()
+            .any(|coord| a.get_height(coord) != b.get_height(coord));
+        assert!(differs, "two seeds produced an identical grid");
+    }
+
+    /// The cache is a memoization of the generator, so it must not be able to
+    /// disagree with it. Guards the cached and uncached paths against drift.
+    #[test]
+    fn cached_and_uncached_paths_agree() {
+        let generator = PerlinGenerator::lowlands(Some(7));
+        let expected: Vec<u32> = sample_coords()
+            .into_iter()
+            .map(|coord| std::cmp::max(generator.generate_height(coord), 1))
+            .collect();
+
+        let map = HeightMap::new(PerlinGenerator::lowlands(Some(7)));
+        for (coord, want) in sample_coords().into_iter().zip(expected) {
+            assert_eq!(map.get_height(coord), want, "mismatch at {coord:?}");
+        }
+    }
+
+    /// Tile meshes are scaled by height, so a zero would collapse a tile.
+    #[test]
+    fn height_never_falls_below_one() {
+        let map = HeightMap::new(FlatGenerator::new(0));
+        assert_eq!(map.get_height(HexCoord::ORIGIN), 1);
+        assert_eq!(map.get_height(HexCoord::new_cubic(99, -99, 0)), 1);
+    }
+
+    #[test]
+    fn world_height_scales_the_quantized_height() {
+        let map = HeightMap::new(FlatGenerator::new(3));
+        assert_eq!(
+            map.get_world_height(HexCoord::ORIGIN),
+            3.0 * HEX_HEIGHT_SCALE
+        );
     }
 }

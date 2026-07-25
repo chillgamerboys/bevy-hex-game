@@ -54,7 +54,7 @@ fn spawn_player(
 ) {
     let material = materials.add(StandardMaterial::from(Color::srgb(1., 0.2, 0.2)));
 
-    let coord = HexCoord(0, 0);
+    let coord = HexCoord::ORIGIN;
     let position = coord.to_world(Some(&height_map));
     let scale = Vec3::splat(PLAYER_SCALE);
 
