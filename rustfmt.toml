@@ -1,0 +1,6 @@
+# Defaults, stated explicitly so `cargo fmt` behaves identically for everyone
+# regardless of editor settings or toolchain drift. Formatting is not a matter
+# of taste here: it is what keeps diffs from AI agents reviewable.
+edition = "2021"
+max_width = 100
+newline_style = "Unix"

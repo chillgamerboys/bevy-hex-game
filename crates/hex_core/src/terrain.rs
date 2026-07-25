@@ -1,0 +1,328 @@
+//! Terrain height generation.
+
+use bevy_ecs::resource::Resource;
+use bevy_math::Vec2;
+use bevy_platform::collections::HashMap;
+use xxhash_rust::xxh3::xxh3_64_with_seed;
+
+use crate::hex::HexCoord;
+
+/// hashes bytes with seed using msg
+/// to distinguish it from other hashes on same bytes
+pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
+    let mut vec = bytes.to_vec();
+    let msg_bytes = msg.as_bytes();
+    let mut msg_vec = msg_bytes.to_vec();
+    vec.append(&mut msg_vec);
+    xxh3_64_with_seed(vec.as_slice(), seed)
+}
+
+/// Convert quantized height to height in world space.
+pub fn to_world(height: u32, height_scale: f32) -> f32 {
+    (height as f32) * height_scale
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Wrapper Struct ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+
+#[derive(Resource)]
+pub struct HeightMap {
+    generator: Box<dyn HeightGenerator>,
+    /// World units per unit of quantized height. Comes from settings rather than
+    /// a constant, so terrain drama is tunable without a rebuild.
+    height_scale: f32,
+    /// Heights for every coord in the spawned grid, precomputed once in [`Self::new`].
+    /// Coords outside the grid fall through to the generator.
+    cache: HashMap<HexCoord, u32>,
+}
+
+impl HeightMap {
+    /// returns as a quantized integer. To get this as height in world space. Use `get_world_height`
+    pub fn get_height(&self, coord: HexCoord) -> u32 {
+        if let Some(height) = self.cache.get(&coord) {
+            return *height;
+        }
+        Self::generate(self.generator.as_ref(), coord)
+    }
+
+    /// gets height of coord in world space. To get quantized height use `get_height`
+    pub fn get_world_height(&self, coord: HexCoord) -> f32 {
+        let q_height = self.get_height(coord);
+        to_world(q_height, self.height_scale)
+    }
+
+    /// Builds a height map, precomputing every coord within `grid_radius`.
+    pub fn new(generator: impl HeightGenerator, grid_radius: u32, height_scale: f32) -> Self {
+        let generator: Box<dyn HeightGenerator> = Box::new(generator);
+        // The perlin generator is pure but not cheap, and callers hit it constantly:
+        // once per tile at spawn, then again for every waypoint of every click-to-move
+        // path. The playable grid is a fixed, known set of coords, so evaluate it once
+        // up front and read from the map thereafter.
+        let cache = HexCoord::ORIGIN
+            .within_radius(grid_radius)
+            .into_iter()
+            .map(|coord| (coord, Self::generate(generator.as_ref(), coord)))
+            .collect();
+        Self {
+            generator,
+            height_scale,
+            cache,
+        }
+    }
+
+    /// The uncached height for a coord. Floors at 1 so no tile is scaled to zero.
+    fn generate(generator: &dyn HeightGenerator, coord: HexCoord) -> u32 {
+        std::cmp::max(generator.generate_height(coord), 1)
+    }
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Inner Trait  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+
+pub trait HeightGenerator: Send + Sync + 'static {
+    fn generate_height(&self, coord: HexCoord) -> u32;
+}
+
+pub struct FlatGenerator {
+    height: u32,
+}
+
+impl FlatGenerator {
+    pub fn new(height: u32) -> Self {
+        Self { height }
+    }
+}
+
+impl HeightGenerator for FlatGenerator {
+    fn generate_height(&self, _coord: HexCoord) -> u32 {
+        self.height
+    }
+}
+
+pub struct RandGenerator {
+    min: u32,
+    max: u32,
+    seed: u64,
+}
+
+// generates height randomly. White Noise
+impl RandGenerator {
+    pub fn new(min: u32, max: u32, seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or(rand::random());
+        Self { min, max, seed }
+    }
+}
+
+impl HeightGenerator for RandGenerator {
+    fn generate_height(&self, coord: HexCoord) -> u32 {
+        let hash = seeded_hash(&coord.to_bytes(), self.seed, "Random Height Map") as u32;
+        hash % (self.max - self.min) + self.min
+    }
+}
+
+// generate terrain height with fractal perlin noise
+pub struct PerlinGenerator {
+    steps: Vec<PerlinStep>,
+    seed: u64,
+}
+
+impl PerlinGenerator {
+    // For creating custom perlin height maps
+    pub fn new(steps: Vec<PerlinStep>, seed: Option<u64>) -> Self {
+        let seed = seed.unwrap_or(rand::random());
+        Self { steps, seed }
+    }
+
+    // ~~~~~~~~~~~~~~ Prefabs ~~~~~~~~~~~~~~ //
+
+    pub fn dunes(seed: Option<u64>) -> Self {
+        Self::new(
+            vec![
+                PerlinStep::new(0.05, 0.01, 30.),
+                PerlinStep::new(0.5, 0.1, 1.),
+            ],
+            seed,
+        )
+    }
+
+    pub fn hills(seed: Option<u64>) -> Self {
+        Self::new(vec![PerlinStep::new(0.05, 0.05, 30.)], seed)
+    }
+
+    pub fn slopes(seed: Option<u64>) -> Self {
+        Self::new(vec![PerlinStep::new(0.01, 0.01, 50.)], seed)
+    }
+
+    pub fn crags(seed: Option<u64>) -> Self {
+        Self::new(vec![PerlinStep::new(0.15, 0.15, 35.)], seed)
+    }
+
+    pub fn lowlands(seed: Option<u64>) -> Self {
+        Self::new(vec![PerlinStep::new(0.035, 0.05, 3.)], seed)
+    }
+
+    // ~~~~~~~~~~~ Internal Funcs ~~~~~~~~~~~ //
+    // These were created by following https://gpfault.net/posts/perlin-noise.txt.html
+
+    fn gradient(&self, vec: Vec2) -> Vec2 {
+        let x_dir = seeded_hash(vec.to_string().as_bytes(), self.seed, "Perlin X Dir") as f32;
+        let y_dir = seeded_hash(vec.to_string().as_bytes(), self.seed, "Perlin Y Dir") as f32;
+        Vec2::new(x_dir, y_dir).normalize()
+    }
+
+    fn fade(p: f32) -> f32 {
+        p * p * p * (p * (p * 6. - 15.) + 10.)
+    }
+
+    fn noise(&self, v: Vec2) -> f32 {
+        let v0 = v.floor();
+        let v1 = v0 + Vec2::new(1., 0.);
+        let v2 = v0 + Vec2::new(0., 1.);
+        let v3 = v0 + Vec2::new(1., 1.);
+
+        let g0 = self.gradient(v0);
+        let g1 = self.gradient(v1);
+        let g2 = self.gradient(v2);
+        let g3 = self.gradient(v3);
+
+        let t0 = v.x - v0.x;
+        let t1 = v.y - v0.y;
+
+        let fade_t0 = Self::fade(t0);
+        let fade_t1 = Self::fade(t1);
+
+        let v0v1 = (1. - fade_t0) * g0.dot(v - v0) + fade_t0 * g1.dot(v - v1);
+        let v2v3 = (1. - fade_t0) * g2.dot(v - v2) + fade_t0 * g3.dot(v - v3);
+
+        (1. - fade_t1) * v0v1 + fade_t1 * v2v3
+    }
+}
+
+impl HeightGenerator for PerlinGenerator {
+    fn generate_height(&self, coord: HexCoord) -> u32 {
+        let mut height = 0.;
+        for step in self.steps.iter() {
+            let x = (coord.x() as f32) * step.x_freq;
+            let y = (coord.y() as f32) * step.y_freq;
+            let noise = self.noise(Vec2::new(x, y));
+            height += (noise * 2. + 0.7) * step.magnitude;
+            height += noise * step.magnitude;
+        }
+        height as u32
+    }
+}
+
+// For adding a level in the perlin noise generation.
+// Can add any number of these to the perlin noise generator
+pub struct PerlinStep {
+    x_freq: f32,
+    y_freq: f32,
+    magnitude: f32,
+}
+
+impl PerlinStep {
+    pub fn new(x_freq: f32, y_freq: f32, magnitude: f32) -> Self {
+        Self {
+            x_freq,
+            y_freq,
+            magnitude,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_RADIUS: u32 = 20;
+    const TEST_HEIGHT_SCALE: f32 = 0.4;
+
+    /// Sample coordinates spread across and beyond the playable grid, so the
+    /// cached and uncached paths are both exercised.
+    fn sample_coords() -> Vec<HexCoord> {
+        vec![
+            HexCoord::ORIGIN,
+            HexCoord::new_cubic(1, -1, 0),
+            HexCoord::new_cubic(7, -3, -4),
+            HexCoord::new_cubic(-12, 5, 7),
+            HexCoord::new_cubic(19, -19, 0),
+            // Outside the test grid radius, so this misses the cache.
+            HexCoord::new_cubic(64, -32, -32),
+        ]
+    }
+
+    #[test]
+    fn same_seed_produces_the_same_terrain() {
+        let a = HeightMap::new(
+            PerlinGenerator::lowlands(Some(20260725)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        let b = HeightMap::new(
+            PerlinGenerator::lowlands(Some(20260725)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        for coord in sample_coords() {
+            assert_eq!(
+                a.get_height(coord),
+                b.get_height(coord),
+                "terrain diverged at {coord:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn different_seeds_produce_different_terrain() {
+        let a = HeightMap::new(
+            PerlinGenerator::lowlands(Some(1)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        let b = HeightMap::new(
+            PerlinGenerator::lowlands(Some(2)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        let differs = HexCoord::ORIGIN
+            .within_radius(20)
+            .into_iter()
+            .any(|coord| a.get_height(coord) != b.get_height(coord));
+        assert!(differs, "two seeds produced an identical grid");
+    }
+
+    /// The cache is a memoization of the generator, so it must not be able to
+    /// disagree with it. Guards the cached and uncached paths against drift.
+    #[test]
+    fn cached_and_uncached_paths_agree() {
+        let generator = PerlinGenerator::lowlands(Some(7));
+        let expected: Vec<u32> = sample_coords()
+            .into_iter()
+            .map(|coord| std::cmp::max(generator.generate_height(coord), 1))
+            .collect();
+
+        let map = HeightMap::new(
+            PerlinGenerator::lowlands(Some(7)),
+            TEST_RADIUS,
+            TEST_HEIGHT_SCALE,
+        );
+        for (coord, want) in sample_coords().into_iter().zip(expected) {
+            assert_eq!(map.get_height(coord), want, "mismatch at {coord:?}");
+        }
+    }
+
+    /// Tile meshes are scaled by height, so a zero would collapse a tile.
+    #[test]
+    fn height_never_falls_below_one() {
+        let map = HeightMap::new(FlatGenerator::new(0), TEST_RADIUS, TEST_HEIGHT_SCALE);
+        assert_eq!(map.get_height(HexCoord::ORIGIN), 1);
+        assert_eq!(map.get_height(HexCoord::new_cubic(99, -99, 0)), 1);
+    }
+
+    #[test]
+    fn world_height_scales_the_quantized_height() {
+        let map = HeightMap::new(FlatGenerator::new(3), TEST_RADIUS, TEST_HEIGHT_SCALE);
+        assert_eq!(
+            map.get_world_height(HexCoord::ORIGIN),
+            3.0 * TEST_HEIGHT_SCALE
+        );
+    }
+}

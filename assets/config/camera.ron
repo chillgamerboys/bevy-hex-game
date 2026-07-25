@@ -1,0 +1,20 @@
+// How the camera moves.
+(
+    // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
+    // same at every distance.
+    pan_speed: 0.4,
+    // Added to the zoom distance before scaling pan speed, so panning still works
+    // when fully zoomed in.
+    pan_speed_offset: 10.0,
+
+    // Tilt limits, 0.0 (level with the horizon) to 1.0 (straight down).
+    min_pitch: 0.25,
+    max_pitch: 0.95,
+
+    // Zoom limits, in world units.
+    min_zoom: 5.0,
+    max_zoom: 50.0,
+
+    // Fraction of the current distance covered per scroll notch.
+    zoom_sensitivity: 0.2,
+)

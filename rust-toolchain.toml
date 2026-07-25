@@ -1,0 +1,5 @@
+# Bevy 0.19 requires Rust 1.95.0 or newer. Pin an exact toolchain so a fresh
+# clone doesn't fail to build against whatever stable happens to be installed.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]

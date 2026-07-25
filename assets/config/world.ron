@@ -1,0 +1,27 @@
+// Grid shape and terrain generation.
+//
+// Safe to edit while the game is running: save the file and the world rebuilds.
+(
+    // Tiles from the centre to the edge. The grid holds 3r^2 + 3r + 1 tiles, so
+    // this grows quadratically -- 20 is 1261 tiles, 40 would be 4921.
+    grid_radius: 20,
+
+    // World units per unit of tile height. Larger means more dramatic terrain.
+    height_scale: 0.4,
+
+    // Tile colour, as (red, green, blue), each from 0.0 to 1.0.
+    tile_color: (1.0, 0.8, 0.8),
+
+    terrain: (
+        // Set a number for a world you can reproduce, e.g. Some(20260725).
+        // None picks a new one every launch.
+        seed: None,
+
+        // Octaves of noise, added together. Higher frequency means bumpier;
+        // magnitude is how much height that octave contributes. Add more entries
+        // for finer detail on top of the broad shape.
+        steps: [
+            (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+        ],
+    ),
+)

@@ -1,7 +1,52 @@
-[package]
-name = "magic_game"
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+# Dependency versions live here so the crates can't drift apart. Each crate
+# opts in with `foo = { workspace = true }` and states its own features.
+[workspace.dependencies]
+hex_core = { path = "crates/hex_core" }
+hex_assets = { path = "crates/hex_assets" }
+hex_world = { path = "crates/hex_world" }
+hex_gameplay = { path = "crates/hex_gameplay" }
+hex_dev = { path = "crates/hex_dev" }
+
+bevy = "0.19"
+bevy_ecs = "0.19"
+bevy_math = "0.19"
+bevy_platform = "0.19"
+bevy_reflect = "0.19"
+bevy-inspector-egui = "0.37"
+rand = "0.8.5"
+xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+
+[workspace.lints.rust]
+# `bevy_lint` sets this cfg when it runs. Declaring it keeps the compiler from
+# warning about an unknown cfg, and means the linter can be switched on with no
+# source changes. It does not support Bevy 0.19 yet (0.18 is its ceiling), so it
+# is not wired into CI; this is here so it costs nothing to adopt when it lands.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(bevy_lint)"] }
+# TODO: raise to "warn" in the docs PR. It currently fires 55 times, mostly in
+# hex_core, whose public API is about to be rewritten around hexx — documenting
+# it now would be writing docs for code that is about to change.
+missing_docs = "allow"
+
+[workspace.lints.clippy]
+# Bevy injects system arguments by dependency injection, so systems routinely and
+# correctly take more than seven parameters.
+too_many_arguments = "allow"
+# Queries are type-heavy by construction; the lint fires on ordinary Bevy code.
+type_complexity = "allow"
+nonstandard_macro_braces = "warn"
+
+# Warning levels for individual Bevy lints go here once bevy_lint supports 0.19.
+# <https://thebevyflock.github.io/bevy_cli/api/bevy_lint/lints/>
+[workspace.metadata.bevy_lint]
+# panicking_methods = "deny"
 
 # Enable a small amount of optimization in debug mode
 [profile.dev]
@@ -11,9 +56,23 @@ opt-level = 1
 [profile.dev.package."*"]
 opt-level = 3
 
-[dependencies]
-bevy = "0.9"
-bevy-inspector-egui = "0.14.0"
-bevy_mod_picking = "0.10.0"
-xxhash-rust = { version = "0.8.6", features=["xxh3"]}
-rand = "0.8.5"
+# wgpu's debug assertions are expensive enough to distort dev-build profiling.
+# <https://github.com/bevyengine/bevy/issues/14291>
+[profile.dev.package.wgpu-types]
+debug-assertions = false
+
+[profile.release]
+# Whole-program optimization. Costs compile time; this is the profile we ship,
+# so that trade is the right way round.
+codegen-units = 1
+lto = "thin"
+
+# Fast to compile, since CI only needs to know the code builds and passes.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = "line-tables-only"
+codegen-units = 4
+
+[profile.ci.package."*"]
+opt-level = 0

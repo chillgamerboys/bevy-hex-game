@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, refactor]
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail fast and keep logs readable rather than emitting incremental artefacts
+  # CI immediately throws away.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # Formatting and licensing need no Bevy build, so they report in seconds
+  # instead of waiting behind a ~10 minute compile.
+  quick:
+    name: Format and dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  test:
+    name: Clippy and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # Bevy needs these to build on Linux even for a check-only run.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # --all-features so hex_dev is linted too; it is excluded from a default build.
+      - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
+      - run: cargo test --workspace --all-features --profile ci
+
+  # The three platforms we intend to ship. Catches target-specific breakage —
+  # notably the Windows console subsystem attribute — before it reaches a release.
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # No --all-features: this must build exactly what ships, without hex_dev.
+      - run: cargo build --workspace --profile ci

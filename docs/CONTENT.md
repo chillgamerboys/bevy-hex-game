@@ -1,0 +1,143 @@
+# Changing the game without writing code
+
+Most of how the game looks and feels is controlled by five text files in
+`assets/config/`. You can edit them in any text editor. You do not need to know
+Rust, and you do not need to rebuild anything.
+
+| File | Controls |
+|---|---|
+| `world.ron` | Map size, terrain shape, terrain seed, tile colour |
+| `camera.ron` | How fast the camera pans, how far it can zoom and tilt |
+| `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
+| `player.ron` | Player size, movement speed, colour |
+| `display.ron` | Vsync / frame rate behaviour |
+
+## Seeing your changes
+
+Run the game with:
+
+```sh
+cargo dev
+```
+
+Then edit a file and **save it**. The game notices immediately — you never need to
+close and reopen it.
+
+How quickly you *see* the change depends on which file:
+
+| File | When it takes effect |
+|---|---|
+| `camera.ron` | Straight away |
+| `display.ron` | Straight away |
+| `world.ron` | On the next world rebuild |
+| `lighting.ron` | On the next world rebuild |
+| `player.ron` | Movement speed straight away; size and colour on the next rebuild |
+
+**To rebuild the world**, press `BACKSPACE` to return to the title screen, then
+`ENTER` to start again. It takes under a second and picks up your edit.
+
+The split exists because some values are read continuously while the game runs and
+others are read once, when the map and pieces are created. Nothing is lost either
+way — the rebuild is quick.
+
+(`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
+while tuning, and `--release` when you just want to play.)
+
+## The format
+
+These are RON files. Three rules cover almost everything:
+
+**Text after `//` is a comment.** It is ignored by the game, so you can leave notes
+for yourself.
+
+**Every value needs a comma after it**, including the last one in a list. This is
+the single most common mistake.
+
+**Decimal numbers need a decimal point.** Write `1.0`, not `1`. Whole numbers like
+`grid_radius: 20` are the exception — those are counts, and are written plainly.
+
+Colours are written as `(red, green, blue)`, each from `0.0` to `1.0`:
+
+```ron
+tile_color: (1.0, 0.8, 0.8),   // pale pink
+```
+
+`0.0, 0.0, 0.0` is black, `1.0, 1.0, 1.0` is white.
+
+## If something goes wrong
+
+**The game sits on "loading…" forever.** One of the files has a mistake in it — most
+likely a missing comma. The terminal will name the file, the line, and the column.
+
+The game deliberately refuses to start rather than quietly using old values,
+because "it started but ignored your edit" is much harder to notice than "it did
+not start."
+
+**A change had no effect.** Check you saved the file, and that you are running with
+`cargo dev` rather than `cargo run --release`.
+
+**You want to undo everything.** These files are tracked in git:
+
+```sh
+git checkout assets/config/
+```
+
+## Things worth trying
+
+**A world you can come back to.** By default the terrain is different every launch.
+In `world.ron`:
+
+```ron
+seed: Some(20260725),
+```
+
+Any number works. The same number always produces the same map, so if you find a
+map you like, write the number down.
+
+**Bumpier terrain.** In `world.ron`, `magnitude` is how tall the hills are and
+`x_freq` / `y_freq` are how close together. Bigger frequencies mean rougher ground:
+
+```ron
+steps: [
+    (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+],
+```
+
+Add a second line with a *higher* frequency and *smaller* magnitude to lay fine
+detail over the broad shape:
+
+```ron
+steps: [
+    (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+    (x_freq: 0.20,  y_freq: 0.20, magnitude: 0.6),
+],
+```
+
+**A bigger map.** `grid_radius: 20` gives 1261 tiles. Be careful: the tile count
+grows quadratically, so `40` is 4921 tiles and `100` is over 30,000. Raise it a
+little at a time and watch the frame rate.
+
+**Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
+(a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for
+overcast; `100000.0` is direct noon sun. Rebuild the world to see it.
+
+## One thing that will not do anything on a Mac
+
+`display.ron` controls vsync. On macOS it has no visible effect: the system
+composites every window and syncs it to the display regardless of what the game
+asks for, so the frame rate stays pinned to your screen's refresh rate either way.
+On a MacBook with a ProMotion display that means it moves between 60 and 120 on
+its own, depending on whether anything is animating.
+
+This was measured rather than assumed. The setting does work on Windows and Linux,
+which is why it is still there.
+
+## What is not in these files
+
+Some values live in the code because changing them without also changing an art
+asset would silently break the game rather than produce an error.
+
+The main one is hex tile geometry. The size of a hex is a measurement of the 3D
+model in `assets/meshes/hex.glb` — changing the number without changing the model
+makes tiles overlap or leaves gaps between them. If you need tiles at a different
+size, the model has to change too. Ask a programmer.
