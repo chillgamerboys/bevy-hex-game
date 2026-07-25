@@ -31,6 +31,32 @@
 //! a column with a bottom and a top — so floating platforms, overhangs and caves are
 //! representable rather than being special cases bolted onto a single elevation.
 //! Terrain generation lives in `hex_map`; this crate only defines the vocabulary.
+//!
+//! # A position is a tile, not a coordinate
+//!
+//! This is the rule the rest of the game is built on, and the one most likely to be
+//! violated by accident:
+//!
+//! > **Columns stacked at the same coordinate are not connected.** A unit standing on
+//! > a bridge cannot step down to the ground beneath it. Reaching the lower column
+//! > means travelling — a ramp or spiral of adjacent columns descending gradually —
+//! > or an ability that explicitly bypasses the rule, such as teleporting or
+//! > tunnelling.
+//!
+//! So a unit is not *at* `HexCoord(3, -1)`. It is on a **specific column** there.
+//! Two columns sharing a coordinate are unrelated places that happen to share an
+//! address, exactly as two flats in a building share a street number.
+//!
+//! The practical consequence for anything that moves: **identify positions by tile
+//! entity, never by [`HexCoord`] alone.** A `HashMap<HexCoord, _>` keyed on
+//! coordinate silently collapses a stack down to one entry, and whichever column
+//! loses that race becomes unreachable — or worse, a unit crossing a bridge
+//! teleports to the ground. Adjacency between columns is
+//! [`HexCoord::neighbors`] *plus* an acceptable [`HexSpan::step_to`]; the
+//! coordinate on its own is only half the answer.
+//!
+//! What counts as an acceptable step, and which abilities may ignore the rule, is
+//! movement design and lives in `hex_gameplay`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
@@ -266,6 +292,17 @@ impl HexSpan {
     pub fn overlaps(self, other: Self) -> bool {
         self.bottom < other.top && other.bottom < self.top
     }
+
+    /// Height difference between this column's surface and another's.
+    ///
+    /// Positive when `other` is higher. This is the quantity a traversability rule
+    /// compares against a maximum step height — but *what* that maximum is, and
+    /// whether stairs or a slope change the answer, is a movement-design question
+    /// and deliberately not decided here.
+    #[must_use]
+    pub fn step_to(self, other: Self) -> f32 {
+        other.top - self.top
+    }
 }
 
 /// Marks the parent entity that owns every spawned tile.
@@ -445,5 +482,59 @@ mod tests {
 
         assert!((span.centre() - half - span.bottom).abs() < 1e-6);
         assert!((span.centre() + half - span.top).abs() < 1e-6);
+    }
+}
+
+#[cfg(test)]
+mod stacking_rule {
+    use super::*;
+
+    /// Columns stacked at one coordinate are separate places. A bridge over ground
+    /// is two spans that do not overlap, and the step between them is the full drop
+    /// — which is what a movement rule measures to reject it.
+    #[test]
+    fn a_bridge_and_the_ground_beneath_it_are_far_apart() {
+        let ground = HexSpan::from_ground(1.0);
+        let bridge = HexSpan::new(6.0, 7.0);
+
+        assert!(!ground.overlaps(bridge), "a bridge should clear the ground");
+        assert!((ground.step_to(bridge) - 6.0).abs() < 1e-6);
+        assert!((bridge.step_to(ground) + 6.0).abs() < 1e-6);
+    }
+
+    /// A spiral descent is a run of adjacent columns whose surfaces change gently.
+    /// Each individual step is small even though the total drop is large — which is
+    /// exactly what distinguishes a legal route from stepping off the edge.
+    #[test]
+    fn a_gradual_descent_has_small_steps_throughout() {
+        let ramp: Vec<HexSpan> = (0..8i32)
+            .map(|i| HexSpan::from_ground(8.0 - i as f32))
+            .collect();
+
+        let total = ramp[0].step_to(ramp[ramp.len() - 1]).abs();
+        assert!(
+            (total - 7.0).abs() < 1e-6,
+            "the ramp should descend 7 units"
+        );
+
+        for pair in ramp.windows(2) {
+            assert!(
+                pair[0].step_to(pair[1]).abs() <= 1.0,
+                "each step of a ramp should be small"
+            );
+        }
+    }
+
+    /// `step_to` is signed and antisymmetric: stepping up by n is stepping down by n
+    /// the other way. A rule comparing against a maximum needs the magnitude, so
+    /// getting the sign convention wrong silently permits falls it should refuse.
+    #[test]
+    fn step_is_signed_and_antisymmetric() {
+        let low = HexSpan::from_ground(2.0);
+        let high = HexSpan::from_ground(5.0);
+
+        assert!(low.step_to(high) > 0.0, "stepping up is positive");
+        assert!(high.step_to(low) < 0.0, "stepping down is negative");
+        assert!((low.step_to(high) + high.step_to(low)).abs() < 1e-6);
     }
 }
