@@ -14,7 +14,7 @@ pub mod pathing;
 /// The player piece and click-to-move.
 pub mod player;
 
-pub use movement::{route, Footing, Standing, MAX_STEP};
+pub use movement::{route, Body, Footing, Standing, MAX_STEP};
 pub use player::Player;
 
 /// Adds every gameplay system.

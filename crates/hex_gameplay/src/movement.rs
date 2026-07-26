@@ -1,14 +1,20 @@
 //! Which columns a piece may step between, and how it gets from one to another.
 //!
-//! # The rule
+//! # The rules
 //!
-//! > A step is legal when the destination is an **adjacent column**, its surface is
-//! > within [`MAX_STEP`] levels, and it is **solid enough to stand on**.
+//! > A body may **stand** on a column when its substance is solid and its
+//! > [`Headroom`](hex_core::Headroom) is at least the body's [`Body::levels_tall`].
+//!
+//! > A **step** is legal when the destination is an adjacent column a body can stand
+//! > on, and its surface is within [`MAX_STEP`] levels.
 //!
 //! Columns stacked at one coordinate are never adjacent, so a piece on a bridge
 //! cannot drop to the ground beneath it. Getting down means a ramp of adjacent
 //! columns descending a level at a time — or an ability that explicitly ignores this,
 //! which is not implemented and belongs here when it is.
+//!
+//! Headroom is what makes size matter: a two-level body cannot squeeze into the
+//! one-voxel crawlspace under a bridge that a one-level body walks straight through.
 //!
 //! # What this is not
 //!
@@ -22,13 +28,41 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
-use hex_core::{HexCoord, HexSpan, Level, SubstanceId, TilePos};
+use hex_core::{Headroom, HexCoord, HexSpan, Level, SubstanceId, TilePos};
 
 /// How many levels a piece may climb or drop in one step.
 ///
 /// One, by design: a step is a step. Anything steeper is a cliff and has to be walked
 /// around, or bypassed with an ability.
 pub const MAX_STEP: Level = 1;
+
+/// How much room a thing takes up, and therefore where it fits.
+///
+/// A struct rather than a bare [`Level`] on purpose. Bodies come in configurations —
+/// the obvious next one is a **footprint**, a set of coordinate offsets for something
+/// wider than a single hex — and adding that field here changes [`Body::admits`] and
+/// nothing else. No call site passes the parts separately, so none of them move.
+///
+/// A footprint is deliberately not built yet. It is pure gameplay, invisible to the
+/// map, and it first needs a decision this codebase has not taken: whether a wide body
+/// may straddle a one-level step, or must have every hex of its footprint level.
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct Body {
+    /// How many levels tall, and so how much clear space it needs overhead.
+    pub levels_tall: Level,
+}
+
+impl Body {
+    /// Whether this body fits in the space above a surface.
+    ///
+    /// The single place the size rule lives, and where a footprint check would join
+    /// it. Everything else asks this rather than comparing levels itself.
+    #[must_use]
+    pub const fn admits(self, headroom: Headroom) -> bool {
+        headroom.0 >= self.levels_tall
+    }
+}
 
 /// A column a piece can stand on: where it is, and how high its surface sits.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,12 +81,17 @@ impl Standing {
     }
 }
 
-/// Every column a piece could stand on, indexed by position.
+/// Every column **a particular body** could stand on, indexed by position.
+///
+/// Body-specific by construction rather than universal, because standability depends
+/// on size: a crawlspace under a bridge is footing for a small creature and a wall for
+/// a large one. Filtering once here is what lets [`Footing::at`], [`Footing::ground`],
+/// [`Footing::step_from`] and [`route`] stay free of size arguments entirely.
 ///
 /// Built from the tile entities rather than from a map resource, which is what keeps
 /// gameplay independent of how terrain is stored. `hex_map` can be rewritten
-/// wholesale as long as tiles carry a [`TilePos`], a [`HexSpan`] and a
-/// [`SubstanceId`].
+/// wholesale as long as tiles carry a [`TilePos`], a [`HexSpan`], a [`SubstanceId`]
+/// and a [`Headroom`].
 #[derive(Debug, Default)]
 pub struct Footing {
     by_pos: HashMap<TilePos, Standing>,
@@ -62,19 +101,31 @@ pub struct Footing {
 }
 
 impl Footing {
-    /// Collects every standable column from the tile entities.
+    /// Collects the columns `body` can stand on from the tile entities.
     ///
-    /// A tile is standable when its substance is solid. Air is never spawned as a
-    /// prism, but a future non-solid substance — water, say — would be, and stepping
-    /// onto it should not silently work.
+    /// Two independent conditions, from two different places:
+    ///
+    /// - **Solid**, read from the substance table. Air is never spawned as a prism,
+    ///   but a future non-solid substance such as water would be, and stepping onto it
+    ///   should not silently work.
+    /// - **Room enough**, from the [`Headroom`] the map reports. Zero headroom means
+    ///   the tile is buried inside a column and is not a surface at all; too little
+    ///   means the body does not fit.
+    ///
+    /// Both are checked here rather than in the caller's query, so there is exactly
+    /// one place the rule lives. Getting this wrong is not subtle in its effects and
+    /// is very subtle in its symptoms: treating buried runs as standable put the
+    /// player inside the terrain and left every route walking through the bedrock,
+    /// arriving nowhere.
     pub fn from_tiles<'a>(
-        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId)>,
+        tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
         table: &SubstanceTable,
+        body: Body,
     ) -> Self {
         let mut footing = Self::default();
 
-        for (pos, span, substance) in tiles {
-            if !table.is_solid(*substance) {
+        for (pos, span, substance, headroom) in tiles {
+            if !table.is_solid(*substance) || !body.admits(*headroom) {
                 continue;
             }
             // The tile's `TilePos` is already its topmost solid voxel, so the
@@ -169,6 +220,7 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
 mod tests {
     use super::*;
     use hex_assets::{Substance, SubstanceFile};
+    use hex_core::MAX_HEADROOM;
 
     const STONE: SubstanceId = SubstanceId(1);
 
@@ -193,23 +245,42 @@ mod tests {
         SubstanceTable::from_file(&SubstanceFile { substances })
     }
 
-    /// A one-level column whose topmost solid voxel is `level`.
+    /// A body of the size the game actually ships, for tests about stepping rather
+    /// than about size.
+    const NORMAL: Body = Body { levels_tall: 2 };
+
+    /// A one-level column under open sky.
     ///
     /// The span uses a level height of 1 so world coordinates and levels line up,
     /// which keeps the tests readable. `hex_map` uses whatever `level_height` says;
     /// gameplay never sees it.
-    fn tile(coord: HexCoord, level: Level) -> (TilePos, HexSpan, SubstanceId) {
-        #[expect(clippy::cast_precision_loss, reason = "test levels are single digits")]
-        let span = HexSpan::new(level as f32, (level + 1) as f32);
-        (TilePos::new(coord, level), span, STONE)
+    fn tile(coord: HexCoord, level: Level) -> (TilePos, HexSpan, SubstanceId, Headroom) {
+        roofed(coord, level, MAX_HEADROOM)
     }
 
-    fn footing_from(tiles: &[(TilePos, HexSpan, SubstanceId)]) -> Footing {
+    /// A one-level column with a specific amount of space above it — a ledge under an
+    /// overhang, or a run buried in a column when `headroom` is zero.
+    fn roofed(
+        coord: HexCoord,
+        level: Level,
+        headroom: Level,
+    ) -> (TilePos, HexSpan, SubstanceId, Headroom) {
+        #[expect(clippy::cast_precision_loss, reason = "test levels are single digits")]
+        let span = HexSpan::new(level as f32, (level + 1) as f32);
+        (TilePos::new(coord, level), span, STONE, Headroom(headroom))
+    }
+
+    fn footing_from(tiles: &[(TilePos, HexSpan, SubstanceId, Headroom)]) -> Footing {
+        footing_for(tiles, NORMAL)
+    }
+
+    fn footing_for(tiles: &[(TilePos, HexSpan, SubstanceId, Headroom)], body: Body) -> Footing {
         Footing::from_tiles(
             tiles
                 .iter()
-                .map(|(pos, span, substance)| (pos, span, substance)),
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
             &table(),
+            body,
         )
     }
 
@@ -374,9 +445,98 @@ mod tests {
         let coord = HexCoord::ORIGIN;
         let span = HexSpan::new(0.0, 1.0);
         let footing = Footing::from_tiles(
-            [(&TilePos::new(coord, 0), &span, &SubstanceId::AIR)].into_iter(),
+            [(
+                &TilePos::new(coord, 0),
+                &span,
+                &SubstanceId::AIR,
+                &Headroom(MAX_HEADROOM),
+            )]
+            .into_iter(),
             &table(),
+            NORMAL,
         );
         assert!(footing.ground(coord).is_none());
+    }
+
+    /// A run buried inside a column is not a surface, however solid it is.
+    ///
+    /// This is the shipped bug, in one assertion. Run-merging splits a column into
+    /// stacked runs, and treating the buried ones as standable made the bedrock at
+    /// the bottom look exactly as good as the grass on top — so the piece stood
+    /// inside the terrain and routes walked through the rock.
+    #[test]
+    fn buried_runs_are_never_standable() {
+        let coord = HexCoord::ORIGIN;
+        let footing = footing_from(&[roofed(coord, 0, 0)]);
+        assert!(
+            footing.ground(coord).is_none(),
+            "a run with no space above it is inside a column, not on top of one"
+        );
+    }
+
+    /// The case headroom exists for: the same ledge is footing for a short body and a
+    /// wall for a tall one.
+    #[test]
+    fn a_tall_body_does_not_fit_where_a_short_one_does() {
+        let coord = HexCoord::ORIGIN;
+        // One clear voxel — a crawlspace under a bridge.
+        let tiles = [roofed(coord, 1, 1)];
+
+        assert!(
+            footing_for(&tiles, Body { levels_tall: 1 })
+                .ground(coord)
+                .is_some(),
+            "one level of clearance is enough for a one-level body"
+        );
+        assert!(
+            footing_for(&tiles, Body { levels_tall: 2 })
+                .ground(coord)
+                .is_none(),
+            "a two-level body does not fit under a one-voxel ceiling"
+        );
+    }
+
+    /// A ceiling partway along an otherwise flat route blocks a tall body and lets a
+    /// short one through. Terrain that is walkable is a property of the walker.
+    #[test]
+    fn a_low_tunnel_blocks_only_the_bodies_that_do_not_fit() {
+        let line: Vec<HexCoord> = HexCoord::ORIGIN.line_between(HexCoord::new_cubic(3, -3, 0));
+        let tiles: Vec<_> = line
+            .iter()
+            .enumerate()
+            // A low roof over the middle of the line, open sky either side.
+            .map(|(i, c)| {
+                if i == 2 {
+                    roofed(*c, 4, 1)
+                } else {
+                    tile(*c, 4)
+                }
+            })
+            .collect();
+
+        let short = Body { levels_tall: 1 };
+        let short_footing = footing_for(&tiles, short);
+        let (Some(from), Some(to)) = (
+            short_footing.ground(HexCoord::ORIGIN),
+            short_footing.ground(HexCoord::new_cubic(3, -3, 0)),
+        ) else {
+            unreachable!("both ends have ground")
+        };
+        assert!(
+            route(from, to, &short_footing).is_some(),
+            "a one-level body fits through the tunnel"
+        );
+
+        let tall_footing = footing_for(&tiles, Body { levels_tall: 2 });
+        let (Some(from), Some(to)) = (
+            tall_footing.ground(HexCoord::ORIGIN),
+            tall_footing.ground(HexCoord::new_cubic(3, -3, 0)),
+        ) else {
+            unreachable!("both ends are still open sky for a tall body")
+        };
+        assert!(
+            route(from, to, &tall_footing).is_none(),
+            "a two-level body cannot pass under the low roof"
+        );
     }
 }

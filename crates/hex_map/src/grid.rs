@@ -13,7 +13,8 @@ use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    GameplaySetup, HexCoord, HexGrid, HexSpan, HexTile, Screen, SubstanceId, TerrainEdit, TilePos,
+    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
+    TerrainEdit, TilePos, MAX_HEADROOM,
 };
 
 use crate::generator::{HeightMap, PerlinGenerator, PerlinStep};
@@ -28,6 +29,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<HexTile>()
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
+        .register_type::<Headroom>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_gameplay` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -164,6 +166,11 @@ fn build_grid(
                 palette_materials.get_or_create(run.substance, table, materials, settings);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
+            // Only the map can measure this: a run knows its own extent but nothing
+            // about what is stacked on it. Zero means buried, and nothing can stand
+            // on a buried run however solid it is.
+            let headroom = headroom_above(column, run.top);
+
             tiles.push(
                 commands
                     .spawn((
@@ -186,6 +193,7 @@ fn build_grid(
                         // into movement. Voxels inside the run are addressed by
                         // `TilePos`, not by this entity.
                         TilePos::new(coord, run.top - 1),
+                        Headroom(headroom),
                     ))
                     .id(),
             );
@@ -200,6 +208,23 @@ fn build_grid(
             HexGrid,
         ))
         .add_children(&tiles);
+}
+
+/// Clear voxels starting at `from`, saturating at [`MAX_HEADROOM`].
+///
+/// `from` is a run's exclusive `top`, so it names the voxel directly above the run's
+/// topmost solid one — the first place a body standing here would put its feet' worth
+/// of air. A solid voxel there means the run is buried and the answer is zero.
+///
+/// Saturating matters: above a column's top the air is unbounded, so counting to the
+/// first solid voxel would never terminate. [`Column::get`] returns air for anything
+/// out of range, which is what makes this loop safe without bounds checks.
+fn headroom_above(column: &Column, from: Level) -> Level {
+    (0..MAX_HEADROOM)
+        .take_while(|offset| column.get(from + offset).is_air())
+        .count()
+        .try_into()
+        .unwrap_or(MAX_HEADROOM)
 }
 
 /// World-space extent of a run of levels.

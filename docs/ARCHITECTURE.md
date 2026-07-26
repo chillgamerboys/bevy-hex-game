@@ -29,7 +29,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on |
 |---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, terrain edits, app states, ordering sets | Bevy sub-crates only — no renderer |
+| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets | Bevy sub-crates only — no renderer |
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
@@ -44,9 +44,14 @@ blast radius is what makes that ownership safe: work there cannot break gameplay
 camera, the sky, the screens or the menus, because none of them can see it.
 
 The map reaches the rest of the game **only through components**. Tiles are spawned
-carrying a `HexCoord`, a `TilePos`, a `HexSpan` and a `SubstanceId`; `hex_gameplay`
-queries those. Nothing outside `hex_map` references `VoxelMap` or any generator, so
-terrain storage and generation can be replaced wholesale without anyone noticing.
+carrying a `HexCoord`, a `TilePos`, a `HexSpan`, a `SubstanceId` and a `Headroom`;
+`hex_gameplay` queries those. Nothing outside `hex_map` references `VoxelMap` or any
+generator, so terrain storage and generation can be replaced wholesale without anyone
+noticing.
+
+`Headroom` is on that list because only the map can measure it: a run carries its own
+extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface
+from the inside of a column — let alone whether a body fits in the space above one.
 
 Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
 into the map, so a spell that digs or builds requests it and the map applies it.

@@ -51,6 +51,38 @@ pub struct TilePos {
     pub level: Level,
 }
 
+/// The most clear voxels ever counted above a surface.
+///
+/// Air above the top of a column is unbounded, so the count has to stop somewhere.
+/// This is far taller than any body, which is what makes saturating here harmless:
+/// "eight clear levels" and "open sky" are the same answer to every question anything
+/// actually asks.
+pub const MAX_HEADROOM: Level = 8;
+
+/// How many clear voxels sit **directly above this tile's surface**, saturating at
+/// [`MAX_HEADROOM`].
+///
+/// Zero means the tile is buried inside a column and is not a surface at all. A tile
+/// entity is a run of voxels, and a column is usually several stacked runs — bedrock
+/// under stone under dirt under grass — of which only the top of a contiguous stack
+/// has an open face. Treating the buried ones as surfaces put the player inside the
+/// terrain and left every route walking through the bedrock.
+///
+/// Only the map can measure this. A run carries its own extent but knows nothing about
+/// what is stacked on it, so `hex_map` counts it once at spawn and publishes it here
+/// rather than gameplay trying to infer it from spans.
+///
+/// This is **not** "standable". Standing also needs a solid substance and a body short
+/// enough to fit, both of which are `hex_gameplay`'s judgement. This component states
+/// the geometry and nothing else.
+///
+/// Ground under a bridge keeps its headroom — the bridge is a separate run with air
+/// between — but only as much as the gap allows, which is exactly what stops a
+/// two-level body walking through a one-voxel crawlspace.
+#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[reflect(Component)]
+pub struct Headroom(pub Level);
+
 impl TilePos {
     /// The bedrock voxel at the centre of the map.
     pub const ORIGIN: Self = Self {

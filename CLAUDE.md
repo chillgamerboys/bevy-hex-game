@@ -66,6 +66,11 @@ and tests without a renderer. It holds the test suite (17 tests).
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
   topmost solid voxel. Interior voxels have no entity, which is why targeting is
   positional. See `docs/MAP_MODEL.md`.
+- **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
+  it, 0 when buried inside a column — and a `Body` may stand only where headroom is at
+  least its `levels_tall` (2 for the player). Only the map can measure this, so it
+  publishes it; gameplay cannot derive it from spans. `height` is reserved for terrain,
+  which is why a body is `levels_tall`.
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.
