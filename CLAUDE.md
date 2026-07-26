@@ -172,10 +172,27 @@ allowed to be wrong.
   Rust-affecting PRs into `dev` as well as into `main`. Markdown-only changes skip
   the Rust jobs.
 
+### Skill pipeline
+
+The PR lifecycle is driven by skills in `.claude/skills/`:
+`/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
+`/promote` for the deliberate dev→main hop, which gates on a human having
+played the build; `/release` to bump `[workspace.package] version` and tag
+`vX.Y.Z` (the tag triggers the release build). Commit subjects follow
+Conventional Commits — `/release` computes the version bump from them.
+`/audit-pr` writes `/tmp/audit-pr-receipt-<PR>.json`; `/merge-pr` refuses to
+merge without a green receipt for the current HEAD.
+Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
+links) → `/test-full` (+ship build; the visual walk stays manual).
+Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`.
+Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
+`/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
+tickets. Binding is encouraged, never required.
+
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and more than 180 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 226 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
