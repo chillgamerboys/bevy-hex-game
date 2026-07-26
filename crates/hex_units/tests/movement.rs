@@ -20,6 +20,7 @@ use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
+use hex_anim::Transformation;
 use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
@@ -27,7 +28,7 @@ use hex_core::{
     Turn, MAX_HEADROOM,
 };
 use hex_units::{
-    Enemy, Faction, HoveredSurface, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
+    Enemy, Faction, HoveredSurface, MovingTo, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -316,7 +317,16 @@ fn clicking_before_settings_load_does_not_panic() {
     app.update();
 }
 
-/// Clicking a tile starts a move, and updates which surface the player is on.
+/// Clicking a tile starts a move, and the player arrives **when the walk finishes**.
+///
+/// This test used to assert the arrival one frame after the click, which passed only
+/// because `StandsOn` was written the moment the move was *ordered*. That is the bug
+/// the review found: everything asking where a unit is — engagement most of all — was
+/// reading the destination rather than the position, so a click across the map started
+/// a fight instantly at the far end of the route.
+///
+/// So the assertion is now in two halves, and the first half is the one that matters:
+/// **immediately after the click the player has not moved.**
 #[test]
 fn clicking_a_tile_moves_the_player() {
     let mut app = test_app();
@@ -338,21 +348,42 @@ fn clicking_a_tile_moves_the_player() {
     click(&mut app, target, window);
     app.update();
 
-    let mut players = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
-    let standing = players
-        .iter(app.world())
-        .next()
-        .copied()
-        .expect("a player should exist");
-
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
     assert_eq!(
-        standing.0.pos.coord, destination,
-        "clicking a tile should move the player onto that surface"
+        standing_of(&mut app).map(|s| s.pos.coord),
+        Some(HexCoord::ORIGIN),
+        "the click committed a route; the piece has not walked it yet"
+    );
+    assert!(
+        app.world().get::<MovingTo>(player).is_some(),
+        "the committed route should be recorded while the walk runs"
+    );
+
+    // Stand in for the animation finishing, which is what `hex_anim`'s driver does.
+    app.world_mut()
+        .entity_mut(player)
+        .remove::<Transformation>();
+    app.update();
+
+    let standing = standing_of(&mut app).expect("a player should exist");
+    assert_eq!(
+        standing.pos.coord, destination,
+        "the player should be on the destination once the walk lands"
     );
     assert_eq!(
-        standing.0.pos.level, GROUND_LEVEL,
+        standing.pos.level, GROUND_LEVEL,
         "the player should arrive on the surface, not inside the column"
     );
+    assert!(
+        app.world().get::<MovingTo>(player).is_none(),
+        "an arrived piece should no longer be carrying a route"
+    );
+}
+
+/// Where the player is standing right now.
+fn standing_of(app: &mut App) -> Option<hex_units::Standing> {
+    let mut players = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    players.iter(app.world()).next().map(|s| s.0)
 }
 
 /// Regression test for the buried-run bug.
@@ -1035,5 +1066,62 @@ fn a_route_stops_being_drawn_when_its_ground_goes() {
         count::<With<PathOverlay>>(&mut app),
         0,
         "the route is still lit across ground that has been deleted"
+    );
+}
+
+/// A fight starting mid-walk puts the piece down where it is.
+///
+/// Committing to a long walk and then being ambushed halfway should leave the piece
+/// where the ambush happened, not deliver it to a destination chosen before anybody
+/// knew there was a fight.
+///
+/// It lands on a **whole step** of the route, never between two: a piece standing
+/// between hexes is not a position the rest of the game can express, since every rule
+/// here is written in terms of a surface.
+#[test]
+fn a_fight_stops_the_walk_where_it_started() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let destination = HexCoord::new_cubic(3, -3, 0);
+    let target = surface_at(&mut app, destination).expect("the fixture covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    app.update();
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    let route: Vec<TilePos> = app
+        .world()
+        .get::<MovingTo>(player)
+        .expect("the click should have committed a route")
+        .path
+        .iter()
+        .map(|standing| standing.pos)
+        .collect();
+    assert!(route.len() > 1, "setup failed — the route is not a walk");
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the walk carried on after the fight began"
+    );
+    assert!(
+        app.world().get::<MovingTo>(player).is_none(),
+        "the piece is still holding a route it is no longer walking"
+    );
+
+    let ended = standing_of(&mut app).expect("a player should exist").pos;
+    assert!(
+        route.contains(&ended),
+        "the piece was put down at {ended:?}, which is not on the route it was walking"
+    );
+    assert_ne!(
+        ended,
+        TilePos::new(destination, GROUND_LEVEL),
+        "the piece was delivered to a destination chosen before the fight existed"
     );
 }

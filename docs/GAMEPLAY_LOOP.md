@@ -131,6 +131,28 @@ independent of each other still holds.
 part of a map is worth testing and press `BACKSPACE` then `ENTER` to rebuild. See
 [CONTENT.md](CONTENT.md).
 
+## Where a unit is, and where it is going
+
+Two different facts, and they used to be one component. `StandsOn` is the surface a
+piece is **actually on**; `MovingTo` carries the route it has committed to walking.
+
+Conflating them meant everything that asked where a unit was got the answer it would
+have *eventually*. A click across the map started a fight instantly at the far end of
+the route, ended one while the piece was still walking away, and could pass straight
+through engaging distance without noticing whenever the destination happened to be out
+of range.
+
+**A fight starting mid-walk stops the walk.** The piece is put down on the nearest
+whole step of its route — never between two hexes, because a position between surfaces
+is not something any other rule can express. Committing to a long walk and then being
+ambushed halfway should leave you where the ambush happened, not deliver you somewhere
+chosen before anyone knew there was a fight.
+
+The route is kept as the whole path rather than just its endpoint precisely so that
+interruption has somewhere real to put the piece. It cannot be recovered from the
+animation: `HexPathingLine` keeps only world positions, and its legs stop lining up
+with a per-step clock as soon as a route climbs.
+
 ## The high ground
 
 Elevation is an **advantage, not a separation**. A unit gains one hex of range for

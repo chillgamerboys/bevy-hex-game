@@ -46,13 +46,36 @@ pub(crate) type TileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
-/// Which surface a piece is standing on.
+/// Which surface a piece is **actually standing on**, right now.
 ///
 /// A coordinate is not enough: surfaces stacked in one column are separate places,
 /// so a piece on a bridge and a piece on the ground beneath it share a horizontal
 /// address but not a location.
+///
+/// This used to be written the moment a move was *ordered*, which made it the
+/// destination rather than the position for as long as the walk took. Everything that
+/// asks where a unit is — engagement above all — was therefore reading the future.
+/// A single click across the map started a fight instantly, ended one while the piece
+/// was still walking away, and could cross straight through engaging distance without
+/// ever noticing if the far end happened to be out of range. The committed route lives
+/// in [`MovingTo`] now, and this means what it says.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StandsOn(pub Standing);
+
+/// A walk in progress, and every surface it passes over.
+///
+/// Paired with a [`Transformation`]: that one animates, this one remembers what the
+/// animation *means*. The whole path rather than just the endpoint, because a fight
+/// starting mid-stride has to put the piece down on a real hex, and the animation
+/// cannot say which one — `HexPathingLine` keeps only `Vec3`s, and its legs do not
+/// even line up with a per-step clock once a route climbs.
+///
+/// The first entry is the surface left behind, so a path is always at least one long.
+#[derive(Component, Debug, Clone)]
+pub struct MovingTo {
+    /// Surfaces walked over, starting where the walk began.
+    pub path: Vec<Standing>,
+}
 
 /// Which side a unit is on.
 ///
@@ -134,12 +157,13 @@ fn on_tile_clicked(
     tiles: TileQuery,
     mut players: Query<
         (Entity, &StandsOn, &Body, Option<&mut Turn>),
-        // `Without<Transformation>` is a rule, not an optimisation. `StandsOn` is the
-        // committed destination the moment a move starts, so a second click while the
-        // piece is still walking would route from where it is *going*, queue a fresh
-        // animation over the top of the first, and charge `movement_left` a second
-        // time for the same turn. `hex_combat::ai` has always filtered this way; the
-        // player now obeys the rule the enemy already did.
+        // `Without<Transformation>` is a rule, not an optimisation: a piece already
+        // walking is not available to be sent somewhere else. A second click would
+        // queue a fresh animation over the top of the first and charge
+        // `movement_left` twice for one turn — and it would route from a position the
+        // piece has not reached yet, since `arrive` only writes `StandsOn` once the
+        // walk finishes. `hex_combat::ai` has always filtered this way; the player now
+        // obeys the rule the enemy already did.
         (With<Player>, With<Selected>, Without<Transformation>),
     >,
     settings: Option<Res<PlayerSettings>>,
@@ -215,10 +239,75 @@ fn on_tile_clicked(
         }
 
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
+        // `MovingTo`, not `StandsOn`. The piece has not gone anywhere yet — it has been
+        // told where to go, and `arrive` writes the position once it is true.
         commands
             .entity(entity)
-            .insert((animation, StandsOn(destination)));
+            .insert((animation, MovingTo { path: steps }));
     }
+}
+
+/// Writes a finished walk into the position it ended at.
+///
+/// Registered by [`movement::plugin`](crate::movement::plugin) rather than here,
+/// because it is bookkeeping every unit needs and nothing to do with spawning a
+/// scenario. `hex_combat`'s tests want the former without the latter.
+///
+/// Reconciled from the **absence** of a [`Transformation`] rather than from
+/// `RemovedComponents`: the removal is a deferred command, so a reader can miss the
+/// frame it lands in, and this way a unit that somehow lost its animation without
+/// finishing still ends up somewhere real instead of stuck holding a route forever.
+pub(crate) fn arrive(
+    mut commands: Commands,
+    arrived: Query<(Entity, &MovingTo), Without<Transformation>>,
+) {
+    for (entity, moving) in &arrived {
+        let mut unit = commands.entity(entity);
+        unit.remove::<MovingTo>();
+        if let Some(destination) = moving.path.last() {
+            unit.insert(StandsOn(*destination));
+        }
+    }
+}
+
+/// Stops a walk where it is when a fight starts.
+///
+/// Committing to a long walk and then being ambushed halfway should leave the piece
+/// where the ambush happened, not deliver it to a destination chosen before anyone
+/// knew there was a fight.
+///
+/// It snaps to the **nearest whole step** rather than to the exact interpolated point,
+/// because a piece standing between two hexes is not a position the rest of the game
+/// can express — every rule here is written in terms of a surface.
+pub(crate) fn halt_on_combat(
+    mut commands: Commands,
+    mut walking: Query<(Entity, &MovingTo, &mut Transform)>,
+) {
+    for (entity, moving, mut transform) in &mut walking {
+        let Some(stopped) = nearest_step(&moving.path, transform.translation) else {
+            continue;
+        };
+        transform.translation = stopped.world_position();
+        commands
+            .entity(entity)
+            .insert(StandsOn(stopped))
+            .remove::<MovingTo>()
+            .remove::<Transformation>();
+    }
+}
+
+/// The step in `path` closest to a world position.
+///
+/// `total_cmp` rather than `partial_cmp`: distances are never `NaN` here, and a
+/// comparison that cannot fail needs no unwrap to explain away.
+fn nearest_step(path: &[Standing], at: Vec3) -> Option<Standing> {
+    path.iter()
+        .min_by(|a, b| {
+            a.world_position()
+                .distance_squared(at)
+                .total_cmp(&b.world_position().distance_squared(at))
+        })
+        .copied()
 }
 
 /// Resolves a coordinate written in a settings file, falling back to the map centre.

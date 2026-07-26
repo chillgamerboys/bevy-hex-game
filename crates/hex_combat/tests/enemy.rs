@@ -37,7 +37,11 @@ fn test_app() -> App {
         levels_tall: 2,
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
-    app.add_plugins(hex_combat::plugin);
+    // `hex_units::movement::plugin`, not the whole of `hex_units::plugin`: this is what
+    // keeps `StandsOn` honest as a unit walks, and combat is meaningless without it.
+    // The full plugin would also read `scenario.ron` and spawn its own pieces on top of
+    // the ones these tests place by hand.
+    app.add_plugins((hex_units::movement::plugin, hex_combat::plugin));
 
     while app.plugins_state() != PluginsState::Cleaned {
         app.finish();
@@ -110,6 +114,20 @@ fn enter_gameplay(app: &mut App) {
     app.update();
 }
 
+/// Stands in for the walk animation finishing.
+///
+/// Removing the component is exactly what `hex_anim`'s driver does once a transformer
+/// reports itself done, and `hex_units::arrive` is what turns that into a new position.
+/// **A unit's `StandsOn` does not move until this happens** — it is where the piece is,
+/// not where it was sent — so any test that reads a position after ordering a move has
+/// to let the move land first.
+fn finish_moving(app: &mut App, entity: Entity) {
+    app.world_mut()
+        .entity_mut(entity)
+        .remove::<Transformation>();
+    app.update();
+}
+
 /// Where a unit currently stands.
 ///
 /// Returns an `Option` rather than unwrapping: the restriction lints are only relaxed
@@ -138,6 +156,7 @@ fn an_enemy_closes_the_distance_on_its_turn() {
 
     end_turn(&mut app);
     app.update();
+    finish_moving(&mut app, enemy);
 
     let after = coord_of(&app, enemy).expect("the enemy exists");
     assert!(
@@ -162,6 +181,7 @@ fn an_enemy_stops_adjacent_rather_than_on_top() {
 
     end_turn(&mut app);
     app.update();
+    finish_moving(&mut app, enemy);
 
     let after = coord_of(&app, enemy).expect("the enemy exists");
     assert_ne!(after, HexCoord::ORIGIN, "the enemy walked onto the player");
@@ -197,6 +217,7 @@ fn an_enemy_cannot_outrun_its_movement_budget() {
     let before = coord_of(&app, enemy).expect("the enemy exists");
     end_turn(&mut app);
     app.update();
+    finish_moving(&mut app, enemy);
     let after = coord_of(&app, enemy).expect("the enemy exists");
 
     let travelled = before.distance(after);

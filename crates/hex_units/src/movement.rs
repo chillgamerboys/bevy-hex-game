@@ -40,7 +40,9 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
-use hex_core::{Headroom, HexCoord, HexSpan, Level, SubstanceId, TilePos};
+use hex_core::{
+    AppSystems, Headroom, HexCoord, HexSpan, Level, Mode, PausableSystems, SubstanceId, TilePos,
+};
 
 /// Registers the movement types.
 ///
@@ -50,6 +52,19 @@ use hex_core::{Headroom, HexCoord, HexSpan, Level, SubstanceId, TilePos};
 /// another; moving either would have silently dropped it from the inspector.
 pub fn plugin(app: &mut App) {
     app.register_type::<Body>();
+
+    // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
+    // also reads `scenario.ron` and spawns pieces: anything that needs positions to
+    // stay honest — `hex_combat`, and its tests — wants this half without that one.
+    app.add_systems(
+        Update,
+        crate::units::arrive
+            .in_set(AppSystems::Update)
+            .in_set(PausableSystems),
+    );
+    // Committing to a long walk and then being ambushed halfway should leave the piece
+    // where the ambush happened.
+    app.add_systems(OnEnter(Mode::Combat), crate::units::halt_on_combat);
 }
 
 /// How many levels a piece may climb or drop in one step.

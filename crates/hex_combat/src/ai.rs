@@ -21,7 +21,7 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, SubstanceTable};
 use hex_core::{Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn};
 use hex_units::{
-    route, Body, Enemy, Faction, Footing, HexPathingLine, Standing, StandsOn, MAX_STEP,
+    route, Body, Enemy, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn, MAX_STEP,
 };
 
 use crate::turns::TurnOrder;
@@ -122,11 +122,11 @@ fn take_enemy_turn(
     let footing = Footing::from_tiles(tiles.iter(), &table, *body);
     if let Some(steps) = approach(standing.0, target, &footing, turn.movement_left) {
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
-        if let Some(destination) = steps.last() {
-            commands
-                .entity(entity)
-                .insert((animation, StandsOn(*destination)));
-        }
+        // `MovingTo`, not `StandsOn` — the enemy is where it is until it arrives, and
+        // `hex_units::arrive` is what writes the new position when that becomes true.
+        commands
+            .entity(entity)
+            .insert((animation, MovingTo { path: steps }));
     }
     spend(&mut turn);
 }
