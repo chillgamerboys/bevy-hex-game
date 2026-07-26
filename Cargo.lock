@@ -3192,6 +3192,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
+name = "hex_anim"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "hex_core",
+]
+
+[[package]]
 name = "hex_assets"
 version = "0.1.0"
 dependencies = [
@@ -3243,6 +3251,7 @@ name = "hex_gameplay"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "hex_anim",
  "hex_assets",
  "hex_core",
 ]
