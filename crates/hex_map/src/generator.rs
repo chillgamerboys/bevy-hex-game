@@ -10,7 +10,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use xxhash_rust::xxh3::xxh3_64_with_seed;
 
-use hex_core::HexCoord;
+use hex_core::{HexCoord, Level};
 
 /// Hashes bytes with a seed, salted by `msg`.
 ///
@@ -25,15 +25,6 @@ pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
     xxh3_64_with_seed(vec.as_slice(), seed)
 }
 
-/// Converts a quantized height to world units.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "quantized tile heights are small; f32 is exact below 2^24"
-)]
-pub fn to_world(height: u32, height_scale: f32) -> f32 {
-    (height as f32) * height_scale
-}
-
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ Wrapper Struct ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
 #[derive(Resource)]
@@ -45,9 +36,6 @@ pub fn to_world(height: u32, height_scale: f32) -> f32 {
 /// streamed regions) without anything outside `hex_map` noticing.
 pub struct HeightMap {
     generator: Box<dyn HeightGenerator>,
-    /// World units per unit of quantized height. Comes from settings rather than
-    /// a constant, so terrain drama is tunable without a rebuild.
-    height_scale: f32,
     /// Heights for every coord in the spawned grid, precomputed once in [`Self::new`].
     /// Coords outside the grid fall through to the generator.
     cache: HashMap<HexCoord, u32>,
@@ -62,17 +50,21 @@ impl HeightMap {
         Self::generate(self.generator.as_ref(), coord)
     }
 
-    /// Height at a coordinate, in world units.
-    pub fn get_world_height(&self, coord: HexCoord) -> f32 {
-        let q_height = self.get_height(coord);
-        to_world(q_height, self.height_scale)
+    /// The level of the topmost solid voxel at a coordinate.
+    ///
+    /// Always at least 1, so every column is bedrock plus something above it. A
+    /// column of nothing but bedrock would be a hole in the world that nothing could
+    /// dig through, since bedrock is deliberately not diggable.
+    #[must_use]
+    pub fn surface_level(&self, coord: HexCoord) -> Level {
+        Level::try_from(self.get_height(coord).max(1)).unwrap_or(Level::MAX)
     }
 
     /// Builds a height map, precomputing every coordinate within `grid_radius`.
     ///
     /// Coordinates outside that radius still work; they fall through to the
     /// generator instead of being served from the cache.
-    pub fn new(generator: impl HeightGenerator, grid_radius: u32, height_scale: f32) -> Self {
+    pub fn new(generator: impl HeightGenerator, grid_radius: u32) -> Self {
         let generator: Box<dyn HeightGenerator> = Box::new(generator);
         // The perlin generator is pure but not cheap, and callers hit it constantly:
         // once per tile at spawn, then again for every waypoint of every click-to-move
@@ -83,11 +75,7 @@ impl HeightMap {
             .into_iter()
             .map(|coord| (coord, Self::generate(generator.as_ref(), coord)))
             .collect();
-        Self {
-            generator,
-            height_scale,
-            cache,
-        }
+        Self { generator, cache }
     }
 
     /// The uncached height for a coord. Floors at 1 so no tile is scaled to zero.
@@ -320,7 +308,6 @@ mod tests {
     use super::*;
 
     const TEST_RADIUS: u32 = 20;
-    const TEST_HEIGHT_SCALE: f32 = 0.4;
 
     /// Sample coordinates spread across and beyond the playable grid, so the
     /// cached and uncached paths are both exercised.
@@ -338,16 +325,8 @@ mod tests {
 
     #[test]
     fn same_seed_produces_the_same_terrain() {
-        let a = HeightMap::new(
-            PerlinGenerator::lowlands(Some(20260725)),
-            TEST_RADIUS,
-            TEST_HEIGHT_SCALE,
-        );
-        let b = HeightMap::new(
-            PerlinGenerator::lowlands(Some(20260725)),
-            TEST_RADIUS,
-            TEST_HEIGHT_SCALE,
-        );
+        let a = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)), TEST_RADIUS);
+        let b = HeightMap::new(PerlinGenerator::lowlands(Some(20260725)), TEST_RADIUS);
         for coord in sample_coords() {
             assert_eq!(
                 a.get_height(coord),
@@ -359,16 +338,8 @@ mod tests {
 
     #[test]
     fn different_seeds_produce_different_terrain() {
-        let a = HeightMap::new(
-            PerlinGenerator::lowlands(Some(1)),
-            TEST_RADIUS,
-            TEST_HEIGHT_SCALE,
-        );
-        let b = HeightMap::new(
-            PerlinGenerator::lowlands(Some(2)),
-            TEST_RADIUS,
-            TEST_HEIGHT_SCALE,
-        );
+        let a = HeightMap::new(PerlinGenerator::lowlands(Some(1)), TEST_RADIUS);
+        let b = HeightMap::new(PerlinGenerator::lowlands(Some(2)), TEST_RADIUS);
         let differs = HexCoord::ORIGIN
             .within_radius(20)
             .into_iter()
@@ -386,11 +357,7 @@ mod tests {
             .map(|coord| std::cmp::max(generator.generate_height(coord), 1))
             .collect();
 
-        let map = HeightMap::new(
-            PerlinGenerator::lowlands(Some(7)),
-            TEST_RADIUS,
-            TEST_HEIGHT_SCALE,
-        );
+        let map = HeightMap::new(PerlinGenerator::lowlands(Some(7)), TEST_RADIUS);
         for (coord, want) in sample_coords().into_iter().zip(expected) {
             assert_eq!(map.get_height(coord), want, "mismatch at {coord:?}");
         }
@@ -399,15 +366,22 @@ mod tests {
     /// Tile meshes are scaled by height, so a zero would collapse a tile.
     #[test]
     fn height_never_falls_below_one() {
-        let map = HeightMap::new(FlatGenerator::new(0), TEST_RADIUS, TEST_HEIGHT_SCALE);
+        let map = HeightMap::new(FlatGenerator::new(0), TEST_RADIUS);
         assert_eq!(map.get_height(HexCoord::ORIGIN), 1);
         assert_eq!(map.get_height(HexCoord::new_cubic(99, -99, 0)), 1);
     }
 
     #[test]
-    fn world_height_scales_the_quantized_height() {
-        let map = HeightMap::new(FlatGenerator::new(3), TEST_RADIUS, TEST_HEIGHT_SCALE);
-        let expected = 3.0 * TEST_HEIGHT_SCALE;
-        assert!((map.get_world_height(HexCoord::ORIGIN) - expected).abs() < f32::EPSILON);
+    fn the_surface_level_matches_the_generated_height() {
+        let map = HeightMap::new(FlatGenerator::new(3), TEST_RADIUS);
+        assert_eq!(map.surface_level(HexCoord::ORIGIN), 3);
+    }
+
+    /// A generator returning zero must still leave a level above bedrock. Bedrock is
+    /// not diggable, so a column of nothing but bedrock is a permanent hole.
+    #[test]
+    fn the_surface_never_collapses_onto_bedrock() {
+        let map = HeightMap::new(FlatGenerator::new(0), TEST_RADIUS);
+        assert_eq!(map.surface_level(HexCoord::ORIGIN), 1);
     }
 }

@@ -25,11 +25,14 @@ pub struct MapSettings {
     /// Tiles from the centre to the edge. The grid holds `3r² + 3r + 1` tiles, so
     /// this grows quadratically: 20 is 1261 tiles, 40 would be 4921.
     pub grid_radius: u32,
-    /// World units per unit of quantized tile height.
+    /// World height of one voxel level.
     ///
-    /// A [`HexSpan`](hex_core::HexSpan) is measured in quantized units; this is what
-    /// converts it to world space.
-    pub height_scale: f32,
+    /// The tile mesh is exactly one unit tall, so a run of *n* levels renders at
+    /// `scale.y = n * level_height` and columns stack seamlessly at any value.
+    ///
+    /// Lower values give flatter, more terraced terrain; raising it toward 1.0 gives
+    /// chunkier cells that read better once they are being dug into.
+    pub level_height: f32,
     /// Colour of the tiles.
     pub tile_color: Rgb,
     /// Terrain generation.
