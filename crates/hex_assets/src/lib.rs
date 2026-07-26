@@ -16,12 +16,15 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
 pub mod loader;
+/// The scenarios offered on the title screen.
+pub mod scenario;
 pub mod settings;
 pub mod substances;
 
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
+pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
 pub use settings::{
     to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, PlayerSettings,
     PresentModeSetting, Rgb, ScenarioSettings,
@@ -43,15 +46,20 @@ pub fn plugin(app: &mut App) {
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
-        .register_type::<ScenarioSettings>();
+        .register_type::<ScenarioSettings>()
+        .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
 
+    // `ScenarioSettings` is deliberately **not** loaded from a file any more. It is
+    // still the resource `spawn_units` reads, but its value now comes from whichever
+    // scenario was chosen, so the library is what gets loaded and the placements come
+    // out of it.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
-        .load_settings::<ScenarioSettings>("config/scenario.ron", CONFIG_EXTENSIONS);
+        .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.

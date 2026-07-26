@@ -15,6 +15,10 @@ hex_map = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
 
+[dev-dependencies]
+# Only for the tests that open each scenario's world file and check it parses.
+ron = "0.12.2"
+
 [features]
 # Empty by default so `cargo build --release` ships without the inspector. Use
 # `cargo dev` (aliased in .cargo/config.toml) for a build with dev tooling.

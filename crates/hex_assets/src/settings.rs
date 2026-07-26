@@ -35,6 +35,13 @@ pub struct CameraSettings {
     pub gameplay_eye: (f32, f32, f32),
     /// Point the camera looks at and orbits around whenever gameplay starts.
     pub gameplay_focus: (f32, f32, f32),
+    /// Camera position applied whenever the title screen is shown.
+    ///
+    /// Separate from the gameplay frame so quitting to the menu gives the same view
+    /// every time, rather than wherever the player happened to have orbited to.
+    pub menu_eye: (f32, f32, f32),
+    /// Point the camera looks at on the title screen.
+    pub menu_focus: (f32, f32, f32),
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -148,12 +155,14 @@ pub struct CubeCoord {
     pub z: i32,
 }
 
-/// `assets/config/scenario.ron` — where the units start.
+/// Where a scenario's units start.
 ///
-/// This exists so the map can be tested without writing Rust: move these coordinates
-/// and the two units appear somewhere else on the terrain. It is a scaffold for
-/// trying maps out, not an encounter format — a real one will describe many units,
-/// their lattices, and what triggers them.
+/// **Not loaded from a file of its own.** It is the placements out of whichever
+/// scenario was chosen, inserted by `hex_game` before gameplay spawns — see
+/// [`ScenarioLibrary`](crate::scenario::ScenarioLibrary).
+///
+/// A scaffold for trying maps out, not an encounter format: a real one will describe
+/// many units, their lattices, and what triggers them.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioSettings {

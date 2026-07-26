@@ -1,0 +1,35 @@
+// Rolling hills — the procedural preset, with nothing built on it.
+//
+// A deliberate contrast to the showcase map: no river, no bridge, no mountain, and
+// nothing that has to be crossed in a particular place. Terrain here is one smooth
+// noise field, so movement is about distance rather than about finding the one way
+// through.
+//
+// It exists mostly to prove that picking a scenario really does change the world. If
+// this and the showcase map ever look alike, something is wrong with the selection and
+// not with the terrain.
+//
+// Same file format as `config/world.ron` — this is a `MapSettings`, and everything in
+// CONTENT.md about editing that applies here too.
+(
+    // Smaller than the showcase map. Nothing here needs the room, and a tighter grid
+    // makes the difference between the two obvious the moment either loads.
+    grid_radius: 9,
+
+    // World height of one voxel level. Matched to the showcase map so a piece is the
+    // same size on both and the two are honestly comparable.
+    level_height: 0.4,
+
+    terrain: Perlin((
+        // Fixed, so this map is the same every launch. A random seed would make "did
+        // the scenario change?" impossible to answer by looking.
+        seed: Some(20260726),
+
+        // Two octaves: broad hills, then a little roughness on top. One octave alone
+        // reads as a smooth dome rather than as ground.
+        steps: [
+            (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+            (x_freq: 0.11, y_freq: 0.13, magnitude: 1.0),
+        ],
+    )),
+)

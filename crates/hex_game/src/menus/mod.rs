@@ -10,9 +10,10 @@
 use bevy::prelude::*;
 
 mod pause;
+pub mod widgets;
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_plugins(pause::plugin);
+    app.add_plugins((pause::plugin, widgets::plugin));
 }
 
 /// A full-screen overlay that dims whatever is behind it.

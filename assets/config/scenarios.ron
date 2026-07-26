@@ -1,0 +1,57 @@
+// What the title screen offers.
+//
+// A scenario is a world plus the units standing on it. Add one here and it appears on
+// the menu — no Rust, no restart beyond the one you were going to do anyway.
+//
+// Order is the order they are listed, so it is your decision rather than an accident.
+//
+// FIELDS
+//
+//   name    what the button says
+//   blurb   one line underneath, saying what is interesting about this one
+//   world   the map file, as a path under `assets/`
+//   units   where the pieces start
+//
+// The `world` path is NOT checked by the compiler — nothing here knows what a map is,
+// deliberately, so that this file does not have to be edited whenever the map format
+// changes. A typo is caught by a test that opens every world named here, so a wrong
+// path fails `cargo test` rather than at the loading screen.
+//
+// COORDINATES are CUBE coordinates and MUST SUM TO ZERO: x + y + z == 0. That is what
+// makes them a hex grid rather than three loose numbers.
+// See https://www.redblobgames.com/grids/hexagons/
+//
+// A coordinate that does not sum to zero, or that has no ground a unit can stand on --
+// off the edge of the map, or a spot with too little headroom -- is reported in the log
+// and the unit falls back to the centre of the map. It does not stop the game, so a
+// piece standing somewhere surprising is worth checking the terminal for.
+(
+    scenarios: [
+        (
+            name: "The Crossing",
+            blurb: "A river with one bridge over it, a mountain, and a switchback up the side.",
+            world: "config/world.ron",
+            units: (
+                // The centre of the map, which on this world is the bridge deck --
+                // the river runs underneath.
+                player: (x: 0, y: 0, z: 0),
+
+                // Six hexes east: far enough to walk around before anything happens,
+                // close enough to find without hunting.
+                enemy: (x: 6, y: -6, z: 0),
+            ),
+        ),
+        (
+            name: "Rolling Hills",
+            blurb: "Open procedural ground. Nowhere to funnel through, so distance is the only obstacle.",
+            world: "config/worlds/rolling-hills.ron",
+            units: (
+                player: (x: 0, y: 0, z: 0),
+
+                // Closer than on the Crossing, because there is no terrain in the way
+                // to make the walk interesting.
+                enemy: (x: 5, y: -5, z: 0),
+            ),
+        ),
+    ],
+)

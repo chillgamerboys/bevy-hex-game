@@ -14,6 +14,7 @@ pub fn plugin(app: &mut App) {
         // the UI screens draw through, and the skybox behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
+        .add_systems(OnEnter(Screen::Title), frame_menu_camera)
         .add_systems(Update, apply_skybox_brightness.in_set(AppSystems::Update))
         .add_systems(
             Update,
@@ -75,16 +76,57 @@ fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
 /// Restores the designer-authored full-map view whenever gameplay begins.
 fn frame_gameplay_camera(
     settings: Res<CameraSettings>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
-    let (eye_x, eye_y, eye_z) = settings.gameplay_eye;
-    let (focus_x, focus_y, focus_z) = settings.gameplay_focus;
+    frame_camera(
+        cameras,
+        settings.gameplay_eye,
+        settings.gameplay_focus,
+        "gameplay_eye and gameplay_focus",
+    );
+}
+
+/// And the menu view whenever the title screen is shown.
+///
+/// Without this the title screen inherited wherever the player had orbited to before
+/// quitting to it — so the same menu appeared at a different angle and zoom every time,
+/// which reads as a glitch rather than as a camera that was never told to move.
+///
+/// Framed rather than hidden behind an opaque panel, because the sky is the nicest
+/// thing on that screen and the only cost of keeping it is saying where to point.
+fn frame_menu_camera(
+    settings: Option<Res<CameraSettings>>,
+    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+) {
+    // `Option`, because the title screen is reached on a timer rather than a load gate
+    // and is genuinely reachable before `camera.ron` has parsed. Leaving the camera
+    // where it is for a frame or two is a much better failure than a panic.
+    let Some(settings) = settings else { return };
+    frame_camera(
+        cameras,
+        settings.menu_eye,
+        settings.menu_focus,
+        "menu_eye and menu_focus",
+    );
+}
+
+/// Points every camera at `focus` from `eye`.
+///
+/// `what` names the settings being applied, so a bad edit says which pair to look at.
+fn frame_camera(
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    eye: (f32, f32, f32),
+    focus: (f32, f32, f32),
+    what: &str,
+) {
+    let (eye_x, eye_y, eye_z) = eye;
+    let (focus_x, focus_y, focus_z) = focus;
     let eye = Vec3::new(eye_x, eye_y, eye_z);
     let focus = Vec3::new(focus_x, focus_y, focus_z);
     let offset = eye - focus;
 
     if !eye.is_finite() || !focus.is_finite() || offset.length_squared() <= f32::EPSILON {
-        warn!("camera.ron: gameplay_eye and gameplay_focus must be finite, distinct points");
+        warn!("camera.ron: {what} must be finite, distinct points");
         return;
     }
 
@@ -305,6 +347,7 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use bevy::asset::AssetPlugin;
     use bevy::state::app::StatesPlugin;
 
     use super::*;
@@ -313,6 +356,10 @@ mod tests {
         CameraSettings {
             gameplay_eye: (0.0, 44.0, 38.0),
             gameplay_focus: (0.0, 6.0, 0.0),
+            // Deliberately unlike the gameplay frame, so a test that confuses the two
+            // fails rather than passing on a coincidence.
+            menu_eye: (0.0, 12.0, 34.0),
+            menu_focus: (0.0, 9.0, 0.0),
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -385,5 +432,97 @@ mod tests {
 
         enter(&mut app, Screen::Gameplay);
         assert_full_map_frame(&app, entity);
+    }
+
+    /// The title screen gets its own frame, not whatever the player left behind.
+    ///
+    /// Reported from play as the menu appearing "at a random zoom of the scenario":
+    /// quitting to the title kept the camera exactly where gameplay had orbited it to,
+    /// so the same screen looked different every time. Nothing was moving the camera
+    /// back, because nothing had ever been asked to.
+    #[test]
+    fn the_title_screen_is_framed_every_time() {
+        // **The whole plugin, not just the system.** The bug was that nothing called
+        // the framing on the way back to the title — registering it by hand here would
+        // test a function that works and prove nothing about whether anything runs it,
+        // which is exactly the shape of the defect.
+        let mut app = App::new();
+        // The camera plugin also carries orbit, pan and skybox systems, so the test
+        // has to supply what those declare even though they never run here: input for
+        // the mouse and keyboard, windowing for `CursorMoved`, assets for the skybox.
+        // A missing message or resource is a panic, not a skipped system.
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            StatesPlugin,
+            bevy::input::InputPlugin,
+            bevy::window::WindowPlugin::default(),
+        ));
+        app.init_asset::<Image>();
+        app.init_state::<Screen>();
+        app.insert_resource(camera_settings());
+        app.insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+            skybox: Handle::default(),
+        });
+        app.add_plugins(super::plugin);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                PanOrbitCamera::default(),
+            ))
+            .id();
+
+        enter(&mut app, Screen::Title);
+        assert_menu_frame(&app, entity);
+
+        // Orbit somewhere else, as playing would, then come back.
+        {
+            let mut moved = app.world_mut().entity_mut(entity);
+            if let Some(mut transform) = moved.get_mut::<Transform>() {
+                transform.translation = Vec3::new(-30.0, 4.0, 2.0);
+            }
+        }
+        enter(&mut app, Screen::Gameplay);
+        enter(&mut app, Screen::Title);
+        assert_menu_frame(&app, entity);
+    }
+
+    fn assert_menu_frame(app: &App, entity: Entity) {
+        let transform = app
+            .world()
+            .entity(entity)
+            .get::<Transform>()
+            .expect("the camera should have a transform");
+        let eye = Vec3::new(0.0, 12.0, 34.0);
+        let focus = Vec3::new(0.0, 9.0, 0.0);
+
+        assert!(
+            transform.translation.distance(eye) < 1e-5,
+            "the menu inherited the camera instead of framing it; it is at {}",
+            transform.translation
+        );
+        let forward = transform.forward().as_vec3();
+        assert!(forward.dot((focus - eye).normalize()) > 0.9999);
+    }
+
+    /// A camera settings file that has not parsed yet must not take the game down.
+    ///
+    /// The title screen is reached on a wall-clock timer rather than a load gate, so it
+    /// is genuinely reachable before `camera.ron` exists as a resource. A plain
+    /// `Res<CameraSettings>` there is a panic, which is the same crash this project
+    /// already shipped once on this very screen.
+    #[test]
+    fn framing_the_title_without_settings_does_not_panic() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.add_systems(OnEnter(Screen::Title), frame_menu_camera);
+        app.world_mut()
+            .spawn((Transform::default(), PanOrbitCamera::default()));
+
+        enter(&mut app, Screen::Title);
     }
 }

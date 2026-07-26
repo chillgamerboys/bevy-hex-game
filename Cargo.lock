@@ -3256,6 +3256,7 @@ dependencies = [
  "hex_map",
  "hex_units",
  "hex_world",
+ "ron",
 ]
 
 [[package]]

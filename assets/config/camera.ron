@@ -4,6 +4,16 @@
     gameplay_eye: (0.0, 44.0, 38.0),
     gameplay_focus: (0.0, 6.0, 0.0),
 
+    // Reapplied whenever the title screen is shown. Without a frame of its own the
+    // menu inherited wherever the player had orbited to before quitting, so the same
+    // screen appeared at a different angle every time.
+    //
+    // Nothing is rendered behind the menu except the sky, so this is really choosing
+    // which part of the horizon to sit on. Low and level: the skybox is most
+    // interesting near the horizon and least interesting straight up.
+    menu_eye: (0.0, 12.0, 34.0),
+    menu_focus: (0.0, 9.0, 0.0),
+
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.
     pan_speed: 0.4,

@@ -1,21 +1,27 @@
-//! Designer-facing map settings, loaded from `assets/config/world.ron`.
+//! Designer-facing map settings, loaded from a world file such as
+//! `assets/config/world.ron`.
 //!
 //! These live here rather than in `hex_assets` so that the map's settings, its
 //! generation, and its rendering are all in the crate the map is owned in. Only the
-//! *loader* is shared: `hex_assets::LoadSettings` handles RON parsing and hot reload
-//! for every settings type in the game.
+//! *loader* is shared: `hex_assets` handles RON parsing and hot reload for every
+//! settings type in the game.
+//!
+//! **Which file is chosen at runtime, not here.** Each scenario names its own world, so
+//! this registers the type as loadable and the binary asks for a path once the player
+//! has picked one. `world.ron` is still the world the first scenario uses and still the
+//! file to edit while trying terrain out.
 
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use hex_assets::{LoadSettings, CONFIG_EXTENSIONS};
+use hex_assets::{RegisterSettings, CONFIG_EXTENSIONS};
 use hex_core::{HexCoord, Level};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
-/// Registers map settings for loading.
+/// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
     app.register_type::<MapSettings>();
-    app.load_settings::<MapSettings>("config/world.ron", CONFIG_EXTENSIONS);
+    app.register_settings::<MapSettings>(CONFIG_EXTENSIONS);
 }
 
 /// `assets/config/world.ron`: grid shape and terrain generation.
