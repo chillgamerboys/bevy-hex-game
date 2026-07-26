@@ -57,8 +57,8 @@ render as a plain blue screen, a sky shader that fails to load renders a black s
 and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
 If your change touches rendering, movement, or state transitions, walk it: splash
-→ title → **ENTER** → gameplay, orbit, click a tile, **ESC** to pause, **BACKSPACE**
-to return to the title, **ENTER** again to rebuild the world.
+→ title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
+**BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
 
 ## Where code goes
 

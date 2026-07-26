@@ -44,23 +44,57 @@ use hex_core::{
     AppSystems, Headroom, HexCoord, HexSpan, Level, Mode, PausableSystems, SubstanceId, TilePos,
 };
 
+/// Ordering for systems that consume a unit's logical position.
+#[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum MovementSystems {
+    /// Reconcile [`StandsOn`](crate::StandsOn) with completed animation legs.
+    Reconcile,
+}
+
+/// Every whole waypoint crossed during the latest movement reconciliation.
+///
+/// A single frame may finish several animation legs. Consumers that care whether a
+/// route passed through an intermediate position must inspect this resource after
+/// [`MovementSystems::Reconcile`] instead of sampling only the final
+/// [`StandsOn`](crate::StandsOn).
+#[derive(Resource, Debug, Default)]
+pub struct MovementCrossings(Vec<(Entity, Standing)>);
+
+impl MovementCrossings {
+    /// Crossed waypoints in route order for each reconciled unit.
+    pub fn iter(&self) -> impl Iterator<Item = (Entity, Standing)> + '_ {
+        self.0.iter().copied()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(crate) fn push(&mut self, entity: Entity, standing: Standing) {
+        self.0.push((entity, standing));
+    }
+}
+
 /// Registers the movement types.
 ///
-/// This module has no systems — it is rules, not behaviour. The plugin exists so
-/// [`Body`] is registered beside where it is defined. It was previously registered by
-/// the player's plugin, which meant a type declared in one file was announced by
-/// another; moving either would have silently dropped it from the inspector.
+/// [`Body`] is registered beside where it is defined, and route reconciliation lives
+/// here because every kind of unit needs its logical position kept aligned with the
+/// animation.
 pub fn plugin(app: &mut App) {
-    app.register_type::<Body>();
+    app.register_type::<Body>()
+        .init_resource::<MovementCrossings>();
 
     // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
-    // also reads `scenario.ron` and spawns pieces: anything that needs positions to
-    // stay honest — `hex_combat`, and its tests — wants this half without that one.
+    // also reads the active scenario placements and spawns pieces: anything that needs
+    // positions to stay honest — `hex_combat`, and its tests — wants this half without
+    // that one.
     app.add_systems(
         Update,
-        crate::units::arrive
+        crate::units::reconcile_movement
+            .in_set(MovementSystems::Reconcile)
             .in_set(AppSystems::Update)
-            .in_set(PausableSystems),
+            .in_set(PausableSystems)
+            .after(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
     // where the ambush happened.

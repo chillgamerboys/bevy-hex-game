@@ -90,43 +90,40 @@ fn take_enemy_turn(
         return;
     }
 
-    let Some((target_entity, target)) = nearest_foe(&others, *faction, standing.0) else {
+    let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+    let Some(plan) = best_foe(&others, *faction, standing.0, &footing, turn.movement_left) else {
         // Nothing to fight. Spend the turn so the order keeps moving rather than
         // stalling on a unit with nothing to do.
         spend(&mut turn);
         return;
     };
 
-    // Close enough already: swing.
-    //
-    // **Reach, not range.** Melee gets no high-ground bonus — an attacker five levels
-    // up should not acquire a two-hex punch — so this is the same step rule movement
-    // uses: adjacent column, within one level. Comparing coordinates alone let an
-    // enemy on a bridge swing at somebody on the ground beneath it, which the flat
-    // test terrain could never have shown.
-    if standing.0.pos.is_within_step_of(target.pos, MAX_STEP) {
-        lunge(&mut commands, entity, standing.0, target, settings.speed);
-        recoil(
-            &mut commands,
-            target_entity,
-            target,
-            standing.0,
-            settings.speed,
-        );
-        info!("enemy attacks");
-        spend(&mut turn);
-        return;
-    }
-
-    // Otherwise close the distance as far as this turn allows.
-    let footing = Footing::from_tiles(tiles.iter(), &table, *body);
-    if let Some(steps) = approach(standing.0, target, &footing, turn.movement_left) {
-        let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
-        // `MovingTo`, not `StandsOn` — the enemy is where it is until it arrives, and
-        // `hex_units::arrive` is what writes the new position when that becomes true.
-        commands
-            .entity(entity)
-            .insert((animation, MovingTo { path: steps }));
+    match plan.action {
+        FoeAction::Attack => {
+            lunge(
+                &mut commands,
+                entity,
+                standing.0,
+                plan.target,
+                settings.speed,
+            );
+            recoil(
+                &mut commands,
+                plan.entity,
+                plan.target,
+                standing.0,
+                settings.speed,
+            );
+            info!("enemy attacks");
+        }
+        FoeAction::Move(approach) => {
+            let animation: Transformation =
+                HexPathingLine::new(&approach.steps, settings.speed).into();
+            commands
+                .entity(entity)
+                .insert((animation, MovingTo::new(approach.steps, settings.speed)));
+        }
+        FoeAction::Wait => {}
     }
     spend(&mut turn);
 }
@@ -137,26 +134,83 @@ fn spend(turn: &mut Turn) {
     turn.movement_left = 0;
 }
 
-/// The unit hostile to `faction` that is most worth going after.
+/// What the enemy can do about one foe this turn.
+enum FoeAction {
+    /// Already within melee reach.
+    Attack,
+    /// A terrain route exists and this is the affordable prefix of it.
+    Move(Approach),
+    /// No terrain route reaches this foe.
+    Wait,
+}
+
+/// One candidate target and the action available against it.
+struct FoePlan {
+    entity: Entity,
+    target: Standing,
+    action: FoeAction,
+}
+
+impl FoePlan {
+    /// Deterministic target priority: attack, routable approach, unreachable.
+    ///
+    /// Route cost decides between two approachable foes, horizontal distance is a
+    /// stable secondary signal, and entity id resolves exact ties. Query iteration
+    /// order is deliberately absent from the decision.
+    fn priority(&self, from: Standing) -> (u8, usize, u32, u64) {
+        let (kind, route_cost) = match &self.action {
+            FoeAction::Attack => (0, 0),
+            FoeAction::Move(approach) => (1, approach.route_cost),
+            FoeAction::Wait => (2, usize::MAX),
+        };
+        (
+            kind,
+            route_cost,
+            from.pos.coord.distance(self.target.pos.coord),
+            self.entity.to_bits(),
+        )
+    }
+}
+
+/// The hostile unit that offers the best action from this terrain position.
 ///
-/// Anything already within reach wins outright, and only then does distance decide.
-/// Sorting on horizontal distance alone picked whoever was nearest *on the map* — which
-/// on stacked terrain can be somebody on a bridge overhead that no amount of walking
-/// will ever bring this unit next to, while a reachable target stands one hex further
-/// off. `min_by_key` is first-wins, so the tuple orders reachable before near.
-fn nearest_foe(
+/// Horizontal nearness is not routability on stacked terrain: a target on a bridge
+/// directly overhead may be impossible to approach while another target two hexes
+/// away has open ground all the way to it. Every candidate is planned before it is
+/// ranked so the unreachable one cannot consume the turn merely by looking nearer on
+/// the map.
+fn best_foe(
     others: &Query<(Entity, &Faction, &StandsOn)>,
     faction: Faction,
     from: Standing,
-) -> Option<(Entity, Standing)> {
+    footing: &Footing,
+    budget: u32,
+) -> Option<FoePlan> {
     others
         .iter()
         .filter(|(_, other, _)| faction.is_hostile_to(**other))
-        .min_by_key(|(_, _, standing)| {
-            let in_reach = !from.pos.is_within_step_of(standing.0.pos, MAX_STEP);
-            (in_reach, from.pos.coord.distance(standing.0.pos.coord))
+        .map(|(entity, _, standing)| {
+            let target = standing.0;
+            let action = if from.pos.is_within_step_of(target.pos, MAX_STEP) {
+                // **Reach, not range.** Melee gets no high-ground bonus: an attacker
+                // five levels up must not acquire a two-hex punch.
+                FoeAction::Attack
+            } else {
+                approach(from, target, footing, budget).map_or(FoeAction::Wait, FoeAction::Move)
+            };
+            FoePlan {
+                entity,
+                target,
+                action,
+            }
         })
-        .map(|(entity, _, standing)| (entity, standing.0))
+        .min_by_key(|plan| plan.priority(from))
+}
+
+/// A full route's tactical distance and the prefix affordable this turn.
+struct Approach {
+    steps: Vec<Standing>,
+    route_cost: usize,
 }
 
 /// The steps to take toward `target`, stopping adjacent to it and within `budget`.
@@ -166,12 +220,7 @@ fn nearest_foe(
 /// around it rather than standing there, and the clamp to `budget` below is the
 /// ordinary case rather than the rare one: closing a long distance simply takes
 /// several turns.
-fn approach(
-    from: Standing,
-    target: Standing,
-    footing: &Footing,
-    budget: u32,
-) -> Option<Vec<Standing>> {
+fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) -> Option<Approach> {
     if budget == 0 {
         return None;
     }
@@ -184,7 +233,10 @@ fn approach(
     if reachable == 0 {
         return None;
     }
-    full.get(..=reachable).map(<[Standing]>::to_vec)
+    full.get(..=reachable).map(|steps| Approach {
+        steps: steps.to_vec(),
+        route_cost: adjacent_index,
+    })
 }
 
 /// A short lean toward the target and back, as the visible half of an attack.

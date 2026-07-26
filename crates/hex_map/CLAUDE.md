@@ -209,8 +209,8 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
 Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but the
-world is only rebuilt on entering gameplay — press `BACKSPACE` then `ENTER` to see
-terrain changes.
+world is only rebuilt on entering gameplay — press `BACKSPACE`, then click its
+scenario to see terrain changes.
 
 `terrain::build_map` is pure: settings and a substance palette go in, and a complete
 `VoxelMap` comes out. Keep ECS resources, commands, and rendering out of it.

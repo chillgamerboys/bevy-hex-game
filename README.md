@@ -35,7 +35,7 @@ Two things worth knowing:
 | `SPACE` | End your turn, in combat |
 | `ESC` | Pause (or quit, on the title screen) |
 | `BACKSPACE` | Return to the title screen |
-| `ENTER` | Start the game, from the title screen |
+| Click a scenario | Start it from the title screen |
 
 ## Diagnostics
 

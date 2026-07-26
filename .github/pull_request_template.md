@@ -20,8 +20,9 @@ event renders a black sky, a wrong speed unit just looks slightly off, and a til
 whose transform disagrees with its span floats or sinks. All of them pass CI.
 
 If the change touches rendering, movement, or state transitions, walk it:
-splash -> title -> ENTER -> gameplay, orbit, click a tile, click the tile you are
-standing on, ESC to pause and resume, BACKSPACE to the title, ENTER to rebuild.
+splash -> title -> click a scenario -> gameplay, orbit, click a tile, click the tile
+you are standing on, ESC to pause and resume, BACKSPACE to the title, click a scenario
+to rebuild.
 -->
 
 ## Boundaries

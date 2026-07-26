@@ -22,14 +22,25 @@ use hex_core::{AppSystems, PausableSystems};
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ System ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 
+/// Ordering for systems that consume the position produced by an animation.
+///
+/// A movement reconciliation system belongs after [`Self::Drive`], so it observes
+/// both the transform written this frame and a finished animation's deferred removal.
+#[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum AnimationSystems {
+    /// Advance transformations and remove the ones that have finished.
+    Drive,
+}
+
 /// Registers the transform-animation driver.
 pub fn plugin(app: &mut App) {
-    // Pausable: movement should stop when the game is paused. Because timings come
-    // from `Res<Time>` rather than a wall clock, a paused animation resumes where
-    // it left off instead of jumping forward by the length of the pause.
+    // Pausable: movement should stop when the game is paused. `Transformation`
+    // accumulates only the deltas from frames in which this system actually runs, so
+    // skipping the system also skips the paused time.
     app.add_systems(
         Update,
         transformation_driver
+            .in_set(AnimationSystems::Drive)
             .in_set(AppSystems::Update)
             .in_set(PausableSystems),
     );
@@ -37,30 +48,26 @@ pub fn plugin(app: &mut App) {
 
 /// Advances every in-flight [`Transformation`] and drops the ones that have finished.
 ///
-/// Timings come from [`Res<Time>`], so animations follow the engine clock: they respect
-/// pausing, `Time::set_relative_speed`, and step correctly when the app is throttled.
-/// Each transformer is fed *seconds since its own component was attached*, not an
-/// absolute timestamp, which keeps transformers independent of when they were built.
+/// Timings come from [`Time::delta_secs_f64`], so animations follow the engine clock:
+/// they respect `Time::set_relative_speed` and step correctly when the app is
+/// throttled. The delta is accumulated on the component rather than derived from
+/// absolute elapsed time, because this system does not run while paused and paused
+/// wall-clock time must not reappear as a jump on resume.
 fn transformation_driver(
     mut commands: Commands,
     time: Res<Time>,
     mut query: Query<(Entity, &mut Transform, &mut Transformation)>,
 ) {
-    let now = time.elapsed_secs_f64();
     for (entity, mut transform, mut transformation) in query.iter_mut() {
-        // Anchor on the first frame this component is seen rather than at construction
-        // time, so an animation queued during a pause doesn't burn through its duration
-        // before it ever renders. Assigning through `Mut` here also means change
-        // detection only fires on that first frame.
-        let start = match transformation.started_at {
-            Some(start) => start,
-            None => {
-                transformation.started_at = Some(now);
-                now
-            }
+        // The first driven frame is time zero. An animation may have been queued late
+        // in the preceding frame or during a pause, and neither interval belongs to it.
+        let elapsed = if transformation.started {
+            transformation.elapsed += time.delta_secs_f64();
+            transformation.elapsed
+        } else {
+            transformation.started = true;
+            0.0
         };
-
-        let elapsed = now - start;
         transformation.update(&mut transform, elapsed);
         if transformation.is_finished(elapsed) {
             commands.entity(entity).remove::<Transformation>();
@@ -78,9 +85,10 @@ fn transformation_driver(
 /// "currently moving".
 pub struct Transformation {
     transformer: Box<dyn Transformer>,
-    /// Engine-clock reading of the first frame this component was driven, or `None`
-    /// until then. All times handed to the inner transformer are relative to it.
-    started_at: Option<f64>,
+    /// Seconds accumulated on frames when the animation driver actually ran.
+    elapsed: f64,
+    /// Keeps the first driven frame anchored at exactly zero.
+    started: bool,
 }
 
 impl Transformation {
@@ -88,8 +96,17 @@ impl Transformation {
     pub fn new(transformer: impl Transformer) -> Self {
         Self {
             transformer: Box::new(transformer),
-            started_at: None,
+            elapsed: 0.0,
+            started: false,
         }
+    }
+
+    /// Active seconds since this transformation first ran.
+    ///
+    /// Paused frames are excluded because the driver does not run on them.
+    #[must_use]
+    pub fn elapsed(&self) -> f64 {
+        self.elapsed
     }
 
     /// `elapsed` is seconds since this transformation started.
@@ -245,6 +262,8 @@ impl Transformer for TransformerSeries {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     /// A leg from the origin to `x` at one unit per second, so elapsed seconds and
@@ -322,5 +341,75 @@ mod tests {
         series.push(leg(2.0, 1.0));
 
         assert_close(at(&series, 99.0), Vec3::new(2.0, 0.0, 0.0));
+    }
+
+    #[derive(Resource)]
+    struct DriverEnabled(bool);
+
+    /// Skipping the driver must skip time as well as writes.
+    ///
+    /// Deriving animation time from the engine's absolute elapsed clock fails this:
+    /// that clock continues while `PausableSystems` is gated, so the first frame after
+    /// five paused seconds jumps forward by five seconds.
+    #[test]
+    fn a_paused_transformation_resumes_without_a_time_jump() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_millis(100),
+        ));
+        app.insert_resource(DriverEnabled(true));
+        app.configure_sets(
+            Update,
+            PausableSystems.run_if(|enabled: Res<DriverEnabled>| enabled.0),
+        );
+        app.add_plugins(plugin);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Transformation::from(LinearMovement::new(
+                    Vec3::ZERO,
+                    Vec3::new(10.0, 0.0, 0.0),
+                    1.0,
+                    0.0,
+                )),
+            ))
+            .id();
+
+        // First observation anchors the animation at zero; the next driven frame is
+        // one active tick in.
+        app.update();
+        app.update();
+        assert_close(
+            app.world()
+                .get::<Transform>(entity)
+                .expect("the animated entity should exist")
+                .translation,
+            Vec3::new(0.1, 0.0, 0.0),
+        );
+
+        app.world_mut().resource_mut::<DriverEnabled>().0 = false;
+        for _ in 0..5 {
+            app.update();
+        }
+        assert_close(
+            app.world()
+                .get::<Transform>(entity)
+                .expect("the animated entity should exist")
+                .translation,
+            Vec3::new(0.1, 0.0, 0.0),
+        );
+
+        app.world_mut().resource_mut::<DriverEnabled>().0 = true;
+        app.update();
+        assert_close(
+            app.world()
+                .get::<Transform>(entity)
+                .expect("the animated entity should exist")
+                .translation,
+            Vec3::new(0.2, 0.0, 0.0),
+        );
     }
 }
