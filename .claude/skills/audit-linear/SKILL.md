@@ -24,10 +24,17 @@ to inspect, MCP unreachable while a reference exists to verify).
    Both are first-class.
 
    ```bash
-   BRANCH=$(echo "$PR_JSON" | jq -r '.headRefName')
-   BODY=$(echo "$PR_JSON" | jq -r '.body')
-   REF=$(echo "$BRANCH $BODY" | grep -oE 'HEX-[0-9]+' | head -1)
+   BRANCH=$(printf '%s' "$PR_JSON" | jq -r '.headRefName')
+   BODY=$(printf '%s' "$PR_JSON" | jq -r '.body')
+   REF=$(printf '%s %s' "$BRANCH" "$BODY" | grep -oE 'HEX-[0-9]+' | head -1)
    ```
+
+   **Use `printf '%s'`, never `echo`, to re-feed JSON into `jq`.** zsh's
+   builtin `echo` interprets the `\n` escapes inside a JSON string,
+   which corrupts the document — `jq` then fails with "control
+   characters from U+0000 through U+001F must be escaped" and the
+   tie-detection silently returns no match. This is a real failure
+   observed on this repo's default shell, not a hypothetical.
 
    - **Match found** → proceed to step 3.
    - **No match** → report a **warning** and return `warn` (not a

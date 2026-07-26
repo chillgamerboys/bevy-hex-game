@@ -11,7 +11,7 @@ If the diff is doc-only:
 
 ```bash
 CHANGED=$(git diff --name-only origin/dev...HEAD)
-if echo "$CHANGED" | grep -vqE '\.md$|^docs/|^README|^CHANGELOG|^\.claude/'; then
+if printf '%s\n' "$CHANGED" | grep -vqE '\.md$|^docs/|^README|^CHANGELOG|^\.claude/'; then
     # Has non-doc changes; proceed.
     :
 else
@@ -20,6 +20,10 @@ else
     exit $?
 fi
 ```
+
+(`printf '%s\n'` rather than `echo` — zsh's builtin `echo` interprets
+backslash escapes, which mangles any path containing one and breaks
+JSON re-fed into `jq`. Same reason `/audit-linear` avoids it.)
 
 This keeps `/audit-pr` fast on doc-fixup PRs without skipping the
 link-check baseline entirely (CI still runs it; so does `/test-local`).
