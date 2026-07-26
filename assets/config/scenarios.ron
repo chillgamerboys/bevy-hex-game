@@ -49,9 +49,9 @@
         ),
         (
             name: "Rolling Hills",
-            blurb: "Open procedural ground under a low sun. Nowhere to funnel through, so distance is the only obstacle.",
+            blurb: "Open procedural ground under heavy cloud. Nowhere to funnel through, so distance is the only obstacle.",
             world: "config/worlds/rolling-hills.ron",
-            lighting: "config/lighting/late-afternoon.ron",
+            lighting: "config/lighting/overcast.ron",
             units: (
                 player: (x: 0, y: 0, z: 0),
 

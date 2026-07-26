@@ -154,6 +154,44 @@ mod tests {
         }
     }
 
+    /// Every shipped sun is actually above the horizon.
+    ///
+    /// **The reason this test exists.** `sun_rotation` looks like "height, compass,
+    /// roll" and is not: it is an XYZ Euler triple that wraps past 2π, and the vertical
+    /// component of the result depends on the first two numbers *together*. The first
+    /// alternative lighting file changed both and put the sun 20° **below** the horizon.
+    ///
+    /// A directional light pointing at the sky lights nothing. The map renders as a
+    /// black mass, no system errors, no log line — it is only visible by looking, and
+    /// it shipped because nobody did.
+    ///
+    /// Computed with Bevy's own `Quat`, deliberately: hand-derived Euler maths is what
+    /// caused the bug, so a hand-derived check would be the same mistake twice.
+    #[test]
+    fn every_shipped_sun_is_above_the_horizon() {
+        for scenario in &library().scenarios {
+            let text = fs::read_to_string(assets_dir().join(&scenario.lighting))
+                .expect("the lighting file should exist");
+            let lighting: LightingSettings =
+                ron::from_str(&text).expect("the lighting should parse");
+
+            let (x, y, z) = lighting.sun_rotation;
+            // The direction the light *travels*, which is the transform's forward axis
+            // — exactly what `sun_transform` builds in `hex_world::sky`.
+            let heading = Quat::from_euler(EulerRot::XYZ, x, y, z) * Vec3::NEG_Z;
+            let elevation = (-heading.y).asin().to_degrees();
+
+            assert!(
+                heading.y < 0.0,
+                "scenario {:?}: {} puts the sun {:.1}° below the horizon, which lights \
+                 nothing and renders a black map",
+                scenario.name,
+                scenario.lighting,
+                -elevation
+            );
+        }
+    }
+
     /// And every unit starts inside the world it is placed on.
     ///
     /// Not a formality. `coord_from` and `spawn_unit` both warn and fall back to the
