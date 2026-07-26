@@ -18,6 +18,8 @@ use hex_core::{HexCoord, Level};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
+const MAX_PROCEDURAL_LEVEL: Level = 128;
+
 /// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
     app.register_type::<MapSettings>();
@@ -50,6 +52,7 @@ impl MapSettings {
         match &self.terrain {
             TerrainSettings::Showcase(showcase) => showcase.validate(self.grid_radius),
             TerrainSettings::Perlin(_) => Ok(()),
+            TerrainSettings::Procedural(procedural) => procedural.validate(self.grid_radius),
         }
     }
 }
@@ -84,6 +87,223 @@ pub enum TerrainSettings {
     Showcase(ShowcaseSettings),
     /// The original fractal Perlin terrain.
     Perlin(PerlinSettings),
+    /// A versioned, seeded map assembled from landform, environment, and tactics.
+    Procedural(ProceduralSettings),
+}
+
+/// Settings for the semantic-first procedural generator.
+///
+/// The three recipe axes are intentionally independent. A landform defines geometry,
+/// an environment chooses materials, and a tactical recipe defines the routes and
+/// barriers that make the result playable.
+#[derive(Reflect, Debug, Clone, PartialEq, Deserialize)]
+pub struct ProceduralSettings {
+    /// Algorithm contract used to reproduce saved seeds after the generator evolves.
+    pub generator_version: u32,
+    /// Large-scale terrain geometry.
+    pub landform: LandformSettings,
+    /// Surface and hazard materials.
+    pub environment: EnvironmentSettings,
+    /// Required routes, anchors, and tactical structure.
+    pub tactical: TacticalSettings,
+}
+
+/// Geometry recipes available to the procedural generator.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub enum LandformSettings {
+    /// Connected, moderately elevated terrain on both sides of a valley.
+    Hills(HillsSettings),
+    /// Floating land masses joined by a required bridge network.
+    SkyIslands(SkyIslandsSettings),
+}
+
+/// Parameters for connected hills.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HillsSettings {
+    /// Base surface level of the river valley and crossing approaches.
+    pub valley_level: Level,
+    /// Maximum height above the valley. V1 supports values from one through eight.
+    pub max_relief: Level,
+    /// Number of hill centres placed on each side of the barrier.
+    pub hills_per_bank: u8,
+}
+
+/// Parameters for the structural sky-island probe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SkyIslandsSettings {
+    /// Surface level of the critical island chain.
+    pub surface_level: Level,
+    /// Radius of each required island.
+    pub island_radius: u32,
+}
+
+/// Material recipes independent of terrain geometry.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum EnvironmentSettings {
+    /// Grass, dirt, exposed stone, gravel, and water.
+    TemperateGrassland,
+    /// Snow and ice over the hills, with water remaining an impassable hazard.
+    Frozen,
+    /// Basalt terrain separated by non-solid lava.
+    Volcanic,
+}
+
+/// Tactical topology recipes.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub enum TacticalSettings {
+    /// An edge-to-edge hazard with a bridge and a separated alternate crossing.
+    Crossing(CrossingSettings),
+    /// A critical chain of floating islands plus optional flight-only islands.
+    LinkedIslands(LinkedIslandsSettings),
+}
+
+/// Parameters for the two-route crossing recipe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CrossingSettings {
+    /// Cells expanded around the centreline. One produces a three-wide barrier.
+    pub barrier_half_width: u32,
+    /// Surface level of the channel bed.
+    pub bed_level: Level,
+    /// Lowest occupied hazard voxel.
+    pub hazard_bottom: Level,
+    /// Highest occupied hazard voxel, inclusive.
+    pub hazard_top: Level,
+    /// Level occupied by the one-voxel bridge deck.
+    pub bridge_level: Level,
+}
+
+/// Parameters for the linked-island structural probe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LinkedIslandsSettings {
+    /// Width of every required bridge in cells.
+    pub bridge_width: u32,
+}
+
+impl ProceduralSettings {
+    const SUPPORTED_VERSION: u32 = 1;
+
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if self.generator_version != Self::SUPPORTED_VERSION {
+            return Err(format!(
+                "unsupported procedural generator_version {}; expected {}",
+                self.generator_version,
+                Self::SUPPORTED_VERSION
+            ));
+        }
+
+        match (&self.landform, &self.tactical) {
+            (LandformSettings::Hills(hills), TacticalSettings::Crossing(crossing)) => {
+                hills.validate(grid_radius)?;
+                crossing.validate(hills.valley_level)?;
+            }
+            (LandformSettings::SkyIslands(islands), TacticalSettings::LinkedIslands(linked)) => {
+                islands.validate(grid_radius)?;
+                linked.validate()?;
+            }
+            (LandformSettings::Hills(_), TacticalSettings::LinkedIslands(_)) => {
+                return Err("Hills landform requires the Crossing tactical recipe".to_owned());
+            }
+            (LandformSettings::SkyIslands(_), TacticalSettings::Crossing(_)) => {
+                return Err(
+                    "SkyIslands landform requires the LinkedIslands tactical recipe".to_owned(),
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl HillsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err("procedural Hills requires grid_radius from 12 through 40".to_owned());
+        }
+        if self.valley_level < 5 {
+            return Err("Hills valley_level must leave room for bedrock and strata".to_owned());
+        }
+        if !(1..=8).contains(&self.max_relief) {
+            return Err("Hills max_relief must be between 1 and 8".to_owned());
+        }
+        let Some(highest_surface) = self.valley_level.checked_add(self.max_relief) else {
+            return Err("Hills level relationship overflows Level".to_owned());
+        };
+        if highest_surface > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "Hills surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        if !(1..=6).contains(&self.hills_per_bank) {
+            return Err("Hills hills_per_bank must be between 1 and 6".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl SkyIslandsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err("procedural SkyIslands requires grid_radius from 12 through 40".to_owned());
+        }
+        if self.surface_level < 8 {
+            return Err("SkyIslands surface_level must be at least 8".to_owned());
+        }
+        let Some(highest_surface) = self.surface_level.checked_add(4) else {
+            return Err("SkyIslands level relationship overflows Level".to_owned());
+        };
+        if highest_surface > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "SkyIslands surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        if !(2..=4).contains(&self.island_radius) {
+            return Err("SkyIslands island_radius must be between 2 and 4".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl CrossingSettings {
+    fn validate(&self, valley_level: Level) -> Result<(), String> {
+        if self.barrier_half_width != 1 {
+            return Err("procedural Crossing barrier_half_width must be 1".to_owned());
+        }
+        if self.bed_level < 1 {
+            return Err("Crossing bed_level must remain above bedrock".to_owned());
+        }
+        if self.bed_level > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "Crossing levels cannot exceed {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        let Some(expected_hazard_bottom) = self.bed_level.checked_add(1) else {
+            return Err("Crossing bed relationship overflows Level".to_owned());
+        };
+        if self.hazard_bottom != expected_hazard_bottom {
+            return Err("Crossing hazard_bottom must sit directly above its bed".to_owned());
+        }
+        if self.hazard_top < self.hazard_bottom
+            || self.hazard_top >= valley_level
+            || self.hazard_top > MAX_PROCEDURAL_LEVEL
+        {
+            return Err("Crossing hazard levels must lie between the bed and valley".to_owned());
+        }
+        let Some(expected_bridge_level) = valley_level.checked_add(1) else {
+            return Err("Crossing bridge relationship overflows Level".to_owned());
+        };
+        if self.bridge_level != expected_bridge_level || self.bridge_level > MAX_PROCEDURAL_LEVEL {
+            return Err("Crossing bridge_level must be exactly one above the valley".to_owned());
+        }
+        Ok(())
+    }
+}
+
+impl LinkedIslandsSettings {
+    fn validate(&self) -> Result<(), String> {
+        if self.bridge_width != 2 {
+            return Err("LinkedIslands bridge_width must be 2".to_owned());
+        }
+        Ok(())
+    }
 }
 
 /// Perlin terrain configuration.
@@ -425,6 +645,79 @@ mod tests {
         };
         assert_eq!(perlin.seed, Some(7));
         assert_eq!(perlin.steps.len(), 1);
+    }
+
+    #[test]
+    fn procedural_variants_remain_deserializable() {
+        for ron in [
+            include_str!("../../../assets/config/worlds/procedural-hills.ron"),
+            include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
+            include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
+            include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
+        ] {
+            let settings: MapSettings =
+                ron::from_str(ron).expect("shipped procedural RON should parse");
+            assert!(matches!(settings.terrain, TerrainSettings::Procedural(_)));
+        }
+    }
+
+    #[test]
+    fn procedural_radius_is_bounded_for_v1() {
+        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        for invalid_radius in [11, 41] {
+            let invalid = source.replacen(
+                "grid_radius: 12",
+                &format!("grid_radius: {invalid_radius}"),
+                1,
+            );
+            let error = ron::from_str::<MapSettings>(&invalid)
+                .expect_err("v1 procedural radius outside 12 through 40 should fail");
+            assert!(
+                error.to_string().contains("12 through 40"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_landform_tactical_combinations_are_rejected() {
+        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        let invalid = source.replacen(
+            "tactical: Crossing((\n            barrier_half_width: 1,\n            bed_level: 12,\n            hazard_bottom: 13,\n            hazard_top: 14,\n            bridge_level: 16,\n        ))",
+            "tactical: LinkedIslands((bridge_width: 2))",
+            1,
+        );
+        let error = ron::from_str::<MapSettings>(&invalid)
+            .expect_err("Hills with LinkedIslands should fail at deserialization");
+        assert!(
+            error.to_string().contains("requires the Crossing"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn procedural_levels_are_bounded_before_voxel_allocation() {
+        let hills = include_str!("../../../assets/config/worlds/procedural-hills.ron")
+            .replacen("valley_level: 15", "valley_level: 125", 1)
+            .replacen("bed_level: 12", "bed_level: 122", 1)
+            .replacen("hazard_bottom: 13", "hazard_bottom: 123", 1)
+            .replacen("hazard_top: 14", "hazard_top: 124", 1)
+            .replacen("bridge_level: 16", "bridge_level: 126", 1);
+        let hills_error = ron::from_str::<MapSettings>(&hills)
+            .expect_err("terrain above the v1 allocation ceiling should fail");
+        assert!(
+            hills_error.to_string().contains("cannot exceed level 128"),
+            "unexpected error: {hills_error}"
+        );
+
+        let sky = include_str!("../../../assets/config/worlds/procedural-sky-islands.ron")
+            .replacen("surface_level: 15", "surface_level: 125", 1);
+        let sky_error = ron::from_str::<MapSettings>(&sky)
+            .expect_err("sky islands must reserve bounded space for optional relief");
+        assert!(
+            sky_error.to_string().contains("cannot exceed level 128"),
+            "unexpected error: {sky_error}"
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
 mod menus;
+mod review;
 mod scenarios;
 mod screens;
 
@@ -91,6 +92,7 @@ impl Plugin for AppPlugin {
         app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
+                GameplaySetup::Rules,
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
@@ -107,6 +109,7 @@ impl Plugin for AppPlugin {
             scenarios::plugin,
             screens::plugin,
             menus::plugin,
+            review::plugin,
         ));
 
         app.add_systems(Update, apply_display_settings);

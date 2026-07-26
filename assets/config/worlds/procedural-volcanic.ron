@@ -1,0 +1,21 @@
+// Architecture probe: basalt hills, lava barrier, and a dry basalt causeway.
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 1,
+        landform: Hills((
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        )),
+        environment: Volcanic,
+        tactical: Crossing((
+            barrier_half_width: 1,
+            bed_level: 12,
+            hazard_bottom: 13,
+            hazard_top: 14,
+            bridge_level: 16,
+        )),
+    )),
+)

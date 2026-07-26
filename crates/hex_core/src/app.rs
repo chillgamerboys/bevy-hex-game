@@ -88,12 +88,12 @@ pub struct PausableSystems;
 
 /// Ordering for world construction on entering [`Screen::Gameplay`].
 ///
-/// Building a world has a dependency chain — resources, then the terrain, then the
-/// things standing on the terrain — and each step lives in a different crate.
-/// `hex_map` builds the map; `hex_units` spawns the player onto it. Systems added
-/// to the same `OnEnter` schedule otherwise run in **unspecified order**, and
-/// `.chain()` cannot express ordering across a crate boundary because neither crate
-/// can see the other's systems.
+/// Building a world has a dependency chain — shared rules, resources, terrain, then
+/// the things standing on the terrain — and each step lives in a different crate.
+/// `hex_units` publishes the ordinary walker, `hex_map` validates and builds the map,
+/// then `hex_units` spawns the player onto it. Systems added to the same `OnEnter`
+/// schedule otherwise run in **unspecified order**, and `.chain()` cannot express
+/// ordering across a crate boundary because neither crate can see the other's systems.
 ///
 /// Bevy inserts a sync point between ordered sets, which matters here beyond mere
 /// ordering: entities spawned through `Commands` in one set are not queryable until
@@ -102,6 +102,11 @@ pub struct PausableSystems;
 /// it, not just earlier.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum GameplaySetup {
+    /// Publish shared gameplay rules, such as canonical traversal profiles.
+    ///
+    /// Map generation validates against these rules, so they must exist before
+    /// generator resources are built.
+    Rules,
     /// Insert resources the world is built from, such as generator configuration.
     Resources,
     /// Spawn the map itself — the terrain everything else stands on.

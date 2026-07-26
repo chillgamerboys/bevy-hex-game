@@ -68,9 +68,8 @@ Two things depend on it:
 
 - **Zero means buried.** A run with something solid directly on top is inside a
   column, not a surface, and nothing can stand on it however solid it is.
-- **Small means cramped.** A character is 2 levels tall by default
-  (`levels_tall` in `player.ron`), so a one-voxel gap under a bridge is a wall to it
-  and a corridor to something shorter.
+- **Small means cramped.** The canonical walker is exactly 2 levels tall, so a
+  one-voxel gap under a bridge is a wall to it and a corridor to something shorter.
 
 Getting this wrong is the worst class of bug in this codebase — it renders perfectly
 and errors nowhere. Publishing headroom for every run as if it were exposed put the
@@ -198,7 +197,7 @@ A clean log is not evidence a change worked. **Look at the window.**
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
 | A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
 | A piece stands *inside* a column, and clicking does nothing | Buried runs were given non-zero `Headroom`, so gameplay took the bedrock for a surface |
-| A piece refuses to walk somewhere that looks fine | Its `Headroom` is below the body's `levels_tall`. Check what is above it |
+| A piece refuses to walk somewhere that looks fine | Its `Headroom` is below the body's traversal-profile height. Check what is above it |
 
 ## Working here
 
@@ -212,8 +211,41 @@ Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but t
 world is only rebuilt on entering gameplay — press `BACKSPACE`, then click its
 scenario to see terrain changes.
 
-`terrain::build_map` is pure: settings and a substance palette go in, and a complete
-`VoxelMap` comes out. Keep ECS resources, commands, and rendering out of it.
+### Deterministic procedural review
+
+The review hooks are dormant unless `HEX_REVIEW_SCENARIO` is set. To launch one exact
+seed for manual play, use an exact, unique name from `scenarios.ron`:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+cargo run --release -p hex_game
+```
+
+This bypasses only the title-screen click; loading, validation, terrain spawning, and
+actor spawning use the normal path. Omit `HEX_REVIEW_SEED` to use the scenario's
+configured seed. A seed override is valid only for a scenario that already declares
+`generation_seed`.
+
+Add a PNG path and view to make a deterministic 1920x1080 renderer capture. The game
+waits for validated terrain to settle, writes the image, and exits:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+HEX_REVIEW_CAPTURE=".context/procedural-maps/iteration-01/hero-default.png" \
+HEX_REVIEW_VIEW=default \
+cargo run --release -p hex_game
+```
+
+Repeat with `HEX_REVIEW_VIEW=rotated` and `HEX_REVIEW_VIEW=top-down`, changing the
+output filename each time. `HEX_REVIEW_VIEW` requires `HEX_REVIEW_CAPTURE`; capture
+defaults to the `default` view when the view variable is omitted. Always launch
+through Cargo so asset paths resolve.
+
+`terrain::build_non_procedural_map` and `procedural::build` are pure: settings and
+their explicit generation inputs go in, and a complete `VoxelMap` comes out. Keep ECS
+resources, commands, and rendering out of them.
 
 `HeightGenerator` implementations used by the optional Perlin preset must also be
 pure. Results are cached, so an impure generator produces terrain that changes

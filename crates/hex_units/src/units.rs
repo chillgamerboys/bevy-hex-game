@@ -15,11 +15,12 @@ use bevy::prelude::*;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioSettings, SubstanceTable,
+    to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings,
+    SubstanceTable,
 };
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen, SubstanceId, TilePos,
-    Turn,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, Pause,
+    Screen, SubstanceId, TerrainReady, TilePos, TraversalProfileId, TraversalProfiles, Turn,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
@@ -165,7 +166,9 @@ pub fn plugin(app: &mut App) {
         // `Commands`-spawned entities are invisible until the queue is applied.
         .add_systems(
             OnEnter(Screen::Gameplay),
-            spawn_units.in_set(GameplaySetup::Actors),
+            spawn_units
+                .in_set(GameplaySetup::Actors)
+                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(OnExit(Screen::Gameplay), despawn_units)
         .add_observer(on_tile_clicked);
@@ -424,12 +427,16 @@ fn spawn_units(
     table: Res<SubstanceTable>,
     settings: Res<PlayerSettings>,
     scenario: Res<ScenarioSettings>,
+    anchors: Option<Res<MapAnchors>>,
+    profiles: Res<TraversalProfiles>,
 ) {
     // Both units share a body for now. When lattices land, size becomes a property of
     // the unit rather than a global setting, and this is where that starts.
-    let body = Body {
-        levels_tall: settings.levels_tall,
+    let Some(walker) = profiles.get(TraversalProfileId::WALKER) else {
+        error!("ordinary walker traversal rules were not published; not spawning scenario units");
+        return;
     };
+    let body = Body::new(*walker);
     let footing = Footing::from_tiles(tiles.iter(), &table, body);
 
     let player_material = materials.add(StandardMaterial::from(to_color(settings.color)));
@@ -437,33 +444,74 @@ fn spawn_units(
     // until they have their own meshes.
     let enemy_material = materials.add(StandardMaterial::from(Color::srgb(0.25, 0.45, 0.9)));
 
-    spawn_unit(
-        &mut commands,
-        &assets,
-        UnitSpawn {
-            coord: coord_from(scenario.player, "player"),
-            faction: Faction::Player,
-            material: player_material,
-            name: "Player",
-            settings: &settings,
-            body,
-        },
-        &footing,
-    );
+    let anchors = anchors.as_deref();
+    if let Some(placement) = placement_from(&scenario.player, "player", anchors) {
+        spawn_unit(
+            &mut commands,
+            &assets,
+            UnitSpawn {
+                placement,
+                faction: Faction::Player,
+                material: player_material,
+                name: "Player",
+                settings: &settings,
+                body,
+            },
+            &footing,
+        );
+    }
 
-    spawn_unit(
-        &mut commands,
-        &assets,
-        UnitSpawn {
-            coord: coord_from(scenario.enemy, "enemy"),
-            faction: Faction::Hostile,
-            material: enemy_material,
-            name: "Enemy",
-            settings: &settings,
-            body,
-        },
-        &footing,
-    );
+    if let Some(placement) = placement_from(&scenario.enemy, "enemy", anchors) {
+        spawn_unit(
+            &mut commands,
+            &assets,
+            UnitSpawn {
+                placement,
+                faction: Faction::Hostile,
+                material: enemy_material,
+                name: "Enemy",
+                settings: &settings,
+                body,
+            },
+            &footing,
+        );
+    }
+}
+
+/// A placement resolved as far as scenario settings permit.
+enum ResolvedPlacement {
+    /// Authored placements choose the lowest fitting surface at this coordinate.
+    Fixed(HexCoord),
+    /// Generated anchors identify one exact surface, including its level.
+    Anchor { id: MapAnchorId, pos: TilePos },
+}
+
+/// Resolves a scenario placement without silently substituting generated anchors.
+fn placement_from(
+    setting: &ScenarioPlacement,
+    unit: &str,
+    anchors: Option<&MapAnchors>,
+) -> Option<ResolvedPlacement> {
+    match setting {
+        ScenarioPlacement::Fixed(coord) => Some(ResolvedPlacement::Fixed(coord_from(*coord, unit))),
+        ScenarioPlacement::Anchor(name) => {
+            let id = MapAnchorId::from(name.as_str());
+            let Some(anchors) = anchors else {
+                error!(
+                    "scenarios.ron: {unit} uses anchor \"{id}\", but the active map published no \
+                     anchors; not spawning {unit}"
+                );
+                return None;
+            };
+            let Some(pos) = anchors.get(&id) else {
+                error!(
+                    "scenarios.ron: {unit} uses missing map anchor \"{id}\"; not spawning {unit}"
+                );
+                return None;
+            };
+            Some(ResolvedPlacement::Anchor { id, pos })
+        }
+    }
 }
 
 /// Everything that differs between one unit and the next.
@@ -471,7 +519,7 @@ fn spawn_units(
 /// Grouped into a struct because the alternative is an eight-argument function where
 /// two of the arguments are `&str` and easy to swap by accident.
 struct UnitSpawn<'a> {
-    coord: HexCoord,
+    placement: ResolvedPlacement,
     faction: Faction,
     material: Handle<StandardMaterial>,
     name: &'static str,
@@ -480,19 +528,36 @@ struct UnitSpawn<'a> {
 }
 
 fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, footing: &Footing) {
-    // Stand on the lowest surface at the coordinate that this body fits on — the
-    // ground, rather than any bridge built over it.
-    let standing = footing.ground(spawn.coord).unwrap_or_else(|| {
-        warn!(
-            "scenarios.ron: nothing at {:?} that the {} can stand on — \
-             using the centre of the map instead",
-            spawn.coord, spawn.name
-        );
-        footing.ground(HexCoord::ORIGIN).unwrap_or(Standing {
-            pos: TilePos::new(HexCoord::ORIGIN, 0),
-            span: HexSpan::new(0.0, f32::EPSILON),
-        })
-    });
+    let standing = match spawn.placement {
+        // Stand on the lowest surface at an authored coordinate that this body fits
+        // on: the ground, rather than any bridge built over it. Preserve the existing
+        // authored-map fallback for a designer typo.
+        ResolvedPlacement::Fixed(coord) => footing.ground(coord).unwrap_or_else(|| {
+            warn!(
+                "scenarios.ron: nothing at {:?} that the {} can stand on — \
+                 using the centre of the map instead",
+                coord, spawn.name
+            );
+            footing.ground(HexCoord::ORIGIN).unwrap_or(Standing {
+                pos: TilePos::new(HexCoord::ORIGIN, 0),
+                span: HexSpan::new(0.0, f32::EPSILON),
+            })
+        }),
+        // A generated anchor promises one exact surface. Falling back to the lowest
+        // surface or the origin would hide a generator/validation defect and may put
+        // the unit on the ground beneath a bridge.
+        ResolvedPlacement::Anchor { id, pos } => {
+            let Some(standing) = footing.at(pos) else {
+                error!(
+                    "map anchor \"{id}\" for the {} points to {pos:?}, which its body cannot stand \
+                     on; not spawning {}",
+                    spawn.name, spawn.name
+                );
+                return;
+            };
+            standing
+        }
+    };
 
     let scale = spawn.settings.scale;
     let [mesh_a, mesh_b] = assets.player_pieces.clone();

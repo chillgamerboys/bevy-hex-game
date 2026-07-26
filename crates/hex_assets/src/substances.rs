@@ -331,12 +331,16 @@ mod tests {
     }
 
     #[test]
-    fn showcase_substances_have_the_required_behaviour() {
+    fn terrain_substances_have_the_required_behaviour() {
         let table = SubstanceTable::from_file(&shipped_file());
         let gravel = table.id("gravel").expect("gravel should be registered");
         let water = table.id("water").expect("water should be registered");
         let metal = table.id("metal").expect("metal should be registered");
         let bedrock = table.id("bedrock").expect("bedrock should be registered");
+        let snow = table.id("snow").expect("snow should be registered");
+        let ice = table.id("ice").expect("ice should be registered");
+        let basalt = table.id("basalt").expect("basalt should be registered");
+        let lava = table.id("lava").expect("lava should be registered");
 
         assert!(table.is_solid(gravel));
         assert!(table.is_diggable(gravel));
@@ -344,6 +348,12 @@ mod tests {
         assert!(table.is_diggable(water), "water should be clearable");
         assert!(table.is_solid(metal));
         assert!(table.is_diggable(metal));
+        for (name, substance) in [("snow", snow), ("ice", ice), ("basalt", basalt)] {
+            assert!(table.is_solid(substance), "{name} must be footing");
+            assert!(table.is_diggable(substance), "{name} must be diggable");
+        }
+        assert!(!table.is_solid(lava), "lava must not be footing");
+        assert!(table.is_diggable(lava), "lava should be clearable");
         assert!(!table.is_diggable(bedrock));
     }
 }

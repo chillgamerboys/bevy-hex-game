@@ -1,15 +1,13 @@
 // The player piece.
 (
-    scale: 0.25,
+    // The king mesh is 9.08 source units tall. At the shared 0.4 world-units per
+    // voxel level, this renders at 1.88 levels: visibly just under the walker's
+    // two-level clearance contract.
+    scale: 0.083,
 
     // Movement speed in world units per second. A tile is about 1.76 units
     // across, so 5.0 crosses one in a little over a third of a second.
     speed: 5.0,
 
     color: (1.0, 0.2, 0.2),
-
-    // How many levels tall the piece is. It needs this much clear space above a
-    // surface to stand there, so raising it shuts the piece out of low tunnels and
-    // gaps under bridges. This is the piece's own size, not the terrain's.
-    levels_tall: 2,
 )

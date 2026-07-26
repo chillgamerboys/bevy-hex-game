@@ -15,8 +15,6 @@ use bevy::prelude::*;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
 
-use hex_core::Level;
-
 /// A colour written as `(r, g, b)` in sRGB, each component 0.0–1.0.
 ///
 /// A plain tuple rather than Bevy's `Color`, whose serialized form is an
@@ -241,13 +239,6 @@ pub struct PlayerSettings {
     pub speed: f32,
     /// Colour of the player piece.
     pub color: Rgb,
-    /// How many levels tall the piece is.
-    ///
-    /// It needs this much clear space above a surface to stand there, so raising it
-    /// makes low tunnels and gaps under bridges impassable. Deliberately *not* called
-    /// `height`: that word is taken by terrain, and confusing the two is a silent
-    /// geometric bug.
-    pub levels_tall: Level,
 }
 
 /// `assets/config/display.ron` — window and presentation.
@@ -322,6 +313,19 @@ pub struct CubeCoord {
     pub z: i32,
 }
 
+/// One unit's starting point in a scenario.
+///
+/// Authored maps use an exact cube coordinate. Generated maps publish named anchors
+/// after generation, so their scenarios remain valid when a different seed moves the
+/// useful parts of the map.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub enum ScenarioPlacement {
+    /// An exact coordinate on an authored map.
+    Fixed(CubeCoord),
+    /// A generated position resolved from [`hex_core::MapAnchors`].
+    Anchor(String),
+}
+
 /// Where a scenario's units start.
 ///
 /// **Not loaded from a file of its own.** It is the placements out of whichever
@@ -330,13 +334,13 @@ pub struct CubeCoord {
 ///
 /// A scaffold for trying maps out, not an encounter format: a real one will describe
 /// many units, their lattices, and what triggers them.
-#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
+#[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioSettings {
     /// Where the player starts.
-    pub player: CubeCoord,
+    pub player: ScenarioPlacement,
     /// Where the single enemy starts.
-    pub enemy: CubeCoord,
+    pub enemy: ScenarioPlacement,
 }
 
 #[cfg(test)]
@@ -363,11 +367,19 @@ mod tests {
         let (eye_x, eye_y, eye_z) = camera.gameplay_eye;
         let (focus_x, focus_y, focus_z) = camera.gameplay_focus;
         assert!(eye_x.abs() < f32::EPSILON);
-        assert!((eye_y - 44.0).abs() < f32::EPSILON);
-        assert!((eye_z - 38.0).abs() < f32::EPSILON);
+        assert!((eye_y - 48.0).abs() < f32::EPSILON);
+        assert!((eye_z - 42.0).abs() < f32::EPSILON);
         assert!(focus_x.abs() < f32::EPSILON);
         assert!((focus_y - 6.0).abs() < f32::EPSILON);
         assert!(focus_z.abs() < f32::EPSILON);
+
+        let initial_radius =
+            ((eye_x - focus_x).powi(2) + (eye_y - focus_y).powi(2) + (eye_z - focus_z).powi(2))
+                .sqrt();
+        assert!(
+            initial_radius <= camera.max_zoom * 0.9,
+            "the full-map frame should retain at least 10% manual zoom-out headroom"
+        );
     }
 
     /// Every field must be present, or the game hangs on "loading…" with the reason

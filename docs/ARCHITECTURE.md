@@ -297,7 +297,7 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 |---|---|---|
 | Every frame | `camera.ron`, `display.ron`, all of `lighting.ron` | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
-| At spawn | `world.ron`, `substances.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
+| At spawn | `world.ron`, `substances.ron`, `player.ron` scale/colour | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
 values every frame, but the sun and ambient were only applied on

@@ -21,7 +21,7 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, SubstanceTable};
 use hex_core::{Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn};
 use hex_units::{
-    route, Body, Enemy, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn, MAX_STEP,
+    route, Body, Enemy, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn,
 };
 
 use crate::turns::TurnOrder;
@@ -191,7 +191,7 @@ fn best_foe(
         .filter(|(_, other, _)| faction.is_hostile_to(**other))
         .map(|(entity, _, standing)| {
             let target = standing.0;
-            let action = if from.pos.is_within_step_of(target.pos, MAX_STEP) {
+            let action = if footing.admits_step(from.pos, target.pos) {
                 // **Reach, not range.** Melee gets no high-ground bonus: an attacker
                 // five levels up must not acquire a two-hex punch.
                 FoeAction::Attack
