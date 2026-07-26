@@ -215,4 +215,22 @@ mod tests {
         assert!((focus_y - 6.0).abs() < f32::EPSILON);
         assert!(focus_z.abs() < f32::EPSILON);
     }
+
+    /// Every field must be present, or the game hangs on "loading…" with the reason
+    /// only in the terminal. `LightingSettings` has seventeen of them and no default,
+    /// so a rename or a dropped line is otherwise caught by launching the game.
+    #[test]
+    fn shipped_lighting_settings_parse() {
+        let lighting: LightingSettings =
+            ron::from_str(include_str!("../../../assets/config/lighting.ron"))
+                .expect("the shipped lighting settings should parse");
+
+        // The optional extras ship disabled; both are removed from the camera rather
+        // than applied at zero, so turning them on is the only way to change the look.
+        assert!(
+            lighting.sky_light_intensity.abs() < f32::EPSILON,
+            "the sky light ships off"
+        );
+        assert!(lighting.fog_density.abs() < f32::EPSILON, "haze ships off");
+    }
 }

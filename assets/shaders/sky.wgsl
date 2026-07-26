@@ -110,14 +110,26 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // away from the zenith, so a hex covers the same angular size straight up as it
     // does near the horizon. A plain `dir.xz / dir.y` (gnomonic) projection instead
     // stretches cells to infinity as the view approaches the horizon.
-    // `abs` mirrors the lower hemisphere onto the upper one, which keeps `theta` in
-    // [0, pi/2] and away from the projection's singularity at straight down — cells
-    // near it stretch into long radial streaks. The mirroring is not cosmetic: the
-    // gameplay camera looks *down*, so most of the sky on screen is below the horizon
-    // and has to carry proper clouds rather than smears.
+    //
+    // `abs` keeps `theta` in [0, pi/2], away from the second singularity at straight
+    // down, where cells otherwise smear into long radial streaks. That region is not
+    // an edge case: the gameplay camera looks *down*, so most of the sky on screen is
+    // below the horizon. Be clear about what this costs — it does not extend the
+    // pattern downwards, it **mirrors** it, so the lower sky is a reflection of the
+    // upper one and the two meet in a fold at `dir.y == 0`. The fold is normally off
+    // screen or behind terrain; it is visible if you orbit until the horizon is in
+    // frame, and is the thing to revisit if this ever needs to look right there.
     let theta = acos(clamp(abs(dir.y), 0.0, 1.0));
-    let azim = atan2(dir.z, dir.x);
-    let p = vec2<f32>(cos(azim), sin(azim)) * theta * sky.hex_scale;
+    // The radial unit vector directly, rather than `atan2` then `cos`/`sin` of it:
+    // identical result, and it has no undefined case at the pole where `dir.xz` is
+    // zero (`atan2(0, 0)` would give a NaN that survives the `theta == 0` multiply).
+    let horizontal = vec2<f32>(dir.x, dir.z);
+    let horizontal_len = length(horizontal);
+    var radial = vec2<f32>(1.0, 0.0);
+    if (horizontal_len > 1e-6) {
+        radial = horizontal / horizontal_len;
+    }
+    let p = radial * theta * sky.hex_scale;
 
     // Accumulate cloud density over the cell the pixel is in and its six neighbours,
     // so a cloud spanning several present cells is one continuous mass.

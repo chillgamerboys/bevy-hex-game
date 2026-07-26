@@ -1,6 +1,6 @@
 # Changing the game without writing code
 
-Most of how the game looks and feels is controlled by six text files in
+Most of how the game looks and feels is controlled by seven text files in
 `assets/config/`. You can edit them in any text editor. You do not need to know
 Rust, and you do not need to recompile the game.
 

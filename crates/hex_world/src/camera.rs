@@ -86,13 +86,23 @@ fn spawn_camera(
         })),
         Transform::from_scale(Vec3::splat(SKY_DOME_RADIUS)),
         NotShadowCaster,
+        // `MeshPickingPlugin` raycasts every `Mesh3d` by default, and the dome's
+        // bounding box permanently contains the camera, so the cheap AABB rejection
+        // never fires and every pointer move would walk its several thousand
+        // triangles. Backface culling means it reports no hit anyway.
+        Pickable::IGNORE,
         SkyDome,
         Name::new("Sky Dome"),
     ));
 }
 
-/// Placeholder sky parameters used until `LightingSettings` loads. Muted values so a
-/// stalled settings load is obviously wrong rather than looking intentional.
+/// Sky parameters used for the one frame or two before `LightingSettings` loads.
+///
+/// Written in linear RGB, because that is what the shader consumes — unlike
+/// [`sky_params`], which converts the designer-facing sRGB values. Deliberately close
+/// to the shipped sky rather than an alarming colour: the loading screen already
+/// blocks on settings, so this is only ever seen briefly, and a garish placeholder
+/// would be the more visible bug.
 fn default_sky_params() -> SkyParams {
     SkyParams {
         horizon_color: Vec3::new(0.5, 0.6, 0.7),
@@ -186,7 +196,12 @@ fn follow_camera(
         return;
     };
     for mut dome in &mut domes {
-        dome.translation = cam.translation;
+        // Guarded because writing through `Mut` marks the transform changed even when
+        // the value is identical, which would re-propagate and re-extract the dome
+        // every frame on a still camera — including on the menu screens.
+        if dome.translation.distance_squared(cam.translation) > f32::EPSILON {
+            dome.translation = cam.translation;
+        }
     }
 }
 
