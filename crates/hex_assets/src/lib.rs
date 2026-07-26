@@ -19,7 +19,9 @@ pub mod loader;
 pub mod settings;
 pub mod substances;
 
-pub use loader::{LoadSettings, SettingsRegistry};
+pub use loader::{
+    choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+};
 pub use settings::{
     to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, PlayerSettings,
     PresentModeSetting, Rgb, ScenarioSettings,
