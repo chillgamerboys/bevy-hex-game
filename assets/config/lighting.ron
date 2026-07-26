@@ -17,7 +17,11 @@
 
     // Hexagonal clouds.
     cloud_color: (0.97, 0.98, 1.0),
-    cloud_coverage: 0.4,
-    hex_cloud_scale: 13.0,
-    cloud_softness: 0.12,
+    cloud_coverage: 0.18,
+    hex_cloud_scale: 16.0,
+    cloud_softness: 0.1,
+    // 0.0 = hard hexagons, 1.0 = round; a gentle hex hint in the middle.
+    cloud_roundness: 0.5,
+    // Fbm edge break-up: 0.0 clean, ~0.5 wispy.
+    cloud_noise: 0.3,
 )

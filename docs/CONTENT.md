@@ -175,24 +175,32 @@ zenith_color: (0.25, 0.50, 0.85),  // straight up
 sky tone. Set the two close together for a flat, even sky; push them apart for a
 deeper, more dramatic one.
 
-The clouds are hexagons — a nod to the grid — shaped by four more values:
+The clouds sit on a hexagonal grid — a nod to the map — but are drawn as soft puffs
+that merge where they touch. Six values shape them:
 
 ```ron
 cloud_color:     (0.97, 0.98, 1.0),  // usually near-white
-cloud_coverage:  0.4,   // 0.0 is a clear sky, 1.0 clouds every cell
-hex_cloud_scale: 13.0,  // bigger = smaller and more numerous clouds
-cloud_softness:  0.12,  // 0.02 is crisp-edged, 0.3 is soft and fluffy
+cloud_coverage:  0.18,  // 0.0 is a clear sky, higher is cloudier
+hex_cloud_scale: 16.0,  // bigger = smaller and more numerous clouds
+cloud_softness:  0.1,   // extra edge softening on top of the automatic anti-aliasing
+cloud_roundness: 0.5,   // 0.0 is hard hexagons, 1.0 is round; the middle hints at hex
+cloud_noise:     0.3,   // 0.0 is clean-edged, ~0.5 is wispy and broken up
 ```
 
-- **`cloud_coverage`** is how much of the sky is clouded, from none to solid.
-- **`hex_cloud_scale`** sets cloud *size* — but inverted: turn it **up** for many
-  small hexes, **down** for a few big ones.
-- **`cloud_softness`** blurs the hex edges. Low keeps them sharp and geometric; high
-  makes them read as soft clouds that happen to be hex-shaped.
+- **`cloud_coverage`** is how much of the sky is clouded. Because neighbouring clouds
+  now merge, a little goes a long way — past ~0.35 the sky fills in quickly.
+- **`hex_cloud_scale`** sets cloud *size*, inverted: turn it **up** for many small
+  clouds, **down** for a few big ones.
+- **`cloud_roundness`** morphs each cloud from a hard hexagon (`0.0`) to a round puff
+  (`1.0`). The `0.5` default keeps a gentle hex hint.
+- **`cloud_noise`** breaks the edges up with fine detail — low is clean and smooth,
+  high is wispy.
+- **`cloud_softness`** adds extra blur on top; the edges are already kept crisp
+  automatically, so this is only for a softer, hazier look.
 
 For a clear blue sky, set `cloud_coverage: 0.0`. For an overcast one, raise coverage
-and soften the edges. The colours take `(red, green, blue)` from `0.0` to `1.0`, the
-same as everywhere else.
+and push `cloud_noise` up. The colours take `(red, green, blue)` from `0.0` to `1.0`,
+the same as everywhere else.
 
 ## One thing that will not do anything on a Mac
 

@@ -78,6 +78,10 @@ pub struct LightingSettings {
     pub hex_cloud_scale: f32,
     /// Edge softness of each cloud, ~0.02 (crisp) to ~0.3 (fluffy).
     pub cloud_softness: f32,
+    /// Cloud shape from hexagonal to round: 0.0 keeps hard hex edges, 1.0 is a disc.
+    pub cloud_roundness: f32,
+    /// Strength of the fbm noise that breaks up cloud edges, ~0.0 (clean) to ~0.5 (wispy).
+    pub cloud_noise: f32,
 }
 
 /// `assets/config/player.ron` — the player piece.

@@ -22,6 +22,8 @@ pub(crate) struct SkyParams {
     pub hex_scale: f32,
     pub cloud_color: Vec3,
     pub cloud_softness: f32,
+    pub cloud_roundness: f32,
+    pub cloud_noise: f32,
 }
 
 /// Material that renders the procedural sky onto the dome.

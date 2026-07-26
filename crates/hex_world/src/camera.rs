@@ -80,7 +80,7 @@ fn spawn_camera(
     // Built with placeholder params; `apply_sky_material` fills them once settings
     // load. Not a shadow caster — a 500-unit sphere would shadow the whole map.
     commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(32, 18))),
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(64, 48))),
         MeshMaterial3d(sky_materials.add(SkyMaterial {
             params: default_sky_params(),
         })),
@@ -101,6 +101,8 @@ fn default_sky_params() -> SkyParams {
         hex_scale: 8.0,
         cloud_color: Vec3::new(0.9, 0.9, 0.92),
         cloud_softness: 0.1,
+        cloud_roundness: 0.5,
+        cloud_noise: 0.0,
     }
 }
 
@@ -151,6 +153,8 @@ fn sky_params(settings: &LightingSettings) -> SkyParams {
         hex_scale: settings.hex_cloud_scale,
         cloud_color: lin(settings.cloud_color),
         cloud_softness: settings.cloud_softness,
+        cloud_roundness: settings.cloud_roundness,
+        cloud_noise: settings.cloud_noise,
     }
 }
 

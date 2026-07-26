@@ -192,6 +192,17 @@ Two choices worth knowing:
   near the horizon. The obvious `dir.xz / dir.y` (gnomonic) projection stretches
   cells toward infinity near the horizon — it renders, and looks wrong, with no
   error in the log.
+- **The cloud field is a density, not a per-cell mask.** Each pixel sums a soft bump
+  from its hex cell *and its six neighbours*, then thresholds; that is what lets
+  adjacent clouds merge with no seam (a single-cell mask left a visible gap because
+  the fill stopped short of the shared edge). `cloud_roundness` blends the cell shape
+  hexagon→disc, and an fbm built on the shader's one `hash21` breaks the edges up.
+- **Anti-aliasing is analytic.** The cloud edge is a `smoothstep` whose width comes
+  from `fwidth()` of the density, so it stays ~1px crisp at any zoom or view angle.
+  This matters because MSAA (Bevy's default 4x) only smooths *geometry* edges, not a
+  colour discontinuity computed inside the fragment shader, and there is no
+  post-process AA in the project — a fixed-width edge shimmered and read as
+  low-resolution.
 
 Colours and cloud parameters come from `LightingSettings` and are pushed into the
 material by `apply_sky_material` on load and on every hot reload — see
