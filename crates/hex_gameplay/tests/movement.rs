@@ -52,8 +52,9 @@ const CRAWLSPACE: HexCoord = HexCoord::new_cubic(-2, 2, 0);
 ///
 /// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this whole
 /// structure exists to enforce — so the tiles here are spawned by the test itself.
-/// That is not a workaround: it is the point. Gameplay consumes `HexCoord` and
-/// `HexSpan` components, and anything producing those will do.
+/// That is not a workaround: it is the point. Gameplay consumes `HexTile` entities
+/// carrying `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`, and anything
+/// producing that contract will do.
 fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
@@ -107,8 +108,8 @@ fn test_app() -> App {
 ///
 /// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this structure
 /// exists to enforce — so the tiles are spawned by the test itself. That is not a
-/// workaround: gameplay consumes `TilePos`, `HexSpan`, `SubstanceId` and [`Headroom`],
-/// and anything producing those will do.
+/// workaround: gameplay queries `With<HexTile>` for `TilePos`, `HexSpan`,
+/// `SubstanceId` and [`Headroom`], and anything producing that contract will do.
 ///
 /// The layering is the whole point. An earlier version of this fixture spawned **one**
 /// tile per coordinate, so every tile was trivially the surface and a bug that
@@ -171,7 +172,7 @@ fn substance_table() -> SubstanceTable {
 ///
 /// The pointer's screen location is irrelevant here — picking has already resolved
 /// which entity was hit by the time this event exists, which is exactly why a click
-/// identifies one specific column rather than a coordinate.
+/// identifies one specific surface rather than a coordinate.
 fn click(app: &mut App, entity: Entity, window: Entity) {
     let Some(target) = bevy::window::WindowRef::Entity(window).normalize(Some(window)) else {
         unreachable!("an explicit window entity always normalizes")
@@ -222,9 +223,9 @@ fn the_player_spawns_on_the_surface() {
     );
 }
 
-/// The player records which column it occupies, not merely which hex.
+/// The player records which surface it occupies, not merely which hex.
 #[test]
-fn the_player_knows_which_column_it_is_on() {
+fn the_player_knows_which_surface_it_is_on() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
@@ -268,7 +269,7 @@ fn clicking_before_settings_load_does_not_panic() {
     app.update();
 }
 
-/// Clicking a tile starts a move, and updates which column the player is on.
+/// Clicking a tile starts a move, and updates which surface the player is on.
 #[test]
 fn clicking_a_tile_moves_the_player() {
     let mut app = test_app();
@@ -299,7 +300,7 @@ fn clicking_a_tile_moves_the_player() {
 
     assert_eq!(
         standing.0.pos.coord, destination,
-        "clicking a tile should move the player onto that column"
+        "clicking a tile should move the player onto that surface"
     );
     assert_eq!(
         standing.0.pos.level, GROUND_LEVEL,

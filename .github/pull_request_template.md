@@ -4,8 +4,13 @@
 
 ## Checks
 
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test --workspace`
+- [ ] All relative links in tracked Markdown resolve
+- [ ] `cargo fmt --all --check` (unless Markdown-only)
+- [ ] `cargo deny check` (unless Markdown-only)
+- [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
+- [ ] `cargo test --workspace --all-features --profile ci` (unless Markdown-only)
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
+- [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
 - [ ] **I ran the game and looked at it**
 
 <!--

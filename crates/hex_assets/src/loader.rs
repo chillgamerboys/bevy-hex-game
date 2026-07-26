@@ -151,7 +151,7 @@ impl LoadSettings for App {
 
         // Runs until the asset lands, then inserts it and stops doing work. Also
         // re-inserts on change, which is what makes hot-reloading settings work
-        // under the `dev_native` feature.
+        // under the `dev` feature.
         self.add_systems(Update, insert_settings::<T>);
 
         self

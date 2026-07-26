@@ -1,16 +1,16 @@
-//! Which columns a piece may step between, and how it gets from one to another.
+//! Which surfaces a piece may step between, and how it gets from one to another.
 //!
 //! # The rules
 //!
-//! > A body may **stand** on a column when its substance is solid and its
+//! > A body may **stand** on a surface when its substance is solid and its
 //! > [`Headroom`](hex_core::Headroom) is at least the body's [`Body::levels_tall`].
 //!
-//! > A **step** is legal when the destination is an adjacent column a body can stand
+//! > A **step** is legal when the destination is an adjacent surface a body can stand
 //! > on, and its surface is within [`MAX_STEP`] levels.
 //!
-//! Columns stacked at one coordinate are never adjacent, so a piece on a bridge
+//! Surfaces stacked in one column are never adjacent, so a piece on a bridge
 //! cannot drop to the ground beneath it. Getting down means a ramp of adjacent
-//! columns descending a level at a time — or an ability that explicitly ignores this,
+//! surfaces descending a level at a time — or an ability that explicitly ignores this,
 //! which is not implemented and belongs here when it is.
 //!
 //! Headroom is what makes size matter: a two-level body cannot squeeze into the
@@ -64,12 +64,12 @@ impl Body {
     }
 }
 
-/// A column a piece can stand on: where it is, and how high its surface sits.
+/// A surface a piece can stand on: where it is and its rendered span.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Standing {
     /// Which voxel is being stood on.
     pub pos: TilePos,
-    /// The column's extent, for placing the piece in the world.
+    /// The rendered run's extent, for placing the piece in the world.
     pub span: HexSpan,
 }
 
@@ -81,7 +81,7 @@ impl Standing {
     }
 }
 
-/// Every column **a particular body** could stand on, indexed by position.
+/// Every surface **a particular body** could stand on, indexed by position.
 ///
 /// Body-specific by construction rather than universal, because standability depends
 /// on size: a crawlspace under a bridge is footing for a small creature and a wall for
@@ -95,13 +95,13 @@ impl Standing {
 #[derive(Debug, Default)]
 pub struct Footing {
     by_pos: HashMap<TilePos, Standing>,
-    /// Surfaces at each coordinate, so a column can be found without knowing which
+    /// Surfaces at each coordinate, so one can be found without knowing which
     /// level its top happens to be at.
     surfaces: HashMap<HexCoord, Vec<Standing>>,
 }
 
 impl Footing {
-    /// Collects the columns `body` can stand on from the tile entities.
+    /// Collects the surfaces `body` can stand on from the tile entities.
     ///
     /// Two independent conditions, from two different places:
     ///
@@ -146,19 +146,19 @@ impl Footing {
         footing
     }
 
-    /// The column whose surface is at `pos`, if anything can be stood on there.
+    /// The standable surface at `pos`, if one exists.
     #[must_use]
     pub fn at(&self, pos: TilePos) -> Option<Standing> {
         self.by_pos.get(&pos).copied()
     }
 
-    /// Every standable column at a coordinate, in no particular order.
+    /// Every standable surface at a coordinate, in no particular order.
     #[must_use]
     pub fn at_coord(&self, coord: HexCoord) -> &[Standing] {
         self.surfaces.get(&coord).map_or(&[], Vec::as_slice)
     }
 
-    /// The lowest standable column at a coordinate — the ground, rather than any
+    /// The lowest standable surface at a coordinate — the ground, rather than any
     /// bridge built over it.
     #[must_use]
     pub fn ground(&self, coord: HexCoord) -> Option<Standing> {
@@ -168,9 +168,9 @@ impl Footing {
             .copied()
     }
 
-    /// The column reachable in one step from `from` at `coord`, if any.
+    /// The surface reachable in one step from `from` at `coord`, if any.
     ///
-    /// Where several columns at that coordinate are within reach — a low bridge over
+    /// Where several surfaces at that coordinate are within reach — a low bridge over
     /// a shallow ditch — the closest in height wins, because that is the one a piece
     /// walking in a straight line would naturally step onto.
     #[must_use]
@@ -183,7 +183,7 @@ impl Footing {
     }
 }
 
-/// The columns a piece passes over walking from `from` to `to` in a straight line.
+/// The surfaces a piece passes over walking from `from` to `to` in a straight line.
 ///
 /// Returns [`None`] when the line is blocked — a cliff, a gap, or a coordinate with
 /// nothing standable on it. **Terrain is not guaranteed connected**, so "no route
@@ -211,7 +211,7 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
         current = next;
     }
 
-    // The line has to actually arrive. Landing on a different column at the right
+    // The line has to actually arrive. Landing on a different surface at the right
     // coordinate — the ground under the target bridge, say — is not arriving.
     (current.pos == to.pos).then_some(steps)
 }

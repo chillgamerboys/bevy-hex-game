@@ -131,10 +131,11 @@ impl Column {
 /// The world, as voxels.
 ///
 /// Private to `hex_map` in every meaningful sense: nothing outside this crate reads
-/// it. Terrain reaches the rest of the game as entities carrying a
-/// [`TilePos`], a [`HexSpan`](hex_core::HexSpan) and a [`SubstanceId`], so this can
-/// be replaced — chunked, streamed, swapped for
-/// `hexx::storage::HexagonalMap` — without anything else noticing.
+/// it. Terrain reaches the rest of the game as entities carrying
+/// [`HexTile`](hex_core::HexTile), [`HexCoord`], [`TilePos`],
+/// [`HexSpan`](hex_core::HexSpan), [`SubstanceId`] and
+/// [`Headroom`](hex_core::Headroom), so storage can be replaced without exposing it
+/// outside this crate.
 #[derive(Resource, Debug, Default)]
 pub struct VoxelMap {
     columns: HashMap<HexCoord, Column>,
@@ -401,7 +402,7 @@ mod tests {
     }
 
     /// Stacked positions must not collide — the failure that would make a lower
-    /// column unreachable.
+    /// surface unreachable.
     #[test]
     fn stacked_positions_are_independent() {
         let mut map = VoxelMap::new();

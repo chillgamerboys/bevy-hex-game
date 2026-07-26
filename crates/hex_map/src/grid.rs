@@ -1,9 +1,11 @@
 //! Builds the voxel world, and turns it into tile entities.
 //!
-//! This is the seam between the map and the rest of the game. Storage, generation and
-//! substances are private to `hex_map`; everything downstream sees only entities
-//! carrying a [`TilePos`](hex_core::TilePos), a [`HexSpan`](hex_core::HexSpan) and a
-//! [`SubstanceId`](hex_core::SubstanceId).
+//! Storage and generation are private to `hex_map`; rendered terrain reaches other
+//! crates as entities carrying [`HexTile`](hex_core::HexTile),
+//! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
+//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
+//! [`Headroom`](hex_core::Headroom). The substance table itself is shared through
+//! `hex_assets` because gameplay also reads its behavior flags.
 //!
 //! Keeping that seam narrow is what lets the map be rebuilt without touching
 //! gameplay. A richer map means producing different voxels here; it does not change
@@ -46,7 +48,7 @@ pub fn plugin(app: &mut App) {
             Update,
             apply_terrain_edits.run_if(in_state(Screen::Gameplay)),
         )
-        .add_systems(OnExit(Screen::Gameplay), despawn_grid);
+        .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }
 
 /// Which substances the generator lays down, resolved once from the table.
@@ -116,10 +118,11 @@ fn column_for(surface: hex_core::Level, palette: &Palette) -> Column {
     column
 }
 
-fn despawn_grid(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
+fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
     for entity in &grids {
         commands.entity(entity).despawn();
     }
+    commands.remove_resource::<VoxelMap>();
 }
 
 /// Spawns one entity per contiguous run of substance.
@@ -162,8 +165,7 @@ fn build_grid(
     let mut tiles = Vec::new();
     for (coord, column) in map.columns() {
         for run in runs(column) {
-            let material =
-                palette_materials.get_or_create(run.substance, table, materials, settings);
+            let material = palette_materials.get_or_create(run.substance, table, materials);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
             // Only the map can measure this: a run knows its own extent but nothing
@@ -252,18 +254,13 @@ impl MaterialCache {
         substance: SubstanceId,
         table: &SubstanceTable,
         materials: &mut Assets<StandardMaterial>,
-        settings: &MapSettings,
     ) -> Handle<StandardMaterial> {
         if let Some((_, handle)) = self.by_substance.iter().find(|(id, _)| *id == substance) {
             return handle.clone();
         }
 
-        // An unknown substance falls back to the configured tile colour rather than
-        // rendering black, which would look like a lighting bug rather than a
-        // missing entry in `substances.ron`.
-        let color = table
-            .get(substance)
-            .map_or(settings.tile_color, |s| s.color);
+        // Bright magenta makes an unknown id visibly distinct from a lighting fault.
+        let color = table.get(substance).map_or((1.0, 0.0, 1.0), |s| s.color);
         let handle = materials.add(StandardMaterial::from(to_color(color)));
         self.by_substance.push((substance, handle.clone()));
         handle
@@ -287,11 +284,7 @@ fn apply_terrain_edits(
 ) {
     let mut changed = false;
     for edit in edits.read() {
-        match *edit {
-            TerrainEdit::Set { pos, substance } => map.set(pos, substance),
-            TerrainEdit::Clear { pos } => map.set(pos, SubstanceId::AIR),
-        }
-        changed = true;
+        changed |= apply_terrain_edit(&mut map, &table, edit);
     }
     if !changed {
         return;
@@ -308,4 +301,25 @@ fn apply_terrain_edits(
         &table,
         &settings,
     );
+}
+
+/// Applies a changed edit at a nonnegative level unless it replaces a non-diggable voxel.
+fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &TerrainEdit) -> bool {
+    let pos = edit.pos();
+    if pos.level < 0 {
+        return false;
+    }
+
+    let current = map.get(pos);
+    let replacement = match *edit {
+        TerrainEdit::Set { substance, .. } => substance,
+        TerrainEdit::Clear { .. } => SubstanceId::AIR,
+    };
+
+    if current == replacement || (!current.is_air() && !table.is_diggable(current)) {
+        return false;
+    }
+
+    map.set(pos, replacement);
+    true
 }

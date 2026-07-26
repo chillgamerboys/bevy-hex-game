@@ -10,12 +10,12 @@ use bevy_state::prelude::*;
 
 /// The screen the player is currently looking at.
 ///
-/// Transitions run in order at startup — `Splash` → `Title` → `Loading` →
-/// `Gameplay` — with `Loading` the point where assets are guaranteed present.
-/// Spawning gameplay entities on `OnEnter(Screen::Gameplay)` rather than at
-/// `Startup` is what removes the old implicit ordering hazard, where
-/// `spawn_player` read a resource that only existed because an unrelated plugin
-/// happened to run in `PreStartup`.
+/// The app starts at `Splash`, advances to `Title`, and waits for the player to
+/// continue to `Loading` and then `Gameplay`. `Loading` waits for settings-derived
+/// resources and for asset handles to reach a terminal state. Spawning gameplay
+/// entities on `OnEnter(Screen::Gameplay)` rather than at `Startup` is what removes
+/// the old implicit ordering hazard, where `spawn_player` read a resource that only
+/// existed because an unrelated plugin happened to run in `PreStartup`.
 #[derive(States, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 pub enum Screen {
     /// Engine warm-up. Brief, and skipped past automatically.
@@ -23,7 +23,7 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
-    /// Waits for assets to finish loading before gameplay is allowed to spawn.
+    /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.
     Gameplay,
@@ -72,13 +72,14 @@ pub enum GameplaySetup {
     Actors,
 }
 
-/// Coarse ordering for everything in `Update`.
+/// Shared cross-crate phases for systems in `Update`.
 ///
 /// Bevy runs systems in parallel and in unspecified order unless told otherwise.
 /// Before this existed, `orbit_camera` and `pan_camera` both took `&mut Transform`
 /// on the same entity with no declared ordering — benign only because they happen
-/// to touch different fields. Putting every system in one of these sets makes the
-/// frame's shape explicit rather than emergent.
+/// to touch different fields. Systems opt into these phases when their ordering
+/// participates in the frame's shared input/update flow; self-contained state and
+/// UI systems do not need to.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum AppSystems {
     /// Advance timers.
