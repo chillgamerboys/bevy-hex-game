@@ -23,8 +23,8 @@ use bevy::state::app::StatesPlugin;
 use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn,
-    MAX_HEADROOM,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen, SubstanceId, TilePos,
+    Turn, MAX_HEADROOM,
 };
 use hex_units::{
     Enemy, Faction, HoveredSurface, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
@@ -85,6 +85,10 @@ fn test_app() -> App {
     // `State<Mode>` at all, and click-to-move correctly refuses to act — which looks
     // exactly like a movement bug from inside a test.
     app.add_sub_state::<Mode>();
+    // The real app registers this in `screens/gameplay.rs` too. Without it there is no
+    // `State<Pause>` at all, and a test for "a paused click does nothing" would pass
+    // whether or not the observer checks — the resource simply would not exist.
+    app.add_sub_state::<Pause>();
 
     app.configure_sets(
         OnEnter(Screen::Gameplay),
@@ -883,5 +887,112 @@ fn clicking_water_does_not_move_the_player() {
     assert!(
         app.world().get_entity(before).is_ok(),
         "the player should not have been despawned"
+    );
+}
+
+/// The entity id of a tile's standable surface at a coordinate.
+fn surface_at(app: &mut App, coord: HexCoord) -> Option<Entity> {
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &HexCoord, &Headroom), With<HexTile>>();
+    tiles
+        .iter(app.world())
+        .find(|(_, at, headroom)| **at == coord && headroom.0 > 0)
+        .map(|(entity, _, _)| entity)
+}
+
+/// How much movement the player has left, if it holds a turn.
+fn movement_left(app: &mut App) -> Option<u32> {
+    let mut turns = app.world_mut().query_filtered::<&Turn, With<Player>>();
+    turns
+        .iter(app.world())
+        .next()
+        .map(|turn| turn.movement_left)
+}
+
+/// A second click while the piece is still walking is ignored, not charged.
+///
+/// `StandsOn` names the *committed destination* from the moment a move starts, so an
+/// unguarded second click routes from where the piece is going rather than where it
+/// is, queues a second animation over the first, and bills `movement_left` twice for
+/// one turn. Two clicks two hexes away would leave a four-hex budget empty having
+/// moved two.
+#[test]
+fn a_second_click_while_moving_is_not_charged_again() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let target = surface_at(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+
+    click(&mut app, target, window);
+    app.update();
+    let after_first = movement_left(&mut app);
+    assert_eq!(after_first, Some(2), "two hexes should cost two");
+
+    // **A different tile**, and that detail is the test. Clicking the same one again
+    // routes from the destination to itself for a cost of zero, so the bill is
+    // unchanged whether or not the guard exists and the test proves nothing. The
+    // double charge only appears when the second click has somewhere new to go.
+    let elsewhere = surface_at(&mut app, HexCoord::new_cubic(2, 0, -2))
+        .expect("the fake terrain covers this coordinate");
+    click(&mut app, elsewhere, window);
+    app.update();
+
+    assert_eq!(
+        movement_left(&mut app),
+        after_first,
+        "the second click was billed to a turn that had already paid"
+    );
+}
+
+/// A click that lands while paused does nothing at all.
+///
+/// `PausableSystems` gates systems, and this is a global observer that was never in
+/// that set. Without an explicit check, a click behind the pause overlay spends the
+/// turn immediately and the walk plays out the instant the game resumes.
+#[test]
+fn a_click_while_paused_neither_moves_nor_spends() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    app.world_mut()
+        .resource_mut::<NextState<Pause>>()
+        .set(Pause(true));
+    app.update();
+
+    let before = movement_left(&mut app);
+    let mut standing = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let start = standing
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a player should exist")
+        .0
+        .pos;
+
+    let target = surface_at(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    app.update();
+
+    let mut after = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let ended = after
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a player should exist")
+        .0
+        .pos;
+
+    assert_eq!(ended, start, "the piece moved while the game was paused");
+    assert_eq!(
+        movement_left(&mut app),
+        before,
+        "a paused click spent a turn"
     );
 }

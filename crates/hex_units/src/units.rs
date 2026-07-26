@@ -17,7 +17,8 @@ use hex_assets::{
     to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioSettings, SubstanceTable,
 };
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen, SubstanceId, TilePos,
+    Turn,
 };
 
 use crate::movement::{route, Body, Footing, Standing};
@@ -133,15 +134,30 @@ fn on_tile_clicked(
     tiles: TileQuery,
     mut players: Query<
         (Entity, &StandsOn, &Body, Option<&mut Turn>),
-        (With<Player>, With<Selected>),
+        // `Without<Transformation>` is a rule, not an optimisation. `StandsOn` is the
+        // committed destination the moment a move starts, so a second click while the
+        // piece is still walking would route from where it is *going*, queue a fresh
+        // animation over the top of the first, and charge `movement_left` a second
+        // time for the same turn. `hex_combat::ai` has always filtered this way; the
+        // player now obeys the rule the enemy already did.
+        (With<Player>, With<Selected>, Without<Transformation>),
     >,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,
+    pause: Option<Res<State<Pause>>>,
 ) {
     let (Some(settings), Some(table)) = (settings, table) else {
         return;
     };
+
+    // Paused means paused. `PausableSystems` gates *systems*, and this is a global
+    // observer — it is not in that set and never was, so a click landing behind the
+    // pause overlay would spend the turn and start a walk that then plays out the
+    // moment the game resumes.
+    if pause.is_some_and(|pause| pause.get().0) {
+        return;
+    }
 
     // Every resource here is an `Option`. Observers are global: this one fires on the
     // title screen, in menus, and before anything has loaded. Bevy validates system
