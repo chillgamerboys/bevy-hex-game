@@ -41,12 +41,39 @@ commands.spawn((
     tile_pos,      // TilePos   — the run's TOPMOST SOLID VOXEL, not its base
     span,          // HexSpan   — the run's world extent
     substance,     // SubstanceId
+    headroom,      // Headroom  — clear voxels above the run, 0 if buried
     Mesh3d(...), MeshMaterial3d(...), Transform { ... },
 ));
 ```
 
-`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId)` with `With<HexTile>`. That
-is the entire read interface, and `TerrainEdit` is the entire write interface.
+`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+`With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
+write interface.
+
+### `Headroom` is not optional, and it is yours to get right
+
+**Only the map can measure it.** A run carries its own extent but knows nothing about
+what is stacked on it, so gameplay cannot work this out — it has to be told.
+
+Count the clear voxels directly above the run's top, saturating at `MAX_HEADROOM`
+(above a column's top the air is unbounded, so an uncapped count would not terminate):
+
+```rust
+let headroom = headroom_above(column, run.top);   // run.top is exclusive
+```
+
+Two things depend on it:
+
+- **Zero means buried.** A run with something solid directly on top is inside a
+  column, not a surface, and nothing can stand on it however solid it is.
+- **Small means cramped.** A character is 2 levels tall by default
+  (`levels_tall` in `player.ron`), so a one-voxel gap under a bridge is a wall to it
+  and a corridor to something shorter.
+
+Getting this wrong is the worst class of bug in this codebase — it renders perfectly
+and errors nowhere. Publishing headroom for every run as if it were exposed put the
+player *inside* the terrain and left every route walking through the bedrock, arriving
+nowhere. It shipped green across clippy, the whole test suite and five CI jobs.
 
 **So: however you generate, store, or stream the map, spawn tiles carrying those
 components and everything keeps working.** Replace `VoxelMap` wholesale if you want
@@ -110,6 +137,8 @@ The tests enforce these; they are here so you know *why*.
 - **A tile's transform agrees with its span.** Otherwise pieces float or sink and
   *nothing errors*.
 - **Air is never spawned as a prism.**
+- **A buried run reports zero headroom.** Anything else makes gameplay treat the
+  inside of a column as a place to stand.
 
 ## Rules that will block your commit
 
@@ -161,6 +190,8 @@ A clean log is not evidence a change worked. **Look at the window.**
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
 | A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
+| A piece stands *inside* a column, and clicking does nothing | Buried runs were given non-zero `Headroom`, so gameplay took the bedrock for a surface |
+| A piece refuses to walk somewhere that looks fine | Its `Headroom` is below the body's `levels_tall`. Check what is above it |
 
 ## Working here
 

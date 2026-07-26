@@ -15,6 +15,9 @@ If you only want to change how the terrain looks, [CONTENT.md](CONTENT.md) is sh
 **A position** — `TilePos { coord, level }` — is one voxel. This is how anything in the
 world is addressed.
 
+**Headroom** — `Headroom(Level)` — is how many clear voxels sit above a tile's surface.
+Zero means it is buried inside a column.
+
 **A substance** — `SubstanceId` — is what a voxel is made of: stone, dirt, grass, air.
 The list lives in `assets/config/substances.ron`.
 
@@ -45,6 +48,28 @@ forbidden thing eventually will.
 A step is legal when the destination is an adjacent column and its surface is within
 **one level**. Because levels are integers, that is `step.abs() <= 1` — no epsilon, no
 accumulated float error. This is the concrete payoff for quantising the vertical axis.
+
+### A surface has to have room above it
+
+Every tile reports its **headroom**: how many clear voxels sit directly above it,
+saturating at `MAX_HEADROOM`. Two things fall out of one number.
+
+**Zero headroom means buried.** A column is several stacked runs — bedrock under dirt
+under grass — and only the top of a contiguous stack is a surface. The rest are inside
+the column and nothing can stand on them however solid they are.
+
+**Small headroom means cramped.** A body declares how tall it is (`levels_tall`,
+2 by default), and it can only stand where headroom is at least that. So a one-voxel
+gap under a bridge is a crawlspace: passable to something small, a wall to a person.
+Terrain being walkable is a property of the walker, not of the terrain.
+
+Only the map can measure this. A run knows its own extent but nothing about what is
+stacked on it, so `hex_map` counts it at spawn and publishes it; gameplay cannot
+work it out from spans.
+
+> This is the map's half of a contract nothing else can check. Marking buried runs as
+> having room put the player *inside* the terrain and left every route walking through
+> the bedrock — and it rendered perfectly, with a clean log and a green test suite.
 
 ### Terrain is not guaranteed connected
 
@@ -100,7 +125,7 @@ movement.
 ## What each crate sees
 
 ```
-hex_core     TilePos, HexSpan, SubstanceId, TerrainEdit — the vocabulary
+hex_core     TilePos, HexSpan, SubstanceId, Headroom, TerrainEdit — the vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
 hex_gameplay reads tiles; cannot see hex_map
@@ -109,7 +134,7 @@ hex_gameplay reads tiles; cannot see hex_map
 The map talks to the rest of the game **only through components on tile entities**:
 
 ```rust
-(HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Mesh3d, ...)
+(HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
 `hex_gameplay` queries those. It never reads `VoxelMap` or any generator, so terrain
@@ -132,6 +157,8 @@ and the map applies it. That is the whole write path.
 |---|---|
 | A tile entity covers a **run**, not a voxel | its `HexSpan` may be many levels tall |
 | A tile's `TilePos` is its **surface** | the topmost solid voxel, not the base |
+| Headroom of 0 means **buried** | solid, but inside a column and not standable |
+| A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
 | A tile's transform must agree with its span | otherwise pieces float or sink, and **nothing errors** |
 | Clearing a one-voxel run **removes** an entity | only clearing the middle of a taller run adds one |

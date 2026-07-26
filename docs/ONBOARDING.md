@@ -94,6 +94,12 @@ the same substance are merged into one prism, so a fifteen-level stone column is
 once rather than fifteen times. That keeps the game fast, and it means a voxel buried
 inside a column has no object of its own — it is found by position.
 
+Because of that, a tile also carries its **headroom**: how many clear voxels sit above
+it. Zero means the tile is buried inside a column, so it is solid rock rather than
+somewhere to stand. A small number means a low ceiling — a character is two levels
+tall, so a one-voxel gap under a bridge is a wall to it and a corridor to something
+smaller. **Whether terrain is walkable depends on who is walking.**
+
 There is a rule about those, and it is a game-design decision rather than a
 technical one:
 
@@ -110,7 +116,7 @@ becomes unreachable.
 ```
 crates/
   hex_map/       ← YOURS. terrain, tiles, map settings
-  hex_core/      shared vocabulary — HexCoord, HexSpan
+  hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
   hex_world/     camera and sky
   hex_gameplay/  the player and movement

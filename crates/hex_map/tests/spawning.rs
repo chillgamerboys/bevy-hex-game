@@ -27,10 +27,13 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
+use std::collections::HashMap;
+
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, HexCoord, HexGrid, HexSpan, HexTile, Screen, SubstanceId, TerrainEdit, TilePos,
+    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
+    TerrainEdit, TilePos, MAX_HEADROOM,
 };
 use hex_map::{MapSettings, PerlinStepSettings, TerrainSettings, VoxelMap};
 
@@ -301,6 +304,114 @@ fn tiles_carry_their_substance_and_position() {
         checked += 1;
     }
     assert!(checked > 0, "no tiles were checked");
+}
+
+/// Exactly one run per column is [`Exposed`], and it is the topmost one.
+///
+/// This is the map's half of a contract gameplay cannot check for itself: a run knows
+/// its own extent but nothing about what is stacked on it, so only the map can say
+/// which runs have air above them. Getting it wrong is what put the player inside the
+/// terrain and left every route walking through the bedrock.
+///
+/// Only the top run of each column has headroom, and under open sky it saturates.
+///
+/// This is the map's half of a contract gameplay cannot check for itself: a run knows
+/// its own extent but nothing about what is stacked on it, so only the map can measure
+/// the space above. Getting it wrong is what put the player inside the terrain and
+/// left every route walking through the bedrock.
+///
+/// Generated terrain has no caves or overhangs, so exactly one run per column has room
+/// above it and that room is open sky. A column with a bridge over it would report the
+/// gap instead, which the platform test below covers.
+#[test]
+fn only_the_top_of_each_column_has_headroom() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+
+    let mut tops: HashMap<HexCoord, Level> = HashMap::new();
+    let mut clear_per_column: HashMap<HexCoord, usize> = HashMap::new();
+    let mut clear_levels: HashMap<HexCoord, Level> = HashMap::new();
+
+    for (pos, headroom) in query.iter(app.world()) {
+        let top = tops.entry(pos.coord).or_insert(pos.level);
+        *top = (*top).max(pos.level);
+        if headroom.0 > 0 {
+            *clear_per_column.entry(pos.coord).or_insert(0) += 1;
+            clear_levels.insert(pos.coord, pos.level);
+            assert_eq!(
+                headroom.0, MAX_HEADROOM,
+                "the surface of column {:?} is under open sky and should saturate",
+                pos.coord
+            );
+        }
+    }
+
+    assert!(!tops.is_empty(), "no tiles were checked");
+    for (coord, top) in &tops {
+        assert_eq!(
+            clear_per_column.get(coord).copied().unwrap_or(0),
+            1,
+            "column {coord:?} should have exactly one run with room above it"
+        );
+        assert_eq!(
+            clear_levels.get(coord).copied(),
+            Some(*top),
+            "the run with room above it in column {coord:?} should be its topmost"
+        );
+    }
+}
+
+/// Headroom under a platform is the size of the gap, not open sky.
+///
+/// This is what makes a body's size mean anything: build a roof two levels up and the
+/// ground below reports 2, so a three-level body no longer fits there. Without this,
+/// every surface would look infinitely tall and overhangs would be free to walk under.
+#[test]
+fn a_platform_overhead_reduces_the_headroom_below() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let coord = HexCoord::ORIGIN;
+    let (surface, stone) = {
+        let world = app.world();
+        let map = world
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist");
+        let table = world
+            .get_resource::<SubstanceTable>()
+            .expect("a substance table should exist");
+        (
+            map.surface(coord).expect("the origin should have ground"),
+            table.id("stone").expect("stone should be defined"),
+        )
+    };
+
+    // A roof three levels above the surface leaves exactly two clear voxels between.
+    let gap = 2;
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: TilePos::new(coord, surface + gap + 1),
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+    let headroom = query
+        .iter(app.world())
+        .find(|(pos, _)| pos.coord == coord && pos.level == surface)
+        .map(|(_, headroom)| headroom.0)
+        .expect("the original surface should still be a tile");
+
+    assert_eq!(
+        headroom, gap,
+        "the ground under a platform should report the gap, not open sky"
+    );
 }
 
 /// Digging a voxel out of the middle of a run splits it in two, which is what makes
