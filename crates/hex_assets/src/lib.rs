@@ -21,8 +21,8 @@ pub mod substances;
 
 pub use loader::{LoadSettings, SettingsRegistry};
 pub use settings::{
-    to_color, CameraSettings, DisplaySettings, LightingSettings, PlayerSettings,
-    PresentModeSetting, Rgb,
+    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, PlayerSettings,
+    PresentModeSetting, Rgb, ScenarioSettings,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -42,14 +42,16 @@ pub fn plugin(app: &mut App) {
     app.register_type::<CameraSettings>()
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
-        .register_type::<DisplaySettings>();
+        .register_type::<DisplaySettings>()
+        .register_type::<ScenarioSettings>();
 
     app.add_plugins(substances::plugin);
 
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
-        .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS);
+        .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
+        .load_settings::<ScenarioSettings>("config/scenario.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.

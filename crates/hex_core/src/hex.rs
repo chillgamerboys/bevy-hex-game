@@ -56,7 +56,7 @@
 //! coordinate on its own is only half the answer.
 //!
 //! What counts as an acceptable step, and which abilities may ignore the rule, is
-//! movement design and lives in `hex_gameplay`.
+//! movement design and lives in `hex_units`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
@@ -255,7 +255,7 @@ impl HexCoord {
 /// # The contract
 ///
 /// This is how the map talks to everything else. `hex_map` decides what spans exist
-/// and how they are drawn; `hex_gameplay` reads them off tile entities. Neither
+/// and how they are drawn; `hex_units` reads them off tile entities. Neither
 /// crate can see the other.
 #[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq)]
 #[reflect(Component)]

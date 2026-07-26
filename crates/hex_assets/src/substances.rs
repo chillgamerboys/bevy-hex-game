@@ -5,7 +5,7 @@
 //!
 //! It lives in `hex_assets` rather than in `hex_map` because both the map and
 //! gameplay need it — the map to colour a prism, gameplay to ask whether something
-//! is solid enough to stand on or soft enough to dig. `hex_gameplay` cannot see
+//! is solid enough to stand on or soft enough to dig. `hex_units` cannot see
 //! `hex_map`, so a table defined there would be unreachable.
 
 use bevy::platform::collections::HashMap;

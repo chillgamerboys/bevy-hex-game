@@ -129,7 +129,7 @@ movement.
 hex_core     TilePos, HexSpan, SubstanceId, Headroom, TerrainEdit — the vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
-hex_gameplay reads tiles; cannot see hex_map
+hex_units reads tiles; cannot see hex_map
 ```
 
 The map talks to the rest of the game **only through components on tile entities**:
@@ -138,7 +138,7 @@ The map talks to the rest of the game **only through components on tile entities
 (HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
-`hex_gameplay` queries those. It never reads `VoxelMap` or any generator, so terrain
+`hex_units` queries those. It never reads `VoxelMap` or any generator, so terrain
 storage and generation can be replaced wholesale — chunked, streamed, generated
 differently — without anything else noticing.
 
@@ -175,5 +175,5 @@ and the map applies it. That is the whole write path.
   are the obvious basis, once there is a movement-cost model.
 - **Anything about turns.** There is no turn system yet.
 - **Whether stacked columns ever connect.** Teleport and tunnel are named in the design
-  but not implemented. When they are, they belong in `hex_gameplay` as explicit
+  but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

@@ -2,7 +2,7 @@
 //!
 //! This module defines *what the map is made of* without saying anything about how
 //! it is stored. `hex_map` owns storage, generation, and rendering; everything here
-//! is shared so that `hex_gameplay` can reason about terrain without depending on
+//! is shared so that `hex_units` can reason about terrain without depending on
 //! the crate that produces it.
 //!
 //! # `level`, never `z`
@@ -73,7 +73,7 @@ pub const MAX_HEADROOM: Level = 8;
 /// rather than gameplay trying to infer it from spans.
 ///
 /// This is **not** "standable". Standing also needs a solid substance and a body short
-/// enough to fit, both of which are `hex_gameplay`'s judgement. This component states
+/// enough to fit, both of which are `hex_units`'s judgement. This component states
 /// the geometry and nothing else.
 ///
 /// Ground under a bridge keeps its headroom — the bridge is a separate run with air
@@ -145,7 +145,7 @@ impl TilePos {
     /// Purely geometric: adjacent column, and no more than `max_step` levels of
     /// climb or drop. Whether the destination is solid enough to stand on, whether
     /// the mover has the movement left, and which abilities ignore this entirely are
-    /// all questions for `hex_gameplay`.
+    /// all questions for `hex_units`.
     #[must_use]
     pub fn is_within_step_of(self, other: Self, max_step: Level) -> bool {
         self.coord.distance(other.coord) == 1 && self.level_step_to(other).abs() <= max_step
@@ -179,7 +179,7 @@ impl SubstanceId {
 
 /// A request to change the world.
 ///
-/// `hex_gameplay` cannot call into `hex_map` — the two crates deliberately cannot see
+/// `hex_units` cannot call into `hex_map` — the two crates deliberately cannot see
 /// each other — so a spell that digs, builds, or destroys writes one of these and the
 /// map applies it. This is the whole write path.
 ///

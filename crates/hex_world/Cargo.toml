@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 description = "3D presentation of the world: hex grid spawning, terrain meshes, sky, camera."
 
-# Must NOT depend on hex_gameplay. The two talk through components and states
+# Must NOT depend on hex_units. The two talk through components and states
 # defined in hex_core; cargo is what enforces that.
 [dependencies]
 bevy = { workspace = true }

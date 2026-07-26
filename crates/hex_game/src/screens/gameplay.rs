@@ -1,7 +1,7 @@
 //! The game itself.
 //!
 //! Owns only the pause toggle and the route back to the title screen. The world
-//! and the player are spawned by `hex_world` and `hex_gameplay` on
+//! and the player are spawned by `hex_world` and `hex_units` on
 //! `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into
 //! either of them.
 

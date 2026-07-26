@@ -30,6 +30,16 @@ use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{Headroom, HexCoord, HexSpan, Level, SubstanceId, TilePos};
 
+/// Registers the movement types.
+///
+/// This module has no systems — it is rules, not behaviour. The plugin exists so
+/// [`Body`] is registered beside where it is defined. It was previously registered by
+/// the player's plugin, which meant a type declared in one file was announced by
+/// another; moving either would have silently dropped it from the inspector.
+pub fn plugin(app: &mut App) {
+    app.register_type::<Body>();
+}
+
 /// How many levels a piece may climb or drop in one step.
 ///
 /// One, by design: a step is a step. Anything steeper is a cliff and has to be walked
