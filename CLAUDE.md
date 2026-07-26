@@ -32,6 +32,43 @@ because in a workspace `CARGO_MANIFEST_DIR` is the *binary crate's* directory �
 without it the game looks in `crates/hex_game/assets/`, finds nothing, and renders
 a plain blue window with only `Path not found` in the log.
 
+### Deterministic map review builds
+
+`hex_game/src/review.rs` owns the exact-scenario launch and renderer-capture hooks.
+They compile only with the default-off `map-review` feature, so the shipped release
+binary ignores every `HEX_REVIEW_*` environment variable. The feature is separate
+from `dev`: review packs exercise a release-shaped build without the inspector.
+
+Launch one exact configured scenario seed for manual play:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+cargo run --release -p hex_game --features map-review
+```
+
+This bypasses only the title-screen click. Loading, validation, terrain spawning, and
+actor spawning still use the production path. Omit `HEX_REVIEW_SEED` to use the
+scenario's configured seed; an override is valid only when that scenario declares
+`generation_seed`.
+
+Add a PNG path and camera view for a deterministic 1920x1080 renderer capture:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+HEX_REVIEW_CAPTURE=".context/procedural-maps/iteration-01/hero-default.png" \
+HEX_REVIEW_VIEW=default \
+cargo run --release -p hex_game --features map-review
+```
+
+`HEX_REVIEW_VIEW` accepts `default`, `rotated`, or `top-down` and requires
+`HEX_REVIEW_CAPTURE`; omitting the view uses `default`. The process exits after
+persisting the PNG. A frame that fails the visual-coverage check still leaves its PNG
+at the requested path and exits with an error, so the rejected output can be inspected.
+Map-review builds keep their console on Windows because these diagnostics are part of
+the tool.
+
 ## Workspace
 
 ```
@@ -67,11 +104,12 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors`) orders
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Finalize`) orders
   `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
   set — `.chain()` cannot express it, and a local chain that looks correct will race.
   The set boundary also supplies a sync point: `Commands`-spawned entities are not
-  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made.
+  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made
+  and `Finalize` sees the required actors.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.
@@ -82,10 +120,10 @@ and tests without a renderer. It holds the largest share of the test suite.
   footing. Interior voxels have no entity, which is why targeting is positional. See
   `docs/MAP_MODEL.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
-  it, 0 when buried inside a column — and a `Body` may stand only where headroom is at
-  least its `levels_tall` (2 for the player). Only the map can measure this, so it
-  publishes it; gameplay cannot derive it from spans. `height` is reserved for terrain,
-  which is why a body is `levels_tall`.
+  it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
+  its traversal profile. The canonical walker is exactly 2 levels tall and may climb
+  or drop 1. Only the map can measure headroom, so it publishes it; gameplay cannot
+  derive it from spans.
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.

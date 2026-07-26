@@ -11,7 +11,8 @@ Everything about the map:
 |---|---|
 | `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
 | `src/generator.rs` | The optional Perlin height field |
-| `src/terrain.rs` | Pure `MapSettings + palette -> VoxelMap` construction for every preset |
+| `src/terrain.rs` | Pure Showcase and Perlin construction |
+| `src/procedural.rs` | Versioned procedural planning, validation, candidate selection, and diagnostics |
 | `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
 | `src/settings.rs` | Validated designer-facing settings from a world file, e.g. `assets/config/world.ron` |
 
@@ -24,7 +25,7 @@ explains the voxel representation and the rules everything else depends on.
 ## Your compile-time blast radius is bounded, deliberately
 
 **Nothing depends on `hex_map` except the binary.** `hex_core`, `hex_assets`,
-`hex_world` and `hex_gameplay` cannot see it. Cargo enforces this — a `use hex_map::`
+`hex_world` and `hex_units` cannot see it. Cargo enforces this — a `use hex_map::`
 in any of them fails to compile.
 
 The consequence is that those crates cannot import map internals. It is still
@@ -48,7 +49,7 @@ commands.spawn((
 ));
 ```
 
-`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
 write interface.
 
@@ -68,9 +69,8 @@ Two things depend on it:
 
 - **Zero means buried.** A run with something solid directly on top is inside a
   column, not a surface, and nothing can stand on it however solid it is.
-- **Small means cramped.** A character is 2 levels tall by default
-  (`levels_tall` in `player.ron`), so a one-voxel gap under a bridge is a wall to it
-  and a corridor to something shorter.
+- **Small means cramped.** The canonical walker is exactly 2 levels tall, so a
+  one-voxel gap under a bridge is a wall to it and a corridor to something shorter.
 
 Getting this wrong is the worst class of bug in this codebase — it renders perfectly
 and errors nowhere. Publishing headroom for every run as if it were exposed put the
@@ -173,7 +173,8 @@ Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 ```rust
 GameplaySetup::Resources   // generate and insert VoxelMap
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
-GameplaySetup::Actors      // hex_gameplay's, not yours; needs tiles to exist
+GameplaySetup::Actors      // hex_units', not yours; needs tiles to exist
+GameplaySetup::Finalize    // hex_game verifies terrain and required actors
 ```
 
 **Do not put tile spawning outside `Terrain`.** Systems in one `OnEnter` schedule run
@@ -198,7 +199,7 @@ A clean log is not evidence a change worked. **Look at the window.**
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
 | A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
 | A piece stands *inside* a column, and clicking does nothing | Buried runs were given non-zero `Headroom`, so gameplay took the bedrock for a surface |
-| A piece refuses to walk somewhere that looks fine | Its `Headroom` is below the body's `levels_tall`. Check what is above it |
+| A piece refuses to walk somewhere that looks fine | Its `Headroom` is below the body's traversal-profile height. Check what is above it |
 
 ## Working here
 
@@ -212,8 +213,9 @@ Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but t
 world is only rebuilt on entering gameplay — press `BACKSPACE`, then click its
 scenario to see terrain changes.
 
-`terrain::build_map` is pure: settings and a substance palette go in, and a complete
-`VoxelMap` comes out. Keep ECS resources, commands, and rendering out of it.
+`terrain::build_non_procedural_map` and `procedural::build` are pure: settings and
+their explicit generation inputs go in, and a complete `VoxelMap` comes out. Keep ECS
+resources, commands, and rendering out of them.
 
 `HeightGenerator` implementations used by the optional Perlin preset must also be
 pure. Results are cached, so an impure generator produces terrain that changes

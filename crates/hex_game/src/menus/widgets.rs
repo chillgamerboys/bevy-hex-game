@@ -74,6 +74,29 @@ pub fn button(name: &'static str) -> impl Bundle {
     )
 }
 
+/// A compact button for a secondary command beside a scenario entry.
+///
+/// Its dimensions are stable so changing a numeric seed cannot resize its row.
+#[must_use]
+pub fn compact_button(name: &'static str) -> impl Bundle {
+    (
+        Name::new(name),
+        Button,
+        Node {
+            width: Val::Px(136.0),
+            height: Val::Px(88.0),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        },
+        BackgroundColor(RESTING),
+    )
+}
+
 /// The label line inside a button.
 #[must_use]
 pub fn label(text: impl Into<String>) -> impl Bundle {

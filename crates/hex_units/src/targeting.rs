@@ -25,9 +25,9 @@
 //! # Reach is not the same as range
 //!
 //! Melee does **not** use this. An attacker five levels up should not acquire a
-//! two-hex punch, so swinging at something stays
-//! [`TilePos::is_within_step_of`](hex_core::TilePos::is_within_step_of) — adjacent
-//! column, within one level. Two rules on purpose: a spell has *range* and gains from
+//! two-hex punch, so swinging requires the active
+//! [`TraversalProfile`](hex_core::TraversalProfile) to admit the adjacent-surface step
+//! in both directions. Two rules on purpose: a spell has *range* and gains from
 //! elevation; a fist has *reach* and does not.
 //!
 //! # What this becomes

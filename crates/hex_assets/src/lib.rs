@@ -27,7 +27,7 @@ pub use loader::{
 pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
     to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
-    PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,
+    PlayerSettings, PresentModeSetting, Rgb, ScenarioPlacement, ScenarioSettings,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -46,6 +46,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
+        .register_type::<ScenarioPlacement>()
         .register_type::<ScenarioSettings>()
         .register_type::<ScenarioLibrary>();
 

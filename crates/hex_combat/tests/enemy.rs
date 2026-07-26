@@ -36,7 +36,6 @@ fn test_app() -> App {
         scale: 0.25,
         speed: 5.0,
         color: (1.0, 0.2, 0.2),
-        levels_tall: 2,
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     // `hex_units::movement::plugin`, not the whole of `hex_units::plugin`: this is what
@@ -99,7 +98,7 @@ fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, initiative: u32)
     let mut unit = app.world_mut().spawn((
         faction,
         StandsOn(standing),
-        Body { levels_tall: 2 },
+        Body::new(hex_core::TraversalProfile::WALKER),
         Initiative(initiative),
         Transform::from_translation(standing.world_position()),
     ));

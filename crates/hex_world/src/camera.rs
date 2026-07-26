@@ -430,14 +430,14 @@ mod tests {
 
     fn camera_settings() -> CameraSettings {
         CameraSettings {
-            gameplay_eye: (0.0, 44.0, 38.0),
+            gameplay_eye: (0.0, 48.0, 42.0),
             gameplay_focus: (0.0, 6.0, 0.0),
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
             max_pitch: 0.95,
             min_zoom: 5.0,
-            max_zoom: 60.0,
+            max_zoom: 70.0,
             zoom_sensitivity: 0.2,
         }
     }
@@ -460,7 +460,7 @@ mod tests {
             .entity(entity)
             .get::<PanOrbitCamera>()
             .expect("the camera should have pan/orbit state");
-        let eye = Vec3::new(0.0, 44.0, 38.0);
+        let eye = Vec3::new(0.0, 48.0, 42.0);
         let focus = Vec3::new(0.0, 6.0, 0.0);
 
         assert!(transform.translation.distance(eye) < 1e-5);
