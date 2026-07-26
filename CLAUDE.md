@@ -71,8 +71,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **The vertical axis is `level`, never `z`** — cube coordinates already use `x`, `y`
   and `z`, and all three are horizontal.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
-  topmost solid voxel. Interior voxels have no entity, which is why targeting is
-  positional. See `docs/MAP_MODEL.md`.
+  topmost material voxel. Its substance determines whether that position is solid
+  footing. Interior voxels have no entity, which is why targeting is positional. See
+  `docs/MAP_MODEL.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom is at
   least its `levels_tall` (2 for the player). Only the map can measure this, so it

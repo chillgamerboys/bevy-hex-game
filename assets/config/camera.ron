@@ -1,5 +1,9 @@
 // How the camera moves.
 (
+    // Reapplied whenever gameplay starts so the complete radius-12 map is visible.
+    gameplay_eye: (0.0, 44.0, 38.0),
+    gameplay_focus: (0.0, 6.0, 0.0),
+
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.
     pan_speed: 0.4,
@@ -13,7 +17,7 @@
 
     // Zoom limits, in world units.
     min_zoom: 5.0,
-    max_zoom: 50.0,
+    max_zoom: 60.0,
 
     // Fraction of the current distance covered per scroll notch.
     zoom_sensitivity: 0.2,

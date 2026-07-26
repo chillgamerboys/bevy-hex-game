@@ -128,9 +128,10 @@ impl Footing {
             if !table.is_solid(*substance) || !body.admits(*headroom) {
                 continue;
             }
-            // The tile's `TilePos` is already its topmost solid voxel, so the
-            // standable position is exactly that — gameplay never has to know how
-            // tall a level is, which is what keeps `level_height` inside the map.
+            // This run passed the solid-substance check, and its `TilePos` is already
+            // its topmost material voxel, so the standable position is exactly that.
+            // Gameplay never has to know how tall a level is, which keeps
+            // `level_height` inside the map.
             let standing = Standing {
                 pos: *pos,
                 span: *span,

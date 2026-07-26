@@ -146,7 +146,7 @@ impl HeightGenerator for RandGenerator {
     }
 }
 
-/// Fractal Perlin noise — the generator the game actually uses.
+/// Fractal Perlin noise for the optional procedural terrain preset.
 ///
 /// Sums several [`PerlinStep`] octaves. Neighbouring coordinates get similar
 /// heights, which is what makes the result walkable rather than jagged.
@@ -192,7 +192,7 @@ impl PerlinGenerator {
         Self::new(vec![PerlinStep::new(0.15, 0.15, 35.)], seed)
     }
 
-    /// Shallow terrain with gentle variation. The default in `world.ron`.
+    /// Shallow terrain with gentle variation. Useful for the optional Perlin preset.
     pub fn lowlands(seed: Option<u64>) -> Self {
         Self::new(vec![PerlinStep::new(0.035, 0.05, 3.)], seed)
     }
