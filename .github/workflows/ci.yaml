@@ -2,8 +2,11 @@ name: CI
 
 on:
   pull_request:
+  # `dev` is the integration branch every PR targets, so it needs post-merge cover
+  # as much as `main` does. This said `[main, refactor]` for months after `refactor`
+  # was deleted, which meant no merge into `dev` ran CI at all.
   push:
-    branches: [main, refactor]
+    branches: [main, dev]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,42 +15,132 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Is there anything here a Rust build could possibly care about?
+  #
+  # Markdown cannot break a build. Everything else can, including doc comments
+  # inside `.rs` files: `missing_docs` is denied and `cargo doc` runs with
+  # `-D warnings`, so a "documentation" change to Rust is still a code change.
+  #
+  # **Fails safe.** Anything unexpected — a force push, an unknown event, a diff
+  # that cannot be computed — reports `code=true` and runs the full suite. Wasting
+  # ten minutes is cheap; skipping the run that would have caught something is not.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: filter
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.base_ref }}" || true
+            changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD" 2>/dev/null) || changed=""
+          else
+            before="${{ github.event.before }}"
+            case "$before" in
+              ''|0000000000000000000000000000000000000000) changed="" ;;
+              *) changed=$(git diff --name-only "$before" "${{ github.sha }}" 2>/dev/null) || changed="" ;;
+            esac
+          fi
+
+          if [ -z "$changed" ]; then
+            echo "could not determine the diff; running everything"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "changed files:"; echo "$changed"
+          if echo "$changed" | grep -qv '\.md$'; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "markdown only; skipping the Rust build"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   # Formatting and licensing need no Bevy build, so they report in seconds
   # instead of waiting behind a ~10 minute compile.
+  #
+  # Note every job below is *always* entered and only its expensive steps are
+  # conditional, rather than the job itself being skipped. A job skipped by an
+  # `if` reports the conclusion "skipped", and whether that satisfies a required
+  # status check is a detail nobody should have to remember. Always reporting
+  # success is unambiguous, and the wasted runner time is a few seconds.
   quick:
     name: Format and dependencies
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      # Docs are a deliverable here — the map is owned by someone who does not
+      # write Rust — and nothing else in this pipeline reads a word of Markdown.
+      # A link rotting is the way these files actually break: `Exposed` outlived
+      # the type it named because `cargo doc` does not check integration tests.
+      # Relative links only; external URLs make CI fail for other people's outages.
+      - name: Check relative links in Markdown
+        run: |
+          set -u
+          broken=$(mktemp)
+          while IFS= read -r file; do
+            dir=$(dirname "$file")
+            grep -oE '\]\([^)#][^)]*\)' "$file" 2>/dev/null \
+              | sed -E 's/^\]\(//; s/\)$//; s/#.*$//' \
+              | grep -vE '^[a-z]+:' \
+              | while IFS= read -r link; do
+                  [ -z "$link" ] && continue
+                  [ -e "$dir/$link" ] || echo "BROKEN: $file -> $link"
+                done
+          done < <(git ls-files '*.md') > "$broken"
+          if [ -s "$broken" ]; then cat "$broken"; exit 1; fi
+          echo "all relative links resolve"
+
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+        if: needs.changes.outputs.code == 'true'
       - uses: EmbarkStudios/cargo-deny-action@v2
+        if: needs.changes.outputs.code == 'true'
         with:
           command: check
 
   test:
     name: Clippy and tests
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
       # Bevy needs these to build on Linux even for a check-only run.
       - name: Install Linux dependencies
+        if: needs.changes.outputs.code == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
+        if: needs.changes.outputs.code == 'true'
       - run: cargo test --workspace --all-features --profile ci
+        if: needs.changes.outputs.code == 'true'
       # Docs are a deliverable here, not a nicety: the map is owned by someone who
       # does not write Rust. A broken intra-doc link is a broken handoff.
+      #
+      # This does *not* cover doc comments in `tests/` — rustdoc skips integration
+      # tests — which is how a link to a deleted type survived a green pipeline.
       - run: cargo doc --workspace --no-deps --all-features
+        if: needs.changes.outputs.code == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
 
@@ -55,6 +148,7 @@ jobs:
   # notably the Windows console subsystem attribute — before it reaches a release.
   build:
     name: Build (${{ matrix.os }})
+    needs: changes
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -62,13 +156,17 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.changes.outputs.code == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # No --all-features: this must build exactly what ships, without hex_dev.
       - run: cargo build --workspace --profile ci
+        if: needs.changes.outputs.code == 'true'
