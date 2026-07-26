@@ -35,7 +35,7 @@ use hex_core::{
     GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
     TerrainEdit, TilePos, MAX_HEADROOM,
 };
-use hex_map::{MapSettings, PerlinStepSettings, TerrainSettings, VoxelMap};
+use hex_map::{MapSettings, PerlinSettings, PerlinStepSettings, TerrainSettings, VoxelMap};
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
 /// tile-count formula is a meaningful check.
@@ -81,7 +81,7 @@ fn test_app() -> App {
     app.insert_resource(MapSettings {
         grid_radius: TEST_RADIUS,
         level_height: 0.4,
-        terrain: TerrainSettings {
+        terrain: TerrainSettings::Perlin(PerlinSettings {
             seed: Some(20_260_725),
             // Taller than the shipped default. The banding puts dirt in the top two
             // levels, so shallow terrain produces nothing but one-voxel runs — and a
@@ -92,7 +92,7 @@ fn test_app() -> App {
                 y_freq: 0.05,
                 magnitude: 14.0,
             }],
-        },
+        }),
     });
 
     app.add_plugins(hex_map::grid::plugin);
@@ -284,21 +284,26 @@ fn entities_scale_with_runs_not_voxels() {
     );
 }
 
-/// Every tile carries what it is made of and where it sits, so gameplay can ask
-/// whether it is solid or diggable without knowing how the map is stored.
+/// Every tile carries the complete map/gameplay component contract.
 #[test]
-fn tiles_carry_their_substance_and_position() {
+fn tiles_carry_the_complete_component_contract() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
     let mut query = app
         .world_mut()
-        .query_filtered::<(&SubstanceId, &TilePos, &HexCoord), With<HexTile>>();
+        .query_filtered::<(&HexCoord, &TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>(
+        );
 
     let mut checked = 0;
-    for (substance, pos, coord) in query.iter(app.world()) {
+    for (coord, pos, span, substance, headroom) in query.iter(app.world()) {
         assert!(!substance.is_air(), "air should not be spawned as a prism");
         assert_eq!(pos.coord, *coord, "a tile's position must match its column");
+        assert!(span.height() > 0.0, "a tile span must have positive height");
+        assert!(
+            (0..=MAX_HEADROOM).contains(&headroom.0),
+            "headroom must remain bounded"
+        );
         checked += 1;
     }
     assert!(checked > 0, "no tiles were checked");
