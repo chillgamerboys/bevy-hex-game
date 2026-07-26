@@ -1,6 +1,6 @@
 # Changing the game without writing code
 
-Most of how the game looks and feels is controlled by seven text files in
+Most of how the game looks and feels is controlled by a handful of text files in
 `assets/config/`. You can edit them in any text editor. You do not need to know
 Rust, and you do not need to recompile the game.
 
@@ -11,7 +11,8 @@ Rust, and you do not need to recompile the game.
 | `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
-| `scenario.ron` | Where the player and the enemy start — **use this to test a map** |
+| `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
+| `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
 
 ## Seeing your changes
@@ -35,7 +36,8 @@ How quickly you *see* the change depends on which file:
 | `substances.ron` | On the next world rebuild |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
-| `scenario.ron` | On the next world rebuild |
+| `scenarios.ron` | On the next world rebuild |
+| `menu.ron` | Straight away |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then
 `ENTER` to start again. It takes under a second and picks up your edit.
@@ -158,10 +160,15 @@ default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain tha
 better once you are digging into it.
 
 **Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
-(a full circle is about 6.28) — the first number is how high the sun sits, the second
-swings it around the compass and decides which way shadows fall. Lower
-`sun_illuminance` towards `1000.0` for overcast; `100000.0` is direct noon sun.
-`sun_color` tints it: warm values read as a low sun.
+(a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for overcast;
+`100000.0` is direct noon sun. `sun_color` tints it: warm values read as a low sun.
+
+> **Change the second number, not the first.** The three are Euler angles rather than
+> "height, compass, roll" — they wrap past 6.28, and whether the sun ends up above or
+> below the horizon depends on the first two *together*. The second swings it round the
+> compass and is safe to play with; changing the first as well can put the sun
+> underneath the map, which lights nothing and renders the terrain as a black mass with
+> no error anywhere. This has happened. There is now a test for it.
 
 The sun is worth treating carefully. The terrain has no texture, so **shadows are the
 only thing giving it shape** — changes that weaken them, or that light the shadowed
@@ -201,6 +208,12 @@ zenith_color: (0.25, 0.50, 0.85),  // straight up
 sky tone. Set the two close together for a flat, even sky; push them apart for a
 deeper, more dramatic one.
 
+The sky dome is drawn **only during gameplay**. The menus have no camera you can move,
+so a view of a sky you cannot look around is a picture that changes for no reason —
+and once each scenario brought its own sky, the menu would have changed colour
+depending on which map you last played. The menus have their own file instead; see
+**The menus** below.
+
 The clouds sit on a hexagonal grid — a nod to the map — but are drawn as soft puffs
 that merge where they touch. Six values shape them:
 
@@ -227,6 +240,60 @@ cloud_noise:     0.3,   // 0.0 is clean-edged, ~0.5 is wispy and broken up
 For a clear blue sky, set `cloud_coverage: 0.0`. For an overcast one, raise coverage
 and push `cloud_noise` up. The colours take `(red, green, blue)` from `0.0` to `1.0`,
 the same as everywhere else.
+
+## The menus
+
+`menu.ron` is the splash, title and loading screens. One value so far:
+
+```ron
+background: (0.10, 0.11, 0.14),
+```
+
+It is a **flat, opaque panel**, not a view of anything. That is deliberate: the menus
+sit outside the world, and the world behind them is different for every scenario. A
+dark, desaturated colour works best, because the buttons are drawn as low-alpha white
+and need something dim to sit on.
+
+Its own file rather than a corner of `lighting.ron`, so the next thing a menu needs
+has somewhere obvious to go.
+
+## Giving a scenario its own sky
+
+`scenarios.ron` entries can name a lighting file:
+
+```ron
+(
+    name: "Rolling Hills",
+    world: "config/worlds/rolling-hills.ron",
+    lighting: "config/lighting/overcast.ron",
+    units: ( ... ),
+),
+```
+
+Leave `lighting` out and the scenario gets `config/lighting.ron`, which is what most
+should do. A lighting file is a complete copy of that file's contents — start by
+copying it and changing what you want.
+
+It is called `lighting` rather than `sky` because it also sets **the sun's angle and
+colour**, so it decides which way the shadows fall. That is most of what makes a
+scenario feel different; a changed sky with unchanged shadows just looks like a filter.
+
+**Two things to know before writing one**, both learned the hard way:
+
+`sun_rotation` is **not** "height, compass, roll". It is an XYZ Euler triple that wraps
+past 2π, and whether the sun ends up above or below the horizon depends on the first
+two numbers *together*. A sun below the horizon lights nothing: the map renders as a
+black mass with no error anywhere. Change the second number and leave the first alone,
+and a test will tell you if you got it wrong.
+
+`zenith_color` is **almost never on screen**. The gameplay camera looks down at the
+map, so you only see the lower band of the sky dome — `sky_color` is effectively the
+whole background. That is why the shipped alternative is weather rather than a sunset:
+a warm horizon colour fills the screen with terracotta and reads as clay, not evening.
+
+Both `world` and `lighting` are paths, and neither is checked by the compiler. A typo
+fails `cargo test` rather than at the loading screen, but only because a test opens
+every file the scenarios name — keep it that way.
 
 ## One thing that will not do anything on a Mac
 

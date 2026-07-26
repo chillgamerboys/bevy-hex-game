@@ -57,7 +57,10 @@ pub struct CameraSettings {
 ///
 /// Bevy uses physical light units: illuminance in lux (~100,000 is direct noon
 /// sun, ~10,000 overcast).
-#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
+// `PartialEq` so a test can assert that two scenarios really do produce different
+// lighting. Without it the only check available is "a resource exists", which passes
+// against an implementation that loads one file and never re-chooses.
+#[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Deserialize)]
 #[reflect(Resource)]
 pub struct LightingSettings {
     /// Sun brightness, in lux.
@@ -134,6 +137,22 @@ pub struct DisplaySettings {
     pub present_mode: PresentModeSetting,
 }
 
+/// `assets/config/menu.ron` — how the menus look.
+///
+/// Separate from [`LightingSettings`] on purpose. The menus used to borrow
+/// `sky_color`, which worked only because lighting happened to load at startup — and
+/// stopped being true the moment lighting became something a scenario chooses. The
+/// menus are not in the world and should not inherit its weather.
+///
+/// One field so far. It has a file of its own because the next thing the menus need —
+/// a second colour, a background image — has an obvious place to go.
+#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
+#[reflect(Resource)]
+pub struct MenuSettings {
+    /// Flat colour behind the splash, title and loading screens.
+    pub background: Rgb,
+}
+
 /// Frame presentation, i.e. the vsync setting.
 ///
 /// Mirrors Bevy's `PresentMode` rather than using it directly, so the RON stays
@@ -182,12 +201,14 @@ pub struct CubeCoord {
     pub z: i32,
 }
 
-/// `assets/config/scenario.ron` — where the units start.
+/// Where a scenario's units start.
 ///
-/// This exists so the map can be tested without writing Rust: move these coordinates
-/// and the two units appear somewhere else on the terrain. It is a scaffold for
-/// trying maps out, not an encounter format — a real one will describe many units,
-/// their lattices, and what triggers them.
+/// **Not loaded from a file of its own.** It is the placements out of whichever
+/// scenario was chosen, inserted by `hex_game` before gameplay spawns — see
+/// [`ScenarioLibrary`](crate::scenario::ScenarioLibrary).
+///
+/// A scaffold for trying maps out, not an encounter format: a real one will describe
+/// many units, their lattices, and what triggers them.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioSettings {
@@ -219,6 +240,25 @@ mod tests {
     /// Every field must be present, or the game hangs on "loading…" with the reason
     /// only in the terminal. `LightingSettings` has seventeen of them and no default,
     /// so a rename or a dropped line is otherwise caught by launching the game.
+    /// The menu's own settings parse.
+    ///
+    /// Its own file, and its own test, because the menu deliberately no longer borrows
+    /// anything from the lighting: that coupling only worked while lighting loaded at
+    /// startup, and stopped being true when scenarios started choosing it.
+    #[test]
+    fn shipped_menu_settings_parse() {
+        let menu: MenuSettings = ron::from_str(include_str!("../../../assets/config/menu.ron"))
+            .expect("the shipped menu settings should parse");
+
+        let (r, g, b) = menu.background;
+        for channel in [r, g, b] {
+            assert!(
+                (0.0..=1.0).contains(&channel),
+                "menu.ron: background channels are 0.0-1.0, got {menu:?}"
+            );
+        }
+    }
+
     #[test]
     fn shipped_lighting_settings_parse() {
         let lighting: LightingSettings =

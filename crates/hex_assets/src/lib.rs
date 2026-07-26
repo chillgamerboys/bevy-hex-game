@@ -16,13 +16,18 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
 pub mod loader;
+/// The scenarios offered on the title screen.
+pub mod scenario;
 pub mod settings;
 pub mod substances;
 
-pub use loader::{LoadSettings, SettingsRegistry};
+pub use loader::{
+    choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+};
+pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
 pub use settings::{
-    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, PlayerSettings,
-    PresentModeSetting, Rgb, ScenarioSettings,
+    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
+    PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -40,15 +45,27 @@ pub fn plugin(app: &mut App) {
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
-        .register_type::<ScenarioSettings>();
+        .register_type::<MenuSettings>()
+        .register_type::<ScenarioSettings>()
+        .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
 
+    // Two types are deliberately **not** loaded from a fixed file here.
+    //
+    // `ScenarioSettings` is still the resource `spawn_units` reads, but its value now
+    // comes from whichever scenario was chosen, so the library is what gets loaded and
+    // the placements come out of it.
+    //
+    // `LightingSettings` is chosen the same way, by `hex_game::scenarios` — a scenario
+    // names its own sky. Loading it here as well would run both `insert_settings` and
+    // `apply_settings_choice` against one resource, and hold the loading screen open
+    // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
-        .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
-        .load_settings::<ScenarioSettings>("config/scenario.ron", CONFIG_EXTENSIONS);
+        .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
+        .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.

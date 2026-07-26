@@ -22,6 +22,7 @@ use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
 mod menus;
+mod scenarios;
 mod screens;
 
 fn main() -> AppExit {
@@ -103,6 +104,7 @@ impl Plugin for AppPlugin {
             hex_world::plugin,
             hex_units::plugin,
             hex_combat::plugin,
+            scenarios::plugin,
             screens::plugin,
             menus::plugin,
         ));

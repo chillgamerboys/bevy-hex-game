@@ -13,7 +13,7 @@ Everything about the map:
 | `src/generator.rs` | The optional Perlin height field |
 | `src/terrain.rs` | Pure `MapSettings + palette -> VoxelMap` construction for every preset |
 | `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
-| `src/settings.rs` | Validated designer-facing settings from `assets/config/world.ron` |
+| `src/settings.rs` | Validated designer-facing settings from a world file, e.g. `assets/config/world.ron` |
 
 Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
 non-programmer.
@@ -192,7 +192,7 @@ A clean log is not evidence a change worked. **Look at the window.**
 |---|---|
 | Plain blue window | Assets not found — run through `cargo`, never the binary directly |
 | Tiles in the wrong place, no error | Transform disagrees with the span |
-| Stuck on "loading…" during initial startup | `world.ron` failed to parse. The terminal names the line |
+| Stuck on "loading…" during initial startup | A settings file failed to parse -- for terrain, whichever world the chosen scenario names. The terminal names the file and line |
 | Perlin terrain differs every run | Its preset has `seed: None`. Set a number to reproduce it |
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |

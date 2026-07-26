@@ -25,6 +25,15 @@ pub fn plugin(app: &mut App) {
         // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
+        // **The sky belongs to the world, not to the menus.** Hidden outside gameplay,
+        // so the title screen is the flat `sky_color` that `apply_ambient` already
+        // puts in `ClearColor` rather than a view of a dome the player cannot move.
+        //
+        // Visibility rather than despawn and respawn: the dome carries a material
+        // handle built once in `spawn_camera`, and rebuilding it per screen would
+        // churn an asset to change one bool.
+        .add_systems(OnEnter(Screen::Gameplay), show_sky)
+        .add_systems(OnExit(Screen::Gameplay), hide_sky)
         // Only the material push depends on the settings; the dome has to follow the
         // camera every frame regardless.
         .add_systems(
@@ -92,6 +101,11 @@ fn spawn_camera(
             params: default_sky_params(),
         })),
         Transform::from_scale(Vec3::splat(SKY_DOME_RADIUS)),
+        // Hidden until gameplay. Splash and title both precede the first
+        // `OnEnter(Gameplay)`, so spawning visible would show the dome on the very
+        // screens this is keeping it off — and only on the first run, which is the
+        // worst kind of bug to notice.
+        Visibility::Hidden,
         NotShadowCaster,
         // `MeshPickingPlugin` raycasts every `Mesh3d` by default, and the dome's
         // bounding box permanently contains the camera, so the cheap AABB rejection
@@ -126,16 +140,59 @@ fn default_sky_params() -> SkyParams {
 /// Restores the designer-authored full-map view whenever gameplay begins.
 fn frame_gameplay_camera(
     settings: Res<CameraSettings>,
-    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
-    let (eye_x, eye_y, eye_z) = settings.gameplay_eye;
-    let (focus_x, focus_y, focus_z) = settings.gameplay_focus;
+    frame_camera(
+        cameras,
+        settings.gameplay_eye,
+        settings.gameplay_focus,
+        "gameplay_eye and gameplay_focus",
+    );
+}
+
+/// Reveals the sky when the world does.
+fn show_sky(domes: Query<&mut Visibility, With<SkyDome>>) {
+    set_sky(domes, Visibility::Visible);
+}
+
+/// And hides it again on the way back to the menus.
+///
+/// The title screen used to inherit wherever the player had orbited to before quitting,
+/// so the same menu appeared at a different angle every time. The first fix pointed the
+/// camera somewhere fixed, which only chose *which* sky to look at; not drawing it is
+/// the answer that leaves nothing to choose.
+fn hide_sky(domes: Query<&mut Visibility, With<SkyDome>>) {
+    set_sky(domes, Visibility::Hidden);
+}
+
+fn set_sky(mut domes: Query<&mut Visibility, With<SkyDome>>, wanted: Visibility) {
+    for mut visibility in &mut domes {
+        // Guarded for the same reason `follow_camera` guards its write: assigning
+        // through `Mut` marks the component changed even when the value is identical,
+        // and visibility changes propagate to children.
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
+}
+
+/// Points every camera at `focus` from `eye`.
+///
+/// `what` names the settings being applied, so a bad edit says which pair to look at.
+fn frame_camera(
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+    eye: (f32, f32, f32),
+    focus: (f32, f32, f32),
+    what: &str,
+) {
+    let (eye_x, eye_y, eye_z) = eye;
+    let (focus_x, focus_y, focus_z) = focus;
     let eye = Vec3::new(eye_x, eye_y, eye_z);
     let focus = Vec3::new(focus_x, focus_y, focus_z);
     let offset = eye - focus;
 
     if !eye.is_finite() || !focus.is_finite() || offset.length_squared() <= f32::EPSILON {
-        warn!("camera.ron: gameplay_eye and gameplay_focus must be finite, distinct points");
+        warn!("camera.ron: {what} must be finite, distinct points");
         return;
     }
 
@@ -338,6 +395,7 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use bevy::asset::AssetPlugin;
     use bevy::state::app::StatesPlugin;
 
     use super::*;
@@ -418,5 +476,108 @@ mod tests {
 
         enter(&mut app, Screen::Gameplay);
         assert_full_map_frame(&app, entity);
+    }
+
+    /// The sky is drawn in the world and nowhere else.
+    ///
+    /// Reported from play as the menu appearing "at a random zoom of the scenario".
+    /// The first fix pointed the camera somewhere fixed, which only chose *which* sky
+    /// to look at; not drawing it at all leaves nothing to choose, and the menu is the
+    /// flat `ClearColor` instead.
+    ///
+    /// **Drives the whole plugin, not the system.** The predecessor of this test
+    /// registered its system by hand, so it proved a function worked and said nothing
+    /// about whether anything called it — and "nothing called it" was the entire defect
+    /// it had been written for.
+    #[test]
+    fn the_sky_belongs_to_gameplay() {
+        let mut app = sky_app();
+
+        // Before any gameplay at all. Splash and title both precede the first
+        // `OnEnter(Gameplay)`, so this is the one pass where the dome has never been
+        // shown — and the only one a first-run bug would show up in.
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Hidden),
+            "the dome was visible before gameplay had ever started"
+        );
+
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Visible),
+            "the world has no sky"
+        );
+
+        enter(&mut app, Screen::Title);
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Hidden),
+            "the sky followed the player back to the menu"
+        );
+
+        // Round again, because the bug this replaces was specifically about returning.
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(dome_visibility(&mut app), Some(Visibility::Visible));
+        enter(&mut app, Screen::Title);
+        assert_eq!(dome_visibility(&mut app), Some(Visibility::Hidden));
+    }
+
+    /// An app running the real camera plugin, with everything that plugin declares.
+    ///
+    /// It also carries orbit, pan and the sky material, so this has to supply what
+    /// those ask for even though they never run here: input for mouse and keyboard,
+    /// windowing for `CursorMoved`, assets for the dome mesh and its material. A
+    /// missing message or resource is a panic, not a skipped system.
+    fn sky_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            StatesPlugin,
+            bevy::input::InputPlugin,
+            bevy::window::WindowPlugin::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.add_plugins(crate::sky_material::plugin);
+        app.init_state::<Screen>();
+        app.insert_resource(camera_settings());
+        app.add_plugins(super::plugin);
+        // `spawn_camera` is on `Startup`, so the dome does not exist until a frame has
+        // run.
+        app.update();
+        app
+    }
+
+    fn dome_visibility(app: &mut App) -> Option<Visibility> {
+        let mut domes = app
+            .world_mut()
+            .query_filtered::<&Visibility, With<SkyDome>>();
+        domes.iter(app.world()).next().copied()
+    }
+
+    /// Reaching the title screen before `camera.ron` has parsed must not take the game
+    /// down.
+    ///
+    /// The title screen arrives on a wall-clock timer rather than a load gate, so it
+    /// really is reachable before the settings exist. This project has shipped that
+    /// crash once already, on this very screen.
+    #[test]
+    fn the_title_screen_survives_missing_settings() {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            StatesPlugin,
+            bevy::input::InputPlugin,
+            bevy::window::WindowPlugin::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.add_plugins(crate::sky_material::plugin);
+        app.init_state::<Screen>();
+        // No `CameraSettings` on purpose.
+        app.add_plugins(super::plugin);
+
+        enter(&mut app, Screen::Title);
     }
 }
