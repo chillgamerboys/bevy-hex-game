@@ -39,6 +39,35 @@ would cut the animation off and strand the piece between two hexes.
 Keys: `SPACE` ends a turn. `ESC` and `BACKSPACE` were already taken by pause and
 quit-to-title.
 
+## Saying no out loud
+
+Clicking a tile can fail for five different reasons — not your turn, nothing standable
+there, no route, further than the movement left, not in gameplay at all — and every one
+of them used to look the same from outside: nothing happened. A rule was
+indistinguishable from a bug, which is a bad property for a game to have and a worse
+one for a prototype nobody has a manual for.
+
+So the answer is drawn **before** the click rather than inferred after it:
+
+| | |
+|---|---|
+| **a ring** | at the feet of whoever is acting — the selection, out of combat |
+| **a faint tint** | over every surface this turn's movement can pay for |
+| **a stronger tint** | along the route to whatever the cursor is over |
+
+A tile that cannot be reached is simply not lit, and hovering it draws no route. The
+HUD carries the same fact as a number — `your turn, 4 to move` — so the tint can be
+checked against something rather than merely trusted.
+
+**There is no range tint while exploring.** Movement is unlimited there, so every
+connected surface qualifies and a tint over the whole map would say nothing. The route
+preview still draws, which is the half that carries information.
+
+Both tints come out of **one** search per selection, not one per hovered tile:
+`Reach`'s keys are the range and a walk back down its predecessors is the route. What
+costs something is rebuilding `Footing`, which reads every tile entity on the map — so
+that happens when the selection or its position changes, never when the cursor moves.
+
 ## What is provisional
 
 Everything in this table is a guess standing in for a decision that
@@ -52,6 +81,7 @@ they are meant to be replaced.
 | **Damage** | none at all | Lattices. Damage disables lattice hexes, and there are no lattices |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
 | **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
+| **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
 from hidden information rather than dice, so the turn order is deterministic: ties

@@ -33,7 +33,7 @@ pub mod units;
 
 pub use movement::{route, Body, Footing, Reach, Standing, MAX_STEP};
 pub use pathing::HexPathingLine;
-pub use selection::{HoveredSurface, PathOverlay, RangeOverlay, Selected, TurnRing};
+pub use selection::{HoveredSurface, PathOverlay, RangeOverlay, Selected, UnitRing};
 pub use units::{Enemy, Faction, Player, StandsOn};
 
 /// Adds every unit system.

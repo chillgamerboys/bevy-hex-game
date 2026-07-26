@@ -26,7 +26,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
-| `hex_units` | Units, picking, movement, body size | `hex_core`, `hex_assets`, `hex_anim` |
+| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` |
 | `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |

@@ -110,6 +110,9 @@ Two of these aren't in the official migration guide:
   `mut`, and you can't read the value inside the argument list of a method that
   mutably borrows it. *(Undocumented.)*
 - `AssetLoader` implementations need `TypePath`.
+- **`StandardMaterial::from(Color)` infers `AlphaMode::Blend` when alpha < 1; a struct
+  literal does not.** It leaves `Opaque`, which discards the alpha and renders a solid
+  object with no warning at all. Anything translucent must set `alpha_mode` explicitly.
 
 Resources-as-components doesn't bite here because no type derives both `Resource`
 and `Component`, and every query names concrete components.
@@ -171,7 +174,8 @@ works.
 Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
 auditing, a state machine, a RON content pipeline, a voxel map with substances and
 destruction, level-based movement, body size via headroom, a turn order with two
-tempos, and a breadth-first pathfinder over stacked surfaces.
+tempos, a breadth-first pathfinder over stacked surfaces, and a movement preview that
+draws the reachable set and the route before a click commits to either.
 
 There are still no abilities and no lattices. Bodies are one hex wide; there is no
 footprint for anything larger, and units do not obstruct each other — so a route may

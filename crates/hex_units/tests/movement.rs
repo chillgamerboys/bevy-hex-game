@@ -27,7 +27,7 @@ use hex_core::{
     MAX_HEADROOM,
 };
 use hex_units::{
-    Enemy, Faction, HoveredSurface, PathOverlay, Player, RangeOverlay, StandsOn, TurnRing,
+    Enemy, Faction, HoveredSurface, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -544,6 +544,15 @@ fn take_a_turn(app: &mut App, movement: u32) -> Option<()> {
     Some(())
 }
 
+/// Which unit the ring is currently under, or [`None`] if nothing is ringed.
+fn ring_owner(app: &mut App) -> Option<Entity> {
+    let mut rings = app.world_mut().query_filtered::<&ChildOf, With<UnitRing>>();
+    rings
+        .iter(app.world())
+        .next()
+        .map(bevy::prelude::ChildOf::parent)
+}
+
 /// The one entity matching a filter, or [`None`].
 fn single<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> Option<Entity> {
     let mut query = app.world_mut().query_filtered::<Entity, Q>();
@@ -681,7 +690,7 @@ fn the_ring_follows_whoever_is_acting() {
     take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
 
     assert_eq!(
-        count::<With<TurnRing>>(&mut app),
+        count::<With<UnitRing>>(&mut app),
         1,
         "the acting unit should be ringed"
     );
@@ -698,17 +707,12 @@ fn the_ring_follows_whoever_is_acting() {
     app.update();
 
     assert_eq!(
-        count::<With<TurnRing>>(&mut app),
+        count::<With<UnitRing>>(&mut app),
         1,
         "handing the turn over in one frame should leave exactly one ring"
     );
 
-    let mut rings = app.world_mut().query_filtered::<&ChildOf, With<TurnRing>>();
-    let owner = rings
-        .iter(app.world())
-        .next()
-        .map(bevy::prelude::ChildOf::parent)
-        .expect("the ring should be a child of the acting unit");
+    let owner = ring_owner(&mut app).expect("the ring should be a child of the acting unit");
     assert_eq!(
         owner, enemy,
         "the ring stayed on the unit that stopped acting"
@@ -737,5 +741,47 @@ fn no_overlay_leaks_across_screens() {
         count::<Or<(With<RangeOverlay>, With<PathOverlay>)>>(&mut app),
         0,
         "tints from a finished game are still on the title screen"
+    );
+}
+
+/// Out of combat there is no turn to key a ring on, so it follows the selection.
+///
+/// Reported from play: "the circle didn't display in explore mode". The first version
+/// keyed the ring on `Turn` alone, which does not exist while exploring — so the piece
+/// you control looked no different from anything else on the map, in the mode you
+/// spend most of your time in.
+#[test]
+fn a_ring_marks_the_selection_while_exploring() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    assert_eq!(
+        count::<With<UnitRing>>(&mut app),
+        1,
+        "exploring has no turn, so the ring must follow the selection instead"
+    );
+
+    let owner = ring_owner(&mut app).expect("the ring should be a child of a unit");
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    assert_eq!(
+        owner, player,
+        "the ring is under something that is not yours"
+    );
+}
+
+/// Entering combat moves the ring from the selection onto whoever is acting.
+///
+/// Both rules are live at once out of combat and in it, so the handover between them
+/// is its own case: one ring, on the acting unit, never two.
+#[test]
+fn combat_moves_the_ring_onto_the_acting_unit() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+
+    assert_eq!(
+        count::<With<UnitRing>>(&mut app),
+        1,
+        "the selection ring and the turn ring should never both be drawn"
     );
 }

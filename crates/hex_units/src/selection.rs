@@ -10,7 +10,7 @@
 //!
 //! | | |
 //! |---|---|
-//! | a ring | at the feet of whichever unit holds a [`Turn`](hex_core::Turn) |
+//! | a ring | at the feet of the acting unit, or of the selection out of combat |
 //! | a faint tint | over every surface within this turn's movement — combat only |
 //! | a stronger tint | along the way to whatever the cursor is over |
 //!
@@ -55,7 +55,7 @@ const RANGE_LIFT: f32 = 0.01;
 /// contend for the same pixels where a path crosses its own range.
 const PATH_LIFT: f32 = 0.05;
 
-/// How far above a unit's feet the turn ring sits.
+/// How far above a unit's feet the ring sits.
 const RING_LIFT: f32 = 0.03;
 
 /// Marks the unit whose movement is being previewed.
@@ -93,9 +93,9 @@ pub struct PathOverlay;
 /// Marks a ring, and remembers the unit it belongs to.
 ///
 /// Holding the owner rather than relying on the hierarchy keeps the reconcile a single
-/// flat comparison against who currently holds a [`Turn`].
+/// flat comparison against who the ring *should* be under.
 #[derive(Component)]
-pub struct TurnRing(Entity);
+pub struct UnitRing(Entity);
 
 /// Meshes and materials shared by every overlay.
 ///
@@ -132,7 +132,7 @@ struct MovementPreview {
     shown: Option<TilePos>,
 }
 
-/// Registers selection, the turn ring, and the movement overlays.
+/// Registers selection, the ring, and the movement overlays.
 pub fn plugin(app: &mut App) {
     app.register_type::<Selected>()
         .register_type::<RangeOverlay>()
@@ -146,7 +146,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::Gameplay), clear_overlays)
         .add_systems(
             Update,
-            (select_a_player, reconcile_turn_ring, redraw_overlays)
+            (select_a_player, reconcile_rings, redraw_overlays)
                 .chain()
                 .in_set(PausableSystems),
         )
@@ -234,57 +234,68 @@ fn select_a_player(
     commands.entity(player).insert(Selected);
 }
 
-/// Puts a ring at the feet of whoever is acting, and takes it away when they stop.
+/// Puts a ring at the feet of the unit the interface is currently about.
+///
+/// **In combat that is whoever holds a [`Turn`]; out of combat it is the selection.**
+/// Keying it on `Turn` alone was the first attempt and left exploring with no ring at
+/// all — there is no turn out there, so nothing was ever marked and the piece you
+/// control looked no different from anything else on the map.
 ///
 /// A child of the unit, so it rides the walk animation without any work: `hex_anim`
 /// drives the root transform and the ring comes along.
 ///
-/// **Reconciled from who holds a [`Turn`] rather than driven by `Added` and
-/// `RemovedComponents`.** `advance_turn` takes the marker off one unit and puts it on
-/// the next in the same system on the same frame. A reconcile does not care in which
-/// order those two facts land; a pair of event readers does.
-fn reconcile_turn_ring(
+/// **Reconciled from state rather than driven by `Added` and `RemovedComponents`.**
+/// `advance_turn` takes the marker off one unit and puts it on the next in the same
+/// system on the same frame. A reconcile does not care in which order those two facts
+/// land; a pair of event readers does.
+fn reconcile_rings(
     mut commands: Commands,
     overlays: Option<Res<OverlayAssets>>,
     acting: Query<(Entity, &Faction), With<Turn>>,
-    rings: Query<(Entity, &TurnRing)>,
+    selected: Query<(Entity, &Faction), With<Selected>>,
+    rings: Query<(Entity, &UnitRing)>,
 ) {
     let Some(overlays) = overlays else {
         return;
     };
 
+    // Acting first: during combat the selection is still sitting on the player, and
+    // ringing it as well would say two units are up at once.
+    let wanted = acting.iter().next().or_else(|| selected.iter().next());
+
     for (ring, owner) in &rings {
-        if acting.get(owner.0).is_err() {
+        if wanted.is_none_or(|(unit, _)| unit != owner.0) {
             // `try_` because the owner may have been despawned earlier this frame —
             // on leaving the screen — which takes its children with it.
             commands.entity(ring).try_despawn();
         }
     }
 
-    for (unit, faction) in &acting {
-        if rings.iter().any(|(_, owner)| owner.0 == unit) {
-            continue;
-        }
-
-        let material = match faction {
-            Faction::Player => overlays.player_ring.clone(),
-            Faction::Hostile => overlays.enemy_ring.clone(),
-        };
-
-        commands.entity(unit).with_children(|parent| {
-            parent.spawn((
-                Mesh3d(overlays.ring.clone()),
-                MeshMaterial3d(material),
-                Transform::from_xyz(0.0, RING_LIFT, 0.0),
-                // Without this the ring swallows clicks on the tile its unit stands
-                // on, which is the bug `Pickable::IGNORE` on the piece already exists
-                // to avoid.
-                Pickable::IGNORE,
-                TurnRing(unit),
-                Name::new("TurnRing"),
-            ));
-        });
+    let Some((unit, faction)) = wanted else {
+        return;
+    };
+    if rings.iter().any(|(_, owner)| owner.0 == unit) {
+        return;
     }
+
+    let material = match faction {
+        Faction::Player => overlays.player_ring.clone(),
+        Faction::Hostile => overlays.enemy_ring.clone(),
+    };
+
+    commands.entity(unit).with_children(|parent| {
+        parent.spawn((
+            Mesh3d(overlays.ring.clone()),
+            MeshMaterial3d(material),
+            Transform::from_xyz(0.0, RING_LIFT, 0.0),
+            // Without this the ring swallows clicks on the tile its unit stands on,
+            // which is the bug `Pickable::IGNORE` on the piece already exists to
+            // avoid.
+            Pickable::IGNORE,
+            UnitRing(unit),
+            Name::new("UnitRing"),
+        ));
+    });
 }
 
 /// Records the surface under the cursor.
