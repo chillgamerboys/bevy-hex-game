@@ -18,7 +18,7 @@ use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
     Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn, MAX_HEADROOM,
 };
-use hex_units::{Body, Faction, Standing, StandsOn};
+use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -380,5 +380,64 @@ fn the_turn_does_not_pass_while_its_unit_is_still_walking() {
         app.world().resource::<TurnOrder>().current(),
         Some(enemy),
         "the turn was handed on while the enemy was still mid-walk"
+    );
+}
+
+/// A fight starts when a unit **arrives**, not when it sets off.
+///
+/// The whole point of splitting `StandsOn` from `MovingTo`. Engagement asks where units
+/// are; while the two were one component that answer was the destination, so committing
+/// to a walk started the fight instantly at the far end of the route — and a walk whose
+/// endpoint happened to be out of range could pass straight through engaging distance
+/// without anything noticing.
+///
+/// Covered here rather than in `hex_units` because `engagement` lives in this crate and
+/// the claim is about the two halves agreeing.
+#[test]
+fn a_fight_starts_on_arrival_not_on_departure() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let start = HexCoord::new_cubic(8, -8, 0);
+    let enemy = spawn_unit(&mut app, Faction::Hostile, start, 10);
+    enter_gameplay(&mut app);
+
+    assert_eq!(
+        *app.world().resource::<State<Mode>>().get(),
+        Mode::Exploring,
+        "precondition: eight hexes apart is no fight"
+    );
+
+    // Commit a walk that ends right next to the player, exactly as the AI would.
+    let path: Vec<Standing> = start
+        .line_between(HexCoord::new_cubic(1, -1, 0))
+        .into_iter()
+        .map(|coord| Standing {
+            pos: TilePos::new(coord, GROUND_LEVEL),
+            span: HexSpan::new(GROUND - 1.0, GROUND),
+        })
+        .collect();
+    app.world_mut().entity_mut(enemy).insert((
+        MovingTo { path },
+        Transformation::from(HexPathingLine::new(&[], 1.0)),
+    ));
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<State<Mode>>().get(),
+        Mode::Exploring,
+        "the fight began at a destination the enemy had not reached"
+    );
+
+    // Three frames, and each one is a real hop rather than padding: `arrive` writes
+    // `StandsOn` through `Commands`, `engagement` reads it the frame after that, and
+    // the `Mode` transition it queues lands the frame after *that*.
+    finish_moving(&mut app, enemy);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<State<Mode>>().get(),
+        Mode::Combat,
+        "arriving next to the player should start the fight"
     );
 }
