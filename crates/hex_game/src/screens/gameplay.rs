@@ -74,7 +74,7 @@ fn exploring_hint() -> String {
 fn update_hud(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
-    acting: Query<Has<Player>, With<Turn>>,
+    acting: Query<(Has<Player>, &Turn)>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
@@ -84,10 +84,14 @@ fn update_hud(
     let wanted = match mode.get() {
         Mode::Exploring => exploring_hint(),
         Mode::Combat => {
+            // How much movement is left, spelled out. Without it a click refused for
+            // being out of range is indistinguishable from a click that did not
+            // register — which is precisely the complaint the tinted range answers,
+            // and the number is what confirms the tint rather than merely repeating it.
             let whose = match acting.single() {
-                Ok(true) => "your turn",
-                Ok(false) => "enemy turn",
-                Err(_) => "…",
+                Ok((true, turn)) => format!("your turn, {} to move", turn.movement_left),
+                Ok((false, _)) => "enemy turn".to_owned(),
+                Err(_) => "…".to_owned(),
             };
             format!(
                 "COMBAT    -    round {}    -    {}    -    SPACE to end turn    \

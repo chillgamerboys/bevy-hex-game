@@ -22,6 +22,7 @@ use hex_core::{
 
 use crate::movement::{route, Body, Footing, Standing};
 use crate::pathing::HexPathingLine;
+use crate::selection::Selected;
 
 /// Tiles as units see them.
 ///
@@ -32,7 +33,7 @@ use crate::pathing::HexPathingLine;
 /// [`Headroom`] comes along because standability depends on it, but the query does not
 /// filter on it: what counts as enough room depends on the body asking, so the filter
 /// belongs in [`Footing::from_tiles`] where the body is known.
-type TileQuery<'w, 's> = Query<
+pub(crate) type TileQuery<'w, 's> = Query<
     'w,
     's,
     (
@@ -116,6 +117,11 @@ fn despawn_units(mut commands: Commands, units: Query<Entity, With<Faction>>) {
 /// Global picking observer: when any `HexTile` is clicked, animate the player over to
 /// that tile, one hex at a time along the route the search found.
 ///
+/// Only a [`Selected`] piece moves. With one player piece that piece is always the
+/// selection, so this changes nothing today — but it is what makes the click
+/// unambiguous once there is a party, and it ties the move to the same piece whose
+/// range and path are being drawn.
+///
 /// `PlayerSettings` is taken as an `Option` because observers are global and fire on
 /// every click, including clicks on menus, where settings-derived resources may be
 /// absent. A plain `Res<T>` panics there — Bevy validates system parameters *before*
@@ -125,7 +131,10 @@ fn on_tile_clicked(
     event: On<Pointer<Click>>,
     mut commands: Commands,
     tiles: TileQuery,
-    mut players: Query<(Entity, &StandsOn, &Body, Option<&mut Turn>), With<Player>>,
+    mut players: Query<
+        (Entity, &StandsOn, &Body, Option<&mut Turn>),
+        (With<Player>, With<Selected>),
+    >,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,

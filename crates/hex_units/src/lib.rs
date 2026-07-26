@@ -26,11 +26,14 @@ use bevy::prelude::*;
 pub mod movement;
 /// Hex-specific movement along a route of surfaces.
 pub mod pathing;
+/// Showing a piece where it can go before it goes there.
+pub mod selection;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 
-pub use movement::{route, Body, Footing, Standing, MAX_STEP};
+pub use movement::{route, Body, Footing, Reach, Standing, MAX_STEP};
 pub use pathing::HexPathingLine;
+pub use selection::{HoveredSurface, PathOverlay, RangeOverlay, Selected, TurnRing};
 pub use units::{Enemy, Faction, Player, StandsOn};
 
 /// Adds every unit system.
@@ -38,5 +41,10 @@ pub use units::{Enemy, Faction, Player, StandsOn};
 /// `hex_anim` is added here rather than by the binary because this crate is its only
 /// consumer: the animation engine is a dependency of movement, not a peer of it.
 pub fn plugin(app: &mut App) {
-    app.add_plugins((hex_anim::plugin, movement::plugin, units::plugin));
+    app.add_plugins((
+        hex_anim::plugin,
+        movement::plugin,
+        units::plugin,
+        selection::plugin,
+    ));
 }

@@ -23,10 +23,12 @@ use bevy::state::app::StatesPlugin;
 use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn,
     MAX_HEADROOM,
 };
-use hex_units::{Enemy, Faction, Player, StandsOn};
+use hex_units::{
+    Enemy, Faction, HoveredSurface, PathOverlay, Player, RangeOverlay, StandsOn, TurnRing,
+};
 
 /// World height of the fake ground these tests stand things on.
 const GROUND: f32 = 2.0;
@@ -513,5 +515,227 @@ fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
         standing.0.pos.coord,
         HexCoord::ORIGIN,
         "an impossible coordinate should fall back to the centre"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Selection, the turn ring, and the movement overlays.
+//
+// The bug these exist for: clicking a tile either moved the player or did
+// nothing, and "nothing" had five different causes that looked identical.
+// Drawing the reachable set is what makes a refusal visible before the click,
+// so a test that the tint is *absent* matters as much as one that it is there.
+// ---------------------------------------------------------------------------
+
+/// Puts the game in combat with the player holding a turn worth `movement` hexes.
+///
+/// Returns [`None`] rather than expecting, because the restriction lint fires in test
+/// *helpers* as well as in `#[test]` functions — only the test itself may unwrap.
+fn take_a_turn(app: &mut App, movement: u32) -> Option<()> {
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    let player = single::<With<Player>>(app)?;
+    app.world_mut().entity_mut(player).insert(Turn {
+        movement_left: movement,
+        acted: false,
+    });
+    app.update();
+    Some(())
+}
+
+/// The one entity matching a filter, or [`None`].
+fn single<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> Option<Entity> {
+    let mut query = app.world_mut().query_filtered::<Entity, Q>();
+    query.iter(app.world()).next()
+}
+
+/// Points the cursor at the standable surface of a coordinate.
+///
+/// The *surface* run, filtered by headroom — not the first tile at the coordinate.
+/// The fixture stacks a buried run under every surface, and a search can never reach
+/// the buried one, so taking the first match would draw no path and blame the feature.
+fn hover(app: &mut App, coord: HexCoord) -> Option<()> {
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+    let pos = tiles
+        .iter(app.world())
+        .find(|(pos, headroom)| pos.coord == coord && headroom.0 > 0)
+        .map(|(pos, _)| *pos)?;
+    app.world_mut().resource_mut::<HoveredSurface>().0 = Some(pos);
+    app.update();
+    Some(())
+}
+
+fn count<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> usize {
+    let mut query = app.world_mut().query_filtered::<Entity, Q>();
+    query.iter(app.world()).count()
+}
+
+/// Hovering draws the way there, and the way there is the length the search says.
+///
+/// Two hexes away is two tinted tiles, not three: the surface the piece already
+/// stands on is not part of the journey, and tinting it would read as a move
+/// starting one hex early.
+#[test]
+fn hovering_a_tile_draws_the_way_to_it() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        2,
+        "a tile two steps away should be two tinted steps"
+    );
+}
+
+/// Exploring has no movement budget, so every connected surface is reachable and a
+/// range tint would cover the entire map — which says nothing at all.
+///
+/// The path still draws. That is the half of the feature exploring actually needs.
+#[test]
+fn exploring_draws_the_path_but_not_a_range() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+
+    assert_eq!(
+        count::<With<RangeOverlay>>(&mut app),
+        0,
+        "unlimited movement must not tint the whole map as 'in range'"
+    );
+    assert!(
+        count::<With<PathOverlay>>(&mut app) > 0,
+        "the path is the part of the preview exploring still needs"
+    );
+}
+
+/// In combat the tint covers exactly what this turn's movement can pay for.
+///
+/// The count is spelled out rather than compared to a formula, because a formula
+/// would reproduce whatever mistake the implementation made. Nineteen coordinates lie
+/// within two steps of the origin; the crawlspace is one of them and is too low for
+/// this body; the piece is standing on another. Seventeen remain.
+#[test]
+fn combat_tints_exactly_what_this_turn_can_reach() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+
+    let mut tinted = app
+        .world_mut()
+        .query_filtered::<&TilePos, With<RangeOverlay>>();
+    let positions: Vec<TilePos> = tinted.iter(app.world()).copied().collect();
+
+    assert_eq!(
+        positions.len(),
+        17,
+        "two hexes of movement should reach seventeen other surfaces, got {positions:?}"
+    );
+    assert!(
+        positions
+            .iter()
+            .all(|pos| pos.coord.distance(HexCoord::ORIGIN) <= 2),
+        "something outside the budget was tinted as reachable"
+    );
+    assert!(
+        !positions.iter().any(|pos| pos.coord == CRAWLSPACE),
+        "the crawlspace is too low for this body and must not be offered"
+    );
+}
+
+/// Nothing is tinted on somebody else's turn.
+///
+/// Regression guard for the promise this feature makes: a lit tile is one the piece
+/// can be sent to *now*. Leaving the range up during the enemy's turn would light
+/// tiles that any click would refuse, which is the exact confusion being fixed.
+#[test]
+fn no_tint_while_it_is_not_your_turn() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    assert!(count::<With<RangeOverlay>>(&mut app) > 0, "setup failed");
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    app.world_mut().entity_mut(player).remove::<Turn>();
+    app.update();
+
+    assert_eq!(
+        count::<With<RangeOverlay>>(&mut app),
+        0,
+        "the range outlived the turn it belonged to"
+    );
+}
+
+/// A ring marks whoever is acting, and moves on when they stop.
+///
+/// Reconciled from who holds a `Turn` rather than from `Added`/`RemovedComponents`,
+/// because the real turn system takes the marker off one unit and puts it on the next
+/// in the same system on the same frame. This test passes the turn the same way.
+#[test]
+fn the_ring_follows_whoever_is_acting() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+
+    assert_eq!(
+        count::<With<TurnRing>>(&mut app),
+        1,
+        "the acting unit should be ringed"
+    );
+
+    // Hand the turn over in one frame, exactly as `advance_turn` does.
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    let enemy = single::<With<Enemy>>(&mut app).expect("an enemy should exist");
+    app.world_mut().entity_mut(player).remove::<Turn>();
+    app.world_mut().entity_mut(enemy).insert(Turn {
+        movement_left: 4,
+        acted: false,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        count::<With<TurnRing>>(&mut app),
+        1,
+        "handing the turn over in one frame should leave exactly one ring"
+    );
+
+    let mut rings = app.world_mut().query_filtered::<&ChildOf, With<TurnRing>>();
+    let owner = rings
+        .iter(app.world())
+        .next()
+        .map(bevy::prelude::ChildOf::parent)
+        .expect("the ring should be a child of the acting unit");
+    assert_eq!(
+        owner, enemy,
+        "the ring stayed on the unit that stopped acting"
+    );
+}
+
+/// Overlays are plain world entities, so nothing else tears them down.
+///
+/// Mirrors `no_unit_leaks_across_screens`, including the two updates: the state
+/// transition and the `OnExit` schedule it triggers do not both land in one.
+#[test]
+fn no_overlay_leaks_across_screens() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+    assert!(count::<With<RangeOverlay>>(&mut app) > 0, "setup failed");
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(
+        count::<Or<(With<RangeOverlay>, With<PathOverlay>)>>(&mut app),
+        0,
+        "tints from a finished game are still on the title screen"
     );
 }
