@@ -172,7 +172,8 @@ pub fn plugin(app: &mut App) {
             (select_a_player, reconcile_rings, redraw_overlays)
                 .chain()
                 .in_set(PausableSystems)
-                .after(track_terrain_changes),
+                .after(track_terrain_changes)
+                .after(crate::movement::MovementSystems::Reconcile),
         )
         // Observers are global and fire in every state, including the title screen.
         // These two touch only `HoveredSurface`, which is initialised at startup and

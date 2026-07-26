@@ -28,7 +28,8 @@ use hex_core::{
     Turn, MAX_HEADROOM,
 };
 use hex_units::{
-    Enemy, Faction, HoveredSurface, MovingTo, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
+    Enemy, Faction, HoveredSurface, MovementSystems, MovingTo, PathOverlay, Player, RangeOverlay,
+    StandsOn, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -376,6 +377,100 @@ fn clicking_a_tile_moves_the_player() {
     assert!(
         app.world().get::<MovingTo>(player).is_none(),
         "an arrived piece should no longer be carrying a route"
+    );
+}
+
+/// The real animation driver and movement reconciliation agree on the landing frame.
+///
+/// The unit test above removes `Transformation` directly to isolate reconciliation.
+/// This one drives the engine clock instead, covering the deferred removal and the
+/// ordering edge between the two systems end to end.
+#[test]
+fn a_finished_animation_automatically_commits_its_destination() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::from_millis(100),
+    ));
+    enter_gameplay(&mut app);
+
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    let target =
+        surface_at(&mut app, destination).expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+
+    for _ in 0..20 {
+        app.update();
+        let player = single::<With<Player>>(&mut app).expect("a player should exist");
+        if app.world().get::<MovingTo>(player).is_none() {
+            break;
+        }
+    }
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the route animation did not finish"
+    );
+    assert!(
+        app.world().get::<MovingTo>(player).is_none(),
+        "the finished route was not reconciled"
+    );
+    assert_eq!(
+        standing_of(&mut app).map(|standing| standing.pos.coord),
+        Some(destination)
+    );
+}
+
+#[derive(Resource, Default)]
+struct StandingChangeCount(usize);
+
+fn count_player_standing_changes(
+    changed: Query<(), (With<Player>, Changed<StandsOn>)>,
+    mut count: ResMut<StandingChangeCount>,
+) {
+    count.0 += changed.iter().count();
+}
+
+/// A logical position changes only when the walk completes another whole leg.
+///
+/// Reassigning the same `StandsOn` on every animation tick makes Bevy's change
+/// detection report movement while the piece is still between the same two waypoints.
+#[test]
+fn an_unfinished_leg_does_not_mark_stands_on_changed() {
+    let mut app = test_app();
+    app.init_resource::<StandingChangeCount>();
+    app.add_systems(
+        Update,
+        count_player_standing_changes.after(MovementSystems::Reconcile),
+    );
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::from_millis(100),
+    ));
+    enter_gameplay(&mut app);
+    app.world_mut().resource_mut::<StandingChangeCount>().0 = 0;
+
+    let target = surface_at(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+
+    // The first driven frame anchors at zero; the next three active ticks are still
+    // short of one 1.73-unit leg at five world units per second.
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<StandingChangeCount>().0,
+        0,
+        "StandsOn changed before a whole route leg completed"
+    );
+
+    app.update();
+    assert_eq!(
+        app.world().resource::<StandingChangeCount>().0,
+        1,
+        "completing the first route leg should publish exactly one logical change"
     );
 }
 
@@ -942,11 +1037,9 @@ fn movement_left(app: &mut App) -> Option<u32> {
 
 /// A second click while the piece is still walking is ignored, not charged.
 ///
-/// `StandsOn` names the *committed destination* from the moment a move starts, so an
-/// unguarded second click routes from where the piece is going rather than where it
-/// is, queues a second animation over the first, and bills `movement_left` twice for
-/// one turn. Two clicks two hexes away would leave a four-hex budget empty having
-/// moved two.
+/// An unguarded second click replaces the active animation and bills
+/// `movement_left` twice for one turn. Two clicks two hexes away would leave a
+/// four-hex budget empty having moved two.
 #[test]
 fn a_second_click_while_moving_is_not_charged_again() {
     let mut app = test_app();
@@ -976,6 +1069,54 @@ fn a_second_click_while_moving_is_not_charged_again() {
         after_first,
         "the second click was billed to a turn that had already paid"
     );
+}
+
+/// The route remains busy until its logical landing has been reconciled.
+///
+/// `Transformation` is removed through deferred commands when the visual animation
+/// finishes. Before movement reconciliation runs, `MovingTo` still exists and
+/// `StandsOn` still names the preceding whole step. A click in that narrow window must
+/// not overwrite the pending arrival or charge a route from the stale position.
+#[test]
+fn a_click_between_animation_finish_and_arrival_is_ignored() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    let target =
+        surface_at(&mut app, destination).expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    app.update();
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    let after_first = movement_left(&mut app);
+    assert_eq!(after_first, Some(2));
+    assert!(app.world().get::<MovingTo>(player).is_some());
+
+    // Exactly the state left after the animation driver's deferred removal is
+    // applied and before movement reconciliation consumes the route.
+    app.world_mut()
+        .entity_mut(player)
+        .remove::<Transformation>();
+    let elsewhere = surface_at(&mut app, HexCoord::new_cubic(2, 0, -2))
+        .expect("the fake terrain covers this coordinate");
+    click(&mut app, elsewhere, window);
+    app.update();
+
+    assert_eq!(
+        movement_left(&mut app),
+        after_first,
+        "the landing-frame click charged a second route"
+    );
+    assert_eq!(
+        standing_of(&mut app).map(|standing| standing.pos.coord),
+        Some(destination),
+        "the landing-frame click overwrote the pending arrival"
+    );
+    assert!(app.world().get::<MovingTo>(player).is_none());
+    assert!(app.world().get::<Transformation>(player).is_none());
 }
 
 /// A click that lands while paused does nothing at all.

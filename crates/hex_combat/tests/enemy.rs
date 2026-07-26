@@ -8,6 +8,8 @@
 //! Terrain is spawned by the test, because `hex_combat` cannot see `hex_map` and does
 //! not need to: it consumes `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`.
 
+use std::time::Duration;
+
 use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
@@ -39,9 +41,13 @@ fn test_app() -> App {
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     // `hex_units::movement::plugin`, not the whole of `hex_units::plugin`: this is what
     // keeps `StandsOn` honest as a unit walks, and combat is meaningless without it.
-    // The full plugin would also read `scenario.ron` and spawn its own pieces on top of
-    // the ones these tests place by hand.
-    app.add_plugins((hex_units::movement::plugin, hex_combat::plugin));
+    // The full plugin would also read the active scenario placements and spawn its own
+    // pieces on top of the ones these tests place by hand.
+    app.add_plugins((
+        hex_anim::plugin,
+        hex_units::movement::plugin,
+        hex_combat::plugin,
+    ));
 
     while app.plugins_state() != PluginsState::Cleaned {
         app.finish();
@@ -117,10 +123,9 @@ fn enter_gameplay(app: &mut App) {
 /// Stands in for the walk animation finishing.
 ///
 /// Removing the component is exactly what `hex_anim`'s driver does once a transformer
-/// reports itself done, and `hex_units::arrive` is what turns that into a new position.
-/// **A unit's `StandsOn` does not move until this happens** — it is where the piece is,
-/// not where it was sent — so any test that reads a position after ordering a move has
-/// to let the move land first.
+/// reports itself done, and movement reconciliation commits the final route step.
+/// `StandsOn` advances only across whole completed legs, so any test that reads the
+/// final position after ordering a move has to let the move land first.
 fn finish_moving(app: &mut App, entity: Entity) {
     app.world_mut()
         .entity_mut(entity)
@@ -228,6 +233,40 @@ fn an_enemy_cannot_outrun_its_movement_budget() {
     assert!(travelled > 0, "the enemy should have moved at all");
 }
 
+/// Equal tactical choices resolve by entity id rather than query iteration order.
+#[test]
+fn equally_routable_foes_have_a_deterministic_tie_break() {
+    let mut app = test_app();
+    let enemy = spawn_unit(&mut app, Faction::Hostile, HexCoord::ORIGIN, 30);
+    let first = HexCoord::new_cubic(3, -3, 0);
+    let second = HexCoord::new_cubic(0, 3, -3);
+    let first_entity = spawn_unit(&mut app, Faction::Player, first, 20);
+    let second_entity = spawn_unit(&mut app, Faction::Player, second, 10);
+    let (expected, other) = if first_entity.to_bits() < second_entity.to_bits() {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    enter_gameplay(&mut app);
+
+    let destination = app
+        .world()
+        .get::<MovingTo>(enemy)
+        .and_then(|moving| moving.path.last())
+        .expect("the enemy should commit an approach")
+        .pos
+        .coord;
+    assert_eq!(
+        destination.distance(expected),
+        1,
+        "an exact tie did not choose the lower entity id"
+    );
+    assert!(
+        destination.distance(other) > 1,
+        "the route headed toward the other equally distant foe"
+    );
+}
+
 /// A turn must not pass while its unit is still mid-stride. Advancing early cuts the
 /// animation off and strands the piece between two hexes.
 ///
@@ -298,17 +337,52 @@ fn an_enemy_turn_ends_once_its_animation_finishes() {
 #[test]
 fn an_adjacent_enemy_attacks_without_moving() {
     let mut app = test_app();
-    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(100),
+    ));
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
     let adjacent = HexCoord::new_cubic(1, -1, 0);
     let enemy = spawn_unit(&mut app, Faction::Hostile, adjacent, 10);
     enter_gameplay(&mut app);
 
     end_turn(&mut app);
-    // Long enough for the lunge to play out and be removed.
-    for _ in 0..240 {
+
+    assert!(
+        app.world().get::<Transformation>(enemy).is_some(),
+        "an adjacent enemy should commit an attack animation"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(enemy),
+        "the attacker should keep its turn while the lunge is running"
+    );
+
+    for _ in 0..10 {
         app.update();
+        let attack_finished = app.world().get::<Transformation>(enemy).is_none();
+        let turn_advanced = app.world().resource::<TurnOrder>().current() == Some(player);
+        if attack_finished && turn_advanced {
+            break;
+        }
     }
 
+    assert!(
+        app.world().get::<Transformation>(enemy).is_none(),
+        "the deterministic clock did not finish the enemy's attack"
+    );
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the target's recoil outlived the completed attack"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(player),
+        "the turn should advance after the attack animation completes"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_some(),
+        "the player should receive the next turn"
+    );
     assert_eq!(
         coord_of(&app, enemy),
         Some(adjacent),
@@ -396,48 +470,160 @@ fn the_turn_does_not_pass_while_its_unit_is_still_walking() {
 #[test]
 fn a_fight_starts_on_arrival_not_on_departure() {
     let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(100),
+    ));
     spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
-    let start = HexCoord::new_cubic(8, -8, 0);
+    let start = HexCoord::new_cubic(5, -5, 0);
+    let destination = HexCoord::new_cubic(4, -4, 0);
     let enemy = spawn_unit(&mut app, Faction::Hostile, start, 10);
     enter_gameplay(&mut app);
 
     assert_eq!(
         *app.world().resource::<State<Mode>>().get(),
         Mode::Exploring,
-        "precondition: eight hexes apart is no fight"
+        "precondition: five hexes apart is no fight"
     );
 
-    // Commit a walk that ends right next to the player, exactly as the AI would.
+    // One real leg crosses exactly from outside engagement range to its boundary.
+    // Making its speed equal to its world-space length gives the leg a one-second
+    // duration under the deterministic 100 ms test clock.
     let path: Vec<Standing> = start
-        .line_between(HexCoord::new_cubic(1, -1, 0))
+        .line_between(destination)
         .into_iter()
         .map(|coord| Standing {
             pos: TilePos::new(coord, GROUND_LEVEL),
             span: HexSpan::new(GROUND - 1.0, GROUND),
         })
         .collect();
+    let [from, to] = path.as_slice() else {
+        panic!("an adjacent coordinate pair should produce a two-step route");
+    };
+    let speed = from.world_position().distance(to.world_position());
     app.world_mut().entity_mut(enemy).insert((
-        MovingTo { path },
-        Transformation::from(HexPathingLine::new(&[], 1.0)),
+        MovingTo::new(path.clone(), speed),
+        Transformation::from(HexPathingLine::new(&path, speed)),
     ));
-    app.update();
 
+    // Several active ticks, but less than the leg's one-second duration.
+    for _ in 0..5 {
+        app.update();
+    }
+    assert_eq!(
+        coord_of(&app, enemy),
+        Some(start),
+        "logical position advanced before the route reached its first waypoint"
+    );
+    assert!(
+        app.world().get::<Transformation>(enemy).is_some(),
+        "the route finished before the arrival assertion"
+    );
+    assert!(matches!(
+        app.world().resource::<NextState<Mode>>(),
+        &NextState::Unchanged
+    ));
+
+    for _ in 0..10 {
+        app.update();
+        if coord_of(&app, enemy) == Some(destination) {
+            break;
+        }
+    }
+
+    assert_eq!(
+        coord_of(&app, enemy),
+        Some(destination),
+        "the real route never arrived at the engagement boundary"
+    );
     assert_eq!(
         *app.world().resource::<State<Mode>>().get(),
         Mode::Exploring,
-        "the fight began at a destination the enemy had not reached"
+        "the queued combat transition should apply on the next frame"
+    );
+    assert!(
+        matches!(
+            app.world().resource::<NextState<Mode>>(),
+            &NextState::Pending(Mode::Combat)
+        ),
+        "arrival at engagement range did not queue combat"
     );
 
-    // Three frames, and each one is a real hop rather than padding: `arrive` writes
-    // `StandsOn` through `Commands`, `engagement` reads it the frame after that, and
-    // the `Mode` transition it queues lands the frame after *that*.
-    finish_moving(&mut app, enemy);
-    app.update();
     app.update();
 
     assert_eq!(
         *app.world().resource::<State<Mode>>().get(),
         Mode::Combat,
         "arriving next to the player should start the fight"
+    );
+}
+
+/// Intermediate whole steps are positions too, even when one frame crosses several.
+///
+/// Both endpoints are outside engage range, so an implementation that updates
+/// `StandsOn` only at final arrival misses the fight completely even though the route
+/// passes directly through the player's tile. The deliberately high speed makes the
+/// first active tick jump from distance eight to distance six on the other side, so
+/// sampling only one `StandsOn` per frame also misses every in-range waypoint.
+#[test]
+fn crossing_engage_range_mid_route_starts_fight_and_stops_walk() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let start = HexCoord::new_cubic(-8, 8, 0);
+    let end = HexCoord::new_cubic(8, -8, 0);
+    let enemy = spawn_unit(&mut app, Faction::Hostile, start, 10);
+    enter_gameplay(&mut app);
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(250),
+    ));
+
+    let path: Vec<Standing> = start
+        .line_between(end)
+        .into_iter()
+        .map(|coord| Standing {
+            pos: TilePos::new(coord, GROUND_LEVEL),
+            span: HexSpan::new(GROUND - 1.0, GROUND),
+        })
+        .collect();
+    let speed = 100.0;
+    app.world_mut().entity_mut(enemy).insert((
+        MovingTo::new(path.clone(), speed),
+        Transformation::from(HexPathingLine::new(&path, speed)),
+    ));
+
+    for _ in 0..100 {
+        app.update();
+        if *app.world().resource::<State<Mode>>().get() == Mode::Combat {
+            break;
+        }
+    }
+
+    assert_eq!(
+        *app.world().resource::<State<Mode>>().get(),
+        Mode::Combat,
+        "the route crossed engage range without starting a fight"
+    );
+    assert!(
+        app.world().get::<Transformation>(enemy).is_none(),
+        "the walk continued after combat began"
+    );
+    assert!(
+        app.world().get::<MovingTo>(enemy).is_none(),
+        "the interrupted unit kept its obsolete route"
+    );
+
+    let stopped = app
+        .world()
+        .get::<StandsOn>(enemy)
+        .expect("the enemy should still have a logical position")
+        .0
+        .pos;
+    assert!(path.iter().any(|step| step.pos == stopped));
+    assert!(
+        stopped.coord.distance(HexCoord::ORIGIN) <= 4,
+        "combat began before the route reached engagement distance"
+    );
+    assert_ne!(
+        stopped.coord, end,
+        "the interrupted walk was delivered to its out-of-range endpoint"
     );
 }

@@ -127,9 +127,9 @@ independent of each other still holds.
 
 ## Trying it out
 
-`assets/config/scenario.ron` places the player and the enemy. Move them onto whatever
-part of a map is worth testing and press `BACKSPACE` then `ENTER` to rebuild. See
-[CONTENT.md](CONTENT.md).
+Each entry in `assets/config/scenarios.ron` places its player and enemy. Move them onto
+whatever part of that scenario's map is worth testing, press `BACKSPACE`, then click
+the scenario to rebuild. See [CONTENT.md](CONTENT.md).
 
 ## Where a unit is, and where it is going
 
@@ -149,9 +149,10 @@ ambushed halfway should leave you where the ambush happened, not deliver you som
 chosen before anyone knew there was a fight.
 
 The route is kept as the whole path rather than just its endpoint precisely so that
-interruption has somewhere real to put the piece. It cannot be recovered from the
-animation: `HexPathingLine` keeps only world positions, and its legs stop lining up
-with a per-step clock as soon as a route climbs.
+logical position can advance at each completed leg and interruption has somewhere real
+to put the piece. `HexPathingLine` and `MovingTo` share cumulative, world-space leg
+durations, so climbs take their actual 3D travel time while every waypoint still maps
+back to its surface.
 
 ## The high ground
 

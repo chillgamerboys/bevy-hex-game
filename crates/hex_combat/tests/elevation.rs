@@ -313,3 +313,43 @@ fn an_unreachable_target_does_not_hang_the_fight() {
         "an enemy with nothing it can do must still finish its turn"
     );
 }
+
+/// A nearer coordinate is not a better target when no terrain route reaches its
+/// surface.
+///
+/// The deck target is only one hex away horizontally but eight levels above the
+/// enemy. A second player is three hexes away on connected ground. Ranking by map
+/// distance alone burns the turn staring at the deck; ranking planned routes moves
+/// toward the ground target.
+#[test]
+fn a_routable_foe_beats_a_nearer_unreachable_one() {
+    let mut app = test_app();
+    let enemy = spawn_unit(&mut app, Faction::Hostile, HexCoord::ORIGIN, GROUND_LEVEL);
+    app.world_mut().entity_mut(enemy).insert(Initiative(20));
+    spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, 0, -1),
+        DECK_LEVEL,
+    );
+    let reachable = HexCoord::new_cubic(3, 0, -3);
+    spawn_unit(&mut app, Faction::Player, reachable, GROUND_LEVEL);
+    enter_gameplay(&mut app);
+
+    let moving = app
+        .world()
+        .get::<hex_units::MovingTo>(enemy)
+        .expect("the enemy should approach the foe connected by ground");
+    let destination = moving
+        .path
+        .last()
+        .expect("an approach contains its starting surface and at least one step")
+        .pos;
+
+    assert_eq!(destination.level, GROUND_LEVEL);
+    assert_eq!(
+        destination.coord.distance(reachable),
+        1,
+        "the enemy did not stop adjacent to the routable target"
+    );
+}

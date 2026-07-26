@@ -33,13 +33,15 @@ pub mod targeting;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 
-pub use movement::{route, Body, Footing, Reach, Standing, MAX_STEP};
+pub use movement::{
+    route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing, MAX_STEP,
+};
 pub use pathing::HexPathingLine;
 pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach, LEVELS_PER_BONUS_RANGE};
-pub use units::{Enemy, Faction, MovingTo, Player, StandsOn};
+pub use units::{Enemy, Faction, MovingTo, Player, StandsOn, StopMovingAt};
 
 /// Adds every unit system.
 ///

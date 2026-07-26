@@ -4,9 +4,10 @@
 //! can tell friend from foe without naming concrete types. `Player` and `Enemy` are
 //! markers on top of that, for the two things that currently exist.
 //!
-//! Spawning reads `assets/config/scenario.ron`, which is deliberately the crudest
-//! thing that works: two coordinates. It exists so terrain can be tried out without
-//! writing Rust, not because it is the encounter format the game will ship.
+//! Spawning reads the active entry from `assets/config/scenarios.ron`, which is
+//! deliberately the crudest thing that works: two coordinates. It exists so terrain
+//! can be tried out without writing Rust, not because it is the encounter format the
+//! game will ship.
 
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
@@ -21,8 +22,8 @@ use hex_core::{
     Turn,
 };
 
-use crate::movement::{route, Body, Footing, Standing};
-use crate::pathing::HexPathingLine;
+use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
+use crate::pathing::{reached_step_index, HexPathingLine};
 use crate::selection::Selected;
 
 /// Tiles as units see them.
@@ -67,14 +68,52 @@ pub struct StandsOn(pub Standing);
 /// Paired with a [`Transformation`]: that one animates, this one remembers what the
 /// animation *means*. The whole path rather than just the endpoint, because a fight
 /// starting mid-stride has to put the piece down on a real hex, and the animation
-/// cannot say which one — `HexPathingLine` keeps only `Vec3`s, and its legs do not
-/// even line up with a per-step clock once a route climbs.
+/// cannot say which surface each world-space waypoint represents.
 ///
 /// The first entry is the surface left behind, so a path is always at least one long.
 #[derive(Component, Debug, Clone)]
 pub struct MovingTo {
     /// Surfaces walked over, starting where the walk began.
     pub path: Vec<Standing>,
+    /// Speed captured when the route was committed.
+    ///
+    /// Settings can hot-reload while a piece is walking. Reconciliation must keep the
+    /// schedule the animation was built with rather than silently adopting a new one.
+    speed: f32,
+    /// Index of the last route step published as [`StandsOn`].
+    reconciled_step: usize,
+}
+
+impl MovingTo {
+    /// Records a committed route using the same speed as its animation.
+    #[must_use]
+    pub fn new(path: Vec<Standing>, speed: f32) -> Self {
+        Self {
+            path,
+            speed,
+            reconciled_step: 0,
+        }
+    }
+
+    fn reached_at(&self, elapsed: f64) -> Option<usize> {
+        reached_step_index(&self.path, self.speed, elapsed)
+    }
+}
+
+/// Requests that an in-flight walk stop at a particular completed waypoint.
+///
+/// Combat attaches this when a large animation tick crosses into engagement range and
+/// then leaves it again. The request survives until `OnEnter(Mode::Combat)`, even when
+/// the visual animation reached its destination and [`MovingTo`] was already removed.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct StopMovingAt(Standing);
+
+impl StopMovingAt {
+    /// Stops the walk at `standing` when combat begins.
+    #[must_use]
+    pub const fn new(standing: Standing) -> Self {
+        Self(standing)
+    }
 }
 
 /// Which side a unit is on.
@@ -157,14 +196,16 @@ fn on_tile_clicked(
     tiles: TileQuery,
     mut players: Query<
         (Entity, &StandsOn, &Body, Option<&mut Turn>),
-        // `Without<Transformation>` is a rule, not an optimisation: a piece already
-        // walking is not available to be sent somewhere else. A second click would
-        // queue a fresh animation over the top of the first and charge
-        // `movement_left` twice for one turn — and it would route from a position the
-        // piece has not reached yet, since `arrive` only writes `StandsOn` once the
-        // walk finishes. `hex_combat::ai` has always filtered this way; the player now
-        // obeys the rule the enemy already did.
-        (With<Player>, With<Selected>, Without<Transformation>),
+        // Both filters are rules. `Transformation` covers the visible walk;
+        // `MovingTo` also covers the deferred landing frame after an animation has
+        // been removed but before its route has been reconciled. Accepting a click in
+        // that gap would route from a stale `StandsOn` and overwrite the arrival.
+        (
+            With<Player>,
+            With<Selected>,
+            Without<Transformation>,
+            Without<MovingTo>,
+        ),
     >,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
@@ -240,32 +281,64 @@ fn on_tile_clicked(
 
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
         // `MovingTo`, not `StandsOn`. The piece has not gone anywhere yet — it has been
-        // told where to go, and `arrive` writes the position once it is true.
+        // told where to go, and reconciliation advances the position as each leg lands.
         commands
             .entity(entity)
-            .insert((animation, MovingTo { path: steps }));
+            .insert((animation, MovingTo::new(steps, settings.speed)));
     }
 }
 
-/// Writes a finished walk into the position it ended at.
+/// Keeps logical position aligned with the whole route steps already reached.
 ///
 /// Registered by [`movement::plugin`](crate::movement::plugin) rather than here,
 /// because it is bookkeeping every unit needs and nothing to do with spawning a
 /// scenario. `hex_combat`'s tests want the former without the latter.
 ///
-/// Reconciled from the **absence** of a [`Transformation`] rather than from
-/// `RemovedComponents`: the removal is a deferred command, so a reader can miss the
-/// frame it lands in, and this way a unit that somehow lost its animation without
-/// finishing still ends up somewhere real instead of stuck holding a route forever.
-pub(crate) fn arrive(
+/// Updating on each completed leg is what lets engagement observe a route that enters
+/// range and later leaves it again. Updating only at the final destination makes both
+/// endpoints truthful while every point between them is invisible to gameplay.
+///
+/// The finished case is still reconciled from the **absence** of a
+/// [`Transformation`] rather than `RemovedComponents`: ordered system sets apply the
+/// driver's deferred removal before this runs, so the destination and route cleanup
+/// land in the same frame.
+pub(crate) fn reconcile_movement(
     mut commands: Commands,
-    arrived: Query<(Entity, &MovingTo), Without<Transformation>>,
+    mut crossings: ResMut<MovementCrossings>,
+    mut moving_units: Query<(
+        Entity,
+        &mut MovingTo,
+        &mut StandsOn,
+        Option<&Transformation>,
+    )>,
 ) {
-    for (entity, moving) in &arrived {
-        let mut unit = commands.entity(entity);
-        unit.remove::<MovingTo>();
-        if let Some(destination) = moving.path.last() {
-            unit.insert(StandsOn(*destination));
+    crossings.clear();
+
+    for (entity, mut moving, mut standing, animation) in &mut moving_units {
+        let reached_index = animation
+            .and_then(|animation| moving.reached_at(animation.elapsed()))
+            .or_else(|| moving.path.len().checked_sub(1));
+
+        if let Some(reached_index) = reached_index {
+            let first_new = moving.reconciled_step.saturating_add(1);
+            if first_new <= reached_index {
+                for index in first_new..=reached_index {
+                    if let Some(reached) = moving.path.get(index).copied() {
+                        crossings.push(entity, reached);
+                    }
+                }
+
+                if let Some(reached) = moving.path.get(reached_index).copied() {
+                    if standing.0 != reached {
+                        standing.0 = reached;
+                    }
+                    moving.reconciled_step = reached_index;
+                }
+            }
+        }
+
+        if animation.is_none() {
+            commands.entity(entity).remove::<MovingTo>();
         }
     }
 }
@@ -281,10 +354,21 @@ pub(crate) fn arrive(
 /// can express — every rule here is written in terms of a surface.
 pub(crate) fn halt_on_combat(
     mut commands: Commands,
-    mut walking: Query<(Entity, &MovingTo, &mut Transform)>,
+    mut walking: Query<
+        (
+            Entity,
+            Option<&MovingTo>,
+            &mut Transform,
+            Option<&StopMovingAt>,
+        ),
+        Or<(With<MovingTo>, With<StopMovingAt>)>,
+    >,
 ) {
-    for (entity, moving, mut transform) in &mut walking {
-        let Some(stopped) = nearest_step(&moving.path, transform.translation) else {
+    for (entity, moving, mut transform, requested) in &mut walking {
+        let stopped = requested.map(|requested| requested.0).or_else(|| {
+            moving.and_then(|moving| nearest_step(&moving.path, transform.translation))
+        });
+        let Some(stopped) = stopped else {
             continue;
         };
         transform.translation = stopped.world_position();
@@ -292,6 +376,7 @@ pub(crate) fn halt_on_combat(
             .entity(entity)
             .insert(StandsOn(stopped))
             .remove::<MovingTo>()
+            .remove::<StopMovingAt>()
             .remove::<Transformation>();
     }
 }
@@ -318,7 +403,7 @@ fn nearest_step(path: &[Standing], at: Vec3) -> Option<Standing> {
 fn coord_from(setting: CubeCoord, unit: &str) -> HexCoord {
     HexCoord::try_new_cubic(setting.x, setting.y, setting.z).unwrap_or_else(|| {
         warn!(
-            "scenario.ron: {unit} is at ({}, {}, {}), which does not sum to zero — \
+            "scenarios.ron: {unit} is at ({}, {}, {}), which does not sum to zero — \
              using the centre of the map instead",
             setting.x, setting.y, setting.z
         );
@@ -399,7 +484,7 @@ fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, fo
     // ground, rather than any bridge built over it.
     let standing = footing.ground(spawn.coord).unwrap_or_else(|| {
         warn!(
-            "scenario.ron: nothing at {:?} that the {} can stand on — \
+            "scenarios.ron: nothing at {:?} that the {} can stand on — \
              using the centre of the map instead",
             spawn.coord, spawn.name
         );

@@ -24,7 +24,7 @@ use bevy::prelude::*;
 
 use hex_anim::Transformation;
 use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn};
-use hex_units::{either_in_reach, Faction, StandsOn};
+use hex_units::{either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt};
 
 /// How far apart two units can be and still start a fight, and related knobs.
 ///
@@ -143,6 +143,7 @@ pub fn plugin(app: &mut App) {
             engagement
                 .in_set(AppSystems::Update)
                 .in_set(PausableSystems)
+                .after(hex_units::MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(
@@ -173,16 +174,27 @@ fn reset(mut order: ResMut<TurnOrder>) {
 /// about. [`either_in_reach`] takes that range; the hysteresis is the same two
 /// thresholds asked separately rather than one distance compared twice.
 fn engagement(
+    mut commands: Commands,
     mode: Res<State<Mode>>,
     mut next: ResMut<NextState<Mode>>,
-    units: Query<(&Faction, &StandsOn)>,
+    units: Query<(Entity, &Faction, &StandsOn)>,
+    crossings: Option<Res<MovementCrossings>>,
 ) {
     let engage = CombatSettings::ENGAGE_RANGE;
     let disengage = engage + CombatSettings::DISENGAGE_MARGIN;
 
     match mode.get() {
         Mode::Exploring => {
-            if any_hostile_in_reach(&units, engage) == Some(true) {
+            if let Some((entity, stopped)) = crossings
+                .as_deref()
+                .and_then(|crossings| first_hostile_crossing(&units, crossings, engage))
+            {
+                // The rendered transform may already have crossed several more legs.
+                // Preserve the first engaging waypoint until combat-entry movement
+                // reconciliation can snap the unit back to it.
+                commands.entity(entity).insert(StopMovingAt::new(stopped));
+                next.set(Mode::Combat);
+            } else if any_hostile_in_reach(&units, engage) == Some(true) {
                 next.set(Mode::Combat);
             }
         }
@@ -206,9 +218,9 @@ fn engagement(
 /// put a unit on a bridge and one on the ground beneath it zero hexes apart — true
 /// horizontally, and exactly why the answer has to come from a reach rule that knows
 /// what height is worth rather than from raw separation.
-fn any_hostile_in_reach(units: &Query<(&Faction, &StandsOn)>, range: u32) -> Option<bool> {
+fn any_hostile_in_reach(units: &Query<(Entity, &Faction, &StandsOn)>, range: u32) -> Option<bool> {
     let mut by_faction: HashMap<Faction, Vec<TilePos>> = HashMap::default();
-    for (faction, standing) in units.iter() {
+    for (_, faction, standing) in units.iter() {
         by_faction.entry(*faction).or_default().push(standing.0.pos);
     }
 
@@ -219,6 +231,32 @@ fn any_hostile_in_reach(units: &Query<(&Faction, &StandsOn)>, range: u32) -> Opt
         mine.iter()
             .any(|a| theirs.iter().any(|b| either_in_reach(*a, *b, range))),
     )
+}
+
+/// The first completed waypoint this frame that came within hostile reach.
+///
+/// Reconciliation records every crossed waypoint in route order. Sampling only the
+/// final [`StandsOn`] would miss a fast unit that entered and left the engagement
+/// radius during one frame.
+fn first_hostile_crossing(
+    units: &Query<(Entity, &Faction, &StandsOn)>,
+    crossings: &MovementCrossings,
+    range: u32,
+) -> Option<(Entity, Standing)> {
+    for (moving_entity, crossed) in crossings.iter() {
+        let Ok((_, moving_faction, _)) = units.get(moving_entity) else {
+            continue;
+        };
+        let entered_reach = units.iter().any(|(entity, faction, standing)| {
+            entity != moving_entity
+                && moving_faction.is_hostile_to(*faction)
+                && either_in_reach(crossed.pos, standing.0.pos, range)
+        });
+        if entered_reach {
+            return Some((moving_entity, crossed));
+        }
+    }
+    None
 }
 
 /// Builds the order and hands the first unit its turn.
