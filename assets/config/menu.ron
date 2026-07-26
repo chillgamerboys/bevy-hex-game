@@ -1,0 +1,19 @@
+// How the menus look.
+//
+// The splash, title and loading screens. Deliberately NOT the sky: the menus are not
+// in the world, and they used to borrow the sky's horizon colour only because the
+// lighting file happened to load before them. Now that each scenario brings its own
+// lighting, that would have meant the menu changing colour depending on which map you
+// last played.
+//
+// Colours are (r, g, b) in sRGB, each 0.0-1.0 — the same form as everywhere else.
+(
+    // Flat colour behind the menu screens.
+    //
+    // Dark and desaturated so the white text and the pale button highlights carry the
+    // screen. A bright background here fights the buttons, which are drawn as low-alpha
+    // white and need something dim to sit on.
+    //
+    // Changing this does not affect the sky. `lighting.ron` owns that.
+    background: (0.10, 0.11, 0.14),
+)

@@ -1,16 +1,17 @@
 //! The substance table: what each kind of voxel is called, and how it behaves.
 //!
-//! Loaded from `assets/config/substances.ron`, so adding a substance is a content
-//! change rather than a code change.
+//! Loaded from `assets/config/substances.ron`, so registering a substance is a
+//! content change rather than a code change. Terrain generation still has to select
+//! it before it appears in a generated world.
 //!
 //! It lives in `hex_assets` rather than in `hex_map` because both the map and
 //! gameplay need it — the map to colour a prism, gameplay to ask whether something
-//! is solid enough to stand on or soft enough to dig. `hex_gameplay` cannot see
+//! is solid enough to stand on or soft enough to dig. `hex_units` cannot see
 //! `hex_map`, so a table defined there would be unreachable.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use hex_core::SubstanceId;
+use hex_core::{Screen, SubstanceId};
 use serde::Deserialize;
 
 use crate::{LoadSettings, Rgb, CONFIG_EXTENSIONS};
@@ -19,7 +20,15 @@ use crate::{LoadSettings, Rgb, CONFIG_EXTENSIONS};
 pub fn plugin(app: &mut App) {
     app.register_type::<SubstanceTable>();
     app.load_settings::<SubstanceFile>("config/substances.ron", CONFIG_EXTENSIONS);
-    app.add_systems(Update, build_table_when_loaded);
+    register_table_builder(app);
+}
+
+/// Keeps live voxel ids stable until the current world has been torn down.
+fn register_table_builder(app: &mut App) {
+    app.add_systems(
+        Update,
+        build_table_when_loaded.run_if(not(in_state(Screen::Gameplay))),
+    );
 }
 
 /// How one substance behaves.
@@ -170,6 +179,8 @@ fn build_table_when_loaded(
 
 #[cfg(test)]
 mod tests {
+    use bevy::state::app::StatesPlugin;
+
     use super::*;
 
     fn test_file() -> SubstanceFile {
@@ -190,6 +201,11 @@ mod tests {
             );
         }
         SubstanceFile { substances }
+    }
+
+    fn shipped_file() -> SubstanceFile {
+        ron::from_str(include_str!("../../../assets/config/substances.ron"))
+            .expect("the shipped substance file should parse")
     }
 
     #[test]
@@ -259,6 +275,49 @@ mod tests {
         assert!(!table.is_diggable(unknown));
     }
 
+    /// Reassigning sorted ids under a live world would reinterpret existing voxels.
+    #[test]
+    fn table_rebuild_waits_until_gameplay_ends() {
+        let original = test_file();
+        let mut replacement = test_file();
+        replacement.substances.insert(
+            "clay".to_owned(),
+            Substance {
+                color: (0.6, 0.3, 0.2),
+                solid: true,
+                diggable: true,
+            },
+        );
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Gameplay);
+        app.insert_resource(SubstanceTable::from_file(&original));
+        app.insert_resource(replacement);
+        register_table_builder(&mut app);
+
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SubstanceTable>()
+                .id("clay")
+                .is_none(),
+            "the live world must keep the table its voxel ids were generated from"
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<SubstanceTable>()
+                .id("clay")
+                .is_some(),
+            "the table should rebuild once gameplay has torn down"
+        );
+    }
+
     /// A file missing `air` still has to produce a table where id 0 is empty space,
     /// because `SubstanceId::AIR` is a compile-time constant.
     #[test]
@@ -269,5 +328,22 @@ mod tests {
         let table = SubstanceTable::from_file(&file);
         assert_eq!(table.name(SubstanceId::AIR), Some("air"));
         assert!(!table.is_solid(SubstanceId::AIR));
+    }
+
+    #[test]
+    fn showcase_substances_have_the_required_behaviour() {
+        let table = SubstanceTable::from_file(&shipped_file());
+        let gravel = table.id("gravel").expect("gravel should be registered");
+        let water = table.id("water").expect("water should be registered");
+        let metal = table.id("metal").expect("metal should be registered");
+        let bedrock = table.id("bedrock").expect("bedrock should be registered");
+
+        assert!(table.is_solid(gravel));
+        assert!(table.is_diggable(gravel));
+        assert!(!table.is_solid(water), "water must not be footing");
+        assert!(table.is_diggable(water), "water should be clearable");
+        assert!(table.is_solid(metal));
+        assert!(table.is_diggable(metal));
+        assert!(!table.is_diggable(bedrock));
     }
 }

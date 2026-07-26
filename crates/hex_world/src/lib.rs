@@ -4,19 +4,21 @@
 //! generation, tile spawning, and map settings together — so the map can be worked
 //! on in one place without reaching across crates.
 //!
-//! This crate must not depend on `hex_gameplay` or `hex_map`. Anything shared
+//! This crate must not depend on `hex_units` or `hex_map`. Anything shared
 //! belongs in `hex_core`.
 
 use bevy::prelude::*;
 
-/// Pan/orbit camera and the skybox.
+/// Pan/orbit camera and the sky dome.
 pub mod camera;
 /// Sun, ambient light, and sky colour.
 pub mod sky;
+/// Procedural sky material.
+mod sky_material;
 
 pub use camera::PanOrbitCamera;
 
 /// Adds every world-presentation system.
 pub fn plugin(app: &mut App) {
-    app.add_plugins((camera::plugin, sky::plugin));
+    app.add_plugins((camera::plugin, sky::plugin, sky_material::plugin));
 }

@@ -1,0 +1,24 @@
+[package]
+name = "hex_combat"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The gameplay loop: real time until something happens, then turns."
+
+# Depends on hex_units, which is a layer rather than a sibling -- a turn order is a
+# fact *about* units, so it cannot be expressed without them. The sibling rule that
+# keeps hex_map, hex_world and hex_units apart still holds; this is not an exception
+# to it, it is a level above it.
+[dependencies]
+bevy = { workspace = true }
+# For `Transformation` only: a turn must not end while its unit is still mid-stride,
+# and the absence of that component is what "finished moving" means.
+hex_anim = { workspace = true }
+# For the substance table and the movement speed, both of which the AI needs to
+# work out where it can walk and how fast to animate getting there.
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+hex_units = { workspace = true }
+
+[lints]
+workspace = true

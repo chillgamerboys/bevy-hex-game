@@ -28,24 +28,26 @@ The list lives in `assets/config/substances.ron`.
 
 ## The rules the rest of the game depends on
 
-### Stacked columns are not connected
+### Stacked surfaces are not connected
 
 A piece on a bridge **cannot step down** to the ground beneath it. Getting down means
-walking a ramp of adjacent columns that descends one level at a time, or using an
+walking a ramp of adjacent surfaces that descends one level at a time, or using an
 ability that explicitly bypasses the rule — a teleport, a tunnel.
 
 This is a design decision, and it means a position is a `TilePos`, never a `HexCoord`.
-Two columns sharing a coordinate are unrelated places that happen to share an address.
+There is one `Column` per coordinate, but separate material runs within it are
+unrelated positions that happen to share a horizontal address. Only runs whose
+substance is solid can become places to stand.
 
 **Never key anything by `HexCoord` in a way that collapses a stack.** A
-`HashMap<HexCoord, f32>` keeping "the highest column" silently makes every lower column
-unreachable, and a piece crossing a bridge teleports to the ground. That abstraction
+`HashMap<HexCoord, f32>` keeping only the highest surface silently makes every lower
+surface unreachable, and a piece crossing a bridge teleports to the ground. That abstraction
 existed briefly and was deleted rather than fixed — one that *can* express the
 forbidden thing eventually will.
 
 ### One level is one step
 
-A step is legal when the destination is an adjacent column and its surface is within
+A step is legal when the destination is an adjacent surface and its level is within
 **one level**. Because levels are integers, that is `step.abs() <= 1` — no epsilon, no
 accumulated float error. This is the concrete payoff for quantising the vertical axis.
 
@@ -78,8 +80,10 @@ is a real answer that callers handle rather than an error.
 
 ### Bedrock is not diggable
 
-It is the floor of the world. Every column has at least one level above it, so a column
-of bare bedrock — a permanent hole nothing could dig through — cannot be generated.
+It is the floor of the world. `substances.ron` marks it non-diggable, and the map
+rejects terrain edits that would replace or clear a non-diggable voxel. Every generated
+column also has at least one level above it, so bare bedrock cannot become a permanent
+hole in the walkable surface.
 
 ## How it is stored
 
@@ -106,10 +110,10 @@ under a megabyte and the correctness difference is what matters.
 
 This is the part worth understanding before changing anything.
 
-**One entity per voxel would be about 25,000 entities.** Instead the spawn pass merges
-vertical runs of the same substance into a single prism, so a fifteen-level stone column
-is one entity. Measured: **3,400–4,100 entities at 60 FPS**, the spread being how much
-the terrain seed varies the number of substance bands.
+**One entity per voxel would be tens of thousands of entities on a deep map.** Instead
+the spawn pass merges vertical runs of the same substance into a single prism, so a
+fifteen-level stone column is one entity. The rendered entity count therefore follows
+the number of substance bands rather than the number of stored voxels.
 
 Two consequences:
 
@@ -118,18 +122,20 @@ Two consequences:
   a tunnelling spell targets — is addressable only by `TilePos`. This is why targeting
   is positional rather than entity-based.
 
-A tile is tagged with the `TilePos` of its **topmost solid voxel**: the thing a piece
-standing there stands on. Tagging the base instead would force gameplay to know the
-level height to work the surface out, which would put a dependency on the map back into
-movement.
+A tile is tagged with the `TilePos` of its run's **topmost material voxel**. Gameplay
+then combines that position with the substance's `solid` flag before treating it as
+footing; a water run is rendered but is not standable. Tagging the base instead would
+force gameplay to know the level height to work the surface out, which would put a
+dependency on the map back into movement.
 
 ## What each crate sees
 
 ```
-hex_core     TilePos, HexSpan, SubstanceId, Headroom, TerrainEdit — the vocabulary
+hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
+             TerrainEdit — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
-hex_gameplay reads tiles; cannot see hex_map
+hex_units reads tiles; cannot see hex_map
 ```
 
 The map talks to the rest of the game **only through components on tile entities**:
@@ -138,7 +144,7 @@ The map talks to the rest of the game **only through components on tile entities
 (HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
-`hex_gameplay` queries those. It never reads `VoxelMap` or any generator, so terrain
+`hex_units` queries those. It never reads `VoxelMap` or any generator, so terrain
 storage and generation can be replaced wholesale — chunked, streamed, generated
 differently — without anything else noticing.
 
@@ -157,7 +163,7 @@ and the map applies it. That is the whole write path.
 | | |
 |---|---|
 | A tile entity covers a **run**, not a voxel | its `HexSpan` may be many levels tall |
-| A tile's `TilePos` is its **surface** | the topmost solid voxel, not the base |
+| A tile's `TilePos` is its **run surface** | the topmost material voxel, not the base |
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
@@ -170,10 +176,13 @@ and the map applies it. That is the whole write path.
 
 - **What a spell does.** `TerrainEdit` can express digging and building; which spells
   exist, what they cost, and what they target is game design.
-- **Pathfinding.** `route` walks a straight line and gives up when blocked.
-  `hexx::a_star`, `field_of_view` and `field_of_movement` are already compiled in and
-  are the obvious basis, once there is a movement-cost model.
-- **Anything about turns.** There is no turn system yet.
-- **Whether stacked columns ever connect.** Teleport and tunnel are named in the design
-  but not implemented. When they are, they belong in `hex_gameplay` as explicit
+- **What a step costs.** `hex_units::movement::Reach` searches over `TilePos` and
+  charges one per step, so the map's substances do not yet affect how far a piece
+  gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
+  keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
+- **Whether terrain takes a turn to change.** A turn order exists now — see
+  [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md) — but `TerrainEdit` is applied the moment it
+  arrives and costs nobody anything. Whether digging is an action is a design question.
+- **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
+  but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a seven-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
 
 Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -11,7 +11,7 @@ summary.
 | Crate | Version | Notes |
 |---|---|---|
 | `bevy` | `0.19` | |
-| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade. `a_star`, `field_of_view` and `field_of_movement` are compiled in but unused |
+| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade. `a_star` and `field_of_movement` are compiled in but **unusable** — both key on `Hex` alone, which cannot express two surfaces stacked at one coordinate. Pathfinding is `hex_units::movement::Reach`, over `TilePos` |
 | `bevy-inspector-egui` | `0.37` | Targets bevy 0.19. Isolated in `hex_dev`, `dev` feature only |
 | `ron` / `serde` | | Designer-facing settings |
 | `xxhash-rust`, `rand` | | Terrain hashing |
@@ -35,37 +35,52 @@ a plain blue window with only `Path not found` in the log.
 ## Workspace
 
 ```
-hex_core → hex_assets → {hex_map, hex_world, hex_gameplay, hex_dev} → hex_game
+hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_anim ─────────────────────→ hex_units
+{Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
 
-**`hex_map`, `hex_world` and `hex_gameplay` must not depend on each other.** Shared
+**`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
-person, and the map reaches the rest of the game only through `HexCoord` and
-`HexSpan` components on tile entities. See `crates/hex_map/CLAUDE.md`.
+person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
+surface `TilePos`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
+entities. See `crates/hex_map/CLAUDE.md`. Cargo isolates the implementation, but
+malformed components can still break gameplay at runtime.
+
+**Ownership cuts both ways.** `hex_units` and `hex_combat` belong to the other person,
+and a review comment on a *design* question inside someone else's crate is an argument
+rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
+broken boundaries are the exception and should block. See
+`docs/ARCHITECTURE.md#ownership-cuts-both-ways`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
-and tests without a renderer. It holds the largest share of the test suite (34 of 94).
+and tests without a renderer. It holds the largest share of the test suite.
 
 ## Conventions
 
-- **Modules expose `pub fn plugin(app: &mut App)`**, not a `Plugin` struct.
-- **Each plugin registers its own reflected types.** Never a central list.
-- **`AppSystems`** (`TickTimers → RecordInput → Update`) orders `Update`;
+- **Subsystem modules expose `pub fn plugin(app: &mut App)`**, not a `Plugin`
+  struct. Support modules such as generators do not need one.
+- **Each plugin registers the reflected types it owns.** `hex_core` has no plugin,
+  so the runtime plugin that introduces one of its shared types registers it.
+- **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
+  into those global `Update` phases; self-contained state/UI systems can run outside.
+  **`PausableSystems`** gates gameplay work behind `Pause(false)`;
   **`GameplaySetup`** (`Resources → Terrain → Actors`) orders
   `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
   set — `.chain()` cannot express it, and a local chain that looks correct will race.
   The set boundary also supplies a sync point: `Commands`-spawned entities are not
   queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made.
-- **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Stacked
-  columns at one coordinate are not connected. Never key anything by `HexCoord` in a
-  way that collapses a stack.
+- **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
+  surfaces in one coordinate's column are not connected. Never key anything by
+  `HexCoord` in a way that collapses a stack.
 - **The vertical axis is `level`, never `z`** — cube coordinates already use `x`, `y`
   and `z`, and all three are horizontal.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
-  topmost solid voxel. Interior voxels have no entity, which is why targeting is
-  positional. See `docs/MAP_MODEL.md`.
+  topmost material voxel. Its substance determines whether that position is solid
+  footing. Interior voxels have no entity, which is why targeting is positional. See
+  `docs/MAP_MODEL.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom is at
   least its `levels_tall` (2 for the player). Only the map can measure this, so it
@@ -74,9 +89,9 @@ and tests without a renderer. It holds the largest share of the test suite (34 o
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.
-- **Settings come from `assets/config/*.ron`.** Resources are absent until parsed
-  rather than defaulted, so a bad file stalls loading instead of silently running
-  with the wrong values.
+- **Settings come from `assets/config/*.ron`.** On initial load, resources are
+  absent until parsed rather than defaulted, so a bad file stalls loading. After
+  that, a failed hot reload retains the last valid value and reports the error.
 
 ## Bevy 0.19 specifics
 
@@ -87,8 +102,9 @@ Idioms that look right but aren't:
   `Pointer<Click>` is still an `Event` for observers.
 - Required-component tuples (`Camera3d`, `Mesh3d`, `MeshMaterial3d`). No `*Bundle`.
 - `ButtonInput<T>`, never `Input<T>`. `Color::srgb`, never `Color::rgb`.
-- `GlobalAmbientLight` is a resource, not `AmbientLight`.
-- Physical light units: illuminance in lux, `Skybox::brightness` in cd/m².
+- `GlobalAmbientLight` is a resource, not `AmbientLight` (which is a per-camera
+  *component* in 0.19).
+- Physical light units: illuminance in lux, `EnvironmentMapLight::intensity` in cd/m².
 - **Cursor deltas via `CursorMoved`, never `MouseMotion`** — Wayland/WSLg does not
   deliver `MouseMotion` while a button is held. See `camera.rs::orbit_camera`.
 
@@ -96,12 +112,14 @@ Idioms that look right but aren't:
 
 Two of these aren't in the official migration guide:
 
-- `Skybox::image` is now `Option<Handle<Image>>`.
 - `DirectionalLight::shadows_enabled` → **`shadow_maps_enabled`**. *(Undocumented.)*
 - `Assets::get_mut` returns an `AssetMut` wrapper, not `&mut A`. Bindings need
   `mut`, and you can't read the value inside the argument list of a method that
   mutably borrows it. *(Undocumented.)*
 - `AssetLoader` implementations need `TypePath`.
+- **`StandardMaterial::from(Color)` infers `AlphaMode::Blend` when alpha < 1; a struct
+  literal does not.** It leaves `Opaque`, which discards the alpha and renders a solid
+  object with no warning at all. Anything translucent must set `alpha_mode` explicitly.
 
 Resources-as-components doesn't bite here because no type derives both `Resource`
 and `Component`, and every query names concrete components.
@@ -114,8 +132,9 @@ change worked — look at the window.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Skybox `AssetEvent` missed; PNG never reinterpreted as a cubemap |
-| Stuck on "loading…" | A RON file failed to parse, or an asset path is wrong |
+| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
+| Clouds smeared into streaks | Sky-projection singularity. Check from the *gameplay* camera: it looks down, so it sees the half of the sky a level screenshot never shows |
+| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
 | Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
@@ -144,27 +163,32 @@ black sky, a gap between tiles, or a piece sunk into the terrain**, and every se
 bug in this codebase so far was found by a person clicking. `dev` is where things are
 allowed to be wrong.
 
-- Prefixes: `chore/`, `fix/`, `perf/`, `feat/`, `docs/`.
+- Prefixes: `chore/`, `fix/`, `perf/`, `feat/`, `docs/`, `refactor/`.
 - `refactor/*` names are usable again now the `refactor` branch is gone; a git ref
   can't be both a file and a directory, so they clashed while it existed.
 - Merge with merge commits (`gh pr merge N --merge`), not squash.
 - Delete feature branches once merged. **Never delete `dev`.**
-- CI runs fmt, clippy, tests, `cargo deny`, and builds on all three platforms — on
-  PRs into `dev` as well as into `main`.
+- CI runs fmt, clippy, tests, `cargo deny`, and builds on all three platforms for
+  Rust-affecting PRs into `dev` as well as into `main`. Markdown-only changes skip
+  the Rust jobs.
 
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, 94 tests. macOS is the primary dev machine; the
-WSL2 setup in the README belongs to another contributor and still works.
+terrain seed. Bevy 0.19, Rust 1.97.1, and more than 180 tests. macOS is the primary
+dev machine; the WSL2 setup in the README belongs to another contributor and still
+works.
 
 Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
 auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, level-based movement, and body size via headroom.
+destruction, level-based movement, body size via headroom, a turn order with two
+tempos, a breadth-first pathfinder over stacked surfaces, a movement preview that draws
+the reachable set and the route before a click commits to either, and surface-aware
+targeting where height buys range.
 
-There is still no turn system, no abilities, and no pathfinder — `route` walks a
-straight line and gives up when blocked. Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other.
+There are still no abilities and no lattices. Bodies are one hex wide; there is no
+footprint for anything larger, and units do not obstruct each other — so a route may
+be drawn straight through another piece.
 
 ## Known gaps
 
@@ -174,11 +198,12 @@ footprint for anything larger, and units do not obstruct each other.
   would cut compile time and binary size but risks silently dropping capability.
 - **Lints are strict, deliberately.** `#[allow]` is banned — use
   `#[expect(lint, reason = "…")]`. `unwrap`, `panic!`, slice indexing, `dbg!`,
-  `println!`, float `==` and undocumented public items are all denied. Restriction
-  lints are relaxed in `#[test]` functions.
+  `println!`, float `==` and undocumented public items are all denied. Tests may
+  unwrap, expect, panic, debug and print; slice indexing and the other restrictions
+  remain denied.
 - **Animation is still `Box<dyn Transformer>`**, which is why `Transformation`
   can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
   rewritten when gameplay lands.
 - **Headless integration tests** live in `crates/hex_map/tests/` and
-  `crates/hex_gameplay/tests/`. They cannot see anything visual — a black sky or a
+  `crates/hex_units/tests/`. They cannot see anything visual — a black sky or a
   mistransformed tile still needs a human looking at the window.

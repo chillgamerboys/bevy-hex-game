@@ -3,15 +3,16 @@ name = "hex_map"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "The map: terrain generation, tile spawning, and map settings."
+description = "Voxel storage, terrain generation, tile spawning, and map settings."
 
-# A leaf crate. Nothing depends on it except the binary, which means work here
-# cannot break gameplay, the camera, the sky, or the screens — those crates
-# cannot see it. That is deliberate: this is the crate the map owner works in.
+# A leaf crate. Nothing depends on it except the binary, so gameplay, camera, sky,
+# and screens cannot import its implementation. The ECS component contract still
+# matters at runtime: bad tile metadata can break movement or presentation.
 #
 # It talks to the rest of the game through `hex_core`'s vocabulary: it spawns
-# entities carrying `HexCoord` and `HexSpan`, and `hex_gameplay` reads those
-# components off the entities rather than reaching for anything defined here.
+# entities carrying `HexTile`, `HexCoord`, surface `TilePos`, `HexSpan`,
+# `SubstanceId`, and `Headroom`; `hex_units` reads those components off the
+# entities rather than reaching for anything defined here.
 [dependencies]
 bevy = { workspace = true }
 hex_assets = { workspace = true }
@@ -22,6 +23,7 @@ xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 hex_assets = { workspace = true }
+ron = "0.12.2"
 
 [lints]
 workspace = true

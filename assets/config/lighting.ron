@@ -1,20 +1,50 @@
-// Sun, ambient light, and sky.
+// Sun, ambient light, sky, and the optional extras.
 //
 // These use real physical units. Illuminance is in lux: around 100000 is direct
-// noon sun, 10000 is overcast. Skybox brightness is in candela per square metre.
+// noon sun, 10000 is overcast. Everything here takes effect the moment you save.
+//
+// The values below are the game's shipped look. The sky light and the haze are both
+// switched off — they are here so the lighting can be explored without touching Rust,
+// not because the game needs them. See docs/CONTENT.md before turning them up.
 (
+    // The sun, and the key light for the whole scene. Its colour and angle decide the
+    // shape of everything: shadows are what model flat-shaded terrain.
     sun_illuminance: 10000.0,
+    sun_color: (1.0, 1.0, 1.0),
 
-    // Sun direction, as XYZ rotation in radians.
+    // Sun direction, as XYZ rotation in radians. The first number is height in the
+    // sky, the second swings it around the compass and decides which way shadows fall.
     sun_rotation: (11.4, 0.3, 0.0),
 
-    // Fill light applied everywhere, so shadows are not pure black.
+    // Uniform fill applied everywhere, so shadows are not pure black.
     ambient_brightness: 80.0,
+    ambient_color: (1.0, 1.0, 1.0),
 
-    // The cubemap already encodes a bright sky, so this stays low to avoid
-    // blowing out the scene.
-    skybox_brightness: 300.0,
+    // Optional sky light: a soft fill that varies with which way a surface faces —
+    // blue from overhead, warm bounce from the ground — so it colours shadows instead
+    // of flattening the scene. 0.0 is off. Try ~100–200 before going higher; a few
+    // hundred already starts washing the shading out.
+    sky_light_intensity: 0.0,
+    ground_color: (0.32, 0.27, 0.21),
 
-    // Background colour, visible anywhere the skybox is not.
-    sky_color: (0.5294, 0.8087, 0.9216),
+    // Sky gradient: paler at the horizon, deeper blue overhead. The sky light reuses
+    // these two, so the lighting can never drift away from the sky.
+    sky_color: (0.55, 0.80, 0.95),
+    zenith_color: (0.25, 0.50, 0.85),
+
+    // Hexagonal clouds.
+    cloud_color: (0.97, 0.98, 1.0),
+    cloud_coverage: 0.18,
+    hex_cloud_scale: 16.0,
+    cloud_softness: 0.1,
+    // 0.0 = hard hexagons, 1.0 = round; a gentle hex hint in the middle.
+    cloud_roundness: 0.5,
+    // Fbm edge break-up: 0.0 clean, ~0.5 wispy.
+    cloud_noise: 0.3,
+
+    // Optional distance haze, off by default. It veils the whole map in pale grey-blue,
+    // which costs more colour than it buys atmosphere at this camera distance.
+    fog_color: (0.62, 0.72, 0.82),
+    fog_sun_color: (1.0, 0.78, 0.50),
+    fog_density: 0.0,
 )

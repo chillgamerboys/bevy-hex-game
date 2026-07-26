@@ -2,7 +2,7 @@
 //!
 //! This module defines *what the map is made of* without saying anything about how
 //! it is stored. `hex_map` owns storage, generation, and rendering; everything here
-//! is shared so that `hex_gameplay` can reason about terrain without depending on
+//! is shared so that `hex_units` can reason about terrain without depending on
 //! the crate that produces it.
 //!
 //! # `level`, never `z`
@@ -73,7 +73,7 @@ pub const MAX_HEADROOM: Level = 8;
 /// rather than gameplay trying to infer it from spans.
 ///
 /// This is **not** "standable". Standing also needs a solid substance and a body short
-/// enough to fit, both of which are `hex_gameplay`'s judgement. This component states
+/// enough to fit, both of which are `hex_units`'s judgement. This component states
 /// the geometry and nothing else.
 ///
 /// Ground under a bridge keeps its headroom — the bridge is a separate run with air
@@ -119,8 +119,8 @@ impl TilePos {
     /// Deliberately excludes [`Self::above`] and [`Self::below`]: **stacked voxels
     /// are not neighbours**. A piece on a bridge cannot step down to the ground
     /// beneath it, so vertical adjacency is not adjacency at all — reaching a lower
-    /// column means a ramp of adjacent columns descending gradually, or an ability
-    /// that explicitly bypasses the rule.
+    /// surface means a ramp across adjacent coordinates descending gradually, or an
+    /// ability that explicitly bypasses the rule.
     #[must_use]
     pub fn neighbours(self) -> [Self; 6] {
         self.coord.neighbors().map(|coord| Self {
@@ -145,7 +145,7 @@ impl TilePos {
     /// Purely geometric: adjacent column, and no more than `max_step` levels of
     /// climb or drop. Whether the destination is solid enough to stand on, whether
     /// the mover has the movement left, and which abilities ignore this entirely are
-    /// all questions for `hex_gameplay`.
+    /// all questions for `hex_units`.
     #[must_use]
     pub fn is_within_step_of(self, other: Self, max_step: Level) -> bool {
         self.coord.distance(other.coord) == 1 && self.level_step_to(other).abs() <= max_step
@@ -154,9 +154,10 @@ impl TilePos {
 
 /// What a voxel is made of.
 ///
-/// An opaque id rather than an enum, so that adding obsidian is a change to
-/// `assets/config/substances.ron` rather than to this crate. The table mapping ids to
-/// names and properties is loaded by `hex_assets`.
+/// An opaque id rather than an enum, so registering obsidian is a change to
+/// `assets/config/substances.ron` rather than to this crate. Terrain generation still
+/// has to select that substance before it appears in a generated world. The table
+/// mapping ids to names and properties is loaded by `hex_assets`.
 #[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[reflect(Component)]
 pub struct SubstanceId(pub u16);
@@ -179,15 +180,20 @@ impl SubstanceId {
 
 /// A request to change the world.
 ///
-/// `hex_gameplay` cannot call into `hex_map` — the two crates deliberately cannot see
+/// `hex_units` cannot call into `hex_map` — the two crates deliberately cannot see
 /// each other — so a spell that digs, builds, or destroys writes one of these and the
 /// map applies it. This is the whole write path.
 ///
-/// Reading terrain does not go through here: that is done by querying tile entities
-/// for their [`TilePos`], [`HexSpan`](crate::HexSpan) and [`SubstanceId`].
+/// The map validates the edit against the current substance. A non-diggable voxel
+/// such as bedrock cannot be cleared or replaced.
+///
+/// Reading terrain does not go through here: gameplay queries entities marked
+/// [`HexTile`](crate::HexTile) for their [`TilePos`], [`HexSpan`](crate::HexSpan),
+/// [`SubstanceId`] and [`Headroom`].
 #[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub enum TerrainEdit {
-    /// Replace the voxel at `pos` with `substance`.
+    /// Replace the voxel at `pos` with `substance`, unless its current substance is
+    /// non-diggable.
     ///
     /// Filling a position above the current top of a column is legal, and is how a
     /// bridge or a conjured platform gets built. Everything between is left as air.
@@ -197,7 +203,7 @@ pub enum TerrainEdit {
         /// What it becomes.
         substance: SubstanceId,
     },
-    /// Turn the voxel at `pos` into air.
+    /// Turn the voxel at `pos` into air if its current substance is diggable.
     ///
     /// Digging a voxel out of the middle of a column splits it: the map re-meshes the
     /// column into a run below the hole and a run above it, which is what makes caves

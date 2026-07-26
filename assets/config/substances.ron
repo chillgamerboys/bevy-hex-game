@@ -1,10 +1,13 @@
 // What the world is made of.
 //
-// Each entry is a substance a voxel can be. Add one by adding an entry here — no
-// code change is needed.
+// Each entry registers a substance that a voxel can use. Adding one here makes it
+// available to the game, but terrain generation must select it before it appears
+// in a generated world.
 //
 // `air` is special and must always be present: it means empty space, and the game
-// checks for it constantly. Everything else is yours.
+// checks for it constantly. The terrain presets select the other entries by name;
+// changing their properties is safe, but renaming them requires updating the
+// generation code.
 (
     substances: {
         "air": (
@@ -30,6 +33,28 @@
 
         "stone": (
             color: (0.55, 0.55, 0.58),
+            solid: true,
+            diggable: true,
+        ),
+
+        "gravel": (
+            color: (0.42, 0.40, 0.36),
+            solid: true,
+            diggable: true,
+        ),
+
+        // Rendered as a voxel but excluded from movement footing. It remains
+        // clearable through the same terrain-edit rule as dirt and stone.
+        "water": (
+            color: (0.08, 0.32, 0.65),
+            solid: false,
+            diggable: true,
+        ),
+
+        // Durability is not modelled yet, so metal is currently just a solid,
+        // diggable bridge material.
+        "metal": (
+            color: (0.30, 0.34, 0.40),
             solid: true,
             diggable: true,
         ),

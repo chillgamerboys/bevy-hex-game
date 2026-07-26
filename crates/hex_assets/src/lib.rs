@@ -16,23 +16,25 @@ use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
 pub mod loader;
+/// The scenarios offered on the title screen.
+pub mod scenario;
 pub mod settings;
 pub mod substances;
 
-pub use loader::{LoadSettings, SettingsRegistry};
+pub use loader::{
+    choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+};
+pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
 pub use settings::{
-    to_color, CameraSettings, DisplaySettings, LightingSettings, PlayerSettings,
-    PresentModeSetting, Rgb,
+    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
+    PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
-const SKYBOX: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
-/// RON files carry a `.ron` extension, but are matched here by their full
-/// double extension so an ordinary `.ron` elsewhere is not claimed by the wrong
-/// loader.
+/// File extensions claimed by the generic settings loader.
 pub const CONFIG_EXTENSIONS: &[&str] = &["ron"];
 
 /// Registers asset loading and the settings shared across the game.
@@ -42,14 +44,28 @@ pub fn plugin(app: &mut App) {
     app.register_type::<CameraSettings>()
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
-        .register_type::<DisplaySettings>();
+        .register_type::<DisplaySettings>()
+        .register_type::<MenuSettings>()
+        .register_type::<ScenarioSettings>()
+        .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
 
+    // Two types are deliberately **not** loaded from a fixed file here.
+    //
+    // `ScenarioSettings` is still the resource `spawn_units` reads, but its value now
+    // comes from whichever scenario was chosen, so the library is what gets loaded and
+    // the placements come out of it.
+    //
+    // `LightingSettings` is chosen the same way, by `hex_game::scenarios` — a scenario
+    // names its own sky. Loading it here as well would run both `insert_settings` and
+    // `apply_settings_choice` against one resource, and hold the loading screen open
+    // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
-        .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
-        .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS);
+        .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
+        .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
+        .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.
@@ -59,8 +75,6 @@ pub struct GameAssets {
     pub hex_tile: Handle<Mesh>,
     /// The two primitives making up the player piece.
     pub player_pieces: [Handle<Mesh>; 2],
-    /// Cubemap for the sky, stored as a vertically stacked 2D PNG.
-    pub skybox: Handle<Image>,
 }
 
 impl GameAssets {
@@ -78,12 +92,11 @@ impl GameAssets {
             })
     }
 
-    fn handle_ids(&self) -> [UntypedAssetId; 4] {
+    fn handle_ids(&self) -> [UntypedAssetId; 3] {
         [
             self.hex_tile.id().untyped(),
             self.player_pieces[0].id().untyped(),
             self.player_pieces[1].id().untyped(),
-            self.skybox.id().untyped(),
         ]
     }
 }
@@ -97,6 +110,5 @@ fn load_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(GameAssets {
         hex_tile: primitive(HEX_MESH, 0),
         player_pieces: [primitive(PIECES_MESH, 0), primitive(PIECES_MESH, 1)],
-        skybox: asset_server.load(SKYBOX),
     });
 }

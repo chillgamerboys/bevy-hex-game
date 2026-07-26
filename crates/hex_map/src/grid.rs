@@ -1,13 +1,15 @@
 //! Builds the voxel world, and turns it into tile entities.
 //!
-//! This is the seam between the map and the rest of the game. Storage, generation and
-//! substances are private to `hex_map`; everything downstream sees only entities
-//! carrying a [`TilePos`](hex_core::TilePos), a [`HexSpan`](hex_core::HexSpan) and a
-//! [`SubstanceId`](hex_core::SubstanceId).
+//! Storage and generation are private to `hex_map`; rendered terrain reaches other
+//! crates as entities carrying [`HexTile`](hex_core::HexTile),
+//! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
+//! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
+//! [`Headroom`](hex_core::Headroom). The substance table itself is shared through
+//! `hex_assets` because gameplay also reads its behavior flags.
 //!
-//! Keeping that seam narrow is what lets the map be rebuilt without touching
-//! gameplay. A richer map means producing different voxels here; it does not change
-//! what a tile *is* to anyone else.
+//! Keeping that boundary narrow is what lets the map be rebuilt without touching
+//! gameplay. A richer map means producing different voxels in the terrain builder;
+//! it does not change what a tile *is* to anyone else.
 
 use bevy::prelude::*;
 
@@ -17,8 +19,8 @@ use hex_core::{
     TerrainEdit, TilePos, MAX_HEADROOM,
 };
 
-use crate::generator::{HeightMap, PerlinGenerator, PerlinStep};
 use crate::settings::MapSettings;
+use crate::terrain::{build_map, TerrainPalette};
 use crate::voxel::{runs, Column, VoxelMap};
 
 /// Registers world construction and tile spawning.
@@ -31,7 +33,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<TilePos>()
         .register_type::<Headroom>()
         .add_message::<TerrainEdit>()
-        // Split across two sets rather than chained locally: `hex_gameplay` spawns
+        // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
         // local `.chain()` cannot order systems in another crate.
         .add_systems(
@@ -46,80 +48,19 @@ pub fn plugin(app: &mut App) {
             Update,
             apply_terrain_edits.run_if(in_state(Screen::Gameplay)),
         )
-        .add_systems(OnExit(Screen::Gameplay), despawn_grid);
+        .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }
 
-/// Which substances the generator lays down, resolved once from the table.
-///
-/// Names are looked up rather than hardcoded as ids, because ids come from the
-/// substance file and would change if it did. Missing names fall back to air, which
-/// renders as nothing — a visible, harmless failure rather than a wrong-looking world.
-struct Palette {
-    bedrock: SubstanceId,
-    stone: SubstanceId,
-    dirt: SubstanceId,
-    grass: SubstanceId,
-}
-
-impl Palette {
-    fn from_table(table: &SubstanceTable) -> Self {
-        let id = |name: &str| table.id(name).unwrap_or(SubstanceId::AIR);
-        Self {
-            bedrock: id("bedrock"),
-            stone: id("stone"),
-            dirt: id("dirt"),
-            grass: id("grass"),
-        }
-    }
-}
-
-/// Fills every column from the bedrock floor up to its generated surface height.
-///
-/// Solid all the way down is what gives digging something to work through. The
-/// banding — bedrock, stone, dirt, a single layer of grass on top — is deliberately
-/// simple: it exists to prove the model renders and to be replaced.
 fn generate_world(mut commands: Commands, settings: Res<MapSettings>, table: Res<SubstanceTable>) {
-    let palette = Palette::from_table(&table);
-
-    let steps = settings
-        .terrain
-        .steps
-        .iter()
-        .map(|step| PerlinStep::new(step.x_freq, step.y_freq, step.magnitude))
-        .collect();
-    let generator = PerlinGenerator::new(steps, settings.terrain.seed);
-    let heights = HeightMap::new(generator, settings.grid_radius);
-
-    let mut map = VoxelMap::new();
-    for coord in HexCoord::ORIGIN.within_radius(settings.grid_radius) {
-        map.insert_column(coord, column_for(heights.surface_level(coord), &palette));
-    }
-
-    commands.insert_resource(map);
+    let palette = TerrainPalette::from_table(&table);
+    commands.insert_resource(build_map(&settings, &palette));
 }
 
-/// The strata of one column, given the level of its topmost solid voxel.
-fn column_for(surface: hex_core::Level, palette: &Palette) -> Column {
-    let mut column = Column::new();
-    for level in 0..=surface {
-        let substance = if level == 0 {
-            palette.bedrock
-        } else if level == surface {
-            palette.grass
-        } else if level + 2 >= surface {
-            palette.dirt
-        } else {
-            palette.stone
-        };
-        column.set(level, substance);
-    }
-    column
-}
-
-fn despawn_grid(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
+fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
     for entity in &grids {
         commands.entity(entity).despawn();
     }
+    commands.remove_resource::<VoxelMap>();
 }
 
 /// Spawns one entity per contiguous run of substance.
@@ -162,8 +103,7 @@ fn build_grid(
     let mut tiles = Vec::new();
     for (coord, column) in map.columns() {
         for run in runs(column) {
-            let material =
-                palette_materials.get_or_create(run.substance, table, materials, settings);
+            let material = palette_materials.get_or_create(run.substance, table, materials);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
             // Only the map can measure this: a run knows its own extent but nothing
@@ -186,12 +126,13 @@ fn build_grid(
                         coord,
                         span,
                         run.substance,
-                        // The run's **topmost solid voxel** — the thing something
-                        // standing here is standing on. Tagging the base instead
-                        // would force gameplay to know the level height to work the
-                        // surface out, putting a dependency on the map straight back
-                        // into movement. Voxels inside the run are addressed by
-                        // `TilePos`, not by this entity.
+                        // The run's topmost material voxel. Gameplay combines this
+                        // position with the substance's `solid` flag before treating
+                        // it as footing. Tagging the base instead would force
+                        // gameplay to know the level height to work the surface out,
+                        // putting a dependency on the map straight back into
+                        // movement. Voxels inside the run are addressed by `TilePos`,
+                        // not by this entity.
                         TilePos::new(coord, run.top - 1),
                         Headroom(headroom),
                     ))
@@ -213,11 +154,11 @@ fn build_grid(
 /// Clear voxels starting at `from`, saturating at [`MAX_HEADROOM`].
 ///
 /// `from` is a run's exclusive `top`, so it names the voxel directly above the run's
-/// topmost solid one — the first place a body standing here would put its feet' worth
-/// of air. A solid voxel there means the run is buried and the answer is zero.
+/// topmost material voxel: the first place a body standing here would need air. A
+/// non-air voxel there means the run is buried and the answer is zero.
 ///
 /// Saturating matters: above a column's top the air is unbounded, so counting to the
-/// first solid voxel would never terminate. [`Column::get`] returns air for anything
+/// first non-air voxel would never terminate. [`Column::get`] returns air for anything
 /// out of range, which is what makes this loop safe without bounds checks.
 fn headroom_above(column: &Column, from: Level) -> Level {
     (0..MAX_HEADROOM)
@@ -252,18 +193,13 @@ impl MaterialCache {
         substance: SubstanceId,
         table: &SubstanceTable,
         materials: &mut Assets<StandardMaterial>,
-        settings: &MapSettings,
     ) -> Handle<StandardMaterial> {
         if let Some((_, handle)) = self.by_substance.iter().find(|(id, _)| *id == substance) {
             return handle.clone();
         }
 
-        // An unknown substance falls back to the configured tile colour rather than
-        // rendering black, which would look like a lighting bug rather than a
-        // missing entry in `substances.ron`.
-        let color = table
-            .get(substance)
-            .map_or(settings.tile_color, |s| s.color);
+        // Bright magenta makes an unknown id visibly distinct from a lighting fault.
+        let color = table.get(substance).map_or((1.0, 0.0, 1.0), |s| s.color);
         let handle = materials.add(StandardMaterial::from(to_color(color)));
         self.by_substance.push((substance, handle.clone()));
         handle
@@ -287,11 +223,7 @@ fn apply_terrain_edits(
 ) {
     let mut changed = false;
     for edit in edits.read() {
-        match *edit {
-            TerrainEdit::Set { pos, substance } => map.set(pos, substance),
-            TerrainEdit::Clear { pos } => map.set(pos, SubstanceId::AIR),
-        }
-        changed = true;
+        changed |= apply_terrain_edit(&mut map, &table, edit);
     }
     if !changed {
         return;
@@ -308,4 +240,25 @@ fn apply_terrain_edits(
         &table,
         &settings,
     );
+}
+
+/// Applies a changed edit at a nonnegative level unless it replaces a non-diggable voxel.
+fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &TerrainEdit) -> bool {
+    let pos = edit.pos();
+    if pos.level < 0 {
+        return false;
+    }
+
+    let current = map.get(pos);
+    let replacement = match *edit {
+        TerrainEdit::Set { substance, .. } => substance,
+        TerrainEdit::Clear { .. } => SubstanceId::AIR,
+    };
+
+    if current == replacement || (!current.is_air() && !table.is_diggable(current)) {
+        return false;
+    }
+
+    map.set(pos, replacement);
+    true
 }

@@ -10,9 +10,10 @@ Everything about the map:
 | File | Holds |
 |---|---|
 | `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
-| `src/generator.rs` | Terrain height generation. `HeightMap`, `HeightGenerator`, Perlin |
-| `src/grid.rs` | Building the world and turning it into tile entities |
-| `src/settings.rs` | Designer-facing settings, loaded from `assets/config/world.ron` |
+| `src/generator.rs` | The optional Perlin height field |
+| `src/terrain.rs` | Pure `MapSettings + palette -> VoxelMap` construction for every preset |
+| `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
+| `src/settings.rs` | Validated designer-facing settings from a world file, e.g. `assets/config/world.ron` |
 
 Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
 non-programmer.
@@ -20,14 +21,15 @@ non-programmer.
 **Read [`docs/MAP_MODEL.md`](../../docs/MAP_MODEL.md) before changing the model.** It
 explains the voxel representation and the rules everything else depends on.
 
-## Your blast radius is bounded, deliberately
+## Your compile-time blast radius is bounded, deliberately
 
 **Nothing depends on `hex_map` except the binary.** `hex_core`, `hex_assets`,
 `hex_world` and `hex_gameplay` cannot see it. Cargo enforces this — a `use hex_map::`
 in any of them fails to compile.
 
-The consequence: **you cannot break gameplay, the camera, the sky, the screens or
-the menus from here.** Work confidently inside this crate.
+The consequence is that those crates cannot import map internals. It is still
+possible to break their runtime behaviour by publishing a wrong `TilePos`, `HexSpan`
+or `Headroom`, which is why the component contract and visual checks below matter.
 
 ## The one contract you must keep
 
@@ -73,7 +75,7 @@ Two things depend on it:
 Getting this wrong is the worst class of bug in this codebase — it renders perfectly
 and errors nowhere. Publishing headroom for every run as if it were exposed put the
 player *inside* the terrain and left every route walking through the bedrock, arriving
-nowhere. It shipped green across clippy, the whole test suite and five CI jobs.
+nowhere. It shipped green across clippy, the whole test suite and every CI check.
 
 **So: however you generate, store, or stream the map, spawn tiles carrying those
 components and everything keeps working.** Replace `VoxelMap` wholesale if you want
@@ -81,22 +83,23 @@ to — nothing outside this crate references it.
 
 ### `TilePos` is the surface, not the base
 
-A tile entity covers a **run** of voxels. Its `TilePos` must be the topmost solid one,
-because that is what a piece standing there stands on. Tagging the base would force
-gameplay to know `level_height` to work the surface out, which puts a dependency on
-this crate straight back into movement — the exact thing the split prevents.
+A tile entity covers a **run** of one non-air substance. Its `TilePos` must be that
+run's topmost material voxel. Gameplay combines the position with the substance's
+`solid` flag before treating it as footing. Tagging the base would force gameplay to
+know `level_height` to work the surface out, which puts a dependency on this crate
+straight back into movement — the exact thing the split prevents.
 
 ### Storage is not rendering
 
-One entity per voxel would be ~25,000 at radius 20. The spawn pass merges vertical runs
-of the same substance into one prism; measured, that is 3,400–4,100 entities at 60 FPS,
-varying with the terrain seed.
+One entity per voxel would be tens of thousands on a deep map. The spawn pass merges
+vertical runs of the same substance into one prism, keeping the rendered entity count
+proportional to material bands rather than depth.
 
 Interior voxels therefore have **no entity**. That is why targeting is positional.
 
 ### The transform must agree with the span
 
-A tile's `Transform` has to match the column it claims to occupy:
+A tile's `Transform` has to match the rendered run described by its span:
 
 - `translation.y == span.centre()`
 - `scale.y == span.height()`
@@ -116,12 +119,13 @@ above the top is air; air *inside* is stored explicitly, and that is what a cave
 - A bridge over ground: one column, solid low down, air, then solid again — which the
   spawn pass renders as **two entities**
 
-**Columns stacked at the same coordinate are not connected.** A piece on a bridge
-cannot step down to the ground beneath it; reaching it means a ramp of adjacent columns
-descending a level at a time, or an ability that explicitly bypasses the rule.
+**Surfaces stacked within the same column are not connected.** A piece on a bridge
+cannot step down to the ground beneath it; reaching it means a ramp across adjacent
+coordinates descending a level at a time, or an ability that explicitly bypasses the
+rule.
 
-> **Never key anything by `HexCoord` in a way that collapses a stack.** Keeping "the
-> highest column" silently makes every lower one unreachable, and a piece crossing a
+> **Never key anything by `HexCoord` in a way that collapses a stack.** Keeping only
+> the highest surface silently makes every lower one unreachable, and a piece crossing a
 > bridge teleports to the ground.
 
 `TilePos::neighbours` deliberately excludes above and below. `TilePos::level_step_to`
@@ -131,10 +135,12 @@ gives the level difference a step rule compares against.
 
 The tests enforce these; they are here so you know *why*.
 
-- **Generated terrain is solid from level 0 up.** Digging needs something to dig
-  through, and a column starting above ground is a hole nothing can stand in.
+- **Every ground foundation is solid from level 0 to its surface.** Intentional
+  features may then add non-solid water or a floating bridge with air beneath it.
 - **Every column has at least one level above bedrock.** Bedrock is not diggable, so
   bare bedrock is a permanent hole.
+- **Terrain edits preserve non-diggable voxels.** `Clear`, setting air, or replacing
+  bedrock with another substance must all be rejected.
 - **A tile's transform agrees with its span.** Otherwise pieces float or sink and
   *nothing errors*.
 - **Air is never spawned as a prism.**
@@ -157,15 +163,15 @@ Also denied: `unwrap()`, `panic!`, `todo!`, `unimplemented!`, slice indexing
 (`v[0]` — use `.get()`, `.first()`, or destructure), `dbg!`, `println!` (use Bevy's
 `info!`/`warn!`), comparing floats with `==`, and any undocumented public item.
 
-Restriction lints are relaxed inside `#[test]` functions — a panic there is the
-point.
+Tests may unwrap, expect, panic, debug and print because failure is their job.
+Slice indexing and the other restriction lints remain denied there.
 
 ## Scheduling: where your systems go
 
 Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 
 ```rust
-GameplaySetup::Resources   // insert resources — the height map goes here
+GameplaySetup::Resources   // generate and insert VoxelMap
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
 GameplaySetup::Actors      // hex_gameplay's, not yours; needs tiles to exist
 ```
@@ -186,8 +192,8 @@ A clean log is not evidence a change worked. **Look at the window.**
 |---|---|
 | Plain blue window | Assets not found — run through `cargo`, never the binary directly |
 | Tiles in the wrong place, no error | Transform disagrees with the span |
-| Stuck on "loading…" | `world.ron` failed to parse. The terminal names the line |
-| Terrain differs every run | `seed: None` in `world.ron`. Set a number to reproduce a map |
+| Stuck on "loading…" during initial startup | A settings file failed to parse -- for terrain, whichever world the chosen scenario names. The terminal names the file and line |
+| Perlin terrain differs every run | Its preset has `seed: None`. Set a number to reproduce it |
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
 | A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
@@ -206,9 +212,12 @@ Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but t
 world is only rebuilt on entering gameplay — press `BACKSPACE` then `ENTER` to see
 terrain changes.
 
-`HeightGenerator` implementations **must be pure**: the same coordinate must always
-give the same height. Results are cached, so an impure generator produces terrain
-that changes depending on what has been looked at.
+`terrain::build_map` is pure: settings and a substance palette go in, and a complete
+`VoxelMap` comes out. Keep ECS resources, commands, and rendering out of it.
+
+`HeightGenerator` implementations used by the optional Perlin preset must also be
+pure. Results are cached, so an impure generator produces terrain that changes
+depending on what has been looked at.
 
 ## Before you finish
 
@@ -230,7 +239,7 @@ gh pr create --base dev        # <- the --base matters
 `main` moves only when `dev` is promoted into it, after someone has played the game.
 This is not ceremony: **CI cannot see anything**. A black sky, a gap between every
 tile, a piece standing inside the terrain — all three have shipped here, green across
-clippy, the whole test suite and five CI jobs. `dev` is where work is allowed to be
+clippy, the whole test suite and every CI check. `dev` is where work is allowed to be
 wrong until a person has looked at it.
 
 `dev` is permanent. Delete your feature branch after it merges; never delete `dev`.

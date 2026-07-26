@@ -1,0 +1,68 @@
+// Overcast: a cold, flat, heavily clouded day.
+//
+// Same format as `config/lighting.ron` — a scenario names one of these in
+// `scenarios.ron` and gets it instead of the shipped default.
+//
+// # Why weather and not a time of day
+//
+// A sunset was the obvious idea and it does not work, for a reason worth writing down:
+// **the gameplay camera looks down at the map, so you only ever see the lower band of
+// the sky dome.** `zenith_color` is essentially never on screen, and `sky_color` is the
+// whole background. Give it a warm sunset orange and the game is green terrain on a
+// flat terracotta field — it reads as clay, not as evening.
+//
+// So a second sky has to stay sky-*coloured*. Weather changes the light without asking
+// the background to be a colour skies are not, at the one angle you can see.
+//
+// The tell that the SUN is being re-applied and not just the dome: shadows point a
+// different way and are much fainter. If the sky changes and the shadows do not, the
+// dome is being repainted while the directional light is not.
+(
+    // Weaker and slightly cool. Overcast light is diffuse; the sun is behind cloud
+    // rather than absent, so it still casts, just faintly.
+    sun_illuminance: 5500.0,
+    sun_color: (0.94, 0.96, 1.0),
+
+    // **These three numbers are not "height, compass, roll".** They are an XYZ Euler
+    // triple, they wrap past 2pi, and the vertical component of the result depends on
+    // both of the first two together. The first version of this file changed both and
+    // put the sun **20 degrees below the horizon** — which lights nothing, renders a
+    // black map, and reports no error at all.
+    //
+    // So the first number is left exactly as the shipped default and only the second is
+    // swung. That puts the sun about 25 degrees up instead of 61, so shadows fall long
+    // and in a different direction. `every_shipped_sun_is_above_the_horizon` checks
+    // this rather than trusting it.
+    sun_rotation: (11.4, 1.1, 0.0),
+
+    // Much more fill, very slightly blue. This is what actually sells overcast: under
+    // cloud almost all the light is sky-scattered, so shadows are shallow rather than
+    // sharp. It is also why the terrain stays readable on a weaker sun.
+    ambient_brightness: 190.0,
+    ambient_color: (0.92, 0.95, 1.0),
+
+    // Still off. See CONTENT.md before turning it up.
+    sky_light_intensity: 0.0,
+    ground_color: (0.28, 0.28, 0.26),
+
+    // Desaturated and pale — grey-blue rather than blue. Kept *lighter* than the
+    // shipped sky, because a dark overcast sky and near-white cloud is a stormfront,
+    // which is a different thing and much louder.
+    sky_color: (0.74, 0.79, 0.83),
+    zenith_color: (0.52, 0.60, 0.68),
+
+    // Heavy cover, low contrast against the sky. Larger cells than the default so the
+    // cloud reads as a single sheet with breaks in it rather than as separate puffs.
+    cloud_color: (0.98, 0.98, 1.0),
+    cloud_coverage: 0.46,
+    hex_cloud_scale: 13.0,
+    cloud_softness: 0.22,
+    cloud_roundness: 0.7,
+    cloud_noise: 0.45,
+
+    // Haze stays off, as it does everywhere. The fields are here so the file is a
+    // complete `LightingSettings` and can be experimented with in place.
+    fog_color: (0.78, 0.81, 0.84),
+    fog_sun_color: (0.90, 0.92, 0.95),
+    fog_density: 0.0,
+)

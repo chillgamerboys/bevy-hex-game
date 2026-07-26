@@ -25,38 +25,40 @@
 //! Hex↔world conversion stays ours, because it has to account for the dimensions of
 //! `hex.glb`.
 //!
-//! # Columns, not heights
+//! # Spans, not heights
 //!
-//! A coordinate does not have *a* height. It carries one or more [`HexSpan`]s — each
-//! a column with a bottom and a top — so floating platforms, overhangs and caves are
-//! representable rather than being special cases bolted onto a single elevation.
-//! Terrain generation lives in `hex_map`; this crate only defines the vocabulary.
+//! A coordinate does not have *a* height. Its one voxel column can expose one or more
+//! non-air material runs, each described by a [`HexSpan`] with a bottom and a top.
+//! Floating platforms, water, overhangs and caves are therefore representable rather
+//! than being special cases bolted onto a single elevation. Terrain generation lives
+//! in `hex_map`; this crate only defines the vocabulary.
 //!
 //! # A position is a tile, not a coordinate
 //!
 //! This is the rule the rest of the game is built on, and the one most likely to be
 //! violated by accident:
 //!
-//! > **Columns stacked at the same coordinate are not connected.** A unit standing on
-//! > a bridge cannot step down to the ground beneath it. Reaching the lower column
-//! > means travelling — a ramp or spiral of adjacent columns descending gradually —
+//! > **Surfaces stacked at the same coordinate are not connected.** A unit standing on
+//! > a bridge cannot step down to the ground beneath it. Reaching the lower surface
+//! > means travelling — a ramp or spiral across adjacent coordinates descending gradually —
 //! > or an ability that explicitly bypasses the rule, such as teleporting or
 //! > tunnelling.
 //!
-//! So a unit is not *at* `HexCoord(3, -1)`. It is on a **specific column** there.
-//! Two columns sharing a coordinate are unrelated places that happen to share an
-//! address, exactly as two flats in a building share a street number.
+//! So a unit is not *at* `HexCoord(3, -1)`. It is on a **specific surface voxel**
+//! there. Separate surfaces in one column are unrelated places that happen to share
+//! a horizontal address, exactly as two flats share a street number.
 //!
-//! The practical consequence for anything that moves: **identify positions by tile
-//! entity, never by [`HexCoord`] alone.** A `HashMap<HexCoord, _>` keyed on
-//! coordinate silently collapses a stack down to one entry, and whichever column
+//! The practical consequence for anything that moves: **identify positions by
+//! [`TilePos`](crate::TilePos), never by [`HexCoord`] alone.** A
+//! `HashMap<HexCoord, _>` keyed on
+//! coordinate silently collapses a stack down to one entry, and whichever surface
 //! loses that race becomes unreachable — or worse, a unit crossing a bridge
-//! teleports to the ground. Adjacency between columns is
-//! [`HexCoord::neighbors`] *plus* an acceptable [`HexSpan::step_to`]; the
-//! coordinate on its own is only half the answer.
+//! teleports to the ground. Adjacency between surfaces combines neighbouring
+//! coordinates with an acceptable level step; the coordinate on its own is only
+//! half the answer.
 //!
 //! What counts as an acceptable step, and which abilities may ignore the rule, is
-//! movement design and lives in `hex_gameplay`.
+//! movement design and lives in `hex_units`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
@@ -214,10 +216,15 @@ impl HexCoord {
 
     /// The underlying [`hexx`] coordinate.
     ///
-    /// Public so that map and gameplay code can reach hexx's algorithms —
-    /// `a_star`, `field_of_view`, `field_of_movement` — and its dense storage types,
-    /// all of which are already compiled in. Reimplementing those is exactly the
-    /// work adopting hexx was meant to avoid.
+    /// Public so that map and gameplay code can reach hexx's algorithms and its dense
+    /// storage types, all of which are already compiled in. Reimplementing those is
+    /// exactly the work adopting hexx was meant to avoid.
+    ///
+    /// **Not all of them survive contact with a stacked map.** `a_star` and
+    /// `field_of_movement` are keyed on `Hex` alone, so a bridge and the ground
+    /// beneath it are one node to them. Anything that has to distinguish the two needs
+    /// a [`TilePos`](crate::TilePos); pathfinding accordingly lives in
+    /// `hex_units::movement` rather than being delegated here.
     ///
     /// `Hex` is two `i32`s and carries no `glam` types, so passing it around does not
     /// reopen the version-skew question that keeps hexx's Bevy features switched off.
@@ -233,15 +240,15 @@ impl HexCoord {
     }
 }
 
-/// The vertical extent a hex occupies, in **world units**.
+/// The vertical extent of a rendered tile, in **world units**.
 ///
-/// A hex is a **column**, not a height. It has a bottom and a top, so terrain that
-/// does not start at ground level is expressible: a platform floating over a valley
-/// is `{ bottom: 8.0, top: 10.0 }`, and an overhang or a bridge over open ground is
-/// two tile entities sharing one [`HexCoord`] with disjoint spans.
+/// A rendered tile is a **prism**, not a height. It has a bottom and a top, so
+/// terrain that does not start at ground level is expressible: a platform floating
+/// over a valley is `{ bottom: 8.0, top: 10.0 }`, and an overhang or a bridge over
+/// open ground is two tile entities sharing one [`HexCoord`] with disjoint spans.
 ///
-/// Ordinary ground is `{ bottom: 0.0, top: h }`, which is what the whole map is
-/// today.
+/// The map emits one span per contiguous substance run, so several disjoint spans
+/// may describe the solid material in one voxel column.
 ///
 /// # Why world units rather than the generator's quantized ones
 ///
@@ -255,29 +262,29 @@ impl HexCoord {
 /// # The contract
 ///
 /// This is how the map talks to everything else. `hex_map` decides what spans exist
-/// and how they are drawn; `hex_gameplay` reads them off tile entities. Neither
+/// and how they are drawn; `hex_units` reads them off tile entities. Neither
 /// crate can see the other.
 #[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq)]
 #[reflect(Component)]
 pub struct HexSpan {
-    /// Underside of the column.
+    /// Underside of the prism.
     pub bottom: f32,
-    /// Upper surface of the column — the height something standing here sits at.
+    /// Upper surface of the prism — the height something standing here sits at.
     pub top: f32,
 }
 
 impl HexSpan {
-    /// A column resting on the ground, `height` tall.
+    /// A span resting on the ground, `height` tall.
     #[must_use]
     pub fn from_ground(height: f32) -> Self {
         Self::new(0.0, height)
     }
 
-    /// A column between two elevations.
+    /// A span between two elevations.
     ///
     /// # Panics
     ///
-    /// Panics unless `top` is above `bottom`. A zero-height or inverted column has
+    /// Panics unless `top` is above `bottom`. A zero-height or inverted span has
     /// no sensible geometry, and accepting one silently produces a tile scaled to
     /// nothing or turned inside out — both of which render without complaint, which
     /// is precisely the kind of failure worth refusing early.
@@ -290,13 +297,13 @@ impl HexSpan {
         Self { bottom, top }
     }
 
-    /// Height of the column. Always positive.
+    /// Height of the span. Always positive.
     #[must_use]
     pub fn height(self) -> f32 {
         self.top - self.bottom
     }
 
-    /// Midpoint of the column.
+    /// Midpoint of the span.
     ///
     /// Where a centre-origin mesh has to sit for its extents to match the span.
     #[must_use]
@@ -304,16 +311,16 @@ impl HexSpan {
         (self.bottom + self.top) * 0.5
     }
 
-    /// Whether two columns at the same coordinate overlap vertically.
+    /// Whether two spans at the same coordinate overlap vertically.
     ///
-    /// Touching end to end does not count: a column ending at 5.0 and another
+    /// Touching end to end does not count: a span ending at 5.0 and another
     /// starting at 5.0 are stacked, not colliding.
     #[must_use]
     pub fn overlaps(self, other: Self) -> bool {
         self.bottom < other.top && other.bottom < self.top
     }
 
-    /// Height difference between this column's surface and another's.
+    /// Height difference between this span's surface and another's.
     ///
     /// Positive when `other` is higher. This is the quantity a traversability rule
     /// compares against a maximum step height — but *what* that maximum is, and
@@ -480,10 +487,10 @@ mod tests {
         let _span = HexSpan::new(10.0, 2.0);
     }
 
-    /// Two columns at one coordinate is how an overhang or a bridge gets expressed,
+    /// Two disjoint spans at one coordinate express an overhang or a bridge,
     /// so detecting when they collide is the map's basic sanity check.
     #[test]
-    fn overlap_detects_colliding_columns() {
+    fn overlap_detects_colliding_spans() {
         let ground = HexSpan::from_ground(5.0);
         let overlapping = HexSpan::new(4.0, 9.0);
         let stacked = HexSpan::new(5.0, 9.0);
@@ -497,7 +504,7 @@ mod tests {
 
     /// A centre-origin mesh scaled to the span's height must land exactly on the
     /// span. This is the invariant tile spawning depends on, and the one a
-    /// multi-span rewrite is most likely to break silently.
+    /// run-meshing change is most likely to break silently.
     #[test]
     fn centre_sits_halfway_between_bottom_and_top() {
         let span = HexSpan::new(2.0, 6.0);
@@ -512,9 +519,9 @@ mod tests {
 mod stacking_rule {
     use super::*;
 
-    /// Columns stacked at one coordinate are separate places. A bridge over ground
-    /// is two spans that do not overlap, and the step between them is the full drop
-    /// — which is what a movement rule measures to reject it.
+    /// Surfaces stacked in one column are separate places. A bridge over ground is
+    /// two spans that do not overlap, and the step between them is the full drop —
+    /// which is what a movement rule measures to reject it.
     #[test]
     fn a_bridge_and_the_ground_beneath_it_are_far_apart() {
         let ground = HexSpan::from_ground(1.0);
@@ -525,7 +532,7 @@ mod stacking_rule {
         assert!((bridge.step_to(ground) + 6.0).abs() < 1e-6);
     }
 
-    /// A spiral descent is a run of adjacent columns whose surfaces change gently.
+    /// A spiral descent is a run of adjacent surfaces whose levels change gently.
     /// Each individual step is small even though the total drop is large — which is
     /// exactly what distinguishes a legal route from stepping off the edge.
     #[test]

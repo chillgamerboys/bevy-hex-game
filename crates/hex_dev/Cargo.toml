@@ -3,7 +3,7 @@ name = "hex_dev"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "Development tooling: world inspector and diagnostics. Compiled only when the `dev` feature is on."
+description = "Development tooling: the world inspector. Compiled only when the `dev` feature is on."
 
 # Isolated here so bevy-inspector-egui — historically the slowest crate in the
 # ecosystem to follow a Bevy release — can never block shipping a build.
