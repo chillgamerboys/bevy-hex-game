@@ -69,7 +69,10 @@ use crate::config::HEX_CIRCUMRADIUS;
 ///
 /// See the [module documentation](self) for why only two of the three cube
 /// coordinates are stored.
-#[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
+// `Ord` has no geometric meaning — a hex grid has no natural ordering — but it makes
+// coordinates usable as `BTreeMap` keys and gives deterministic iteration when
+// sorting for a save file or a stable diff. It compares the stored axial pair.
+#[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[reflect(Component)]
 pub struct HexCoord {
     x: i32,
@@ -209,11 +212,23 @@ impl HexCoord {
         self.to_hex().all_neighbors().map(Self::from_hex)
     }
 
-    const fn to_hex(self) -> Hex {
+    /// The underlying [`hexx`] coordinate.
+    ///
+    /// Public so that map and gameplay code can reach hexx's algorithms —
+    /// `a_star`, `field_of_view`, `field_of_movement` — and its dense storage types,
+    /// all of which are already compiled in. Reimplementing those is exactly the
+    /// work adopting hexx was meant to avoid.
+    ///
+    /// `Hex` is two `i32`s and carries no `glam` types, so passing it around does not
+    /// reopen the version-skew question that keeps hexx's Bevy features switched off.
+    #[must_use]
+    pub const fn to_hex(self) -> Hex {
         Hex::new(self.x, self.y)
     }
 
-    const fn from_hex(hex: Hex) -> Self {
+    /// Wraps a [`hexx`] coordinate.
+    #[must_use]
+    pub const fn from_hex(hex: Hex) -> Self {
         Self { x: hex.x, y: hex.y }
     }
 }
