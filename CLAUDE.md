@@ -121,7 +121,7 @@ change worked — look at the window.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Skybox `AssetEvent` missed; PNG never reinterpreted as a cubemap |
+| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
 | Stuck on "loading…" during initial startup | A RON settings file failed to parse |
 | Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
 

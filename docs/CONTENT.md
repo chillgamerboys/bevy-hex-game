@@ -32,7 +32,7 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `lighting.ron` | Skybox brightness straight away; sun, ambient light, direction and sky colour on the next rebuild |
+| `lighting.ron` | Sky-dome colours and clouds straight away; sun, ambient light and direction on the next rebuild |
 | `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then

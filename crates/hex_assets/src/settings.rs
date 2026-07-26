@@ -52,7 +52,7 @@ pub struct CameraSettings {
 /// `assets/config/lighting.ron` — sun, ambient, and sky.
 ///
 /// Bevy uses physical light units: illuminance in lux (~100,000 is direct noon
-/// sun, ~10,000 overcast), and skybox brightness in cd/m².
+/// sun, ~10,000 overcast).
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct LightingSettings {
@@ -62,11 +62,18 @@ pub struct LightingSettings {
     pub sun_rotation: (f32, f32, f32),
     /// Fill light applied everywhere, in lux.
     pub ambient_brightness: f32,
-    /// Skybox brightness, in cd/m². The cubemap already encodes a bright sky, so
-    /// this stays low to avoid blowing out the scene.
-    pub skybox_brightness: f32,
-    /// Background colour, visible where the skybox is not.
+    /// Sky colour at the horizon, and the `ClearColor` fallback behind the dome.
     pub sky_color: Rgb,
+    /// Sky colour at the zenith (straight up). `sky_color` is the horizon colour.
+    pub zenith_color: Rgb,
+    /// Colour of the hexagonal clouds.
+    pub cloud_color: Rgb,
+    /// Fraction of hex sky-cells that carry a cloud, 0.0–1.0.
+    pub cloud_coverage: f32,
+    /// Size of the hex cloud cells; larger = smaller, more numerous clouds.
+    pub hex_cloud_scale: f32,
+    /// Edge softness of each cloud, ~0.02 (crisp) to ~0.3 (fluffy).
+    pub cloud_softness: f32,
 }
 
 /// `assets/config/player.ron` — the player piece.

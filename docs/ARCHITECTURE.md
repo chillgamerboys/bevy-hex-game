@@ -220,9 +220,9 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, `lighting.ron` skybox brightness | Immediate |
+| Every frame | `camera.ron`, `display.ron`, `lighting.ron` sky/cloud colours | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
-| At spawn | `world.ron`, `substances.ron`, the rest of `lighting.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
+| At spawn | `world.ron`, `substances.ron`, the sun/ambient half of `lighting.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
 
 Returning to the title and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
@@ -247,7 +247,7 @@ evidence that a change worked — **look at the window**.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found. Bevy fell back to `ClearColor` with no meshes. Check `BEVY_ASSET_ROOT` in `.cargo/config.toml` |
-| Black sky | The skybox `AssetEvent` was missed, so the PNG was never reinterpreted as a cubemap |
+| Black sky | The sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
 | Stuck on "loading…" during initial startup | A RON settings file failed to parse |
 | Movement looks wrong | A speed unit conversion. Speeds are world units per **second** |
 | Game appears frozen | It is paused. The overlay exists precisely because this was indistinguishable from a hang |
@@ -288,7 +288,7 @@ Both are the same failure: a fixture too simple to express the thing being teste
 When adding a test, make the fixture resemble what the real map produces — stacked
 runs, varying headroom — or it will report a safety it does not provide.
 
-**These are headless.** A black skybox, a wrong colour, or a mesh at the wrong scale
+**These are headless.** A black sky, a wrong colour, or a mesh at the wrong scale
 still only show up by looking at the window.
 
 ## Not yet done

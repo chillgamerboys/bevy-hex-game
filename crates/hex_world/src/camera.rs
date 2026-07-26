@@ -1,22 +1,30 @@
-use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::MouseWheel;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use hex_assets::{CameraSettings, GameAssets, LightingSettings};
+use hex_assets::{to_color, CameraSettings, LightingSettings, Rgb};
 use hex_core::{AppSystems, Screen};
 
-/// Registers the pan/orbit camera and the skybox.
+use crate::sky_material::{SkyMaterial, SkyParams};
+
+/// Sky-dome radius, in world units. Comfortably inside the camera's default
+/// 1000-unit far plane and far outside `max_zoom` (50) plus the terrain extent.
+const SKY_DOME_RADIUS: f32 = 500.0;
+
+/// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
+#[derive(Component)]
+struct SkyDome;
+
+/// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
         // Spawned once at startup rather than per screen: it is the render target
-        // the UI screens draw through, and the skybox behind them.
+        // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
-        .add_systems(Update, apply_skybox_brightness.in_set(AppSystems::Update))
         .add_systems(
             Update,
-            reinterpret_skybox_when_loaded.in_set(AppSystems::Update),
+            (apply_sky_material, follow_camera).in_set(AppSystems::Update),
         )
         // Camera control is gameplay-only, so dragging over a menu does not
         // silently move the world behind it.
@@ -47,12 +55,14 @@ impl Default for PanOrbitCamera {
     }
 }
 
-/// Spawn the game camera with a built-in cubemap skybox.
-fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
+/// Spawn the game camera and the procedural sky dome.
+fn spawn_camera(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut sky_materials: ResMut<Assets<SkyMaterial>>,
+) {
     let translation = Vec3::new(0., 20., 10.0);
     let radius = translation.length();
-
-    let skybox_handle = assets.skybox.clone();
 
     commands.spawn((
         Camera3d::default(),
@@ -62,80 +72,83 @@ fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
             ..Default::default()
         },
         Name::new("Game Camera"),
-        // Brightness is set by `apply_skybox_brightness` once settings load; the
-        // camera itself has to exist from startup as the UI's render target.
-        Skybox {
-            image: Some(skybox_handle),
-            ..default()
-        },
+    ));
+
+    // A unit sphere scaled to the dome radius, rendered from the inside (see
+    // `SkyMaterial::specialize`). `follow_camera` keeps the camera at its centre.
+    // Built with placeholder params; `apply_sky_material` fills them once settings
+    // load. Not a shadow caster — a 500-unit sphere would shadow the whole map.
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(32, 18))),
+        MeshMaterial3d(sky_materials.add(SkyMaterial {
+            params: default_sky_params(),
+        })),
+        Transform::from_scale(Vec3::splat(SKY_DOME_RADIUS)),
+        NotShadowCaster,
+        SkyDome,
+        Name::new("Sky Dome"),
     ));
 }
 
-/// Applies skybox brightness from settings, and keeps it in step if the file is
-/// edited while running.
-fn apply_skybox_brightness(
-    settings: Option<Res<LightingSettings>>,
-    mut skyboxes: Query<&mut Skybox>,
-) {
-    let Some(settings) = settings else { return };
-    if !settings.is_changed() {
-        return;
-    }
-    for mut skybox in &mut skyboxes {
-        skybox.brightness = settings.skybox_brightness;
+/// Placeholder sky parameters used until `LightingSettings` loads. Muted values so a
+/// stalled settings load is obviously wrong rather than looking intentional.
+fn default_sky_params() -> SkyParams {
+    SkyParams {
+        horizon_color: Vec3::new(0.5, 0.6, 0.7),
+        cloud_coverage: 0.0,
+        zenith_color: Vec3::new(0.2, 0.35, 0.6),
+        hex_scale: 8.0,
+        cloud_color: Vec3::new(0.9, 0.9, 0.92),
+        cloud_softness: 0.1,
     }
 }
 
-/// PNGs do not carry cubemap metadata, so they load as a single stacked 2D texture.
-/// Reinterpret it as a cube array texture the moment the image finishes loading.
-///
-/// Driven by `AssetEvent` rather than by polling a marker component: the load happens
-/// once, but the old query-every-frame version kept scanning for the rest of the run.
-/// Reacting to the event means the body only executes on the frame the asset lands.
-fn reinterpret_skybox_when_loaded(
-    mut asset_events: MessageReader<AssetEvent<Image>>,
-    mut images: ResMut<Assets<Image>>,
-    cameras: Query<&Skybox>,
+/// Build sky parameters from settings. `to_color(..).to_linear()` converts the
+/// designer-facing sRGB tuples into the linear RGB the shader expects.
+fn sky_params(settings: &LightingSettings) -> SkyParams {
+    let lin = |rgb: Rgb| {
+        let c = to_color(rgb).to_linear();
+        Vec3::new(c.red, c.green, c.blue)
+    };
+    SkyParams {
+        horizon_color: lin(settings.sky_color),
+        cloud_coverage: settings.cloud_coverage,
+        zenith_color: lin(settings.zenith_color),
+        hex_scale: settings.hex_cloud_scale,
+        cloud_color: lin(settings.cloud_color),
+        cloud_softness: settings.cloud_softness,
+    }
+}
+
+/// Push sky settings into the dome material, on load and on every hot reload.
+fn apply_sky_material(
+    settings: Option<Res<LightingSettings>>,
+    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
-    for event in asset_events.read() {
-        let AssetEvent::LoadedWithDependencies { id } = event else {
-            continue;
-        };
-
-        // Images load for all sorts of reasons; only touch one a camera uses as a skybox.
-        let is_skybox = cameras.iter().any(|skybox| {
-            skybox
-                .image
-                .as_ref()
-                .is_some_and(|handle| handle.id() == *id)
-        });
-        if !is_skybox {
-            continue;
+    let Some(settings) = settings else {
+        return;
+    };
+    if !settings.is_changed() {
+        return;
+    }
+    for handle in &domes {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.params = sky_params(&settings);
         }
+    }
+}
 
-        let Some(mut image) = images.get_mut(*id) else {
-            continue;
-        };
-        if image.texture_descriptor.array_layer_count() == 1 {
-            // Bind the layer count first: `Assets::get_mut` hands back a change-detection
-            // `AssetMut` wrapper, so reading `image` inside the call's argument list would
-            // overlap with the mutable borrow the call itself takes.
-            let layers = image.height() / image.width();
-            #[expect(
-                clippy::expect_used,
-                reason = "the skybox asset ships with the game; a PNG that is not a \
-                          vertical stack of six square faces is a broken build, and \
-                          failing loudly beats rendering a black sky with no \
-                          explanation"
-            )]
-            image
-                .reinterpret_stacked_2d_as_array(layers)
-                .expect("skybox PNG should be a vertical stack of cube faces");
-            image.texture_view_descriptor = Some(TextureViewDescriptor {
-                dimension: Some(TextureViewDimension::Cube),
-                ..default()
-            });
-        }
+/// Keep the dome centred on the camera so the camera never reaches its far wall.
+fn follow_camera(
+    camera: Query<&Transform, (With<PanOrbitCamera>, Without<SkyDome>)>,
+    mut domes: Query<&mut Transform, With<SkyDome>>,
+) {
+    let Ok(cam) = camera.single() else {
+        return;
+    };
+    for mut dome in &mut domes {
+        dome.translation = cam.translation;
     }
 }
 
