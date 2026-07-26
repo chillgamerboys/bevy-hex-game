@@ -21,11 +21,19 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_assets::{GameAssets, PlayerSettings};
-use hex_core::{GameplaySetup, HexCoord, HexSpan, HexTile, Screen};
+use hex_assets::{Substance, SubstanceFile, SubstanceTable};
+use hex_core::{GameplaySetup, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos};
 use hex_gameplay::player::{Player, StandsOn};
 
-/// Height of the fake ground these tests stand things on.
+/// World height of the fake ground these tests stand things on.
 const GROUND: f32 = 2.0;
+
+/// The level of that ground's surface.
+const GROUND_LEVEL: hex_core::Level = 1;
+
+/// The one solid substance the fake terrain is made of. Id 1, since sorted names put
+/// `air` at 0 and `stone` next.
+const STONE: SubstanceId = SubstanceId(1);
 
 /// A headless app with gameplay wired up, and a stand-in for the map.
 ///
@@ -64,6 +72,7 @@ fn test_app() -> App {
         player_pieces: [Handle::default(), Handle::default()],
         skybox: Handle::default(),
     });
+    app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
@@ -79,10 +88,44 @@ fn test_app() -> App {
     app
 }
 
+/// Flat stone across a small patch.
+///
+/// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this structure
+/// exists to enforce — so the tiles are spawned by the test itself. That is not a
+/// workaround: gameplay consumes `TilePos`, `HexSpan` and `SubstanceId`, and anything
+/// producing those will do.
 fn spawn_fake_terrain(mut commands: Commands) {
     for coord in HexCoord::ORIGIN.within_radius(3) {
-        commands.spawn((HexTile, coord, HexSpan::from_ground(GROUND)));
+        commands.spawn((
+            HexTile,
+            coord,
+            TilePos::new(coord, GROUND_LEVEL),
+            HexSpan::from_ground(GROUND),
+            STONE,
+        ));
     }
+}
+
+/// A substance table with one solid substance, matching `STONE`.
+fn substance_table() -> SubstanceTable {
+    let mut substances = bevy::platform::collections::HashMap::default();
+    substances.insert(
+        "air".to_owned(),
+        Substance {
+            color: (0.0, 0.0, 0.0),
+            solid: false,
+            diggable: false,
+        },
+    );
+    substances.insert(
+        "stone".to_owned(),
+        Substance {
+            color: (0.5, 0.5, 0.5),
+            solid: true,
+            diggable: true,
+        },
+    );
+    SubstanceTable::from_file(&SubstanceFile { substances })
 }
 
 /// Fires a click at `entity`, as the picking backend would.
@@ -153,7 +196,7 @@ fn the_player_knows_which_column_it_is_on() {
         .copied()
         .expect("a player should exist during gameplay");
 
-    assert_eq!(standing.0.coord, HexCoord::ORIGIN);
+    assert_eq!(standing.0.pos.coord, HexCoord::ORIGIN);
     assert!((standing.0.span.top - GROUND).abs() < 1e-4);
 }
 
@@ -214,7 +257,7 @@ fn clicking_a_tile_moves_the_player() {
         .expect("a player should exist");
 
     assert_eq!(
-        standing.0.coord, destination,
+        standing.0.pos.coord, destination,
         "clicking a tile should move the player onto that column"
     );
 }

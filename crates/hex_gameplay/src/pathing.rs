@@ -14,27 +14,9 @@
 
 use bevy::prelude::*;
 
-use hex_core::config::HEX_SMALL_DIAMETER;
-use hex_core::{HexCoord, HexSpan};
-
 use crate::animation::{LinearMovement, Transformer, TransformerSeries};
-
-/// One column on a path: where it is, and how high its surface sits.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PathStep {
-    /// Which hex.
-    pub coord: HexCoord,
-    /// Which column at that hex.
-    pub span: HexSpan,
-}
-
-impl PathStep {
-    /// The world-space point a unit standing here occupies.
-    #[must_use]
-    pub fn world_position(self) -> Vec3 {
-        self.coord.to_world(self.span.top)
-    }
-}
+use crate::movement::Standing;
+use hex_core::config::HEX_SMALL_DIAMETER;
 
 /// Moves a piece along a sequence of columns, one hex-crossing at a time.
 ///
@@ -52,7 +34,7 @@ impl HexPathingLine {
     ///
     /// Fewer than two steps produces an empty animation that finishes immediately,
     /// which is the correct behaviour for "move to where you already are".
-    pub fn new(steps: &[PathStep], speed: f32) -> HexPathingLine {
+    pub fn new(steps: &[Standing], speed: f32) -> HexPathingLine {
         let move_duration = f64::from(HEX_SMALL_DIAMETER / speed);
         let mut transformers = TransformerSeries::new();
 

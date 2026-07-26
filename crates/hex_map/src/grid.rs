@@ -179,9 +179,13 @@ fn build_grid(
                         coord,
                         span,
                         run.substance,
-                        // The run's base. Its surface is `span.top`; addressing a
-                        // voxel inside it is done with `TilePos`, not this entity.
-                        TilePos::new(coord, run.bottom),
+                        // The run's **topmost solid voxel** — the thing something
+                        // standing here is standing on. Tagging the base instead
+                        // would force gameplay to know the level height to work the
+                        // surface out, putting a dependency on the map straight back
+                        // into movement. Voxels inside the run are addressed by
+                        // `TilePos`, not by this entity.
+                        TilePos::new(coord, run.top - 1),
                     ))
                     .id(),
             );
