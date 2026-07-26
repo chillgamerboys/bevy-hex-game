@@ -4,7 +4,7 @@
 //! generation, tile spawning, and map settings together — so the map can be worked
 //! on in one place without reaching across crates.
 //!
-//! This crate must not depend on `hex_gameplay` or `hex_map`. Anything shared
+//! This crate must not depend on `hex_units` or `hex_map`. Anything shared
 //! belongs in `hex_core`.
 
 use bevy::prelude::*;

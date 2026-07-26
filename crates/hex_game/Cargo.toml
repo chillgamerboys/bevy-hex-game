@@ -8,8 +8,9 @@ description = "The game binary: app setup, plugin wiring, screens and menus."
 [dependencies]
 bevy = { workspace = true }
 hex_assets = { workspace = true }
+hex_combat = { workspace = true }
 hex_core = { workspace = true }
-hex_gameplay = { workspace = true }
+hex_units = { workspace = true }
 hex_map = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }

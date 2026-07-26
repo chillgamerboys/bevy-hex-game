@@ -5,7 +5,7 @@
 //! and builds no [`App`](bevy_ecs), which is what keeps it fast to compile and
 //! testable without a GPU.
 //!
-//! Types shared between `hex_world` (presentation) and `hex_gameplay` (rules)
+//! Types shared between `hex_world` (presentation) and `hex_units` (rules)
 //! live here. Those two crates must not depend on each other, so this is where
 //! their common language belongs.
 
@@ -14,6 +14,6 @@ pub mod config;
 pub mod hex;
 pub mod voxel;
 
-pub use app::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
+pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, Turn};
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};
 pub use voxel::{Headroom, Level, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

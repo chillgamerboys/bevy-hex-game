@@ -1,0 +1,17 @@
+[package]
+name = "hex_units"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The things that stand on the map: bodies, positions, and where they may step."
+
+# Must NOT depend on hex_world or hex_map. The three talk through components and
+# states defined in hex_core; cargo is what enforces that.
+[dependencies]
+bevy = { workspace = true }
+hex_anim = { workspace = true }
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+
+[lints]
+workspace = true

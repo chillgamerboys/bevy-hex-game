@@ -128,6 +128,41 @@ impl From<PresentModeSetting> for bevy::window::PresentMode {
     }
 }
 
+/// A hex coordinate as written in RON: `(x: 0, y: 0, z: 0)`.
+///
+/// A plain struct rather than `HexCoord`, whose fields are private on purpose — it
+/// stores axial and presents cube, and a settings file should not have to know that.
+/// Named fields rather than a bare triple because the constraint below is invisible
+/// otherwise, and `(2, -2, 0)` gives a designer nothing to check against.
+///
+/// **The three must sum to zero.** That is what makes cube coordinates a hex grid
+/// rather than three independent numbers; see
+/// <https://www.redblobgames.com/grids/hexagons/>.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct CubeCoord {
+    /// East–west axis.
+    pub x: i32,
+    /// North-east to south-west axis.
+    pub y: i32,
+    /// North-west to south-east axis. Always `-x - y`.
+    pub z: i32,
+}
+
+/// `assets/config/scenario.ron` — where the units start.
+///
+/// This exists so the map can be tested without writing Rust: move these coordinates
+/// and the two units appear somewhere else on the terrain. It is a scaffold for
+/// trying maps out, not an encounter format — a real one will describe many units,
+/// their lattices, and what triggers them.
+#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
+#[reflect(Resource)]
+pub struct ScenarioSettings {
+    /// Where the player starts.
+    pub player: CubeCoord,
+    /// Where the single enemy starts.
+    pub enemy: CubeCoord,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

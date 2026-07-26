@@ -58,7 +58,7 @@
 //! half the answer.
 //!
 //! What counts as an acceptable step, and which abilities may ignore the rule, is
-//! movement design and lives in `hex_gameplay`.
+//! movement design and lives in `hex_units`.
 
 use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
@@ -216,10 +216,15 @@ impl HexCoord {
 
     /// The underlying [`hexx`] coordinate.
     ///
-    /// Public so that map and gameplay code can reach hexx's algorithms —
-    /// `a_star`, `field_of_view`, `field_of_movement` — and its dense storage types,
-    /// all of which are already compiled in. Reimplementing those is exactly the
-    /// work adopting hexx was meant to avoid.
+    /// Public so that map and gameplay code can reach hexx's algorithms and its dense
+    /// storage types, all of which are already compiled in. Reimplementing those is
+    /// exactly the work adopting hexx was meant to avoid.
+    ///
+    /// **Not all of them survive contact with a stacked map.** `a_star` and
+    /// `field_of_movement` are keyed on `Hex` alone, so a bridge and the ground
+    /// beneath it are one node to them. Anything that has to distinguish the two needs
+    /// a [`TilePos`](crate::TilePos); pathfinding accordingly lives in
+    /// `hex_units::movement` rather than being delegated here.
     ///
     /// `Hex` is two `i32`s and carries no `glam` types, so passing it around does not
     /// reopen the version-skew question that keeps hexx's Bevy features switched off.
@@ -257,7 +262,7 @@ impl HexCoord {
 /// # The contract
 ///
 /// This is how the map talks to everything else. `hex_map` decides what spans exist
-/// and how they are drawn; `hex_gameplay` reads them off tile entities. Neither
+/// and how they are drawn; `hex_units` reads them off tile entities. Neither
 /// crate can see the other.
 #[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq)]
 #[reflect(Component)]

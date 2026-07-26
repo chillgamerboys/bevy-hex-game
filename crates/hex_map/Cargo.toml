@@ -11,7 +11,7 @@ description = "Voxel storage, terrain generation, tile spawning, and map setting
 #
 # It talks to the rest of the game through `hex_core`'s vocabulary: it spawns
 # entities carrying `HexTile`, `HexCoord`, surface `TilePos`, `HexSpan`,
-# `SubstanceId`, and `Headroom`; `hex_gameplay` reads those components off the
+# `SubstanceId`, and `Headroom`; `hex_units` reads those components off the
 # entities rather than reaching for anything defined here.
 [dependencies]
 bevy = { workspace = true }

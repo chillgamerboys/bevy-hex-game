@@ -122,7 +122,7 @@ crates/
   hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
   hex_world/     camera and sky
-  hex_gameplay/  the player and movement
+  hex_units/  the player and movement
   hex_dev/       the inspector
   hex_game/      wiring it all together
 assets/
@@ -131,7 +131,7 @@ assets/
 ```
 
 Only the `hex_game` binary depends on `hex_map`; it wires the map into the app.
-The other library crates, including `hex_gameplay` and `hex_world`, cannot import
+The other library crates, including `hex_units` and `hex_world`, cannot import
 it. Cargo enforces that dependency direction, so the map's implementation stays
 isolated at compile time.
 

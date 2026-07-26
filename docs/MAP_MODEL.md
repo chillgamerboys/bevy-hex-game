@@ -135,7 +135,7 @@ hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
              TerrainEdit — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
-hex_gameplay reads tiles; cannot see hex_map
+hex_units reads tiles; cannot see hex_map
 ```
 
 The map talks to the rest of the game **only through components on tile entities**:
@@ -144,7 +144,7 @@ The map talks to the rest of the game **only through components on tile entities
 (HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
-`hex_gameplay` queries those. It never reads `VoxelMap` or any generator, so terrain
+`hex_units` queries those. It never reads `VoxelMap` or any generator, so terrain
 storage and generation can be replaced wholesale — chunked, streamed, generated
 differently — without anything else noticing.
 
@@ -176,10 +176,13 @@ and the map applies it. That is the whole write path.
 
 - **What a spell does.** `TerrainEdit` can express digging and building; which spells
   exist, what they cost, and what they target is game design.
-- **Pathfinding.** `route` walks a straight line and gives up when blocked.
-  `hexx::a_star`, `field_of_view` and `field_of_movement` are already compiled in and
-  are the obvious basis, once there is a movement-cost model.
-- **Anything about turns.** There is no turn system yet.
+- **What a step costs.** `hex_units::movement::Reach` searches over `TilePos` and
+  charges one per step, so the map's substances do not yet affect how far a piece
+  gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
+  keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
+- **Whether terrain takes a turn to change.** A turn order exists now — see
+  [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md) — but `TerrainEdit` is applied the moment it
+  arrives and costs nobody anything. Whether digging is an action is a design question.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
-  but not implemented. When they are, they belong in `hex_gameplay` as explicit
+  but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

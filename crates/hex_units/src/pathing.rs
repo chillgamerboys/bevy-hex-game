@@ -1,4 +1,8 @@
-//! Hex-specific movement, built from the generic primitives in [`crate::animation`].
+//! Hex-specific movement, built from the generic primitives in [`hex_anim`].
+//!
+//! This module is the boundary: `hex_anim` moves a transform from one point to
+//! another and knows nothing else, and everything about a hex being a fixed width
+//! apart lives here.
 //!
 //! # Paths are sequences of surfaces, not coordinates
 //!
@@ -14,7 +18,8 @@
 
 use bevy::prelude::*;
 
-use crate::animation::{LinearMovement, Transformer, TransformerSeries};
+use hex_anim::{LinearMovement, Transformer, TransformerSeries};
+
 use crate::movement::Standing;
 use hex_core::config::HEX_SMALL_DIAMETER;
 
