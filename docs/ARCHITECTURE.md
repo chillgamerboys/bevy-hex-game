@@ -6,8 +6,9 @@ contact with the next change.
 ## The crate graph
 
 ```
-hex_core → hex_assets → {hex_map, hex_world, hex_gameplay} → hex_game
-{Bevy, bevy-inspector-egui} → hex_dev ─────────────────────→ hex_game
+hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_anim ─────────────────────→ hex_units
+{Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -24,7 +25,9 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_gameplay` | Player, picking, movement, body size, animation | `hex_core`, `hex_assets` |
+| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
+| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
 
@@ -39,9 +42,31 @@ components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can 
 break movement or presentation. Cargo protects the dependency graph; tests and visual
 review protect the component contract.
 
+### Ownership cuts both ways
+
+The map is one person's; **`hex_units` and `hex_combat` are the other's**. The split is
+not only about compile times — it is about who gets to decide.
+
+Review across that line is welcome and has caught real bugs in both directions. But a
+comment on a *design* question inside somebody else's crate is an argument, not a veto:
+whether height should help or hinder, what starts a fight, what a turn costs. The owner
+answers it, writes down why, and moves. Blocking on agreement about taste would stall
+work neither person is responsible for.
+
+That has already happened once and is worth knowing about, because the code now
+deliberately does **not** do what a blocking review comment asked. Engagement keeps two
+units at one coordinate in the same fight however tall the column between them — see
+[GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md#the-high-ground) for the reasoning. The reviewer
+read it as a collapsed stack; it is the high ground working. Both readings are
+defensible, and the deciding vote went to the crate's owner rather than to whoever
+commented last.
+
+**Contract bugs are the exception.** A wrong component on a tile entity, a broken
+boundary, a crash — those are not taste and either owner should block on them.
+
 The map reaches the rest of the game **only through components**. Tiles are spawned
 carrying a `HexTile` marker, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId` and
-`Headroom`; `hex_gameplay` queries those. Nothing outside `hex_map` references
+`Headroom`; `hex_units` queries those. Nothing outside `hex_map` references
 `VoxelMap` or any generator, so terrain storage and generation can be replaced
 wholesale without anyone noticing.
 
@@ -54,12 +79,12 @@ into the map, so a spell that digs or builds requests it and the map applies it.
 
 See [MAP_MODEL.md](MAP_MODEL.md) for the voxel model itself.
 
-`hex_gameplay`'s integration tests spawn their own stand-in terrain, which is the
+`hex_units`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
 
 ### The rule that carries the most weight
 
-**`hex_world`, `hex_gameplay` and `hex_map` must never depend on each other.**
+**`hex_world`, `hex_units` and `hex_map` must never depend on each other.**
 
 Presentation, rules and content are the three things that most want to reach into
 each other, and the ones that become most painful to separate once they have. Before
@@ -94,7 +119,7 @@ than fixed — an abstraction that *can* express the forbidden thing eventually 
 
 A step is one level, so the rule is an integer comparison rather than a float
 epsilon — which is the concrete payoff for quantising the vertical axis. Which
-abilities ignore the rule is movement design and lives in `hex_gameplay`.
+abilities ignore the rule is movement design and lives in `hex_units`.
 
 ### Why `hex_core` avoids the `bevy` facade
 
@@ -140,7 +165,7 @@ sets make the ordering that crosses crate boundaries explicit:
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 
-The first: `hex_map` builds the world; `hex_gameplay` spawns the player that
+The first: `hex_map` builds the world; `hex_units` spawns the player that
 stands on the tiles built from it. Both run in the same `OnEnter` schedule, and the
 crates cannot see each other, so `.chain()` could not express the dependency. A local
 chain looked correct and raced in practice — a nondeterministic panic that would most
@@ -264,9 +289,16 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, `lighting.ron` sky/cloud colours | Immediate |
+| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron` | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
-| At spawn | `world.ron`, `substances.ron`, the sun/ambient half of `lighting.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
+| At spawn | `world.ron`, `substances.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
+
+`lighting.ron` used to be split across the first and last rows: the sky shader read its
+values every frame, but the sun and ambient were only applied on
+`OnEnter(Screen::Gameplay)`, so tuning a light angle meant a round trip through the
+title screen. `reload_lighting` now re-applies them on change, which is what makes the
+lighting worth exposing at all — the values below are only useful if you can see them
+move.
 
 Returning to the title and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
@@ -300,17 +332,18 @@ evidence that a change worked — **look at the window**.
 
 Two complementary layers across the workspace.
 
-**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_gameplay`, none of
+**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
 which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
 the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
 id assignment, and the movement rules — including that a two-level body is refused a
 one-voxel crawlspace a one-level body walks into.
 
 **ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
-world afterwards — `crates/hex_map/tests/` and `crates/hex_gameplay/tests/`. Separate
-asset integration tests parse the GLB directly to verify mesh geometry. They exist
-because every bug found in this codebase was found by a person clicking, and the
-worst of them were green across compiler, clippy, unit tests and CI.
+world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and
+`crates/hex_combat/tests/`. Separate asset integration tests parse the GLB directly to
+verify mesh geometry. They exist because every bug found in this codebase was found by
+a person clicking, and the worst of them were green across compiler, clippy, unit
+tests and CI.
 
 They cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
 under open sky and beneath platforms, clean teardown and re-entry, and three specific

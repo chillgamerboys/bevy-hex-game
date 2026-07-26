@@ -3,7 +3,7 @@
 //! # This crate is a leaf
 //!
 //! Nothing depends on `hex_map` except the binary that wires it up. `hex_world`,
-//! `hex_gameplay`, `hex_core` and `hex_assets` cannot see its implementation. Cargo
+//! `hex_units`, `hex_core` and `hex_assets` cannot see its implementation. Cargo
 //! enforces that dependency direction; the component contract below is what keeps
 //! runtime behaviour correct.
 //!
@@ -17,7 +17,7 @@
 //! Tile entities are spawned carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
 //! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). `hex_gameplay` queries those components off the
+//! [`Headroom`](hex_core::Headroom). `hex_units` queries those components off the
 //! entities. It never reads [`HeightMap`] or any other type defined here.
 //!
 //! The practical consequence: **how terrain is generated and stored is entirely

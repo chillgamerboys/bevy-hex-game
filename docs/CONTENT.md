@@ -9,8 +9,9 @@ Rust, and you do not need to recompile the game.
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
 | `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
-| `lighting.ron` | Sun brightness and angle, the sky gradient and its hex clouds, ambient light |
+| `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
+| `scenario.ron` | Where the player and the enemy start — **use this to test a map** |
 | `display.ron` | Vsync / frame rate behaviour |
 
 ## Seeing your changes
@@ -32,8 +33,9 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `lighting.ron` | Sky-dome colours and clouds straight away; sun, ambient light and direction on the next rebuild |
+| `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
+| `scenario.ron` | On the next world rebuild |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then
 `ENTER` to start again. It takes under a second and picks up your edit.
@@ -156,13 +158,37 @@ default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain tha
 better once you are digging into it.
 
 **Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
-(a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for
-overcast; `100000.0` is direct noon sun. Rebuild the world to see it.
+(a full circle is about 6.28) — the first number is how high the sun sits, the second
+swings it around the compass and decides which way shadows fall. Lower
+`sun_illuminance` towards `1000.0` for overcast; `100000.0` is direct noon sun.
+`sun_color` tints it: warm values read as a low sun.
+
+The sun is worth treating carefully. The terrain has no texture, so **shadows are the
+only thing giving it shape** — changes that weaken them, or that light the shadowed
+faces back up, tend to read as "flat" rather than "soft".
+
+**Two extras that ship switched off.** Both live in `lighting.ron` and are worth
+knowing about before you reach for them:
+
+```ron
+sky_light_intensity: 0.0,   // a soft fill from the sky itself
+fog_density:         0.0,   // distance haze
+```
+
+`sky_light_intensity` adds light that varies with which way a surface faces — blue from
+overhead, a warm bounce from the ground — so it colours shadows instead of flooding
+everything equally. It is the honest way to soften shadows. Try `100`–`200` first;
+several hundred already starts washing out the shading that gives terrain its shape.
+`ground_color` sets the bounce colour underneath it.
+
+`fog_density` hazes distant terrain, tinted `fog_color` and glowing `fog_sun_color`
+towards the sun. At this camera distance it costs more colour than it buys atmosphere,
+which is why it is off — `0.002` is about as much as is worth trying.
 
 **The sky and its clouds.** The sky is drawn procedurally — a vertical colour
 gradient with hexagonal clouds — and every part of it lives in `lighting.ron`.
-Unlike the sun, these update **straight away**: edit, save, and the sky changes while
-you watch. It is the easiest thing in the game to tune.
+Like everything else in that file it updates **straight away**: edit, save, and the sky
+changes while you watch. It is the easiest thing in the game to tune.
 
 The gradient runs between two colours:
 
