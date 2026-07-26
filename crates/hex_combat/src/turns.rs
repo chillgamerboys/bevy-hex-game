@@ -148,7 +148,7 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             advance_turn
-                .in_set(AppSystems::Update)
+                .in_set(crate::CombatSystems::Advance)
                 .in_set(PausableSystems)
                 .run_if(in_state(Mode::Combat)),
         )

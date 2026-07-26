@@ -27,6 +27,7 @@
 //! break by entity index, so the same units always produce the same order.
 
 use bevy::prelude::*;
+use hex_core::AppSystems;
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
@@ -36,7 +37,36 @@ pub mod turns;
 pub use hex_core::Turn;
 pub use turns::{Initiative, TurnOrder};
 
+/// The order a turn resolves in.
+///
+/// **Acting has to finish before the turn can pass**, and until this set existed
+/// nothing said so. `take_enemy_turn` was in `PausableSystems` alone while
+/// `advance_turn` was also in [`AppSystems::Update`], so the two were unordered and
+/// could even run in parallel.
+///
+/// That mattered because acting is half immediate and half deferred: `spend` mutates
+/// [`Turn`] in place, but the walk animation goes through `Commands`. Advancing in
+/// between saw a turn marked finished with nothing yet attached to say the unit was
+/// moving — so the turn passed before the enemy had taken a step.
+///
+/// A shared set rather than `.before(advance_turn)` because ordering across modules is
+/// what sets are for, and Bevy inserts the sync point that makes the deferred half
+/// visible at the boundary.
+#[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum CombatSystems {
+    /// Decide and commit what a unit does with its turn.
+    Act,
+    /// Pass the turn on, once whoever holds it has finished.
+    Advance,
+}
+
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (CombatSystems::Act, CombatSystems::Advance)
+            .chain()
+            .in_set(AppSystems::Update),
+    );
     app.add_plugins((turns::plugin, ai::plugin));
 }

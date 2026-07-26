@@ -53,6 +53,7 @@ pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         take_enemy_turn
+            .in_set(crate::CombatSystems::Act)
             .in_set(PausableSystems)
             .run_if(in_state(Mode::Combat)),
     );

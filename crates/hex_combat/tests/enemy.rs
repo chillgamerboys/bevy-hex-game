@@ -324,3 +324,40 @@ fn end_turn(app: &mut App) {
     });
     app.update();
 }
+
+/// The turn cannot pass while the unit holding it is still walking.
+///
+/// Acting is half immediate and half deferred: `spend` mutates `Turn` in place, but the
+/// walk animation is inserted through `Commands`. Until `CombatSystems` existed,
+/// `take_enemy_turn` and `advance_turn` were unordered — so `advance_turn` could see a
+/// turn already marked finished with no `Transformation` yet attached to say the unit
+/// was moving, and hand the turn on before the enemy had taken a step.
+///
+/// The observable consequence is this: while a `Transformation` is running, the order
+/// must still be pointing at its owner. Anything else means somebody else can act
+/// while the enemy is mid-stride.
+#[test]
+fn the_turn_does_not_pass_while_its_unit_is_still_walking() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(4, -4, 0),
+        10,
+    );
+    enter_gameplay(&mut app);
+
+    end_turn(&mut app);
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(enemy).is_some(),
+        "precondition: the enemy should be walking by now"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(enemy),
+        "the turn was handed on while the enemy was still mid-walk"
+    );
+}

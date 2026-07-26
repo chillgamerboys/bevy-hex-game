@@ -996,3 +996,44 @@ fn a_click_while_paused_neither_moves_nor_spends() {
         "a paused click spent a turn"
     );
 }
+
+/// An overlay must not outlive the ground it describes.
+///
+/// `apply_terrain_edits` despawns the **entire** grid and respawns it on any accepted
+/// edit. Nothing about the unit changes when that happens — same piece, same surface,
+/// same budget — so a preview keyed only on the unit keeps drawing a route across
+/// terrain that no longer exists, while a click computes fresh footing and refuses it.
+/// The tint and the click have to agree, or the highlight teaches the player to
+/// distrust it.
+#[test]
+fn a_route_stops_being_drawn_when_its_ground_goes() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    hover(&mut app, destination).expect("the fixture covers this coordinate");
+    assert!(
+        count::<With<PathOverlay>>(&mut app) > 0,
+        "setup failed — no route was drawn to begin with"
+    );
+
+    // Take the destination's surface away, exactly as a rebuilt grid would.
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &HexCoord), With<HexTile>>();
+    let doomed: Vec<Entity> = tiles
+        .iter(app.world())
+        .filter(|(_, coord)| **coord == destination)
+        .map(|(entity, _)| entity)
+        .collect();
+    for entity in doomed {
+        app.world_mut().entity_mut(entity).despawn();
+    }
+    app.update();
+
+    assert_eq!(
+        count::<With<PathOverlay>>(&mut app),
+        0,
+        "the route is still lit across ground that has been deleted"
+    );
+}

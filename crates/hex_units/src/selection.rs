@@ -31,7 +31,7 @@ use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
-use hex_core::{GameplaySetup, Mode, PausableSystems, Screen, TilePos, Turn};
+use hex_core::{GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn};
 
 use crate::movement::{Body, Footing, Reach, Standing};
 use crate::units::{Faction, Player, StandsOn, TileQuery};
@@ -110,16 +110,33 @@ struct OverlayAssets {
     enemy_ring: Handle<StandardMaterial>,
 }
 
+/// How many times the terrain has been rebuilt.
+///
+/// `apply_terrain_edits` despawns the **entire** grid and respawns it on any accepted
+/// edit, so every tile entity gets a new id and the ground a route was found across may
+/// no longer exist. Nothing about the *unit* changes when that happens, which is
+/// exactly why a preview keyed only on the unit outlives the terrain it describes.
+///
+/// A counter rather than a comparison of the tiles themselves: the map publishes a few
+/// thousand tile entities, and the question is only ever "is this the same terrain I
+/// last looked at".
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerrainRevision(pub u64);
+
 /// What a [`Reach`] was computed for.
 ///
 /// Two levels of absence, which are different things: no key at all means nothing is
 /// being previewed — in combat, on somebody else's turn. A key with `budget: None`
 /// means exploring, where movement is unlimited.
+///
+/// `terrain` is here because the other three can all be unchanged while the ground
+/// underneath them is replaced.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct PreviewKey {
     unit: Entity,
     from: TilePos,
     budget: Option<u32>,
+    terrain: u64,
 }
 
 /// The current search, and what is drawn from it.
@@ -139,16 +156,23 @@ pub fn plugin(app: &mut App) {
         .register_type::<PathOverlay>()
         .init_resource::<HoveredSurface>()
         .init_resource::<MovementPreview>()
+        .init_resource::<TerrainRevision>()
         .add_systems(
             OnEnter(Screen::Gameplay),
             create_overlay_assets.in_set(GameplaySetup::Resources),
         )
         .add_systems(OnExit(Screen::Gameplay), clear_overlays)
+        // Deliberately **not** pausable, and ordered before the overlays that read it.
+        // `apply_terrain_edits` is in no set at all, so it runs while the game is
+        // paused; a tracker that stopped with everything else would miss the rebuild
+        // and never see it again — `Added` is a change tick, not a queue.
+        .add_systems(Update, track_terrain_changes)
         .add_systems(
             Update,
             (select_a_player, reconcile_rings, redraw_overlays)
                 .chain()
-                .in_set(PausableSystems),
+                .in_set(PausableSystems)
+                .after(track_terrain_changes),
         )
         // Observers are global and fire in every state, including the title screen.
         // These two touch only `HoveredSurface`, which is initialised at startup and
@@ -156,6 +180,30 @@ pub fn plugin(app: &mut App) {
         // body runs, so an `Option` would be required for anything gameplay-scoped.
         .add_observer(on_tile_hovered)
         .add_observer(on_tile_unhovered);
+}
+
+/// Counts a rebuild whenever tile entities appear or disappear.
+///
+/// Keyed on the tiles themselves rather than on [`TerrainEdit`](hex_core::TerrainEdit),
+/// which is a *request*: the map rejects edits below the floor, no-ops, and anything
+/// non-diggable, and only then rebuilds. Reading the message would invalidate on edits
+/// that changed nothing, and — worse for a test — the message is registered by
+/// `hex_map`, so an app without the map does not have it at all.
+///
+/// This over-counts instead: the initial spawn and every screen entry look like a
+/// rebuild. That costs one search, and erring toward too many rebuilds is the right
+/// direction when the alternative is highlighting ground that no longer exists.
+fn track_terrain_changes(
+    mut revision: ResMut<TerrainRevision>,
+    added: Query<(), Added<HexTile>>,
+    mut removed: RemovedComponents<HexTile>,
+) {
+    // `read().count()` drains. Leaving the removals unread would replay them on the
+    // next frame and count one teardown twice.
+    let gone = removed.read().count();
+    if gone > 0 || !added.is_empty() {
+        revision.0 = revision.0.wrapping_add(1);
+    }
 }
 
 /// An unlit, blended cap material.
@@ -341,6 +389,7 @@ fn redraw_overlays(
     overlays: Option<Res<OverlayAssets>>,
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,
+    revision: Res<TerrainRevision>,
     tiles: TileQuery,
     selected: Query<(Entity, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
     drawn: Query<Entity, DrawnOverlays>,
@@ -364,6 +413,7 @@ fn redraw_overlays(
             unit,
             from: standing.0.pos,
             budget,
+            terrain: revision.0,
         })
     });
 
