@@ -14,7 +14,9 @@ inside the map crate is yours; these asks only extend the published
 component/message contract, and each one says exactly where the boundary
 sits.
 
-## Already delivered by PR #52 — nothing left to ask
+## Delivered by the procedural map pipeline — nothing left to ask
+
+PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
 
 - **Seed contract** (was ask E): `ResolvedMapSeed`, per-scenario
   `generation_seed`, session rerolls, seed snapshotted at scenario click.
@@ -23,25 +25,32 @@ sits.
   on: a version bump intentionally re-terraforms same-seed worlds, so
   regen-based save restoration is version-fragile *by design* — which is
   what makes D2 below the primary save format rather than an optimization.
-- **Shared vocabulary the asks below build on**: `TraversalProfile`/
-  `TraversalProfiles`, `MapAnchorId`/`MapAnchors`,
-  `SpecialMovementRegion(s)`, `TerrainReady`, `ScenarioPlacement::Anchor`,
-  and the snow/ice/basalt/lava substances.
+- **Shared vocabulary the asks below build on**: `TraversalProfile` (the
+  standability and step predicates, shared by generated-map validation and
+  live movement), `MapAnchorId`/`MapAnchors`, `SpecialMovementRegion(s)`,
+  `TerrainReady`, `GameplaySetupFailure`, the terminal
+  `GameplaySetup::Finalize` phase, `ScenarioPlacement::Anchor`, and the
+  snow/ice/basalt/lava substances.
 
 ## A′ — Movement classes (now via traversal profiles)
 
 **Need** ([DESIGN.md](../DESIGN.md#map)): swamp passable only to some
 units, lava only to flying ones, water to swimmers.
 
-**Shape after PR #52**: future movement modes become additional
-`TraversalProfileId`s beside `WALKER`, and substances gain footing tags —
-a gameplay-side field on `Substance` in `hex_assets`, serde-defaulted so
-`substances.ron` keeps parsing:
+**Shape now that the pipeline has landed**: future movement modes become
+additional `TraversalProfile` values beside the canonical walker, and
+substances gain footing tags — a gameplay-side field on `Substance` in
+`hex_assets`, optional so `substances.ron` keeps parsing unchanged:
 
 ```rust
 /// Movement modes that may treat this substance as footing.
-/// Default: ["ground"] when solid, [] otherwise.
-#[serde(default)] pub footing_for: Vec<String>,
+///
+/// Absent in the file means "derive it": `["ground"]` when the substance is
+/// solid, empty otherwise. `Option` rather than `#[serde(default)]` because a
+/// field default cannot see `solid` — the fallback is applied in `validate()`,
+/// alongside the rest of the substance-table checks, and callers read the
+/// resolved value.
+#[serde(default)] pub footing_for: Option<Vec<String>>,
 ```
 
 `Footing` then composes profile × substance class. `SpecialMovementRegions`
@@ -69,6 +78,7 @@ component defined in `hex_core` (gameplay-side):
 ```rust
 /// Names of authored world regions this tile belongs to.
 #[derive(Component, Reflect, Debug, Clone, Default)]
+#[reflect(Component)]
 pub struct RegionTags(pub Vec<String>);
 ```
 
@@ -95,6 +105,7 @@ it (that reintroduces the dependency the split exists to prevent);
 ```rust
 /// The run's lowest material voxel. Its topmost is the entity's TilePos.
 #[derive(Component, Reflect, Debug, Copy, Clone, PartialEq, Eq)]
+#[reflect(Component)]
 pub struct RunBottom(pub Level);
 ```
 

@@ -37,7 +37,6 @@ else is the gameplay side. `docs` is whoever picks it up.
 | Run bottoms on tiles | publish `RunBottom(Level)` beside each tile's `TilePos` so line-of-sight and cover can see under bridges | map |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
-| Docs restructure | execute the kind-separated docs-tree spec: moves, splits, index, status doc, troubleshooting merge, skill repointing | docs |
 
 ## Sequencing
 
@@ -46,13 +45,13 @@ Genuine blockers only — everything else parallelizes:
 - **Deterministic sim seams** → Command funnel → {Lattices wired, mid-combat saves}
 - **Deterministic sim seams** → Save and load
 - **Elements and spells** → Lattice engine wiring; **Lattice engine** → {archetypes in Lattices wired, Knowledge seam}
-- **Docs restructure** is blocked on PR #52 merging (it moves five files #52 edits).
 - Independent picks needing no funnel knowledge: Combat policy knobs, Elements
   and spells, Production hygiene items, and every `map` row.
 
 The `map` rows are specified precisely, with fallbacks if deferred, in
-[map-asks.md](map-asks.md) — two of the original six asks were already
-delivered by PR #52 (seeds and generator versioning).
+[map-asks.md](map-asks.md) — two further asks (the seed contract and
+generator versioning) were answered outright by the procedural map pipeline
+and are recorded there as settled.
 
 ## The epics, in detail
 
@@ -187,12 +186,9 @@ Specified in [map-asks.md](map-asks.md), each with exact signatures,
 publisher/consumer, tests, and a fallback if deferred — nothing on the
 gameplay side blocks on them.
 
-### Docs restructure
+### Where the rest of the documentation lives
 
-Execute the kind-separated docs-tree spec (index, `systems/`, `design/`,
-`development/`, `planning/`, single-source troubleshooting and status docs,
-skill repointing). Hard-blocked on PR #52, which edits five of the files it
-moves. The spec lives outside the repo (it was PR #54, merged and then
-reverted to keep `dev` clean while #52 is in flight); the plan for executing
-it, including the amendments this file's existence introduces, is recorded
-with the audit work.
+The kind-separated docs tree — [the index](../README.md), `systems/`,
+`design/`, `development/`, and this directory — was reorganised alongside
+these planning docs. [status.md](status.md) is the one doc allowed to drift;
+everything outside `planning/` describes contracts.

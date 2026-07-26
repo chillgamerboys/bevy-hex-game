@@ -123,21 +123,32 @@ possible), `Body` footprint unbuilt, bevy_lint still unusable at 0.19.
 | Version display | Never surfaced in-game |
 | Perf posture | Healthy at scale: shared meshes, per-substance materials, ~1–2.5k tile entities; terrain edit = full-grid respawn (flagged naive); diagnostics logging always on, release included |
 
-## PR #52 addendum (reviewed in full; comments on the PR)
+## PR #52 addendum (reviewed in full; merged 2026-07-26)
 
 The deterministic procedural map pipeline landed several things this audit
 was about to ask for: `ResolvedMapSeed` + per-scenario `generation_seed` +
 session rerolls (the seed contract), `generator_version` (versioning, as
-data), `MapAnchors`/`MapAnchorId` (exact spawn surfaces),
-`TraversalProfile`/`TraversalProfiles` + a `GameplaySetup::Rules` phase
+data), `MapAnchors`/`MapAnchorId` (exact spawn surfaces), `TraversalProfile`
 (shared standability/step predicates between validation and live movement),
 `SpecialMovementRegion(s)`, a `TerrainReady` gate, and
-`ScenarioPlacement::{Fixed,Anchor}`. The review found one silent-failure UX
-regression (generation failure after the loading gate strands the player in
-an empty world), two confirmed generator bugs (a latent validation hang; a
-sky-island repair regression), one future-armed contract drift (directional
-melee predicate), and a set of registration/doc/simplification items — see
-the PR. Consequences absorbed into the plan: encounters should use anchor
+`ScenarioPlacement::{Fixed,Anchor}`.
+
+The review found one silent-failure UX regression (generation failure after
+the loading gate strands the player in an empty world), two confirmed
+generator bugs (a latent validation hang; a sky-island repair regression),
+one future-armed contract drift (a directional melee predicate that would
+have granted one-sided melee to the first profile able to drop farther than
+it climbs), and a set of registration, doc, and simplification items — all
+on the PR. The follow-up commit resolved them: `GameplaySetupFailure` plus a
+terminal `GameplaySetup::Finalize` phase make a failed setup return to a
+visible screen instead of an empty world; melee became symmetric
+(`admits_step` in both directions); the `TraversalProfiles` registry and its
+`GameplaySetup::Rules` phase were dropped in favour of the bare
+`TraversalProfile` both sides already share; and the superseded
+`TilePos::is_within_step_of` was removed rather than left as a second step
+predicate.
+
+Consequences absorbed into the plan: encounters should use anchor
 placements; saves get seeds and versioning for free; the terrain-snapshot
 ask is now clearly the primary save format (a `generator_version` bump
 intentionally re-terraforms same-seed worlds, so regen-based saves are
