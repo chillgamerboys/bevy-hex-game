@@ -19,8 +19,8 @@ use hex_assets::{
     SubstanceTable,
 };
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, Pause,
-    Screen, SubstanceId, TerrainReady, TilePos, TraversalProfileId, TraversalProfiles, Turn,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId,
+    MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
@@ -428,15 +428,10 @@ fn spawn_units(
     settings: Res<PlayerSettings>,
     scenario: Res<ScenarioSettings>,
     anchors: Option<Res<MapAnchors>>,
-    profiles: Res<TraversalProfiles>,
 ) {
     // Both units share a body for now. When lattices land, size becomes a property of
     // the unit rather than a global setting, and this is where that starts.
-    let Some(walker) = profiles.get(TraversalProfileId::WALKER) else {
-        error!("ordinary walker traversal rules were not published; not spawning scenario units");
-        return;
-    };
-    let body = Body::new(*walker);
+    let body = Body::new(TraversalProfile::WALKER);
     let footing = Footing::from_tiles(tiles.iter(), &table, body);
 
     let player_material = materials.add(StandardMaterial::from(to_color(settings.color)));
@@ -445,7 +440,7 @@ fn spawn_units(
     let enemy_material = materials.add(StandardMaterial::from(Color::srgb(0.25, 0.45, 0.9)));
 
     let anchors = anchors.as_deref();
-    if let Some(placement) = placement_from(&scenario.player, "player", anchors) {
+    let player = placement_from(&scenario.player, "player", anchors).and_then(|placement| {
         spawn_unit(
             &mut commands,
             &assets,
@@ -458,10 +453,15 @@ fn spawn_units(
                 body,
             },
             &footing,
-        );
+        )
+    });
+    if let Err(reason) = player {
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+        return;
     }
 
-    if let Some(placement) = placement_from(&scenario.enemy, "enemy", anchors) {
+    let enemy = placement_from(&scenario.enemy, "enemy", anchors).and_then(|placement| {
         spawn_unit(
             &mut commands,
             &assets,
@@ -474,7 +474,11 @@ fn spawn_units(
                 body,
             },
             &footing,
-        );
+        )
+    });
+    if let Err(reason) = enemy {
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
     }
 }
 
@@ -491,25 +495,20 @@ fn placement_from(
     setting: &ScenarioPlacement,
     unit: &str,
     anchors: Option<&MapAnchors>,
-) -> Option<ResolvedPlacement> {
+) -> Result<ResolvedPlacement, String> {
     match setting {
-        ScenarioPlacement::Fixed(coord) => Some(ResolvedPlacement::Fixed(coord_from(*coord, unit))),
+        ScenarioPlacement::Fixed(coord) => Ok(ResolvedPlacement::Fixed(coord_from(*coord, unit))),
         ScenarioPlacement::Anchor(name) => {
             let id = MapAnchorId::from(name.as_str());
             let Some(anchors) = anchors else {
-                error!(
-                    "scenarios.ron: {unit} uses anchor \"{id}\", but the active map published no \
-                     anchors; not spawning {unit}"
-                );
-                return None;
+                return Err(format!(
+                    "The {unit} uses map anchor \"{id}\", but the active map published no anchors."
+                ));
             };
             let Some(pos) = anchors.get(&id) else {
-                error!(
-                    "scenarios.ron: {unit} uses missing map anchor \"{id}\"; not spawning {unit}"
-                );
-                return None;
+                return Err(format!("The {unit} uses missing map anchor \"{id}\"."));
             };
-            Some(ResolvedPlacement::Anchor { id, pos })
+            Ok(ResolvedPlacement::Anchor { id, pos })
         }
     }
 }
@@ -527,7 +526,12 @@ struct UnitSpawn<'a> {
     body: Body,
 }
 
-fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, footing: &Footing) {
+fn spawn_unit(
+    commands: &mut Commands,
+    assets: &GameAssets,
+    spawn: UnitSpawn,
+    footing: &Footing,
+) -> Result<(), String> {
     let standing = match spawn.placement {
         // Stand on the lowest surface at an authored coordinate that this body fits
         // on: the ground, rather than any bridge built over it. Preserve the existing
@@ -548,12 +552,11 @@ fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, fo
         // the unit on the ground beneath a bridge.
         ResolvedPlacement::Anchor { id, pos } => {
             let Some(standing) = footing.at(pos) else {
-                error!(
-                    "map anchor \"{id}\" for the {} points to {pos:?}, which its body cannot stand \
-                     on; not spawning {}",
-                    spawn.name, spawn.name
-                );
-                return;
+                return Err(format!(
+                    "Map anchor \"{id}\" for the {} points to {pos:?}, which its body cannot \
+                     stand on.",
+                    spawn.name
+                ));
             };
             standing
         }
@@ -600,6 +603,7 @@ fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, fo
             Pickable::IGNORE,
         ));
     });
+    Ok(())
 }
 
 #[cfg(test)]

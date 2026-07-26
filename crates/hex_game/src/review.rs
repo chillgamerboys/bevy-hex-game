@@ -1,6 +1,8 @@
 //! Deterministic launch and capture hooks for procedural-map review packs.
 //!
-//! Ordinary launches do not install any of these systems. Setting
+//! This module is compiled into runtime builds only with the default-off
+//! `map-review` feature. Ordinary release builds neither inspect nor react to the
+//! review environment variables. In a review build, setting
 //! `HEX_REVIEW_SCENARIO` selects a scenario without automating the title-screen UI;
 //! `HEX_REVIEW_SEED` optionally replaces its configured procedural seed. Adding
 //! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
@@ -20,7 +22,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
 use hex_assets::{CameraSettings, Scenario, ScenarioLibrary};
-use hex_core::{HexTile, ResolvedMapSeed, Screen, TerrainReady};
+use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen, TerrainReady};
 use hex_world::PanOrbitCamera;
 
 use crate::scenarios::ScenarioToLoad;
@@ -185,10 +187,16 @@ fn nonempty(value: Option<String>, name: &str) -> Result<String, String> {
 fn launch_review_scenario(
     mut commands: Commands,
     library: Option<Res<ScenarioLibrary>>,
+    failure: Option<Res<GameplaySetupFailure>>,
     mut request: ResMut<ReviewRequest>,
     mut next: ResMut<NextState<Screen>>,
     mut exit: MessageWriter<AppExit>,
 ) {
+    if let Some(failure) = failure {
+        error!("review scenario setup failed: {}", failure.reason);
+        exit.write(AppExit::error());
+        return;
+    }
     if request.launched {
         return;
     }
@@ -609,27 +617,45 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
         .try_into_dynamic()
         .map_err(|error| format!("cannot convert renderer output: {error}"))?;
     let rgb = dynamic.to_rgb8();
-    if !has_visual_coverage(
+    let has_coverage = has_visual_coverage(
         rgb.as_raw(),
         usize::try_from(rgb.width()).unwrap_or_default(),
         usize::try_from(rgb.height()).unwrap_or_default(),
-    ) {
-        return Err("renderer output lacks meaningful visual coverage".to_owned());
-    }
+    );
 
     prepare_capture_path(path)
-        .map_err(|error| format!("cannot prepare atomic screenshot output: {error}"))?;
+        .map_err(|error| format!("cannot prepare staged screenshot output: {error}"))?;
     let temporary = temporary_capture_path(path)
-        .map_err(|error| format!("cannot prepare atomic screenshot output: {error}"))?;
+        .map_err(|error| format!("cannot prepare staged screenshot output: {error}"))?;
     if let Err(error) = rgb.save(&temporary) {
         let _cleanup = fs::remove_file(&temporary);
         return Err(format!("cannot write temporary PNG: {error}"));
     }
-    if let Err(error) = fs::rename(&temporary, path) {
+    if let Err(error) = install_capture(&temporary, path) {
         let _cleanup = fs::remove_file(&temporary);
-        return Err(format!("cannot atomically install PNG: {error}"));
+        return Err(format!("cannot install PNG: {error}"));
+    }
+    if !has_coverage {
+        return Err(
+            "renderer output lacks meaningful visual coverage; rejected PNG was preserved"
+                .to_owned(),
+        );
     }
     Ok(())
+}
+
+/// Installs a complete temporary PNG, including over an existing Windows file.
+///
+/// `std::fs::rename` replaces files on Unix but rejects an existing destination on
+/// Windows. Removing the old destination only after the new PNG is fully written
+/// keeps the capture path portable without exposing a partially encoded image.
+fn install_capture(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::rename(temporary, path)
 }
 
 fn temporary_capture_path(path: &Path) -> std::io::Result<PathBuf> {
@@ -1016,24 +1042,29 @@ mod tests {
     }
 
     #[test]
-    fn failed_validation_preserves_an_existing_capture() {
+    fn failed_visual_validation_still_persists_the_rejected_png() {
         let directory = review_test_directory("atomic-failure");
         let path = directory.join("capture.png");
         let _cleanup = fs::remove_dir_all(&directory);
         fs::create_dir_all(&directory).expect("the test output directory should be creatable");
-        fs::write(&path, b"previous-good-capture")
-            .expect("the previous capture should be writable");
         let uniform = Image::new_target_texture(
             CAPTURE_WIDTH,
             CAPTURE_HEIGHT,
             TextureFormat::Rgba8UnormSrgb,
             None,
         );
+        fs::write(&path, b"previous capture").expect("the existing capture should be writable");
 
-        assert!(persist_screenshot(&uniform, &path).is_err());
-        assert_eq!(
-            fs::read(&path).expect("the existing capture should remain readable"),
-            b"previous-good-capture"
+        let error = persist_screenshot(&uniform, &path)
+            .expect_err("a uniform renderer output should fail visual validation");
+        assert!(
+            error.contains("rejected PNG was preserved"),
+            "unexpected validation error: {error}"
+        );
+        let png = fs::read(&path).expect("the rejected capture should remain readable");
+        assert!(
+            png.starts_with(b"\x89PNG\r\n\x1a\n"),
+            "the rejected capture was not persisted as a PNG"
         );
         assert!(!temporary_capture_path(&path)
             .expect("the temporary path should be valid")

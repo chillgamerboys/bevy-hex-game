@@ -19,19 +19,30 @@ use hex_assets::{
     choose_settings, LightingSettings, Scenario, ScenarioPlacement, ScenarioSettings,
     SelectSettings, SettingsRegistry, CONFIG_EXTENSIONS,
 };
-use hex_core::{MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegions, TerrainReady};
+use hex_core::{
+    GameplaySetup, GameplaySetupFailure, MapAnchors, ResolvedMapSeed, Screen,
+    SpecialMovementRegions, TerrainReady,
+};
 use hex_map::{MapSettings, TerrainSettings};
+use hex_units::{Enemy, Player};
 
 pub(super) fn plugin(app: &mut App) {
     // `select_settings` rather than `load_settings`: there is no world file to load
     // until somebody has picked a scenario. It shares the registration `hex_map`
     // already did, which is idempotent, so plugin order does not matter here.
-    app.select_settings::<MapSettings>(CONFIG_EXTENSIONS);
+    app.register_type::<ResolvedMapSeed>()
+        .register_type::<GameplaySetupFailure>()
+        .select_settings::<MapSettings>(CONFIG_EXTENSIONS);
     // Lighting is chosen the same way, so a scenario brings its own sky and sun.
     // `hex_assets` no longer loads `lighting.ron` at startup -- two mechanisms writing
     // one resource is the collision `hex_map` already had.
     app.select_settings::<LightingSettings>(CONFIG_EXTENSIONS);
-    app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario);
+    app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario)
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+        )
+        .add_systems(OnExit(Screen::Gameplay), clear_resolved_seed);
 }
 
 /// The exact scenario and resolved seed whose button was clicked.
@@ -73,6 +84,7 @@ fn apply_selected_scenario(
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<ResolvedMapSeed>();
+    commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<ScenarioContractStatus>();
 
     let Some(pending) = pending else {
@@ -82,6 +94,9 @@ fn apply_selected_scenario(
         // readiness gate, so returning to title is sufficient and leaves the registry
         // truthful.
         commands.remove_resource::<ScenarioSettings>();
+        commands.insert_resource(GameplaySetupFailure::new(
+            "Loading started without a selected scenario.",
+        ));
         next.set(Screen::Title);
         error!("loading entered without a clicked scenario; returning to the title screen");
         return;
@@ -141,6 +156,9 @@ pub(crate) fn validate_loaded_scenario(
     if let Some(reason) = scenario_contract_error(&map, &scenario, seed.as_deref()) {
         error!("selected scenario is incompatible with its world: {reason}");
         commands.insert_resource(ScenarioContractStatus::Invalid);
+        commands.insert_resource(GameplaySetupFailure::new(format!(
+            "The selected scenario is incompatible with its world: {reason}."
+        )));
         next.set(Screen::Title);
     } else {
         commands.insert_resource(ScenarioContractStatus::Ready);
@@ -157,14 +175,9 @@ fn scenario_contract_error(
             if seed.is_none() {
                 return Some("procedural terrain has no resolved generation seed".to_owned());
             }
-            for (who, placement, expected) in [
-                ("player", &scenario.player, "party_start"),
-                ("enemy", &scenario.enemy, "hostile_start"),
-            ] {
-                if !matches!(placement, ScenarioPlacement::Anchor(anchor) if anchor == expected) {
-                    return Some(format!(
-                        "procedural {who} placement must be Anchor(\"{expected}\")"
-                    ));
+            for (who, placement) in [("player", &scenario.player), ("enemy", &scenario.enemy)] {
+                if !matches!(placement, ScenarioPlacement::Anchor(_)) {
+                    return Some(format!("procedural {who} placement must use a map anchor"));
                 }
             }
         }
@@ -184,6 +197,47 @@ fn scenario_contract_error(
     None
 }
 
+/// Completes cross-crate gameplay construction or returns visibly to the title.
+///
+/// Map and unit systems publish the detailed reason when they can. The structural
+/// checks here are defense in depth for a future setup system that forgets to do so.
+fn finalize_gameplay_setup(
+    mut commands: Commands,
+    failure: Option<Res<GameplaySetupFailure>>,
+    terrain_ready: Option<Res<TerrainReady>>,
+    players: Query<(), With<Player>>,
+    enemies: Query<(), With<Enemy>>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    let reason = failure
+        .as_deref()
+        .map(|failure| failure.reason.clone())
+        .or_else(|| {
+            terrain_ready
+                .is_none()
+                .then(|| "The selected scenario could not build valid terrain.".to_owned())
+        })
+        .or_else(|| {
+            (players.iter().count() != 1)
+                .then(|| "The selected scenario did not create exactly one player.".to_owned())
+        })
+        .or_else(|| {
+            (enemies.iter().count() != 1)
+                .then(|| "The selected scenario did not create exactly one enemy.".to_owned())
+        });
+
+    let Some(reason) = reason else { return };
+    if failure.is_none() {
+        commands.insert_resource(GameplaySetupFailure::new(reason.clone()));
+    }
+    error!("gameplay setup failed: {reason}");
+    next.set(Screen::Title);
+}
+
+fn clear_resolved_seed(mut commands: Commands) {
+    commands.remove_resource::<ResolvedMapSeed>();
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -199,13 +253,15 @@ mod tests {
         ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
-        GameplaySetup, HexGrid, MapAnchorId, MapAnchors, Mode, Pause, ResolvedMapSeed, Screen,
-        SpecialMovementRegions, TerrainReady,
+        GameplaySetup, GameplaySetupFailure, HexGrid, MapAnchorId, MapAnchors, Mode, Pause,
+        ResolvedMapSeed, Screen, SpecialMovementRegions, TerrainReady,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_units::{Enemy, Player, StandsOn};
 
-    use super::{scenario_contract_error, ScenarioToLoad};
+    use super::{
+        finalize_gameplay_setup, scenario_contract_error, validate_loaded_scenario, ScenarioToLoad,
+    };
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -276,7 +332,7 @@ mod tests {
     }
 
     /// Scenario and world files are independently valid assets, but the pair also has
-    /// a contract: procedural worlds need the standard anchors and a seed; authored
+    /// a contract: procedural worlds need generated anchors and a seed; authored
     /// worlds need fixed coordinates and no scenario seed.
     #[test]
     fn every_shipped_scenario_matches_its_world_kind() {
@@ -318,7 +374,147 @@ mod tests {
         };
         assert!(
             scenario_contract_error(&world, &fixed, Some(&ResolvedMapSeed(1)))
-                .is_some_and(|error| error.contains("party_start"))
+                .is_some_and(|error| error.contains("map anchor"))
+        );
+    }
+
+    #[test]
+    fn procedural_contract_allows_recipe_specific_anchor_names() {
+        let entry = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.generation_seed.is_some())
+            .expect("the shipped library should include procedural terrain");
+        let path = assets_dir().join(&entry.world);
+        let text = fs::read_to_string(path).expect("the procedural world should be readable");
+        let world: MapSettings =
+            ron::from_str(&text).expect("the procedural world should deserialize");
+        let placements = ScenarioSettings {
+            player: ScenarioPlacement::Anchor("surface_entrance".to_owned()),
+            enemy: ScenarioPlacement::Anchor("deep_chamber".to_owned()),
+        };
+
+        assert_eq!(
+            scenario_contract_error(&world, &placements, Some(&ResolvedMapSeed(1))),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_loaded_contract_publishes_a_visible_failure_reason() {
+        let entry = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.generation_seed.is_some())
+            .expect("the shipped library should include procedural terrain");
+        let world_text = fs::read_to_string(assets_dir().join(entry.world))
+            .expect("the procedural world should be readable");
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the procedural world should deserialize");
+        let fixed = ScenarioSettings {
+            player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+            enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(world);
+        app.insert_resource(fixed);
+        app.insert_resource(ResolvedMapSeed(1));
+        app.add_systems(Update, validate_loaded_scenario);
+
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("must use a map anchor"));
+    }
+
+    fn finalizer_app(
+        terrain_ready: bool,
+        player_count: usize,
+        enemy_count: usize,
+        failure: Option<GameplaySetupFailure>,
+    ) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                GameplaySetup::Resources,
+                GameplaySetup::Terrain,
+                GameplaySetup::Actors,
+                GameplaySetup::Finalize,
+            )
+                .chain(),
+        );
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+        );
+        if terrain_ready {
+            app.insert_resource(TerrainReady);
+        }
+        if let Some(failure) = failure {
+            app.insert_resource(failure);
+        }
+        for _ in 0..player_count {
+            app.world_mut().spawn(Player);
+        }
+        for _ in 0..enemy_count {
+            app.world_mut().spawn(Enemy);
+        }
+        app
+    }
+
+    fn enter_gameplay_and_settle(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+        app.update();
+    }
+
+    #[test]
+    fn finalizer_returns_to_title_when_a_required_actor_is_missing() {
+        let mut app = finalizer_app(true, 0, 1, None);
+
+        enter_gameplay_and_settle(&mut app);
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("exactly one player"));
+    }
+
+    #[test]
+    fn finalizer_preserves_a_detailed_setup_failure() {
+        let expected = "The generated party anchor has no standable surface.";
+        let mut app = finalizer_app(true, 1, 1, Some(GameplaySetupFailure::new(expected)));
+
+        enter_gameplay_and_settle(&mut app);
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert_eq!(
+            app.world().resource::<GameplaySetupFailure>().reason,
+            expected
         );
     }
 
@@ -529,6 +725,11 @@ mod tests {
             !app.world().contains_resource::<SpecialMovementRegions>(),
             "loading without a click reused stale generated-region semantics"
         );
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("without a selected scenario"));
 
         assert_ne!(
             *app.world().resource::<State<Screen>>().get(),
@@ -718,10 +919,10 @@ mod tests {
         app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
-                GameplaySetup::Rules,
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Finalize,
             )
                 .chain(),
         );
@@ -736,6 +937,10 @@ mod tests {
         app.insert_resource(seed);
         app.add_plugins((hex_map::plugin, hex_units::movement::plugin));
         hex_units::units::plugin(&mut app);
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+        );
 
         while app.plugins_state() != PluginsState::Cleaned {
             app.finish();
@@ -815,6 +1020,31 @@ mod tests {
             1,
             "re-entry duplicated the rendered grid"
         );
+    }
+
+    #[test]
+    fn missing_generated_enemy_anchor_fails_setup_and_cleans_partial_world() {
+        let mut app = procedural_gameplay_app("Procedural Hills");
+        app.world_mut().resource_mut::<ScenarioSettings>().enemy =
+            ScenarioPlacement::Anchor("missing_enemy_anchor".to_owned());
+
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("missing map anchor"));
+        assert!(
+            !app.world().contains_resource::<VoxelMap>(),
+            "failed setup left generated terrain alive on the title screen"
+        );
+        assert!(standing_pos::<Player>(&mut app).is_none());
+        assert!(standing_pos::<Enemy>(&mut app).is_none());
     }
 
     #[test]

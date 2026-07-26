@@ -32,10 +32,9 @@ use std::collections::{BTreeMap, HashMap};
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, MapAnchorId, MapAnchors,
-    ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalProfile, TraversalProfileId, TraversalProfiles,
-    MAX_HEADROOM,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegion,
+    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
 };
 use hex_map::{
     CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
@@ -67,10 +66,10 @@ fn test_app() -> App {
     app.configure_sets(
         OnEnter(Screen::Gameplay),
         (
-            GameplaySetup::Rules,
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Finalize,
         )
             .chain(),
     );
@@ -184,16 +183,6 @@ fn procedural_app() -> App {
         }),
     });
     app.insert_resource(ResolvedMapSeed(20_260_726));
-    let mut profiles = TraversalProfiles::new();
-    let _previous = profiles.insert(
-        TraversalProfileId::WALKER,
-        TraversalProfile {
-            levels_tall: 2,
-            max_climb: 1,
-            max_drop: 1,
-        },
-    );
-    app.insert_resource(profiles);
     app
 }
 
@@ -213,15 +202,6 @@ fn sky_islands_app() -> App {
         }),
     });
     app
-}
-
-fn region_components(app: &mut App) -> BTreeMap<TilePos, SpecialMovementRegion> {
-    let world = app.world_mut();
-    let mut query = world.query_filtered::<(&TilePos, &SpecialMovementRegion), With<HexTile>>();
-    query
-        .iter(world)
-        .map(|(position, region)| (*position, *region))
-        .collect()
 }
 
 #[test]
@@ -256,7 +236,7 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
 }
 
 #[test]
-fn sky_region_components_exactly_mirror_the_generated_registry() {
+fn sky_region_registry_contains_exact_generated_surfaces() {
     let mut app = sky_islands_app();
     enter_gameplay(&mut app);
 
@@ -266,7 +246,11 @@ fn sky_region_components_exactly_mirror_the_generated_registry() {
         .iter()
         .collect();
     assert!(!expected.is_empty());
-    assert_eq!(region_components(&mut app), expected);
+    assert!(expected.keys().all(|position| !app
+        .world()
+        .resource::<VoxelMap>()
+        .get(*position)
+        .is_air()));
 }
 
 #[test]
@@ -290,10 +274,6 @@ fn clearing_a_tagged_surface_prunes_its_exact_membership() {
         app.world().resource::<SpecialMovementRegions>().get(target),
         None
     );
-    assert!(
-        !region_components(&mut app).contains_key(&target),
-        "the rebuilt grid retained a stale region component"
-    );
 }
 
 #[test]
@@ -308,6 +288,11 @@ fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
         !app.world().contains_resource::<SpecialMovementRegions>(),
         "failed generation published special-region semantics"
     );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("generation seed"));
     assert_eq!(tile_count(&mut app), 0);
 }
 
@@ -323,6 +308,11 @@ fn a_missing_required_substance_never_marks_terrain_ready() {
         !app.world().contains_resource::<SpecialMovementRegions>(),
         "failed generation published special-region semantics"
     );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("water"));
     assert_eq!(tile_count(&mut app), 0);
 }
 
@@ -339,7 +329,6 @@ fn nonprocedural_maps_publish_an_empty_region_registry() {
     enter_gameplay(&mut app);
 
     assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
-    assert!(region_components(&mut app).is_empty());
 }
 
 /// Every column produces at least one entity, and typically several — one per
@@ -899,7 +888,6 @@ fn sky_regions_reenter_with_the_same_exact_memberships() {
         .collect();
 
     assert_eq!(second, first);
-    assert_eq!(region_components(&mut app), first);
 }
 
 /// The world has to exist before the tiles built from it.

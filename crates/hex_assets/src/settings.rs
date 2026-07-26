@@ -232,6 +232,7 @@ fn validate_rgb(name: &str, (red, green, blue): Rgb) -> Result<(), String> {
 /// `assets/config/player.ron` — the player piece.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
+#[serde(deny_unknown_fields)]
 pub struct PlayerSettings {
     /// Uniform scale applied to the player meshes.
     pub scale: f32,
@@ -358,6 +359,26 @@ mod tests {
     use super::*;
 
     const LIGHTING_RON: &str = include_str!("../../../assets/config/lighting.ron");
+    const PLAYER_RON: &str = include_str!("../../../assets/config/player.ron");
+
+    #[test]
+    fn player_settings_reject_removed_fields() {
+        let player = ron::from_str::<PlayerSettings>(PLAYER_RON)
+            .expect("shipped player settings should parse");
+        assert!(player.scale.is_finite());
+
+        let stale = PLAYER_RON.replacen("speed:", "levels_tall: 2,\n    speed:", 1);
+        assert_ne!(
+            stale, PLAYER_RON,
+            "the player fixture no longer contains the speed field"
+        );
+        let error = ron::from_str::<PlayerSettings>(&stale)
+            .expect_err("removed player fields must not be silently ignored");
+        assert!(
+            error.to_string().contains("levels_tall"),
+            "stale player setting returned an unrelated error: {error}"
+        );
+    }
 
     #[test]
     fn shipped_camera_frames_the_showcase() {

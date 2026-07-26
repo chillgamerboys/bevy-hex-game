@@ -42,8 +42,8 @@ use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, GameplaySetup, Headroom, HexCoord, HexSpan, Level, Mode, PausableSystems, Screen,
-    SubstanceId, TilePos, TraversalProfile, TraversalProfileId, TraversalProfiles,
+    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
+    TraversalProfile,
 };
 
 /// Ordering for systems that consume a unit's logical position.
@@ -84,12 +84,7 @@ impl MovementCrossings {
 /// animation.
 pub fn plugin(app: &mut App) {
     app.register_type::<Body>()
-        .init_resource::<MovementCrossings>()
-        .init_resource::<TraversalProfiles>()
-        .add_systems(
-            OnEnter(Screen::Gameplay),
-            publish_walker_profile.in_set(GameplaySetup::Rules),
-        );
+        .init_resource::<MovementCrossings>();
 
     // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
     // also reads the active scenario placements and spawns pieces: anything that needs
@@ -108,27 +103,11 @@ pub fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Mode::Combat), crate::units::halt_on_combat);
 }
 
-/// Publishes the ordinary walker before map resources are generated.
-///
-/// Its two-level height and one-level climb/drop are gameplay invariants. Presentation
-/// settings must not silently change map validation; special movement will use a
-/// different profile rather than weakening this one.
-fn publish_walker_profile(mut profiles: ResMut<TraversalProfiles>) {
-    let _previous = profiles.insert(TraversalProfileId::WALKER, TraversalProfile::WALKER);
-}
-
-/// How many levels a piece may climb or drop in one step.
-///
-/// One, by design: a step is a step. Anything steeper is a cliff and has to be walked
-/// around, or bypassed with an ability.
-pub const MAX_STEP: Level = TraversalProfile::WALKER.max_climb;
-
 /// How much room a thing takes up, and therefore where it fits.
 ///
-/// A struct rather than a bare [`Level`] on purpose. Bodies come in configurations —
-/// the obvious next one is a **footprint**, a set of coordinate offsets for something
-/// wider than a single hex — and adding that field here changes [`Body::admits`] and
-/// nothing else. No call site passes the parts separately, so none of them move.
+/// A struct rather than a bare [`hex_core::Level`] on purpose. Bodies can eventually gain a
+/// footprint or a non-walking movement profile without changing every system that
+/// carries one.
 ///
 /// A footprint is deliberately not built yet. It is pure gameplay, invisible to the
 /// map, and it first needs a decision this codebase has not taken: whether a wide body
@@ -136,7 +115,7 @@ pub const MAX_STEP: Level = TraversalProfile::WALKER.max_climb;
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct Body {
-    /// Exact movement and occupancy rules copied from the published profile at spawn.
+    /// Exact movement and occupancy rules used by this body.
     pub profile: TraversalProfile,
 }
 
@@ -147,23 +126,10 @@ impl Body {
         Self { profile }
     }
 
-    /// The shared traversal rules this ordinary body uses.
-    ///
-    /// The profile is snapshotted from [`TraversalProfiles`] during world setup. Live
-    /// movement therefore uses the exact height, climb, and drop values that validated
-    /// the generated map.
+    /// The traversal rules this body uses.
     #[must_use]
     pub const fn traversal_profile(self) -> TraversalProfile {
         self.profile
-    }
-
-    /// Whether this body fits in the space above a surface.
-    ///
-    /// The single place the size rule lives, and where a footprint check would join
-    /// it. Everything else asks this rather than comparing levels itself.
-    #[must_use]
-    pub const fn admits(self, headroom: Headroom) -> bool {
-        self.traversal_profile().admits_surface(true, headroom)
     }
 }
 
@@ -468,7 +434,7 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
 mod tests {
     use super::*;
     use hex_assets::{Substance, SubstanceFile};
-    use hex_core::MAX_HEADROOM;
+    use hex_core::{Level, MAX_HEADROOM};
 
     const STONE: SubstanceId = SubstanceId(1);
 
@@ -576,7 +542,7 @@ mod tests {
         );
     }
 
-    /// A two-level step is a cliff. This is the whole point of `MAX_STEP`.
+    /// A two-level step exceeds the ordinary walker's climb limit.
     #[test]
     fn a_cliff_blocks_the_route() {
         let a = HexCoord::ORIGIN;

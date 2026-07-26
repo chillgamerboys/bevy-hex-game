@@ -11,8 +11,8 @@ use std::time::Instant;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use hex_core::{
-    Headroom, HexCoord, Level, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TilePos,
-    TraversalProfile, MAX_HEADROOM,
+    HexCoord, Level, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TilePos,
+    TraversalProfile,
 };
 use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
@@ -34,7 +34,7 @@ pub(crate) const BRIDGE: &str = "bridge";
 pub(crate) const ALTERNATE_CROSSING: &str = "alternate_crossing";
 
 /// Diagnostics for one completed procedural generation.
-#[derive(Resource, Reflect, Debug, Clone, PartialEq, Eq)]
+#[derive(Resource, Reflect, Debug, Clone)]
 #[reflect(Resource)]
 pub struct GenerationReport {
     /// Algorithm contract used for the build.
@@ -1175,7 +1175,11 @@ fn lower_only_slope_projection(
         changed = false;
         let snapshot: Vec<(HexCoord, Level)> = cells
             .iter()
-            .filter(|(coord, cell)| !barrier.contains(coord) && cell.hazard.is_none())
+            .filter(|(coord, cell)| {
+                !barrier.contains(coord)
+                    && cell.hazard.is_none()
+                    && cell.foundation != Foundation::None
+            })
             .map(|(coord, cell)| (*coord, cell.surface))
             .collect();
         for (coord, surface) in snapshot {
@@ -1183,7 +1187,7 @@ fn lower_only_slope_projection(
                 .neighbors()
                 .into_iter()
                 .filter_map(|neighbor| cells.get(&neighbor))
-                .filter(|cell| cell.hazard.is_none())
+                .filter(|cell| cell.hazard.is_none() && cell.foundation != Foundation::None)
                 .map(|cell| cell.surface)
                 .min();
             let Some(lowest) = lowest_neighbor else {
@@ -1432,7 +1436,8 @@ fn voxelize_validate_repair(
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> (VoxelMap, Validation, Vec<String>) {
     let mut repair_actions = Vec::new();
-    for round in 0..=MAX_REPAIR_ROUNDS {
+    let mut round = 0;
+    loop {
         let map = voxelize(plan, settings.environment, palette);
         let mut validation = validate_exact(plan, &map, palette, walker, is_solid);
         if validation.valid || round == MAX_REPAIR_ROUNDS {
@@ -1475,11 +1480,8 @@ fn voxelize_validate_repair(
         if changed > 0 {
             repair_actions.push(format!("{} ({changed} cells)", repair_label(round)));
         }
+        round = round.saturating_add(1);
     }
-
-    let map = voxelize(plan, settings.environment, palette);
-    let validation = validate_exact(plan, &map, palette, walker, is_solid);
-    (map, validation, repair_actions)
 }
 
 const fn repair_label(round: u8) -> &'static str {
@@ -1926,18 +1928,24 @@ fn validate_exact(
         notes.push("opposing anchors are disconnected for the ordinary walker".to_owned());
     }
 
-    for surface in &graph.surfaces {
-        if special_regions.get(*surface).is_none() && !distances.contains_key(surface) {
-            notes.push(format!(
-                "ordinary surface {surface:?} is outside the critical network"
-            ));
-            break;
-        }
+    if let Some(surface) = graph
+        .surfaces
+        .iter()
+        .filter(|surface| {
+            special_regions.get(**surface).is_none() && !distances.contains_key(*surface)
+        })
+        .min()
+    {
+        notes.push(format!(
+            "ordinary surface {surface:?} is outside the critical network"
+        ));
     }
     if special_regions.len() != plan.gated.len() {
         notes.push("a gated coordinate has no planned surface".to_owned());
     }
-    for (surface, _) in special_regions.iter() {
+    let mut memberships: Vec<(TilePos, SpecialMovementRegion)> = special_regions.iter().collect();
+    memberships.sort_unstable();
+    for (surface, _) in memberships {
         if !graph.surfaces.contains(&surface) {
             notes.push(format!(
                 "special-movement surface {surface:?} is not standable"
@@ -2323,7 +2331,9 @@ fn validate_hills_columns(
     {
         notes.push("Frozen hills contain no ice surface".to_owned());
     }
-    for (coord, cell) in &plan.cells {
+    let mut planned_cells: Vec<(&HexCoord, &PlannedCell)> = plan.cells.iter().collect();
+    planned_cells.sort_unstable_by_key(|(coord, _)| **coord);
+    for (coord, cell) in planned_cells {
         if cell.foundation != Foundation::SolidToBedrock {
             notes.push(format!("Hills coordinate {coord:?} is not bedrock-founded"));
             break;
@@ -2685,6 +2695,9 @@ fn crossing_side_has_barrier(
     barrier: &BTreeSet<HexCoord>,
     grid_radius: u32,
 ) -> bool {
+    if step == (0, 0) {
+        return false;
+    }
     let [first, second] = endpoint;
     let mut row = [
         shift_coord(first.coord, step),
@@ -2717,16 +2730,11 @@ fn standable_surfaces(
 ) -> HashSet<TilePos> {
     let mut standable = HashSet::with_capacity(map.len());
     for (coord, column) in map.columns() {
-        let mut headroom = MAX_HEADROOM;
         for level in (0..column.top()).rev() {
             let substance = column.get(level);
-            if profile.admits_surface(is_solid(substance), Headroom(headroom)) {
+            let headroom = column.headroom_above(level.saturating_add(1));
+            if profile.admits_surface(is_solid(substance), headroom) {
                 standable.insert(TilePos::new(coord, level));
-            }
-            if substance.is_air() {
-                headroom = headroom.saturating_add(1).min(MAX_HEADROOM);
-            } else {
-                headroom = 0;
             }
         }
     }
@@ -3046,7 +3054,6 @@ mod tests {
 
     use super::*;
     use crate::settings::TerrainSettings;
-
     const BEDROCK: SubstanceId = SubstanceId(1);
     const STONE: SubstanceId = SubstanceId(2);
     const DIRT: SubstanceId = SubstanceId(3);
@@ -3064,6 +3071,10 @@ mod tests {
         max_drop: 1,
     };
     const HERO_SEED: u64 = 1_592_598_566;
+    // Selected once from seeds 0..1_024 for the iteration-one review pack. The
+    // labels describe the measured extreme or median each seed represented; the
+    // selector was intentionally removed after recording this provenance so tests
+    // exercise the fixed corpus rather than rediscovering it.
     const FIXED_REGRESSION_SEEDS: [(&str, u64); 6] = [
         ("median", 4),
         ("relief-min", 1),
@@ -3159,6 +3170,84 @@ mod tests {
         );
         assert!(first.special_regions.is_empty());
         assert!(second.special_regions.is_empty());
+    }
+
+    #[test]
+    fn generator_v1_preset_goldens_are_stable() {
+        let substances: SubstanceFile =
+            ron::from_str(include_str!("../../../assets/config/substances.ron"))
+                .expect("the shipped substances should parse");
+        let table = SubstanceTable::from_file(&substances);
+        let cases = [
+            (
+                "temperate hills",
+                hills(EnvironmentSettings::TemperateGrassland),
+                HERO_SEED,
+                Some(1),
+                4_508_295_216_895_027_881_u64,
+                2_287_003_626_836_917_910_u64,
+            ),
+            (
+                "frozen hills",
+                hills(EnvironmentSettings::Frozen),
+                484_450_342,
+                Some(1),
+                11_000_385_881_747_978_286,
+                15_645_056_389_872_482_358,
+            ),
+            (
+                "volcanic hills",
+                hills(EnvironmentSettings::Volcanic),
+                444_211_238,
+                Some(1),
+                15_742_618_080_999_901_279,
+                9_467_682_862_694_642_740,
+            ),
+            (
+                "sky islands",
+                sky(),
+                94_445_606,
+                Some(0),
+                6_724_558_830_461_654_069,
+                17_755_945_497_268_195_861,
+            ),
+        ];
+
+        for (
+            label,
+            settings,
+            seed,
+            expected_candidate,
+            expected_settings_fingerprint,
+            expected_map_fingerprint,
+        ) in cases
+        {
+            let terrain = TerrainSettings::Procedural(settings.clone());
+            let runtime_palette = TerrainPalette::for_terrain(&table, &terrain)
+                .expect("the shipped substance table should cover procedural terrain");
+            let result = build(
+                12,
+                &settings,
+                seed,
+                &runtime_palette,
+                WALKER,
+                &|substance| table.is_solid(substance),
+            );
+            assert!(result.validated, "{label}: {:?}", result.report.notes);
+            assert!(!result.report.used_fallback, "{label}");
+            assert_eq!(
+                result.report.selected_candidate, expected_candidate,
+                "{label} changed candidate selection"
+            );
+            assert_eq!(
+                result.report.settings_fingerprint, expected_settings_fingerprint,
+                "{label} changed its V1 settings fingerprint"
+            );
+            assert_eq!(
+                result.report.map_fingerprint, expected_map_fingerprint,
+                "{label} changed its V1 map fingerprint"
+            );
+        }
     }
 
     #[test]
@@ -3467,6 +3556,47 @@ mod tests {
         );
         assert!(
             notes.iter().any(|note| note.contains("again beyond")),
+            "{notes:?}"
+        );
+    }
+
+    #[test]
+    fn fitted_crossing_validation_terminates_on_a_repeated_row() {
+        let controls = [HexCoord::from_axial(-12, 0), HexCoord::from_axial(12, 0)];
+        let centres = ordered_centerline(&controls).expect("straight line should be valid");
+        let sections = river_ribbon_sections(&centres, 12).expect("ribbon should be valid");
+        let barrier = ribbon_barrier(&sections);
+        let crossing = fit_crossing_lanes(12, 0, &barrier, &centres, 0)
+            .expect("straight river should admit a crossing");
+        let mut rows = tile_rows(&crossing.rows, 16);
+        let repeated = rows
+            .first()
+            .copied()
+            .expect("fitted crossing should have a first row");
+        *rows
+            .get_mut(1)
+            .expect("fitted crossing should have a second row") = repeated;
+
+        let first_lane: BTreeSet<TilePos> = rows.iter().map(|row| row[0]).collect();
+        let second_lane: BTreeSet<TilePos> = rows.iter().map(|row| row[1]).collect();
+        let declared: BTreeSet<TilePos> = first_lane.union(&second_lane).copied().collect();
+        let surfaces: HashSet<TilePos> = declared.iter().copied().collect();
+        let mut notes = Vec::new();
+
+        validate_fitted_crossing(
+            "corrupt crossing",
+            &rows,
+            &first_lane,
+            &second_lane,
+            &declared,
+            &barrier,
+            &surfaces,
+            12,
+            &mut notes,
+        );
+
+        assert!(
+            notes.iter().any(|note| note.contains("not contiguous")),
             "{notes:?}"
         );
     }
@@ -4028,6 +4158,33 @@ mod tests {
     }
 
     #[test]
+    fn standability_uses_column_headroom_for_every_surface() {
+        let coord = HexCoord::ORIGIN;
+        let mut column = Column::filled(STONE, 8);
+        column.set(3, SubstanceId::AIR);
+        column.set(4, SubstanceId::AIR);
+        let mut map = VoxelMap::new();
+        map.insert_column(coord, column.clone());
+
+        let surfaces = standable_surfaces(&map, WALKER, &solid);
+        for level in 0..column.top() {
+            let position = TilePos::new(coord, level);
+            let expected = WALKER.admits_surface(
+                solid(column.get(level)),
+                column.headroom_above(level.saturating_add(1)),
+            );
+            assert_eq!(
+                surfaces.contains(&position),
+                expected,
+                "standability diverged from Column headroom at {position:?}"
+            );
+        }
+        assert!(surfaces.contains(&TilePos::new(coord, 2)));
+        assert!(surfaces.contains(&TilePos::new(coord, 7)));
+        assert!(!surfaces.contains(&TilePos::new(coord, 1)));
+    }
+
+    #[test]
     fn linked_sky_islands_connect_required_anchors_but_not_gated_islands() {
         let settings = sky();
         let result = build(12, &settings, 808, &palette(), WALKER, &solid);
@@ -4129,6 +4286,52 @@ mod tests {
                 .iter()
                 .any(|note| note.contains("anchor belongs")),
             "{:?}",
+            validation.notes
+        );
+    }
+
+    #[test]
+    fn seed_808_sky_slope_projection_leaves_later_repairs_viable() {
+        let settings = sky();
+        let mut plan = construct_plan(12, &settings, 808, 0, false);
+        let deck_only_before: BTreeMap<HexCoord, PlannedCell> = plan
+            .cells
+            .iter()
+            .filter(|(_, cell)| cell.foundation == Foundation::None)
+            .map(|(coord, cell)| (*coord, *cell))
+            .collect();
+        assert!(
+            !deck_only_before.is_empty(),
+            "the regression requires bridge cells over empty space"
+        );
+
+        let before_projection = plan.clone();
+        repair_plan(&mut plan, 1);
+        let changed = plan
+            .cells
+            .iter()
+            .filter(|(coord, cell)| before_projection.cells.get(*coord) != Some(*cell))
+            .count();
+        let maximum_local_repair = plan.cells.len().saturating_div(20).max(12);
+        assert!(
+            changed <= maximum_local_repair,
+            "slope projection changed {changed} cells; local limit is {maximum_local_repair}"
+        );
+        for (coord, expected) in deck_only_before {
+            assert_eq!(
+                plan.cells.get(&coord),
+                Some(&expected),
+                "deck-only cell {coord:?} participated in slope projection"
+            );
+        }
+
+        repair_plan(&mut plan, 2);
+        synchronize_anchor_levels(&mut plan);
+        let map = voxelize(&plan, settings.environment, &palette());
+        let validation = validate_exact(&plan, &map, &palette(), WALKER, &solid);
+        assert!(
+            validation.valid,
+            "the later crossing repair should remain usable: {:?}",
             validation.notes
         );
     }
@@ -4283,229 +4486,6 @@ mod tests {
 
         assert_eq!(invalid, 0, "{invalid} final maps failed hard validation");
         assert!(fallbacks < 100, "{fallbacks} of 10,000 seeds used fallback");
-    }
-
-    #[test]
-    #[ignore = "manual review-corpus seed selection"]
-    fn select_review_corpus_seeds_from_measured_output() {
-        #[derive(Clone, Copy)]
-        struct Summary {
-            seed: u64,
-            valid_candidates: u8,
-            repair_rounds: u8,
-            metrics: TacticalMetrics,
-            fingerprint: u64,
-        }
-
-        let settings = hills(EnvironmentSettings::TemperateGrassland);
-        let mut summaries = Vec::with_capacity(1_024);
-        for seed in 0..1_024 {
-            let result = build(12, &settings, seed, &palette(), WALKER, &solid);
-            assert!(result.validated, "seed {seed}: {:?}", result.report.notes);
-            summaries.push(Summary {
-                seed,
-                valid_candidates: result.report.valid_candidates,
-                repair_rounds: result.report.repair_rounds,
-                metrics: result.report.metrics,
-                fingerprint: result.report.map_fingerprint,
-            });
-        }
-
-        let mut reliefs: Vec<Level> = summaries
-            .iter()
-            .map(|summary| summary.metrics.relief)
-            .collect();
-        let mut sinuosities: Vec<u32> = summaries
-            .iter()
-            .map(|summary| summary.metrics.river_sinuosity_percent)
-            .collect();
-        let mut detours: Vec<u32> = summaries
-            .iter()
-            .map(|summary| summary.metrics.alternate_detour_percent)
-            .collect();
-        let mut routes: Vec<u32> = summaries
-            .iter()
-            .map(|summary| summary.metrics.critical_route_steps)
-            .collect();
-        reliefs.sort_unstable();
-        sinuosities.sort_unstable();
-        detours.sort_unstable();
-        routes.sort_unstable();
-        let middle = summaries.len() / 2;
-        let targets = (
-            reliefs
-                .get(middle)
-                .copied()
-                .expect("sampled corpus should have a median relief"),
-            sinuosities
-                .get(middle)
-                .copied()
-                .expect("sampled corpus should have a median sinuosity"),
-            detours
-                .get(middle)
-                .copied()
-                .expect("sampled corpus should have a median detour"),
-            routes
-                .get(middle)
-                .copied()
-                .expect("sampled corpus should have a median route length"),
-        );
-
-        let mut selected = BTreeSet::new();
-        let mut choose = |label: &str, key: &dyn Fn(&Summary) -> (u32, u32, u32, u32, u64)| {
-            let summary = summaries
-                .iter()
-                .filter(|summary| !selected.contains(&summary.seed))
-                .min_by_key(|summary| key(summary))
-                .copied()
-                .expect("review corpus should contain an unused seed");
-            selected.insert(summary.seed);
-            eprintln!(
-                "{label}: seed={}, valid_candidates={}, repairs={}, relief={}, route={}, \
-                 detour={}%, sinuosity={}%, fingerprint={}",
-                summary.seed,
-                summary.valid_candidates,
-                summary.repair_rounds,
-                summary.metrics.relief,
-                summary.metrics.critical_route_steps,
-                summary.metrics.alternate_detour_percent,
-                summary.metrics.river_sinuosity_percent,
-                summary.fingerprint
-            );
-        };
-
-        choose("median", &|summary| {
-            (
-                summary.metrics.relief.abs_diff(targets.0),
-                summary.metrics.river_sinuosity_percent.abs_diff(targets.1),
-                summary.metrics.alternate_detour_percent.abs_diff(targets.2),
-                summary.metrics.critical_route_steps.abs_diff(targets.3),
-                summary.seed,
-            )
-        });
-        choose("relief-min", &|summary| {
-            (
-                u32::try_from(summary.metrics.relief).unwrap_or_default(),
-                summary.metrics.river_sinuosity_percent.abs_diff(targets.1),
-                summary.metrics.alternate_detour_percent.abs_diff(targets.2),
-                summary.metrics.critical_route_steps.abs_diff(targets.3),
-                summary.seed,
-            )
-        });
-        choose("relief-max", &|summary| {
-            (
-                u32::MAX.saturating_sub(u32::try_from(summary.metrics.relief).unwrap_or_default()),
-                summary.metrics.river_sinuosity_percent.abs_diff(targets.1),
-                summary.metrics.alternate_detour_percent.abs_diff(targets.2),
-                summary.metrics.critical_route_steps.abs_diff(targets.3),
-                summary.seed,
-            )
-        });
-        choose("sinuosity-min", &|summary| {
-            (
-                summary.metrics.river_sinuosity_percent,
-                summary.metrics.relief.abs_diff(targets.0),
-                summary.metrics.alternate_detour_percent.abs_diff(targets.2),
-                summary.metrics.critical_route_steps.abs_diff(targets.3),
-                summary.seed,
-            )
-        });
-        choose("sinuosity-max", &|summary| {
-            (
-                u32::MAX - summary.metrics.river_sinuosity_percent,
-                summary.metrics.relief.abs_diff(targets.0),
-                summary.metrics.alternate_detour_percent.abs_diff(targets.2),
-                summary.metrics.critical_route_steps.abs_diff(targets.3),
-                summary.seed,
-            )
-        });
-        choose("fallback-pressure", &|summary| {
-            let hard_boundary_distance = summary
-                .metrics
-                .alternate_detour_percent
-                .abs_diff(20)
-                .min(summary.metrics.alternate_detour_percent.abs_diff(60));
-            (
-                u32::from(summary.valid_candidates),
-                u32::from(u8::MAX - summary.repair_rounds),
-                hard_boundary_distance,
-                u32::try_from(8_i32.saturating_sub(summary.metrics.relief)).unwrap_or_default(),
-                summary.seed,
-            )
-        });
-    }
-
-    #[test]
-    #[ignore = "manual iteration review-pack report"]
-    fn print_iteration_one_review_reports() {
-        let substances: SubstanceFile =
-            ron::from_str(include_str!("../../../assets/config/substances.ron"))
-                .expect("the shipped substances should parse");
-        let table = SubstanceTable::from_file(&substances);
-        let temperate = hills(EnvironmentSettings::TemperateGrassland);
-        let fresh = [
-            named_hash(1, 0, "review.fresh", 0),
-            named_hash(1, 0, "review.fresh", 1),
-            named_hash(1, 0, "review.fresh", 2),
-        ];
-        let mut entries = vec![("hero", HERO_SEED, temperate.clone())];
-        entries.extend(
-            FIXED_REGRESSION_SEEDS
-                .into_iter()
-                .map(|(label, seed)| (label, seed, temperate.clone())),
-        );
-        entries.extend(
-            ["fresh-01", "fresh-02", "fresh-03"]
-                .into_iter()
-                .zip(fresh)
-                .map(|(label, seed)| (label, seed, temperate.clone())),
-        );
-        entries.extend([
-            (
-                "probe-frozen",
-                484_450_342,
-                hills(EnvironmentSettings::Frozen),
-            ),
-            (
-                "probe-volcanic",
-                444_211_238,
-                hills(EnvironmentSettings::Volcanic),
-            ),
-            ("probe-sky-islands", 94_445_606, sky()),
-        ]);
-
-        for (label, seed, settings) in entries {
-            let terrain = TerrainSettings::Procedural(settings.clone());
-            let runtime_palette = TerrainPalette::for_terrain(&table, &terrain)
-                .expect("the shipped substance table should cover procedural terrain");
-            let result = build(
-                12,
-                &settings,
-                seed,
-                &runtime_palette,
-                WALKER,
-                &|substance| table.is_solid(substance),
-            );
-            assert!(result.validated, "{label}: {:?}", result.report.notes);
-            let anchors: Vec<(&str, TilePos)> = result.anchors.iter().collect();
-            eprintln!(
-                "{label}: seed={seed}, version={}, candidate={:?}, candidates={}/{}, \
-                 repairs={} {:?}, fallback={}, settings_fingerprint={}, map_fingerprint={}, \
-                 metrics={:?}, elapsed={}us, anchors={anchors:?}, notes={:?}",
-                result.report.generator_version,
-                result.report.selected_candidate,
-                result.report.valid_candidates,
-                result.report.candidates_evaluated,
-                result.report.repair_rounds,
-                result.report.repair_actions,
-                result.report.used_fallback,
-                result.report.settings_fingerprint,
-                result.report.map_fingerprint,
-                result.report.metrics,
-                result.report.elapsed_micros,
-                result.report.notes
-            );
-        }
     }
 
     #[test]

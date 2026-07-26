@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_assets::{Scenario, ScenarioLibrary};
-use hex_core::{ResolvedMapSeed, Screen};
+use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
 
 use crate::menus::widgets::{blurb, button, compact_button, label, LABEL, MUTED};
 use crate::scenarios::ScenarioToLoad;
@@ -67,6 +67,10 @@ struct RerollsScenario {
 /// The line that stands in for the list until the library has loaded.
 #[derive(Component)]
 struct ListPlaceholder;
+
+/// Player-visible reason the previous scenario could not finish setup.
+#[derive(Component)]
+struct SetupFailureNotice;
 
 /// Seed overrides that live only for this process.
 ///
@@ -130,7 +134,8 @@ fn mixed_seed(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn spawn_title(mut commands: Commands) {
+fn spawn_title(mut commands: Commands, failure: Option<Res<GameplaySetupFailure>>) {
+    let failure_reason = failure.as_deref().map(|failure| failure.reason.clone());
     commands
         .spawn(screen_root(Screen::Title, "Title Screen"))
         .with_children(|parent| {
@@ -139,6 +144,19 @@ fn spawn_title(mut commands: Commands) {
                 TextFont::from_font_size(56.0),
                 TextColor(LABEL),
             ));
+            if let Some(reason) = failure_reason {
+                parent.spawn((
+                    Name::new("Gameplay Setup Failure"),
+                    SetupFailureNotice,
+                    Text::new(reason),
+                    TextFont::from_font_size(15.0),
+                    TextColor(Color::srgb(0.95, 0.45, 0.40)),
+                    Node {
+                        max_width: Val::Px(720.0),
+                        ..default()
+                    },
+                ));
+            }
             parent
                 .spawn((
                     Name::new("Scenario List"),
@@ -410,6 +428,25 @@ mod tests {
         let world = app.world_mut();
         let mut query = world.query::<&Text>();
         query.iter(world).any(|text| text.0.contains(wanted))
+    }
+
+    #[test]
+    fn gameplay_setup_failure_is_visible_on_the_title_screen() {
+        let mut app = test_app();
+        app.insert_resource(GameplaySetupFailure::new(
+            "The selected map could not publish a party anchor.",
+        ));
+
+        go_to(&mut app, Screen::Title);
+
+        assert!(has_text(
+            &mut app,
+            "The selected map could not publish a party anchor."
+        ));
+        let mut notices = app
+            .world_mut()
+            .query_filtered::<Entity, With<SetupFailureNotice>>();
+        assert_eq!(notices.iter(app.world()).count(), 1);
     }
 
     /// The menu still has its scenarios when you come back to it.

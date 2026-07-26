@@ -11,7 +11,8 @@ Everything about the map:
 |---|---|
 | `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
 | `src/generator.rs` | The optional Perlin height field |
-| `src/terrain.rs` | Pure `MapSettings + palette -> VoxelMap` construction for every preset |
+| `src/terrain.rs` | Pure Showcase and Perlin construction |
+| `src/procedural.rs` | Versioned procedural planning, validation, candidate selection, and diagnostics |
 | `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
 | `src/settings.rs` | Validated designer-facing settings from a world file, e.g. `assets/config/world.ron` |
 
@@ -24,7 +25,7 @@ explains the voxel representation and the rules everything else depends on.
 ## Your compile-time blast radius is bounded, deliberately
 
 **Nothing depends on `hex_map` except the binary.** `hex_core`, `hex_assets`,
-`hex_world` and `hex_gameplay` cannot see it. Cargo enforces this — a `use hex_map::`
+`hex_world` and `hex_units` cannot see it. Cargo enforces this — a `use hex_map::`
 in any of them fails to compile.
 
 The consequence is that those crates cannot import map internals. It is still
@@ -48,7 +49,7 @@ commands.spawn((
 ));
 ```
 
-`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
 write interface.
 
@@ -172,7 +173,8 @@ Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 ```rust
 GameplaySetup::Resources   // generate and insert VoxelMap
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
-GameplaySetup::Actors      // hex_gameplay's, not yours; needs tiles to exist
+GameplaySetup::Actors      // hex_units', not yours; needs tiles to exist
+GameplaySetup::Finalize    // hex_game verifies terrain and required actors
 ```
 
 **Do not put tile spawning outside `Terrain`.** Systems in one `OnEnter` schedule run
@@ -210,38 +212,6 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but the
 world is only rebuilt on entering gameplay — press `BACKSPACE`, then click its
 scenario to see terrain changes.
-
-### Deterministic procedural review
-
-The review hooks are dormant unless `HEX_REVIEW_SCENARIO` is set. To launch one exact
-seed for manual play, use an exact, unique name from `scenarios.ron`:
-
-```sh
-HEX_REVIEW_SCENARIO="Procedural Hills" \
-HEX_REVIEW_SEED=1592598566 \
-cargo run --release -p hex_game
-```
-
-This bypasses only the title-screen click; loading, validation, terrain spawning, and
-actor spawning use the normal path. Omit `HEX_REVIEW_SEED` to use the scenario's
-configured seed. A seed override is valid only for a scenario that already declares
-`generation_seed`.
-
-Add a PNG path and view to make a deterministic 1920x1080 renderer capture. The game
-waits for validated terrain to settle, writes the image, and exits:
-
-```sh
-HEX_REVIEW_SCENARIO="Procedural Hills" \
-HEX_REVIEW_SEED=1592598566 \
-HEX_REVIEW_CAPTURE=".context/procedural-maps/iteration-01/hero-default.png" \
-HEX_REVIEW_VIEW=default \
-cargo run --release -p hex_game
-```
-
-Repeat with `HEX_REVIEW_VIEW=rotated` and `HEX_REVIEW_VIEW=top-down`, changing the
-output filename each time. `HEX_REVIEW_VIEW` requires `HEX_REVIEW_CAPTURE`; capture
-defaults to the `default` view when the view variable is omitted. Always launch
-through Cargo so asset paths resolve.
 
 `terrain::build_non_procedural_map` and `procedural::build` are pure: settings and
 their explicit generation inputs go in, and a complete `VoxelMap` comes out. Keep ECS

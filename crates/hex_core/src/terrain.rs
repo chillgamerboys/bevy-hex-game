@@ -112,10 +112,9 @@ impl FromIterator<(MapAnchorId, TilePos)> for MapAnchors {
 ///
 /// The id is deterministic only within one generated map. It groups exact surface
 /// positions without naming a generator recipe or promising which future ability can
-/// enter the area. Tile entities in such an area carry this component, while
-/// [`SpecialMovementRegions`] remains the positional source of truth.
-#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[reflect(Component)]
+/// enter the area. [`SpecialMovementRegions`] is the positional source of truth; an
+/// ECS component should be added only when a live system has a query-based use for it.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpecialMovementRegion(
     /// Map-local deterministic region number.
     pub u32,

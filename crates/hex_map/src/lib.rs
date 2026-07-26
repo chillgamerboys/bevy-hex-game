@@ -17,10 +17,10 @@
 //! Tile entities are spawned carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
 //! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). Optional generated surfaces additionally carry
-//! [`SpecialMovementRegion`](hex_core::SpecialMovementRegion). `hex_units` queries
-//! those components off the entities. It never reads [`HeightMap`] or any other type
-//! defined here.
+//! [`Headroom`](hex_core::Headroom). Exact optional-region memberships are published
+//! separately through [`SpecialMovementRegions`](hex_core::SpecialMovementRegions).
+//! `hex_units` queries the tile components off the entities. It never reads
+//! [`HeightMap`] or any other type defined here.
 //!
 //! The practical consequence: **how terrain is generated and stored is entirely
 //! internal.** Replace the generator or key the map differently — as long as tile

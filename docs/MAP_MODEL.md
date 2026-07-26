@@ -81,10 +81,10 @@ is a real answer that callers handle rather than an error.
 ### Optional regions use exact surface metadata
 
 A generator can publish an optional area through `SpecialMovementRegions`, which maps
-each exact `TilePos` in the area to a `SpecialMovementRegion`. The corresponding tile
-entities carry the same region component. This is generic metadata: it does not name
-the recipe that created the area or decide whether flight, swimming, tunnelling, or
-some future ability can enter it.
+each exact `TilePos` in the area to a `SpecialMovementRegion`. The resource is the sole
+source of truth; tile entities do not duplicate this membership. This is generic
+metadata: it does not name the recipe that created the area or decide whether flight,
+swimming, tunnelling, or some future ability can enter it.
 
 Membership is keyed by `TilePos`, not `HexCoord`, so a bridge and the ground beneath it
 can belong to different regions. Region numbers are deterministic only within one
@@ -157,16 +157,17 @@ hex_map      voxel storage, generation, rendering — nothing else can see this
 hex_units reads tiles; cannot see hex_map
 ```
 
-The map talks to the rest of the game **only through components on tile entities**:
+The map exposes rendered footing through components on tile entities:
 
 ```rust
 (HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
-// Optional generated areas also carry SpecialMovementRegion.
 ```
 
-`hex_units` queries those. It never reads `VoxelMap` or any generator, so terrain
-storage and generation can be replaced wholesale — chunked, streamed, generated
-differently — without anything else noticing.
+Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
+by `TilePos`; they are not duplicated on tile entities until a real query-based
+consumer needs that projection. `hex_units` queries the footing components. It never
+reads `VoxelMap` or any generator, so terrain storage and generation can be replaced
+wholesale — chunked, streamed, generated differently — without anything else noticing.
 
 **Writing** goes the other way, through a message:
 

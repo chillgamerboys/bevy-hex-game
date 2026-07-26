@@ -32,8 +32,8 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
 use hex_combat::Initiative;
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Level, Mode, Screen, SubstanceId, TilePos, Turn,
-    MAX_HEADROOM,
+    Headroom, HexCoord, HexSpan, HexTile, Level, Mode, Screen, SubstanceId, TilePos,
+    TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_units::{Body, Faction, Standing, StandsOn};
 
@@ -82,8 +82,9 @@ fn test_app() -> App {
 
 /// Ground everywhere, plus a bridge deck over one line of it.
 ///
-/// The deck is eight levels up — far beyond `MAX_STEP`, so nothing can walk between
-/// the two surfaces and any connection a test observes is a bug rather than a route.
+/// The deck is eight levels up — far beyond the ordinary walker profile, so nothing
+/// can walk between the two surfaces and any connection a test observes is a bug
+/// rather than a route.
 fn spawn_terrain(mut commands: Commands) {
     for coord in HexCoord::ORIGIN.within_radius(10) {
         commands.spawn((
@@ -139,6 +140,16 @@ fn substance_table() -> SubstanceTable {
 }
 
 fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, level: Level) -> Entity {
+    spawn_unit_with_profile(app, faction, coord, level, TraversalProfile::WALKER)
+}
+
+fn spawn_unit_with_profile(
+    app: &mut App,
+    faction: Faction,
+    coord: HexCoord,
+    level: Level,
+    profile: TraversalProfile,
+) -> Entity {
     let standing = Standing {
         pos: TilePos::new(coord, level),
         span: span_at(level),
@@ -146,7 +157,7 @@ fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, level: Level) ->
     let mut unit = app.world_mut().spawn((
         faction,
         StandsOn(standing),
-        Body::new(hex_core::TraversalProfile::WALKER),
+        Body::new(profile),
         Initiative(10),
         Transform::from_translation(standing.world_position()),
     ));
@@ -229,6 +240,43 @@ fn height_does_not_lengthen_a_punch() {
     assert!(
         app.world().get::<Transformation>(player).is_none(),
         "the enemy swung at somebody eight levels below it"
+    );
+}
+
+/// A profile that may descend farther than it climbs still has symmetric melee reach.
+///
+/// Checking only attacker-to-target movement would let this enemy punch eight levels
+/// down while the same two surfaces fail in the other direction. Melee is a shared
+/// boundary between the units, not a directional movement benefit.
+#[test]
+fn asymmetric_drop_does_not_grant_downhill_melee() {
+    let mut app = test_app();
+    let player_coord = HexCoord::new_cubic(1, 0, -1);
+    let player = spawn_unit(&mut app, Faction::Player, player_coord, GROUND_LEVEL);
+    let hostile = spawn_unit_with_profile(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::ORIGIN,
+        DECK_LEVEL,
+        TraversalProfile {
+            levels_tall: 2,
+            max_climb: 1,
+            max_drop: DECK_LEVEL - GROUND_LEVEL,
+        },
+    );
+    app.world_mut().entity_mut(hostile).insert(Initiative(20));
+    enter_gameplay(&mut app);
+    assert_eq!(
+        mode(&mut app),
+        Mode::Combat,
+        "setup failed — no fight, so melee was never evaluated"
+    );
+    app.update();
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "a long-drop profile granted a one-sided downhill melee attack"
     );
 }
 

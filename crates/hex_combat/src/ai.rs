@@ -191,7 +191,9 @@ fn best_foe(
         .filter(|(_, other, _)| faction.is_hostile_to(**other))
         .map(|(entity, _, standing)| {
             let target = standing.0;
-            let action = if footing.admits_step(from.pos, target.pos) {
+            let action = if footing.admits_step(from.pos, target.pos)
+                && footing.admits_step(target.pos, from.pos)
+            {
                 // **Reach, not range.** Melee gets no high-ground bonus: an attacker
                 // five levels up must not acquire a two-hex punch.
                 FoeAction::Attack

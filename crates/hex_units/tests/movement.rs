@@ -24,8 +24,8 @@ use hex_anim::Transformation;
 use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors, Mode, Pause,
-    Screen, SubstanceId, TerrainReady, TilePos, TraversalProfileId, TraversalProfiles, Turn,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId,
+    MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn,
     MAX_HEADROOM,
 };
 use hex_units::{
@@ -101,10 +101,10 @@ fn test_app() -> App {
     app.configure_sets(
         OnEnter(Screen::Gameplay),
         (
-            GameplaySetup::Rules,
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Finalize,
         )
             .chain(),
     );
@@ -292,22 +292,15 @@ fn the_player_spawns_on_the_surface() {
     );
 }
 
-/// Map validation reads this exact profile during `Resources`, before terrain is
-/// spawned, while live movement derives the same rules from the player's body.
+/// Map validation and live movement both use the canonical walker.
 #[test]
-fn gameplay_rules_publish_the_canonical_walker() {
+fn gameplay_units_use_the_canonical_walker() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let walker = *app
-        .world()
-        .resource::<TraversalProfiles>()
-        .get(TraversalProfileId::WALKER)
-        .expect("gameplay rules should publish the ordinary walker");
-
-    assert_eq!(walker.levels_tall, 2);
-    assert_eq!(walker.max_climb, 1);
-    assert_eq!(walker.max_drop, 1);
+    assert_eq!(TraversalProfile::WALKER.levels_tall, 2);
+    assert_eq!(TraversalProfile::WALKER.max_climb, 1);
+    assert_eq!(TraversalProfile::WALKER.max_drop, 1);
 
     let mut bodies = app.world_mut().query_filtered::<&Body, With<Player>>();
     let body = bodies
@@ -316,8 +309,8 @@ fn gameplay_rules_publish_the_canonical_walker() {
         .expect("the spawned player should carry a body");
     assert_eq!(
         body.traversal_profile(),
-        walker,
-        "live movement did not snapshot the profile used by map validation"
+        TraversalProfile::WALKER,
+        "live movement did not use the profile used by map validation"
     );
 }
 
@@ -724,7 +717,7 @@ fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
 /// quietly put the unit at the origin, where it could make an invalid map appear to
 /// have loaded correctly.
 #[test]
-fn a_missing_generated_anchor_skips_that_unit() {
+fn a_missing_generated_anchor_fails_required_actor_setup() {
     let mut app = test_app();
     app.insert_resource(ScenarioSettings {
         player: ScenarioPlacement::Anchor("missing_party_start".to_owned()),
@@ -741,9 +734,14 @@ fn a_missing_generated_anchor_skips_that_unit() {
         "a missing anchor must not fall back to an arbitrary surface"
     );
     assert!(
-        single::<With<Enemy>>(&mut app).is_some(),
-        "one invalid placement should not hide an independent valid unit"
+        single::<With<Enemy>>(&mut app).is_none(),
+        "actor setup should stop after a required placement fails"
     );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("missing_party_start"));
 }
 
 const DECK_ANCHOR: &str = "test_deck";

@@ -5,23 +5,9 @@
 //! growing a near-copy of gameplay's rules and accepting terrain the actual walker
 //! cannot use.
 
-use bevy_ecs::prelude::*;
-use bevy_platform::collections::HashMap;
 use bevy_reflect::prelude::*;
 
 use crate::{Headroom, Level, TilePos};
-
-/// Stable id of a traversal ruleset.
-///
-/// Numeric ids are compact in components and stable across renames. Save data should
-/// treat these values as a compatibility contract once more profiles are introduced.
-#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct TraversalProfileId(pub u16);
-
-impl TraversalProfileId {
-    /// The ordinary ground walker used by the player and current enemies.
-    pub const WALKER: Self = Self(0);
-}
 
 /// Geometry an ordinary traversal mode can occupy and cross.
 ///
@@ -74,59 +60,6 @@ impl TraversalProfile {
             delta >= -self.max_drop
         } else {
             true
-        }
-    }
-}
-
-/// Traversal rules published for the active gameplay setup.
-///
-/// Missing ids return [`None`]; generators and gameplay should fail their own setup
-/// visibly rather than guessing at movement rules.
-#[derive(Resource, Debug, Default, Clone)]
-pub struct TraversalProfiles {
-    by_id: HashMap<TraversalProfileId, TraversalProfile>,
-}
-
-impl TraversalProfiles {
-    /// Creates an empty profile collection.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds or replaces a profile, returning the previous value if it existed.
-    pub fn insert(
-        &mut self,
-        id: TraversalProfileId,
-        profile: TraversalProfile,
-    ) -> Option<TraversalProfile> {
-        self.by_id.insert(id, profile)
-    }
-
-    /// Finds a profile without guessing when an id was not published.
-    #[must_use]
-    pub fn get(&self, id: TraversalProfileId) -> Option<&TraversalProfile> {
-        self.by_id.get(&id)
-    }
-
-    /// The canonical ordinary walker, if it has been published.
-    #[must_use]
-    pub fn walker(&self) -> Option<&TraversalProfile> {
-        self.get(TraversalProfileId::WALKER)
-    }
-
-    /// Every registered id and profile, in unspecified order.
-    pub fn iter(&self) -> impl Iterator<Item = (TraversalProfileId, &TraversalProfile)> {
-        self.by_id.iter().map(|(id, profile)| (*id, profile))
-    }
-}
-
-impl FromIterator<(TraversalProfileId, TraversalProfile)> for TraversalProfiles {
-    fn from_iter<T: IntoIterator<Item = (TraversalProfileId, TraversalProfile)>>(
-        profiles: T,
-    ) -> Self {
-        Self {
-            by_id: profiles.into_iter().collect(),
         }
     }
 }
