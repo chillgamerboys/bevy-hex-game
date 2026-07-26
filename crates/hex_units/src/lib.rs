@@ -30,6 +30,7 @@ pub mod pathing;
 pub mod units;
 
 pub use movement::{route, Body, Footing, Standing, MAX_STEP};
+pub use pathing::HexPathingLine;
 pub use units::{Enemy, Faction, Player, StandsOn};
 
 /// Adds every unit system.

@@ -28,6 +28,8 @@
 
 use bevy::prelude::*;
 
+/// What an enemy does with its turn. A placeholder, and says so.
+mod ai;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
@@ -36,5 +38,5 @@ pub use turns::{Initiative, TurnOrder};
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
-    app.add_plugins(turns::plugin);
+    app.add_plugins((turns::plugin, ai::plugin));
 }

@@ -14,6 +14,9 @@ bevy = { workspace = true }
 # For `Transformation` only: a turn must not end while its unit is still mid-stride,
 # and the absence of that component is what "finished moving" means.
 hex_anim = { workspace = true }
+# For the substance table and the movement speed, both of which the AI needs to
+# work out where it can walk and how fast to animate getting there.
+hex_assets = { workspace = true }
 hex_core = { workspace = true }
 hex_units = { workspace = true }
 
