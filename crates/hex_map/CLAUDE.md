@@ -9,11 +9,16 @@ Everything about the map:
 
 | File | Holds |
 |---|---|
-| `src/generator.rs` | Terrain generation. `HeightMap`, the `HeightGenerator` trait, Perlin and friends |
-| `src/grid.rs` | Turning generated terrain into tile entities |
+| `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
+| `src/generator.rs` | Terrain height generation. `HeightMap`, `HeightGenerator`, Perlin |
+| `src/grid.rs` | Building the world and turning it into tile entities |
 | `src/settings.rs` | Designer-facing settings, loaded from `assets/config/world.ron` |
 
-Plus `assets/config/world.ron` itself, which is edited by a non-programmer.
+Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
+non-programmer.
+
+**Read [`docs/MAP_MODEL.md`](../../docs/MAP_MODEL.md) before changing the model.** It
+explains the voxel representation and the rules everything else depends on.
 
 ## Your blast radius is bounded, deliberately
 
@@ -31,19 +36,35 @@ never by reading anything defined here:
 
 ```rust
 commands.spawn((
-    HexTile,                    // marker
-    hex_coord,                  // hex_core::HexCoord — which hex
-    span,                       // hex_core::HexSpan  — which column
+    HexTile,       // marker
+    hex_coord,     // HexCoord  — which hex
+    tile_pos,      // TilePos   — the run's TOPMOST SOLID VOXEL, not its base
+    span,          // HexSpan   — the run's world extent
+    substance,     // SubstanceId
     Mesh3d(...), MeshMaterial3d(...), Transform { ... },
 ));
 ```
 
-`hex_gameplay` queries `(&HexCoord, &HexSpan)` with `With<HexTile>`. That is the
-entire interface.
+`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId)` with `With<HexTile>`. That
+is the entire read interface, and `TerrainEdit` is the entire write interface.
 
-**So: however you generate, store, or stream the map, spawn tiles carrying a
-`HexCoord` and a `HexSpan`, and everything keeps working.** Replace `HeightMap`
-wholesale if you want to — nothing outside this crate references it.
+**So: however you generate, store, or stream the map, spawn tiles carrying those
+components and everything keeps working.** Replace `VoxelMap` wholesale if you want
+to — nothing outside this crate references it.
+
+### `TilePos` is the surface, not the base
+
+A tile entity covers a **run** of voxels. Its `TilePos` must be the topmost solid one,
+because that is what a piece standing there stands on. Tagging the base would force
+gameplay to know `level_height` to work the surface out, which puts a dependency on
+this crate straight back into movement — the exact thing the split prevents.
+
+### Storage is not rendering
+
+One entity per voxel would be ~25,000 at radius 20. The spawn pass merges vertical runs
+of the same substance into one prism; measured, that is 3,481 entities at 60 FPS.
+
+Interior voxels therefore have **no entity**. That is why targeting is positional.
 
 ### The transform must agree with the span
 
@@ -57,26 +78,38 @@ pieces float or sink and **nothing errors** — the tiles still render. There is
 for this (`tests/spawning.rs::every_tile_transform_matches_its_span`); keep it
 passing.
 
-## Columns, and the rule about them
+## Voxels, columns, and the rule about them
 
-A hex is a **column**, not a height. `HexSpan { bottom, top }`, in world units.
+A column is a list of substances indexed by level, from the bedrock floor up. Anything
+above the top is air; air *inside* is stored explicitly, and that is what a cave is.
 
-- Ground: `HexSpan::from_ground(3.0)` → `{ 0.0, 3.0 }`
-- A floating platform: `HexSpan::new(8.0, 10.0)`
-- A bridge over ground: **two tile entities** at one `HexCoord`, with disjoint spans
+- Ground: levels 0..n of solid substance
+- A floating platform: solid voxels with air beneath them
+- A bridge over ground: one column, solid low down, air, then solid again — which the
+  spawn pass renders as **two entities**
 
-**Columns stacked at the same coordinate are not connected.** A unit on a bridge
-cannot step down to the ground beneath it; reaching it means a ramp or spiral of
-adjacent columns descending gradually, or an ability that explicitly bypasses the
-rule. That is a game-design decision, and it means:
+**Columns stacked at the same coordinate are not connected.** A piece on a bridge
+cannot step down to the ground beneath it; reaching it means a ramp of adjacent columns
+descending a level at a time, or an ability that explicitly bypasses the rule.
 
-> **Never key a map by `HexCoord` alone in a way that collapses a stack.**
-> `HashMap<HexCoord, f32>` keeping "the highest column" silently makes every lower
-> column unreachable. `HeightMap` does this today only because today's terrain has
-> exactly one column per coordinate.
+> **Never key anything by `HexCoord` in a way that collapses a stack.** Keeping "the
+> highest column" silently makes every lower one unreachable, and a piece crossing a
+> bridge teleports to the ground.
 
-`HexSpan::overlaps` tells you whether two columns collide. `HexSpan::step_to` gives
-the height difference between two surfaces.
+`TilePos::neighbours` deliberately excludes above and below. `TilePos::level_step_to`
+gives the level difference a step rule compares against.
+
+## Invariants you must not break
+
+The tests enforce these; they are here so you know *why*.
+
+- **Generated terrain is solid from level 0 up.** Digging needs something to dig
+  through, and a column starting above ground is a hole nothing can stand in.
+- **Every column has at least one level above bedrock.** Bedrock is not diggable, so
+  bare bedrock is a permanent hole.
+- **A tile's transform agrees with its span.** Otherwise pieces float or sink and
+  *nothing errors*.
+- **Air is never spawned as a prism.**
 
 ## Rules that will block your commit
 
@@ -126,6 +159,8 @@ A clean log is not evidence a change worked. **Look at the window.**
 | Stuck on "loading…" | `world.ron` failed to parse. The terminal names the line |
 | Terrain differs every run | `seed: None` in `world.ron`. Set a number to reproduce a map |
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |
+| Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
+| A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
 
 ## Working here
 

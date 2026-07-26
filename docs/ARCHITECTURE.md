@@ -29,9 +29,9 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on |
 |---|---|---|
-| `hex_core` | Hex coordinates, columns, app states, system-ordering sets, shared marker components | Bevy sub-crates only — no renderer |
+| `hex_core` | Hex coordinates, voxel positions, substances, terrain edits, app states, ordering sets | Bevy sub-crates only — no renderer |
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
-| `hex_map` | **The map**: terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
+| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
 | `hex_gameplay` | Player, picking, movement, animation | `hex_core`, `hex_assets` |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy only |
@@ -44,9 +44,14 @@ blast radius is what makes that ownership safe: work there cannot break gameplay
 camera, the sky, the screens or the menus, because none of them can see it.
 
 The map reaches the rest of the game **only through components**. Tiles are spawned
-carrying a `HexCoord` and a `HexSpan`; `hex_gameplay` queries those. Nothing outside
-`hex_map` references `HeightMap` or any generator, so terrain storage and generation
-can be replaced wholesale without anyone noticing.
+carrying a `HexCoord`, a `TilePos`, a `HexSpan` and a `SubstanceId`; `hex_gameplay`
+queries those. Nothing outside `hex_map` references `VoxelMap` or any generator, so
+terrain storage and generation can be replaced wholesale without anyone noticing.
+
+Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
+into the map, so a spell that digs or builds requests it and the map applies it.
+
+See [MAP_MODEL.md](MAP_MODEL.md) for the voxel model itself.
 
 `hex_gameplay`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
@@ -63,10 +68,14 @@ Anything they share goes in `hex_core`. That is why `HexTile`, `HexGrid` and
 `HexSpan` — which look like presentation concerns — live there: gameplay has to
 query tiles without depending on how they are generated or drawn.
 
-## Positions are tiles, not coordinates
+## Positions are voxels, not coordinates
 
-A unit is not *at* `HexCoord(3, -1)`. It is on a **specific column** there. Two
-columns sharing a coordinate are unrelated places that happen to share an address.
+A unit is not *at* `HexCoord(3, -1)`. It is on a **specific voxel** there —
+`TilePos { coord, level }`. Two columns sharing a coordinate are unrelated places that
+happen to share an address.
+
+The vertical axis is called **`level`**, never `z`: cube coordinates already use `x`,
+`y` and `z` and all three are horizontal.
 
 > **Columns stacked at the same coordinate are not connected.** A unit on a bridge
 > cannot step down to the ground beneath it. Reaching it means a ramp or spiral of
@@ -81,8 +90,9 @@ column unreachable, and a unit crossing a bridge teleports to the ground.
 That exact abstraction existed briefly during the refactor and was deleted rather
 than fixed — an abstraction that *can* express the forbidden thing eventually will.
 
-What counts as an acceptable step, and which abilities ignore the rule, is movement
-design and lives in `hex_gameplay`.
+A step is one level, so the rule is an integer comparison rather than a float
+epsilon — which is the concrete payoff for quantising the vertical axis. Which
+abilities ignore the rule is movement design and lives in `hex_gameplay`.
 
 ### Why `hex_core` avoids the `bevy` facade
 
@@ -119,7 +129,7 @@ sets make the intended order explicit:
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 
-The first: `hex_map` inserts `HeightMap`; `hex_gameplay` spawns the player that
+The first: `hex_map` builds the world; `hex_gameplay` spawns the player that
 stands on the tiles built from it. Both run in the same `OnEnter` schedule, and the
 crates cannot see each other, so `.chain()` could not express the dependency. A local
 chain looked correct and raced in practice — a nondeterministic panic that would most
@@ -229,9 +239,10 @@ evidence that a change worked — **look at the window**.
 
 Two layers.
 
-**Unit tests** live in `hex_core` and `hex_map`, which are pure and need no GPU:
-coordinate round-tripping, the cube invariant, line drawing including the degenerate
-zero-length case, radius tile counts, span geometry, and terrain determinism.
+**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_gameplay`, none of
+which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
+the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
+id assignment, and the movement rules.
 
 **Integration tests** run a headless `App` with `MinimalPlugins` and inspect the
 world afterwards — `crates/hex_map/tests/` and `crates/hex_gameplay/tests/`. They
