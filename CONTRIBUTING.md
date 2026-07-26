@@ -53,8 +53,8 @@ commands, but still need valid relative links.
 
 **Then run the game.** This is not optional, and it is not covered by the above.
 Several failure modes here produce a clean log and a wrong window: missing assets
-render as a plain blue screen, a missed skybox event renders a black sky, and a
-speed-unit mistake just looks slightly off. Every one of those passes CI.
+render as a plain blue screen, a sky shader that fails to load renders a black sky,
+and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
 If your change touches rendering, movement, or state transitions, walk it: splash
 → title → **ENTER** → gameplay, orbit, click a tile, **ESC** to pause, **BACKSPACE**

@@ -9,14 +9,16 @@
 
 use bevy::prelude::*;
 
-/// Pan/orbit camera and the skybox.
+/// Pan/orbit camera and the sky dome.
 pub mod camera;
 /// Sun, ambient light, and sky colour.
 pub mod sky;
+/// Procedural sky material.
+mod sky_material;
 
 pub use camera::PanOrbitCamera;
 
 /// Adds every world-presentation system.
 pub fn plugin(app: &mut App) {
-    app.add_plugins((camera::plugin, sky::plugin));
+    app.add_plugins((camera::plugin, sky::plugin, sky_material::plugin));
 }

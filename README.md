@@ -67,7 +67,8 @@ crates/
 assets/
   config/         # designer-editable settings -- see docs/CONTENT.md
   meshes/         # hex.glb, pieces.glb
-  textures/       # sky_boxes/Ryfjallet_cubemap.png
+  shaders/        # sky.wgsl -- the procedural sky
+  textures/       # sprites/
 ```
 
 ## Documentation

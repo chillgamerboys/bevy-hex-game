@@ -104,7 +104,6 @@ mod tests {
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
-            skybox: Handle::default(),
         });
         app.insert_resource(original);
         plugin(&mut app);

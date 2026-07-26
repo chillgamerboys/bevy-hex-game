@@ -1,6 +1,6 @@
 # Changing the game without writing code
 
-Most of how the game looks and feels is controlled by six text files in
+Most of how the game looks and feels is controlled by seven text files in
 `assets/config/`. You can edit them in any text editor. You do not need to know
 Rust, and you do not need to recompile the game.
 
@@ -9,7 +9,7 @@ Rust, and you do not need to recompile the game.
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
 | `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
-| `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
+| `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
 | `scenario.ron` | Where the player and the enemy start — **use this to test a map** |
 | `display.ron` | Vsync / frame rate behaviour |
@@ -33,7 +33,7 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `lighting.ron` | Skybox brightness straight away; sun, ambient light, direction and sky colour on the next rebuild |
+| `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
 | `scenario.ron` | On the next world rebuild |
 
@@ -158,8 +158,75 @@ default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain tha
 better once you are digging into it.
 
 **Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
-(a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for
-overcast; `100000.0` is direct noon sun. Rebuild the world to see it.
+(a full circle is about 6.28) — the first number is how high the sun sits, the second
+swings it around the compass and decides which way shadows fall. Lower
+`sun_illuminance` towards `1000.0` for overcast; `100000.0` is direct noon sun.
+`sun_color` tints it: warm values read as a low sun.
+
+The sun is worth treating carefully. The terrain has no texture, so **shadows are the
+only thing giving it shape** — changes that weaken them, or that light the shadowed
+faces back up, tend to read as "flat" rather than "soft".
+
+**Two extras that ship switched off.** Both live in `lighting.ron` and are worth
+knowing about before you reach for them:
+
+```ron
+sky_light_intensity: 0.0,   // a soft fill from the sky itself
+fog_density:         0.0,   // distance haze
+```
+
+`sky_light_intensity` adds light that varies with which way a surface faces — blue from
+overhead, a warm bounce from the ground — so it colours shadows instead of flooding
+everything equally. It is the honest way to soften shadows. Try `100`–`200` first;
+several hundred already starts washing out the shading that gives terrain its shape.
+`ground_color` sets the bounce colour underneath it.
+
+`fog_density` hazes distant terrain, tinted `fog_color` and glowing `fog_sun_color`
+towards the sun. At this camera distance it costs more colour than it buys atmosphere,
+which is why it is off — `0.002` is about as much as is worth trying.
+
+**The sky and its clouds.** The sky is drawn procedurally — a vertical colour
+gradient with hexagonal clouds — and every part of it lives in `lighting.ron`.
+Like everything else in that file it updates **straight away**: edit, save, and the sky
+changes while you watch. It is the easiest thing in the game to tune.
+
+The gradient runs between two colours:
+
+```ron
+sky_color:    (0.55, 0.80, 0.95),  // at the horizon
+zenith_color: (0.25, 0.50, 0.85),  // straight up
+```
+
+`sky_color` doubles as the fallback colour behind everything, so keep it a believable
+sky tone. Set the two close together for a flat, even sky; push them apart for a
+deeper, more dramatic one.
+
+The clouds sit on a hexagonal grid — a nod to the map — but are drawn as soft puffs
+that merge where they touch. Six values shape them:
+
+```ron
+cloud_color:     (0.97, 0.98, 1.0),  // usually near-white
+cloud_coverage:  0.18,  // 0.0 is a clear sky, higher is cloudier
+hex_cloud_scale: 16.0,  // bigger = smaller and more numerous clouds
+cloud_softness:  0.1,   // extra edge softening on top of the automatic anti-aliasing
+cloud_roundness: 0.5,   // 0.0 is hard hexagons, 1.0 is round; the middle hints at hex
+cloud_noise:     0.3,   // 0.0 is clean-edged, ~0.5 is wispy and broken up
+```
+
+- **`cloud_coverage`** is how much of the sky is clouded. Because neighbouring clouds
+  now merge, a little goes a long way — past ~0.35 the sky fills in quickly.
+- **`hex_cloud_scale`** sets cloud *size*, inverted: turn it **up** for many small
+  clouds, **down** for a few big ones.
+- **`cloud_roundness`** morphs each cloud from a hard hexagon (`0.0`) to a round puff
+  (`1.0`). The `0.5` default keeps a gentle hex hint.
+- **`cloud_noise`** breaks the edges up with fine detail — low is clean and smooth,
+  high is wispy.
+- **`cloud_softness`** adds extra blur on top; the edges are already kept crisp
+  automatically, so this is only for a softer, hazier look.
+
+For a clear blue sky, set `cloud_coverage: 0.0`. For an overcast one, raise coverage
+and push `cloud_noise` up. The colours take `(red, green, blue)` from `0.0` to `1.0`,
+the same as everywhere else.
 
 ## One thing that will not do anything on a Mac
 

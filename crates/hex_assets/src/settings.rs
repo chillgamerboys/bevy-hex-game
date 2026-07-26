@@ -56,21 +56,55 @@ pub struct CameraSettings {
 /// `assets/config/lighting.ron` — sun, ambient, and sky.
 ///
 /// Bevy uses physical light units: illuminance in lux (~100,000 is direct noon
-/// sun, ~10,000 overcast), and skybox brightness in cd/m².
+/// sun, ~10,000 overcast).
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct LightingSettings {
     /// Sun brightness, in lux.
     pub sun_illuminance: f32,
+    /// Sun colour. Warm tints read as low sun; white is midday.
+    pub sun_color: Rgb,
     /// Sun direction as XYZ Euler angles, in radians.
     pub sun_rotation: (f32, f32, f32),
-    /// Fill light applied everywhere, in lux.
+    /// Uniform fill applied everywhere, in lux.
     pub ambient_brightness: f32,
-    /// Skybox brightness, in cd/m². The cubemap already encodes a bright sky, so
-    /// this stays low to avoid blowing out the scene.
-    pub skybox_brightness: f32,
-    /// Background colour, visible where the skybox is not.
+    /// Colour of that uniform fill. White leaves shadows neutral; tinting it towards
+    /// the sky cools them.
+    pub ambient_color: Rgb,
+    /// Strength of the optional sky/ground fill light, in cd/m². **0.0 disables it.**
+    ///
+    /// A directional ambient: `zenith_color` from above, `sky_color` at the horizon,
+    /// `ground_color` from below. Unlike `ambient_brightness` it varies with which way
+    /// a surface faces, so it tints shadows rather than flattening everything equally.
+    /// Keep it small next to `sun_illuminance` — fill that competes with the sun
+    /// removes the shading that gives the terrain its shape.
+    pub sky_light_intensity: f32,
+    /// Colour bounced up from the ground, the underside of the sky light.
+    pub ground_color: Rgb,
+    /// Sky colour at the horizon, and the `ClearColor` fallback behind the dome.
     pub sky_color: Rgb,
+    /// Sky colour at the zenith (straight up). `sky_color` is the horizon colour.
+    pub zenith_color: Rgb,
+    /// Colour of the hexagonal clouds.
+    pub cloud_color: Rgb,
+    /// Fraction of hex sky-cells that carry a cloud, 0.0–1.0.
+    pub cloud_coverage: f32,
+    /// Size of the hex cloud cells; larger = smaller, more numerous clouds.
+    pub hex_cloud_scale: f32,
+    /// Edge softness of each cloud, ~0.02 (crisp) to ~0.3 (fluffy).
+    pub cloud_softness: f32,
+    /// Cloud shape from hexagonal to round: 0.0 keeps hard hex edges, 1.0 is a disc.
+    pub cloud_roundness: f32,
+    /// Strength of the fbm noise that breaks up cloud edges, ~0.0 (clean) to ~0.5 (wispy).
+    pub cloud_noise: f32,
+    /// Haze colour in the distance. Usually close to `sky_color`.
+    pub fog_color: Rgb,
+    /// Colour of the haze looking towards the sun, which is what reads as low light.
+    pub fog_sun_color: Rgb,
+    /// How quickly the haze thickens with distance. **0.0 turns fog off entirely**,
+    /// which is how the game ships — at this camera distance haze costs more colour
+    /// than it buys atmosphere.
+    pub fog_density: f32,
 }
 
 /// `assets/config/player.ron` — the player piece.
@@ -180,5 +214,23 @@ mod tests {
         assert!(focus_x.abs() < f32::EPSILON);
         assert!((focus_y - 6.0).abs() < f32::EPSILON);
         assert!(focus_z.abs() < f32::EPSILON);
+    }
+
+    /// Every field must be present, or the game hangs on "loading…" with the reason
+    /// only in the terminal. `LightingSettings` has seventeen of them and no default,
+    /// so a rename or a dropped line is otherwise caught by launching the game.
+    #[test]
+    fn shipped_lighting_settings_parse() {
+        let lighting: LightingSettings =
+            ron::from_str(include_str!("../../../assets/config/lighting.ron"))
+                .expect("the shipped lighting settings should parse");
+
+        // The optional extras ship disabled; both are removed from the camera rather
+        // than applied at zero, so turning them on is the only way to change the look.
+        assert!(
+            lighting.sky_light_intensity.abs() < f32::EPSILON,
+            "the sky light ships off"
+        );
+        assert!(lighting.fog_density.abs() < f32::EPSILON, "haze ships off");
     }
 }
