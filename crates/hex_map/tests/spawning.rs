@@ -4,7 +4,7 @@
 //!
 //! Every bug found in this codebase so far was found by a person clicking, not by
 //! CI. Two are worth naming, because both were green across `cargo check`, clippy,
-//! the unit tests, and five CI jobs:
+//! the unit tests, and every CI check:
 //!
 //! - The player spawned at ground level and **sank into the terrain**, because it
 //!   read tile entities in the same schedule that created them. `Commands`-spawned
@@ -82,7 +82,6 @@ fn test_app() -> App {
     app.insert_resource(MapSettings {
         grid_radius: TEST_RADIUS,
         level_height: 0.4,
-        tile_color: (1.0, 0.8, 0.8),
         terrain: TerrainSettings {
             seed: Some(20_260_725),
             // Taller than the shipped default. The banding puts dirt in the top two
@@ -177,11 +176,11 @@ fn the_grid_has_a_single_parent() {
     assert_eq!(grids, 1, "tiles should hang off exactly one grid entity");
 }
 
-/// The contract between the map and everything else: a tile carries the column it
-/// occupies, and its transform agrees with that column.
+/// The contract between the map and everything else: a tile carries its rendered
+/// run's span, and its transform agrees with that span.
 ///
 /// This is the invariant gameplay leans on to place a piece on a surface, and the
-/// one a multi-span rewrite is most likely to break silently — the tiles would still
+/// one a run-meshing change is most likely to break silently — the tiles would still
 /// render, just in the wrong place.
 #[test]
 fn every_tile_transform_matches_its_span() {
@@ -306,14 +305,8 @@ fn tiles_carry_their_substance_and_position() {
     assert!(checked > 0, "no tiles were checked");
 }
 
-/// Exactly one run per column has headroom, and it is the topmost one.
-///
-/// This is the map's half of a contract gameplay cannot check for itself: a run knows
-/// its own extent but nothing about what is stacked on it, so only the map can say
-/// which runs have air above them. Getting it wrong is what put the player inside the
-/// terrain and left every route walking through the bedrock.
-///
-/// Only the top run of each column has headroom, and under open sky it saturates.
+/// In gap-free generated terrain, only the top run of each column has headroom, and
+/// under open sky it saturates.
 ///
 /// This is the map's half of a contract gameplay cannot check for itself: a run knows
 /// its own extent but nothing about what is stacked on it, so only the map can measure
@@ -471,6 +464,110 @@ fn clearing_a_voxel_splits_a_run() {
     );
 }
 
+/// Neither digging nor replacement may remove the world's non-diggable floor.
+#[test]
+fn terrain_edits_preserve_non_diggable_bedrock() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let pos = TilePos::ORIGIN;
+    let (bedrock, stone) = {
+        let table = app
+            .world()
+            .get_resource::<SubstanceTable>()
+            .expect("a substance table should exist");
+        (
+            table.id("bedrock").expect("bedrock should be defined"),
+            table.id("stone").expect("stone should be defined"),
+        )
+    };
+    assert_eq!(
+        app.world()
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist")
+            .get(pos),
+        bedrock,
+        "the test target should begin as bedrock"
+    );
+
+    app.world_mut().write_message(TerrainEdit::Clear { pos });
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world()
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist")
+            .get(pos),
+        bedrock,
+        "clearing must not remove non-diggable bedrock"
+    );
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos,
+        substance: SubstanceId::AIR,
+    });
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world()
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist")
+            .get(pos),
+        bedrock,
+        "setting air must not remove non-diggable bedrock"
+    );
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos,
+        substance: stone,
+    });
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world()
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist")
+            .get(pos),
+        bedrock,
+        "replacement must not overwrite non-diggable bedrock"
+    );
+}
+
+/// Positions below the bedrock floor are outside the map and must not trigger work.
+#[test]
+fn terrain_edits_below_the_floor_are_ignored() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let grid_before = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should exist");
+    let stone = app
+        .world()
+        .get_resource::<SubstanceTable>()
+        .and_then(|table| table.id("stone"))
+        .expect("stone should be defined");
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: TilePos::new(HexCoord::ORIGIN, -1),
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    let grid_after = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should still exist");
+    assert_eq!(
+        grid_after, grid_before,
+        "an ignored edit should not rebuild the grid"
+    );
+}
+
 /// Building above the surface leaves the space between as air — a floating platform.
 #[test]
 fn setting_a_voxel_above_the_surface_builds_a_platform() {
@@ -536,6 +633,10 @@ fn leaving_gameplay_removes_the_map() {
         .iter(app.world())
         .count();
     assert_eq!(grids, 0, "the grid parent outlived the gameplay screen");
+    assert!(
+        app.world().get_resource::<VoxelMap>().is_none(),
+        "voxel storage outlived the gameplay screen"
+    );
 }
 
 /// Re-entering rebuilds a complete grid rather than doubling it or leaving gaps.

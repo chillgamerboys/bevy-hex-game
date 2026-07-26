@@ -1,6 +1,7 @@
 // Grid shape and terrain generation.
 //
-// Safe to edit while the game is running: save the file and the world rebuilds.
+// Safe to edit while the game is running: saving reloads these settings. The
+// existing world does not rebuild automatically; press BACKSPACE, then ENTER.
 (
     // Tiles from the centre to the edge. The grid holds 3r^2 + 3r + 1 tiles, so
     // this grows quadratically -- 20 is 1261 tiles, 40 would be 4921.
@@ -8,9 +9,6 @@
 
     // World height of one voxel level. Larger means chunkier, more dramatic terrain.
     level_height: 0.4,
-
-    // Tile colour, as (red, green, blue), each from 0.0 to 1.0.
-    tile_color: (1.0, 0.8, 0.8),
 
     terrain: (
         // Set a number for a world you can reproduce, e.g. Some(20260725).

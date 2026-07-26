@@ -1,13 +1,13 @@
 //! Hex-specific movement, built from the generic primitives in [`crate::animation`].
 //!
-//! # Paths are sequences of tiles, not coordinates
+//! # Paths are sequences of surfaces, not coordinates
 //!
-//! Columns stacked at one coordinate are separate places — see the rule in
-//! [`hex_core::hex`]. A path is therefore a list of the specific columns a unit
+//! Surfaces stacked in one coordinate's column are separate places — see the rule in
+//! [`hex_core::hex`]. A path is therefore a list of the specific surfaces a unit
 //! passes over, and a coordinate on its own is not enough to say where it went.
 //!
 //! An earlier version of this module keyed surface heights by [`HexCoord`](hex_core::HexCoord), taking
-//! the highest column at each. That silently collapsed every stack, so a unit
+//! the highest surface at each. That silently collapsed every stack, so a unit
 //! crossing a bridge would have snapped to the ground beneath it. The lookup is gone
 //! rather than fixed: an abstraction that *can* express the wrong thing eventually
 //! will.
@@ -18,9 +18,9 @@ use crate::animation::{LinearMovement, Transformer, TransformerSeries};
 use crate::movement::Standing;
 use hex_core::config::HEX_SMALL_DIAMETER;
 
-/// Moves a piece along a sequence of columns, one hex-crossing at a time.
+/// Moves a piece along a sequence of surfaces, one hex-crossing at a time.
 ///
-/// The caller decides which columns the route passes through. That is deliberate:
+/// The caller decides which surfaces the route passes through. That is deliberate:
 /// choosing a route is movement design — it has to respect step heights, stairs, and
 /// whatever abilities bypass those — whereas this type only animates a route that has
 /// already been chosen.

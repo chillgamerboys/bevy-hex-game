@@ -1,7 +1,7 @@
 //! Designer-facing settings, loaded from RON files under `assets/config/`.
 //!
 //! Every value here can be changed without touching Rust, and with the
-//! `dev_native` feature on, without restarting the game. See `docs/CONTENT.md`.
+//! `dev` feature on, without restarting the game. See `docs/CONTENT.md`.
 //!
 //! Map settings are deliberately *not* here — they live in `hex_map`, alongside the
 //! generation and rendering they configure, so the whole map is owned in one crate.

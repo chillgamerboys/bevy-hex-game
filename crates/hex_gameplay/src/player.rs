@@ -30,11 +30,11 @@ type TileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
-/// Which column a piece is standing on.
+/// Which surface a piece is standing on.
 ///
-/// A coordinate is not enough: columns stacked at one coordinate are separate places,
-/// so a piece on a bridge and a piece on the ground beneath it share an address but
-/// not a location.
+/// A coordinate is not enough: surfaces stacked in one column are separate places,
+/// so a piece on a bridge and a piece on the ground beneath it share a horizontal
+/// address but not a location.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StandsOn(pub Standing);
 
@@ -80,16 +80,16 @@ fn on_tile_clicked(
         return;
     };
 
-    // The click identifies a tile *entity*, which resolves to one specific column
+    // The click identifies a tile *entity*, which resolves to one specific surface
     // even where several share a coordinate. Picking is the right input for exactly
-    // that reason: it never has to guess which column was meant.
+    // that reason: it never has to guess which surface was meant.
     let clicked = event.event_target();
     let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
     };
 
     for (entity, standing, body) in players.iter() {
-        // Footing and the destination are resolved per body, because whether a column
+        // Footing and the destination are resolved per body, because whether a surface
         // can be stood on depends on who is asking — a crawlspace is footing for a
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
@@ -131,7 +131,7 @@ fn spawn_player(
         levels_tall: settings.levels_tall,
     };
 
-    // Stand on the lowest column at the origin that this body fits on — the ground,
+    // Stand on the lowest surface at the origin that this body fits on — the ground,
     // rather than any bridge built over it.
     let coord = HexCoord::ORIGIN;
     let footing = Footing::from_tiles(tiles.iter(), &table, body);

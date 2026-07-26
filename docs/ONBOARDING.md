@@ -40,22 +40,24 @@ not a crash and there is no useful error.
 Enough to read the code and the other docs.
 
 **Crate** — a folder of code that gets compiled as a unit, like a module or package.
-This project has six, under `crates/`. Yours is `hex_map`.
+This project has seven, under `crates/`. Yours is `hex_map`.
 
 **Entity** — one thing in the world: a tile, the player piece, the camera, the sun.
 Just an ID.
 
-**Component** — a piece of data attached to an entity. A tile has a `HexCoord`
-(which hex it is), a `HexSpan` (its column), a `Transform` (where it is in 3D).
+**Component** — a piece of data attached to an entity. A rendered tile has a
+`HexTile` marker, a `HexCoord` (which hex it is), a surface `TilePos` (which level
+is on top), a `HexSpan` (the prism it draws), a `SubstanceId` (what it is made of),
+and `Headroom` (how much clear space is above it).
 
 **System** — a function that runs every frame, or when something happens. "Move
 everything that is moving" is a system.
 
 **Resource** — data that exists once for the whole game rather than per entity. The
-height map is one.
+voxel map is one.
 
-**Plugin** — a bundle of systems that get switched on together. Each file in your
-crate exposes one.
+**Plugin** — a bundle of systems that get switched on together. Subsystem modules
+such as `grid.rs` expose one; support modules such as `generator.rs` do not.
 
 That is the whole of Bevy's model: entities have components, systems act on them.
 
@@ -103,13 +105,14 @@ smaller. **Whether terrain is walkable depends on who is walking.**
 There is a rule about those, and it is a game-design decision rather than a
 technical one:
 
-> **Stacked columns are not connected.** Someone on a bridge cannot step down to the
-> ground underneath. They have to walk a ramp or spiral that descends gradually, or
-> use something that explicitly bypasses it — a teleport, a tunnel.
+> **Stacked surfaces are not connected.** Someone on a bridge cannot step down to
+> the ground underneath. They have to walk a ramp or spiral across adjacent
+> coordinates that descends gradually, or use something that explicitly bypasses
+> it — a teleport, a tunnel.
 
 The practical version: **never write code that reduces a coordinate to one height.**
-If two columns share an address and you keep "the highest", the lower one silently
-becomes unreachable.
+If one column exposes several surfaces and you keep only the highest, every lower
+one silently becomes unreachable.
 
 ## 3. What is yours
 
@@ -123,29 +126,45 @@ crates/
   hex_dev/       the inspector
   hex_game/      wiring it all together
 assets/
-  config/world.ron   ← YOURS. the map's settings
+  config/world.ron        ← YOURS. the map's shape and terrain settings
+  config/substances.ron   ← YOURS. the map's substance catalogue
 ```
 
-**You cannot break the others by accident.** Nothing depends on `hex_map`, and the
-compiler refuses any attempt to reach into it from elsewhere. If someone else's code
-stops working, it is not because of a change you made inside your crate.
+Only the `hex_game` binary depends on `hex_map`; it wires the map into the app.
+The other library crates, including `hex_gameplay` and `hex_world`, cannot import
+it. Cargo enforces that dependency direction, so the map's implementation stays
+isolated at compile time.
+
+That boundary does not make every map change harmless at runtime. Gameplay reads
+the tile components that the map publishes, so missing or incorrect values can
+still break movement or drawing. The compiler protects the dependency boundary;
+the component contract protects behaviour.
 
 That also means: if you find yourself needing to edit `hex_core` or `hex_game`, stop
 and talk to whoever owns gameplay first. It is allowed — it is just a conversation
 worth having, because those files are shared.
 
-The one thing you must keep: **tiles carry a `HexCoord` and a `HexSpan`.** That is
-how the rest of the game finds out where the ground is. Everything else about how
-the map works is yours to change.
+The contract you must keep is that every rendered tile carries **`HexTile`,
+`HexCoord`, a surface `TilePos`, `HexSpan`, `SubstanceId`, and `Headroom`**.
+`TilePos` names the topmost solid voxel in the rendered run, not its base, and
+`Headroom` reports the clear levels above it. That is how the rest of the game
+finds out what and where the ground is. Everything behind that interface is yours
+to change.
+
+Both `world.ron` and `substances.ron` are map-owned content. Their loading machinery
+and the shared `SubstanceTable` live in `hex_assets`, because gameplay also needs
+to ask whether a substance is solid, but decisions about the map's settings and
+substance catalogue belong here.
 
 ## 4. Knowing you have not broken anything
 
 ```sh
-cargo test --workspace     # ~40 tests, a couple of seconds
+cargo test --workspace     # full workspace suite, a couple of seconds
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
-Both run automatically on every pull request, and both must pass.
+Both run automatically on every pull request that changes code or configuration,
+and both must pass. Markdown-only changes run the documentation link check instead.
 
 **Then run the game and look at it.** This matters more than it sounds. Every bug
 found in this project so far was found by a person looking at the window — including
@@ -167,6 +186,11 @@ saying what it is.
 
 **`used unwrap()`** / **`indexing may panic`** — code that would crash the game if
 something unexpected happened. Use `.get()` and handle the "nothing there" case.
+
+Inside `#[test]` functions, `unwrap()`, `expect()`, `panic!`, `dbg!`, and terminal
+printing are relaxed because a panic is how a test reports failure. The other
+strict lints still apply there: in particular, slice indexing remains denied, so
+use `.get()`, `.first()`, or destructuring in tests too.
 
 **`Resource does not exist`** at runtime — something read data that had not been
 created yet. Usually a system in the wrong stage; see the scheduling notes in

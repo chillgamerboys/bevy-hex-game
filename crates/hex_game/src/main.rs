@@ -64,9 +64,9 @@ impl Plugin for AppPlugin {
             LogDiagnosticsPlugin::default(),
         ));
 
-        // Order the `Update` schedule once, here. Every system in the workspace
-        // declares which of these sets it belongs to, so the shape of a frame is
-        // stated rather than left to whatever order the scheduler happens to pick.
+        // Order the shared `Update` phases once, here. Systems that participate in
+        // cross-crate timing opt into these sets; self-contained state, UI and
+        // presentation systems can run outside them.
         app.configure_sets(
             Update,
             (
