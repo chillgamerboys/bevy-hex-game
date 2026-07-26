@@ -89,7 +89,8 @@ this crate straight back into movement — the exact thing the split prevents.
 ### Storage is not rendering
 
 One entity per voxel would be ~25,000 at radius 20. The spawn pass merges vertical runs
-of the same substance into one prism; measured, that is 3,481 entities at 60 FPS.
+of the same substance into one prism; measured, that is 3,400–4,100 entities at 60 FPS,
+varying with the terrain seed.
 
 Interior voxels therefore have **no entity**. That is why targeting is positional.
 
@@ -215,6 +216,24 @@ that changes depending on what has been looked at.
 2. `cargo test --workspace`
 3. **Run the game and look at it.** Every bug found in this codebase so far was found
    by a human looking at the window, not by CI.
+
+## Where your work goes
+
+**Branch off `dev`, and open your PR against `dev`. Never against `main`.**
+
+```sh
+git checkout dev && git pull
+git checkout -b feat/your-thing
+gh pr create --base dev        # <- the --base matters
+```
+
+`main` moves only when `dev` is promoted into it, after someone has played the game.
+This is not ceremony: **CI cannot see anything**. A black sky, a gap between every
+tile, a piece standing inside the terrain — all three have shipped here, green across
+clippy, the whole test suite and five CI jobs. `dev` is where work is allowed to be
+wrong until a person has looked at it.
+
+`dev` is permanent. Delete your feature branch after it merges; never delete `dev`.
 
 ## Further reading
 

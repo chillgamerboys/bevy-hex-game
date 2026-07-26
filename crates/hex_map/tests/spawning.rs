@@ -306,7 +306,7 @@ fn tiles_carry_their_substance_and_position() {
     assert!(checked > 0, "no tiles were checked");
 }
 
-/// Exactly one run per column is [`Exposed`], and it is the topmost one.
+/// Exactly one run per column has headroom, and it is the topmost one.
 ///
 /// This is the map's half of a contract gameplay cannot check for itself: a run knows
 /// its own extent but nothing about what is stacked on it, so only the map can say
