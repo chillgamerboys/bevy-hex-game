@@ -6,17 +6,9 @@ contact with the next change.
 ## The crate graph
 
 ```
-                    hex_core
-                       │
-                   hex_assets
-                       │
-      ┌───────────┬────┴────┬───────────┐
-      │           │         │           │
-  hex_world   hex_units  hex_map   hex_dev
-      │           │         │           │
-      └───────────┴────┬────┴───────────┘
-                       │
-                    hex_game
+hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_anim ─────────────────────→ hex_units
+{Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -33,21 +25,28 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_units` | Player, picking, movement, body size, animation | `hex_core`, `hex_assets` |
-| `hex_dev` | World inspector. Behind the `dev` feature | Bevy only |
+| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
+| `hex_units` | Units, picking, movement, body size | `hex_core`, `hex_assets`, `hex_anim` |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
+| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
 
 ### `hex_map` is a leaf, on purpose
 
 Nothing depends on it except the binary. It is owned by one person, and bounding the
-blast radius is what makes that ownership safe: work there cannot break gameplay, the
-camera, the sky, the screens or the menus, because none of them can see it.
+compile-time blast radius is what makes that ownership manageable: gameplay, camera,
+sky, screens and menus cannot import map internals.
+
+The boundary does not make malformed output harmless. Those crates consume the
+components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can still
+break movement or presentation. Cargo protects the dependency graph; tests and visual
+review protect the component contract.
 
 The map reaches the rest of the game **only through components**. Tiles are spawned
-carrying a `HexCoord`, a `TilePos`, a `HexSpan`, a `SubstanceId` and a `Headroom`;
-`hex_units` queries those. Nothing outside `hex_map` references `VoxelMap` or any
-generator, so terrain storage and generation can be replaced wholesale without anyone
-noticing.
+carrying a `HexTile` marker, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId` and
+`Headroom`; `hex_units` queries those. Nothing outside `hex_map` references
+`VoxelMap` or any generator, so terrain storage and generation can be replaced
+wholesale without anyone noticing.
 
 `Headroom` is on that list because only the map can measure it: a run carries its own
 extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface
@@ -76,21 +75,21 @@ query tiles without depending on how they are generated or drawn.
 ## Positions are voxels, not coordinates
 
 A unit is not *at* `HexCoord(3, -1)`. It is on a **specific voxel** there —
-`TilePos { coord, level }`. Two columns sharing a coordinate are unrelated places that
-happen to share an address.
+`TilePos { coord, level }`. One `Column` owns that coordinate, but separate exposed
+solid runs within it are unrelated places that happen to share a horizontal address.
 
 The vertical axis is called **`level`**, never `z`: cube coordinates already use `x`,
 `y` and `z` and all three are horizontal.
 
-> **Columns stacked at the same coordinate are not connected.** A unit on a bridge
+> **Surfaces stacked at the same coordinate are not connected.** A unit on a bridge
 > cannot step down to the ground beneath it. Reaching it means a ramp or spiral of
-> adjacent columns descending gradually, or an ability that explicitly bypasses the
+> adjacent surfaces descending gradually, or an ability that explicitly bypasses the
 > rule — teleporting, tunnelling.
 
 This is a game-design decision, and it decides a type. The practical consequence:
 **never key a map by `HexCoord` in a way that collapses a stack.** A
-`HashMap<HexCoord, f32>` keeping "the highest column" silently makes every lower
-column unreachable, and a unit crossing a bridge teleports to the ground.
+`HashMap<HexCoord, f32>` keeping only the highest surface silently makes every lower
+surface unreachable, and a unit crossing a bridge teleports to the ground.
 
 That exact abstraction existed briefly during the refactor and was deleted rather
 than fixed — an abstraction that *can* express the forbidden thing eventually will.
@@ -103,33 +102,42 @@ abilities ignore the rule is movement design and lives in `hex_units`.
 
 It depends on `bevy_ecs`, `bevy_math`, `bevy_platform`, `bevy_reflect` and
 `bevy_state` individually rather than on `bevy`. That keeps a renderer out of the
-domain crate, so its tests run fast and headless. `hex_core` is where the test
-suite lives, and it should stay somewhere a test can run without a GPU.
+domain crate, so its tests run fast and headless. Pure domain coverage belongs there;
+asset, map and gameplay tests live with the behavior they exercise and also run
+without a GPU.
 
 ## Conventions
 
-### Modules expose `pub fn plugin(app: &mut App)`
+### Subsystems expose `pub fn plugin(app: &mut App)`
 
-Not `struct FooPlugin; impl Plugin for FooPlugin`. Same result, far less
-boilerplate:
+Composing modules use a function rather than `struct FooPlugin; impl Plugin for
+FooPlugin`. Support modules such as generators do not need a plugin. Same result,
+far less boilerplate:
 
 ```rust
 app.add_plugins((camera::plugin, grid::plugin, sky::plugin));
 ```
 
-### Every plugin registers its own reflected types
+### Reflection registration stays beside the composing plugin
 
-`hex_dev` used to re-register five types their owning plugins already registered,
+`hex_dev` used to re-register five types the runtime plugins already registered,
 which meant adding any reflected component required editing an unrelated crate.
-Register beside the type it belongs to.
+Register a crate-owned type in that crate's plugin.
+
+`hex_core` is the deliberate exception: it has no `App` and no root plugin, so the
+runtime plugin that introduces a shared type to the composed app registers it.
+For example, `hex_map::grid::plugin` registers the shared tile vocabulary it spawns.
 
 ### Ordering is declared, never inferred
 
-Bevy runs systems in parallel and in unspecified order unless told otherwise. Two
-sets make the intended order explicit:
+Bevy runs systems in parallel and in unspecified order unless told otherwise. Shared
+sets make the ordering that crosses crate boundaries explicit:
 
 - **`AppSystems`** — `TickTimers → RecordInput → Update`, for the `Update`
-  schedule. Configured once in `main.rs`.
+  schedule. Systems opt into these phases when they participate in that ordering;
+  state transitions and self-contained UI/presentation systems may run outside them.
+- **`PausableSystems`** — gates gameplay work such as movement animation behind
+  `Pause(false)`.
 - **`GameplaySetup`** — `Resources → Terrain → Actors`, for `OnEnter(Screen::Gameplay)`.
 
 `GameplaySetup` exists because of two bugs worth not repeating.
@@ -163,18 +171,24 @@ forgets to update.
 
 ```
 Splash ──► Title ──► Loading ──► Gameplay
-                        ▲            │
-                        └────────────┘
-                                        └── Pause (sub-state of Gameplay)
+              ▲                     │
+              └──── BACKSPACE ──────┘
+                                      └── Pause (sub-state of Gameplay)
 ```
 
 `Pause` is a **sub-state** of `Gameplay`, so "paused on the title screen" is
 unrepresentable rather than merely unlikely.
 
 `Loading` is load-bearing, not decorative. It is what makes
-`OnEnter(Screen::Gameplay)` a safe place to build the world: it blocks until both
-the meshes and every settings file are present, so gameplay systems can take
-`Res<WorldSettings>` rather than `Option<Res<…>>`.
+`OnEnter(Screen::Gameplay)` a safe place to build the world: it blocks until every
+settings file has parsed, the derived `SubstanceTable` exists, and every asset handle
+has reached a terminal state. Gameplay systems can therefore take resources such as
+`Res<MapSettings>` rather than `Option<Res<…>>`.
+
+An asset failure is terminal too. The asset server already reports it, and treating
+failure as "still loading" would turn a visible missing-asset problem into a permanent
+loading screen. That is why a bad mesh can still reach gameplay and produce the
+documented plain-blue fallback.
 
 ### Observers are global — treat them that way
 
@@ -191,10 +205,10 @@ the chance to reject it.
 Tunable values live in `assets/config/*.ron` and are editable without Rust. See
 [CONTENT.md](CONTENT.md).
 
-Settings resources are **absent** until their file parses, rather than falling
-back to a default. A default that silently diverges from what someone wrote is
-worse than a stall, because it looks like the edit did not work rather than like
-an error.
+On initial load, settings resources are **absent** until their file parses rather
+than falling back to a default. A default that silently diverges from what someone
+wrote is worse than a stall. After a valid resource exists, a failed hot reload keeps
+that last valid value active while the asset server reports the error.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing
@@ -209,8 +223,9 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron` | Immediate |
-| At spawn | `world.ron`, `lighting.ron`, `player.ron` (size, colour) | Next `OnEnter(Screen::Gameplay)` |
+| Every frame | `camera.ron`, `display.ron`, `lighting.ron` skybox brightness | Immediate |
+| At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
+| At spawn | `world.ron`, `substances.ron`, the rest of `lighting.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
 
 Returning to the title and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
@@ -236,13 +251,13 @@ evidence that a change worked — **look at the window**.
 |---|---|
 | Plain blue window | Assets not found. Bevy fell back to `ClearColor` with no meshes. Check `BEVY_ASSET_ROOT` in `.cargo/config.toml` |
 | Black sky | The skybox `AssetEvent` was missed, so the PNG was never reinterpreted as a cubemap |
-| Stuck on "loading…" | A RON file failed to parse, or an asset path is wrong |
+| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
 | Movement looks wrong | A speed unit conversion. Speeds are world units per **second** |
 | Game appears frozen | It is paused. The overlay exists precisely because this was indistinguishable from a hang |
 
 ## Testing
 
-Two layers, 94 tests.
+Two complementary layers across the workspace.
 
 **Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
 which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
@@ -250,15 +265,17 @@ the degenerate zero-length case, span geometry, voxel columns and run-merging, s
 id assignment, and the movement rules — including that a two-level body is refused a
 one-voxel crawlspace a one-level body walks into.
 
-**Integration tests** run a headless `App` with `MinimalPlugins` and inspect the
-world afterwards — `crates/hex_map/tests/` and `crates/hex_units/tests/`. They
-exist because every bug found in this codebase was found by a person clicking, and
-the worst of them were green across compiler, clippy, unit tests and CI.
+**ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
+world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and
+`crates/hex_combat/tests/`. Separate asset integration tests parse the GLB directly to
+verify mesh geometry. They exist because every bug found in this codebase was found by
+a person clicking, and the worst of them were green across compiler, clippy, unit
+tests and CI.
 
-They cover tile counts, that a tile's transform agrees with its `HexSpan`, that only
-the top run of a column reports headroom, clean teardown and re-entry, and three
-specific regressions: the player must spawn *on* the surface, clicking before settings
-load must not panic, and a buried run must never be standable.
+They cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
+under open sky and beneath platforms, clean teardown and re-entry, and three specific
+regressions: the player must spawn *on* the surface, clicking before settings load
+must not panic, and a buried run must never be standable.
 
 ### A test you have not seen fail is not evidence
 

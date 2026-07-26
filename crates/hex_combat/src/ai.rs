@@ -158,7 +158,7 @@ fn approach(
     }
     let full = route(from, target, footing)?;
 
-    // `full` runs from where we stand to the target's own column. Stopping one short
+    // `full` runs from where we stand to the target's own surface. Stopping one short
     // leaves the attacker adjacent, which is where it wants to be anyway.
     let adjacent_index = full.len().checked_sub(2)?;
     let reachable = adjacent_index.min(budget as usize);

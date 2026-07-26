@@ -1,8 +1,8 @@
 # Changing the game without writing code
 
-Most of how the game looks and feels is controlled by five text files in
+Most of how the game looks and feels is controlled by six text files in
 `assets/config/`. You can edit them in any text editor. You do not need to know
-Rust, and you do not need to rebuild anything.
+Rust, and you do not need to recompile the game.
 
 | File | Controls |
 |---|---|
@@ -33,8 +33,8 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `lighting.ron` | On the next world rebuild |
-| `player.ron` | Movement speed straight away; size, colour and `levels_tall` on the next rebuild |
+| `lighting.ron` | Skybox brightness straight away; sun, ambient light, direction and sky colour on the next rebuild |
+| `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
 | `scenario.ron` | On the next world rebuild |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then
@@ -63,19 +63,24 @@ the single most common mistake.
 Colours are written as `(red, green, blue)`, each from `0.0` to `1.0`:
 
 ```ron
-tile_color: (1.0, 0.8, 0.8),   // pale pink
+"grass": (
+    color: (0.35, 0.62, 0.30),
+    solid: true,
+    diggable: true,
+),
 ```
 
 `0.0, 0.0, 0.0` is black, `1.0, 1.0, 1.0` is white.
 
 ## If something goes wrong
 
-**The game sits on "loading…" forever.** One of the files has a mistake in it — most
-likely a missing comma. The terminal will name the file, the line, and the column.
+**On initial startup, the game sits on "loading…" forever.** One of the files has a
+mistake in it — most likely a missing comma. The terminal will name the file, the
+line, and the column.
 
-The game deliberately refuses to start rather than quietly using old values,
-because "it started but ignored your edit" is much harder to notice than "it did
-not start."
+The game deliberately refuses to start without one valid value for every setting.
+If a hot reload fails later, the asset server reports the error and the last valid
+settings stay active; fix the file and save it again.
 
 **A change had no effect.** Check you saved the file, and that you are running with
 `cargo dev` rather than `cargo run --release`.
@@ -117,7 +122,8 @@ steps: [
 ],
 ```
 
-**A new substance.** In `substances.ron`, copy an entry and change the name:
+**A new substance.** In the map-owned `substances.ron`, copy an entry and change
+the name:
 
 ```ron
 "sand": (
@@ -127,8 +133,9 @@ steps: [
 ),
 ```
 
-It will not appear in the world until a programmer makes the terrain use it, but the
-game will know about it. `air` must always be present — it means empty space.
+Saving the file registers it with the game. It will not appear in generated terrain
+until the generation code selects it. `air` must always be present — it means empty
+space.
 
 **A bigger map.** `grid_radius: 20` gives 1261 columns. Be careful: the tile count
 grows quadratically, so `40` is 4921 columns and `100` is over 30,000 — and each

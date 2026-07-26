@@ -28,24 +28,25 @@ The list lives in `assets/config/substances.ron`.
 
 ## The rules the rest of the game depends on
 
-### Stacked columns are not connected
+### Stacked surfaces are not connected
 
 A piece on a bridge **cannot step down** to the ground beneath it. Getting down means
-walking a ramp of adjacent columns that descends one level at a time, or using an
+walking a ramp of adjacent surfaces that descends one level at a time, or using an
 ability that explicitly bypasses the rule — a teleport, a tunnel.
 
 This is a design decision, and it means a position is a `TilePos`, never a `HexCoord`.
-Two columns sharing a coordinate are unrelated places that happen to share an address.
+There is one `Column` per coordinate, but separate exposed solid runs within it are
+unrelated places that happen to share a horizontal address.
 
 **Never key anything by `HexCoord` in a way that collapses a stack.** A
-`HashMap<HexCoord, f32>` keeping "the highest column" silently makes every lower column
-unreachable, and a piece crossing a bridge teleports to the ground. That abstraction
+`HashMap<HexCoord, f32>` keeping only the highest surface silently makes every lower
+surface unreachable, and a piece crossing a bridge teleports to the ground. That abstraction
 existed briefly and was deleted rather than fixed — one that *can* express the
 forbidden thing eventually will.
 
 ### One level is one step
 
-A step is legal when the destination is an adjacent column and its surface is within
+A step is legal when the destination is an adjacent surface and its level is within
 **one level**. Because levels are integers, that is `step.abs() <= 1` — no epsilon, no
 accumulated float error. This is the concrete payoff for quantising the vertical axis.
 
@@ -78,8 +79,10 @@ is a real answer that callers handle rather than an error.
 
 ### Bedrock is not diggable
 
-It is the floor of the world. Every column has at least one level above it, so a column
-of bare bedrock — a permanent hole nothing could dig through — cannot be generated.
+It is the floor of the world. `substances.ron` marks it non-diggable, and the map
+rejects terrain edits that would replace or clear a non-diggable voxel. Every generated
+column also has at least one level above it, so bare bedrock cannot become a permanent
+hole in the walkable surface.
 
 ## How it is stored
 
@@ -126,7 +129,8 @@ movement.
 ## What each crate sees
 
 ```
-hex_core     TilePos, HexSpan, SubstanceId, Headroom, TerrainEdit — the vocabulary
+hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
+             TerrainEdit — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
 hex_units reads tiles; cannot see hex_map
@@ -174,6 +178,6 @@ and the map applies it. That is the whole write path.
   `hexx::a_star`, `field_of_view` and `field_of_movement` are already compiled in and
   are the obvious basis, once there is a movement-cost model.
 - **Anything about turns.** There is no turn system yet.
-- **Whether stacked columns ever connect.** Teleport and tunnel are named in the design
+- **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit
   exceptions to the step rule, not as changes to it.

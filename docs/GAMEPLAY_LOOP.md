@@ -106,7 +106,7 @@ Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:
 
 - **A pathfinder.** `route` walks a straight line and gives up when blocked, so an
   enemy behind a wall stands still. `hexx::a_star` is compiled in and unused.
-- **Units obstructing each other.** Two units can occupy the same column. An
+- **Units obstructing each other.** Two units can occupy the same surface. An
   occupancy map over unit positions would fix it and lives entirely in `hex_combat`.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.

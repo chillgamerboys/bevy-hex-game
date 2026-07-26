@@ -1,10 +1,13 @@
 // What the world is made of.
 //
-// Each entry is a substance a voxel can be. Add one by adding an entry here — no
-// code change is needed.
+// Each entry registers a substance that a voxel can use. Adding one here makes it
+// available to the game, but terrain generation must select it before it appears
+// in a generated world.
 //
 // `air` is special and must always be present: it means empty space, and the game
-// checks for it constantly. Everything else is yours.
+// checks for it constantly. The default generator also selects `bedrock`, `stone`,
+// `dirt`, and `grass` by name; changing their properties is safe, but renaming
+// them requires updating the generation code.
 (
     substances: {
         "air": (

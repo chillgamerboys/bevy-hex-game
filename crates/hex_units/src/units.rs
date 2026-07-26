@@ -1,6 +1,6 @@
 //! The units on the map: what they are, and how they get placed.
 //!
-//! A unit is a [`Body`] standing on a column, wearing a [`Faction`] so anything else
+//! A unit is a [`Body`] standing on a surface, wearing a [`Faction`] so anything else
 //! can tell friend from foe without naming concrete types. `Player` and `Enemy` are
 //! markers on top of that, for the two things that currently exist.
 //!
@@ -44,11 +44,11 @@ type TileQuery<'w, 's> = Query<
     With<HexTile>,
 >;
 
-/// Which column a piece is standing on.
+/// Which surface a piece is standing on.
 ///
-/// A coordinate is not enough: columns stacked at one coordinate are separate places,
-/// so a piece on a bridge and a piece on the ground beneath it share an address but
-/// not a location.
+/// A coordinate is not enough: surfaces stacked in one column are separate places,
+/// so a piece on a bridge and a piece on the ground beneath it share a horizontal
+/// address but not a location.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct StandsOn(pub Standing);
 
@@ -145,9 +145,9 @@ fn on_tile_clicked(
         return;
     };
 
-    // The click identifies a tile *entity*, which resolves to one specific column
+    // The click identifies a tile *entity*, which resolves to one specific surface
     // even where several share a coordinate. Picking is the right input for exactly
-    // that reason: it never has to guess which column was meant.
+    // that reason: it never has to guess which surface was meant.
     let clicked = event.event_target();
     let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
@@ -160,7 +160,7 @@ fn on_tile_clicked(
             continue;
         }
 
-        // Footing and the destination are resolved per body, because whether a column
+        // Footing and the destination are resolved per body, because whether a surface
         // can be stood on depends on who is asking — a crawlspace is footing for a
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
@@ -177,7 +177,7 @@ fn on_tile_clicked(
             continue;
         };
 
-        // A route of N columns costs N-1 steps: the first entry is where the piece
+        // A route of N surfaces costs N-1 steps: the first entry is where the piece
         // already stands.
         let cost = u32::try_from(steps.len().saturating_sub(1)).unwrap_or(u32::MAX);
         if let Some(mut turn) = turn {
@@ -281,7 +281,7 @@ struct UnitSpawn<'a> {
 }
 
 fn spawn_unit(commands: &mut Commands, assets: &GameAssets, spawn: UnitSpawn, footing: &Footing) {
-    // Stand on the lowest column at the coordinate that this body fits on — the
+    // Stand on the lowest surface at the coordinate that this body fits on — the
     // ground, rather than any bridge built over it.
     let standing = footing.ground(spawn.coord).unwrap_or_else(|| {
         warn!(

@@ -1,10 +1,9 @@
 //! Terrain height generation.
 //!
 //! Entirely internal to `hex_map`. Nothing outside this crate reads [`HeightMap`]
-//! or the generators — the map's output reaches the rest of the game as
-//! [`HexSpan`](hex_core::HexSpan) components on tile entities. That means this file
-//! can be rewritten freely, including changing what a map *is*, without touching a
-//! crate anyone else owns.
+//! or the generators. The map publishes the complete tile component contract from
+//! [`crate::grid`], so this file can be rewritten without exposing its representation
+//! to another crate.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -31,9 +30,8 @@ pub fn seeded_hash(bytes: &[u8], seed: u64, msg: &str) -> u64 {
 /// A generated height field: how tall the ground is at each coordinate.
 ///
 /// Private to this crate. The rest of the game never sees it — terrain reaches
-/// gameplay as [`HexSpan`](hex_core::HexSpan) components on tile entities, so this
-/// can be replaced wholesale (multiple columns per coordinate, chunked storage,
-/// streamed regions) without anything outside `hex_map` noticing.
+/// gameplay through the tile components spawned by [`crate::grid`], so the generator
+/// can be replaced wholesale without exposing its implementation outside `hex_map`.
 pub struct HeightMap {
     generator: Box<dyn HeightGenerator>,
     /// Heights for every coord in the spawned grid, precomputed once in [`Self::new`].

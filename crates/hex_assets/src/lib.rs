@@ -30,9 +30,7 @@ const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
 const SKYBOX: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
-/// RON files carry a `.ron` extension, but are matched here by their full
-/// double extension so an ordinary `.ron` elsewhere is not claimed by the wrong
-/// loader.
+/// File extensions claimed by the generic settings loader.
 pub const CONFIG_EXTENSIONS: &[&str] = &["ron"];
 
 /// Registers asset loading and the settings shared across the game.

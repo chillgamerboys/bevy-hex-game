@@ -147,7 +147,7 @@ fn an_enemy_closes_the_distance_on_its_turn() {
 }
 
 /// It must stop *next to* the player, never on top of it. Walking onto the target
-/// would put two units in one column, which the model has no way to express.
+/// would put two units on one surface, which the model has no way to express.
 #[test]
 fn an_enemy_stops_adjacent_rather_than_on_top() {
     let mut app = test_app();
@@ -291,7 +291,7 @@ fn an_adjacent_enemy_attacks_without_moving() {
     assert_eq!(
         coord_of(&app, enemy),
         Some(adjacent),
-        "an attack should not change which column the enemy stands on"
+        "an attack should not change which surface the enemy stands on"
     );
 }
 

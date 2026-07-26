@@ -9,7 +9,7 @@
 //! outside this crate needs to know.
 
 use bevy::prelude::*;
-use hex_assets::{LoadSettings, Rgb, CONFIG_EXTENSIONS};
+use hex_assets::{LoadSettings, CONFIG_EXTENSIONS};
 use serde::Deserialize;
 
 /// Registers map settings for loading.
@@ -33,8 +33,6 @@ pub struct MapSettings {
     /// Lower values give flatter, more terraced terrain; raising it toward 1.0 gives
     /// chunkier cells that read better once they are being dug into.
     pub level_height: f32,
-    /// Colour of the tiles.
-    pub tile_color: Rgb,
     /// Terrain generation.
     pub terrain: TerrainSettings,
 }

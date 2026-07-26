@@ -11,7 +11,11 @@ cargo dev            # with the world inspector and live asset reload
 cargo run --release  # as it ships
 ```
 
-That's the whole setup on macOS and Windows. The repo pins its toolchain in `rust-toolchain.toml`, so rustup fetches the right compiler on first build — you don't need to match it by hand. A cold build takes 10–20 minutes; incremental builds after that are seconds.
+That's the whole setup on macOS and Windows. Linux needs the system packages in
+the [appendix](#appendix-linux-and-wsl2). The repo pins its toolchain in
+`rust-toolchain.toml`, so rustup fetches the right compiler on first build — you
+don't need to match it by hand. A cold build takes 10–20 minutes; incremental
+builds after that are seconds.
 
 Two things worth knowing:
 
@@ -51,7 +55,7 @@ for the reasoning.
 
 ```
 crates/
-  hex_core/       # hex coordinates, columns, app states, shared components
+  hex_core/       # coordinates, voxel vocabulary, app states, shared components
   hex_assets/     # asset handles, RON settings and their loader
   hex_map/        # the map: voxels, terrain, tile spawning, map settings
   hex_world/      # sky and camera
@@ -87,7 +91,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for why.
 
 ## Appendix: Linux and WSL2
 
-Skip this entirely unless you're building on Linux under WSL2. Native Linux, macOS, and Windows need nothing here.
+Linux needs the system packages below. The GPU-passthrough notes after that apply
+only to WSL2; native Linux can skip them.
 
 ### System packages
 
@@ -117,4 +122,8 @@ Measured on an RTX 3080 host: 60 FPS V-sync locked via Dozen, versus ~11 FPS on 
 
 ### Wayland gotcha
 
-Wayland — and therefore WSLg — does **not** deliver `MouseMotion` events while a mouse button is held. Drag-style input has to be built from `CursorMoved` deltas instead. See `orbit_camera` in `src/plugins/world_3d/camera.rs` for the working pattern, and don't reintroduce `MouseMotion` for dragging.
+Wayland — and therefore WSLg — does **not** deliver `MouseMotion` events while a
+mouse button is held. Drag-style input has to be built from `CursorMoved` deltas
+instead. See `orbit_camera` in
+[`crates/hex_world/src/camera.rs`](crates/hex_world/src/camera.rs) for the working
+pattern, and don't reintroduce `MouseMotion` for dragging.

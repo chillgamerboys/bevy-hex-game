@@ -22,9 +22,9 @@
 
 use bevy::prelude::*;
 
-/// Which columns a piece may step between.
+/// Which surfaces a piece may step between.
 pub mod movement;
-/// Hex-specific movement along a route of columns.
+/// Hex-specific movement along a route of surfaces.
 pub mod pathing;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;

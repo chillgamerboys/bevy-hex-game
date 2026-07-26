@@ -1,10 +1,10 @@
 //! The game itself.
 //!
-//! Owns the pause toggle, the route back to the title screen, and the HUD. The world
-//! and the units are spawned by `hex_map`, `hex_world` and `hex_units` on
-//! `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any of
-//! them. It reads `Mode` and `TurnOrder` to describe what is happening, and writes
-//! neither.
+//! Owns the pause toggle, the route back to the title screen, and the HUD. Terrain,
+//! environment, and the units are spawned by `hex_map`, `hex_world`, and `hex_units`
+//! on `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any
+//! of them. It reads `Mode` and `TurnOrder` to describe what is happening, and
+//! writes neither.
 
 use bevy::prelude::*;
 use hex_combat::{Turn, TurnOrder};
