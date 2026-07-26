@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a six-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a seven-crate cargo workspace.
 
 Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -46,7 +46,7 @@ person, and the map reaches the rest of the game only through `HexCoord` and
 `HexSpan` components on tile entities. See `crates/hex_map/CLAUDE.md`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
-and tests without a renderer. It holds the test suite (17 tests).
+and tests without a renderer. It holds the largest share of the test suite (34 of 94).
 
 ## Conventions
 
@@ -125,25 +125,46 @@ screen.
 
 ## Branch & PR workflow
 
-- Long-running **`refactor`** branch off `main`; work targets `refactor`.
+**Everything targets `dev`. Nothing is merged straight to `main`.**
+
+```
+feat/whatever  ──PR──►  dev  ──PR──►  main
+```
+
+`dev` is permanent — it is the integration branch, not a release branch that gets
+cleaned up. Open every PR against it:
+
+```sh
+gh pr create --base dev
+```
+
+`main` only ever moves by merging `dev` into it, as a deliberate promotion once the
+work there has been played and looked at. That gap is the point: **CI cannot see a
+black sky, a gap between tiles, or a piece sunk into the terrain**, and every serious
+bug in this codebase so far was found by a person clicking. `dev` is where things are
+allowed to be wrong.
+
 - Prefixes: `chore/`, `fix/`, `perf/`, `feat/`, `docs/`.
 - `refactor/*` names are usable again now the `refactor` branch is gone; a git ref
   can't be both a file and a directory, so they clashed while it existed.
 - Merge with merge commits (`gh pr merge N --merge`), not squash.
-- CI runs fmt, clippy, tests, `cargo deny`, and builds on all three platforms.
+- Delete feature branches once merged. **Never delete `dev`.**
+- CI runs fmt, clippy, tests, `cargo deny`, and builds on all three platforms — on
+  PRs into `dev` as well as into `main`.
 
 ## Current state
 
-Runs on macOS/Metal, ~1647 entities in gameplay. Bevy 0.19, Rust 1.97.1. macOS is
-the primary dev machine; the WSL2 setup in the README belongs to another
-contributor and still works.
+Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
+terrain seed. Bevy 0.19, Rust 1.97.1, 94 tests. macOS is the primary dev machine; the
+WSL2 setup in the README belongs to another contributor and still works.
 
 Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
 auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, and level-based movement.
+destruction, level-based movement, and body size via headroom.
 
 There is still no turn system, no abilities, and no pathfinder — `route` walks a
-straight line and gives up when blocked.
+straight line and gives up when blocked. Bodies are one hex wide; there is no
+footprint for anything larger, and units do not obstruct each other.
 
 ## Known gaps
 

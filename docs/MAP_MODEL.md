@@ -108,7 +108,8 @@ This is the part worth understanding before changing anything.
 
 **One entity per voxel would be about 25,000 entities.** Instead the spawn pass merges
 vertical runs of the same substance into a single prism, so a fifteen-level stone column
-is one entity. Measured: **3,481 entities at 60 FPS**.
+is one entity. Measured: **3,400–4,100 entities at 60 FPS**, the spread being how much
+the terrain seed varies the number of substance bands.
 
 Two consequences:
 

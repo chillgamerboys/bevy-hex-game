@@ -77,6 +77,12 @@ Start with the row that describes you.
 | Understand why the project is shaped this way | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Contribute code anywhere | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
+## Contributing, in one line
+
+**Branch off `dev`, and open your PR against `dev`** — `gh pr create --base dev`.
+`main` moves only when `dev` is promoted into it, after someone has played the game.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for why.
+
 ---
 
 ## Appendix: Linux and WSL2
