@@ -1,25 +1,48 @@
-use bevy::core_pipeline::Skybox;
 use bevy::input::mouse::MouseWheel;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::render::render_resource::{TextureViewDescriptor, TextureViewDimension};
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use hex_assets::{CameraSettings, GameAssets, LightingSettings};
+use hex_assets::{to_color, CameraSettings, LightingSettings, Rgb};
 use hex_core::{AppSystems, Screen};
 
-/// Registers the pan/orbit camera and the skybox.
+use crate::sky_material::{SkyMaterial, SkyParams};
+
+/// Sky-dome radius, in world units. Comfortably inside the camera's default
+/// 1000-unit far plane and far outside `max_zoom` (50) plus the terrain extent.
+const SKY_DOME_RADIUS: f32 = 500.0;
+
+/// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
+#[derive(Component, Reflect)]
+#[reflect(Component)]
+struct SkyDome;
+
+/// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
+        .register_type::<SkyDome>()
         // Spawned once at startup rather than per screen: it is the render target
-        // the UI screens draw through, and the skybox behind them.
+        // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
-        .add_systems(OnEnter(Screen::Title), frame_menu_camera)
-        .add_systems(Update, apply_skybox_brightness.in_set(AppSystems::Update))
+        // **The sky belongs to the world, not to the menus.** Hidden outside gameplay,
+        // so the title screen is the flat `sky_color` that `apply_ambient` already
+        // puts in `ClearColor` rather than a view of a dome the player cannot move.
+        //
+        // Visibility rather than despawn and respawn: the dome carries a material
+        // handle built once in `spawn_camera`, and rebuilding it per screen would
+        // churn an asset to change one bool.
+        .add_systems(OnEnter(Screen::Gameplay), show_sky)
+        .add_systems(OnExit(Screen::Gameplay), hide_sky)
+        // Only the material push depends on the settings; the dome has to follow the
+        // camera every frame regardless.
         .add_systems(
             Update,
-            reinterpret_skybox_when_loaded.in_set(AppSystems::Update),
+            apply_sky_material
+                .in_set(AppSystems::Update)
+                .run_if(resource_exists_and_changed::<LightingSettings>),
         )
+        .add_systems(Update, follow_camera.in_set(AppSystems::Update))
         // Camera control is gameplay-only, so dragging over a menu does not
         // silently move the world behind it.
         .add_systems(
@@ -49,12 +72,14 @@ impl Default for PanOrbitCamera {
     }
 }
 
-/// Spawn the game camera with a built-in cubemap skybox.
-fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
+/// Spawn the game camera and the procedural sky dome.
+fn spawn_camera(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut sky_materials: ResMut<Assets<SkyMaterial>>,
+) {
     let translation = Vec3::new(0., 20., 10.0);
     let radius = translation.length();
-
-    let skybox_handle = assets.skybox.clone();
 
     commands.spawn((
         Camera3d::default(),
@@ -64,13 +89,52 @@ fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
             ..Default::default()
         },
         Name::new("Game Camera"),
-        // Brightness is set by `apply_skybox_brightness` once settings load; the
-        // camera itself has to exist from startup as the UI's render target.
-        Skybox {
-            image: Some(skybox_handle),
-            ..default()
-        },
     ));
+
+    // A unit sphere scaled to the dome radius, rendered from the inside (see
+    // `SkyMaterial::specialize`). `follow_camera` keeps the camera at its centre.
+    // Built with placeholder params; `apply_sky_material` fills them once settings
+    // load. Not a shadow caster — a 500-unit sphere would shadow the whole map.
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(1.0).mesh().uv(64, 48))),
+        MeshMaterial3d(sky_materials.add(SkyMaterial {
+            params: default_sky_params(),
+        })),
+        Transform::from_scale(Vec3::splat(SKY_DOME_RADIUS)),
+        // Hidden until gameplay. Splash and title both precede the first
+        // `OnEnter(Gameplay)`, so spawning visible would show the dome on the very
+        // screens this is keeping it off — and only on the first run, which is the
+        // worst kind of bug to notice.
+        Visibility::Hidden,
+        NotShadowCaster,
+        // `MeshPickingPlugin` raycasts every `Mesh3d` by default, and the dome's
+        // bounding box permanently contains the camera, so the cheap AABB rejection
+        // never fires and every pointer move would walk its several thousand
+        // triangles. Backface culling means it reports no hit anyway.
+        Pickable::IGNORE,
+        SkyDome,
+        Name::new("Sky Dome"),
+    ));
+}
+
+/// Sky parameters used for the one frame or two before `LightingSettings` loads.
+///
+/// Written in linear RGB, because that is what the shader consumes — unlike
+/// [`sky_params`], which converts the designer-facing sRGB values. Deliberately close
+/// to the shipped sky rather than an alarming colour: the loading screen already
+/// blocks on settings, so this is only ever seen briefly, and a garish placeholder
+/// would be the more visible bug.
+fn default_sky_params() -> SkyParams {
+    SkyParams {
+        horizon_color: Vec3::new(0.5, 0.6, 0.7),
+        cloud_coverage: 0.0,
+        zenith_color: Vec3::new(0.2, 0.35, 0.6),
+        hex_scale: 8.0,
+        cloud_color: Vec3::new(0.9, 0.9, 0.92),
+        cloud_softness: 0.1,
+        cloud_roundness: 0.5,
+        cloud_noise: 0.0,
+    }
 }
 
 /// Restores the designer-authored full-map view whenever gameplay begins.
@@ -86,28 +150,30 @@ fn frame_gameplay_camera(
     );
 }
 
-/// And the menu view whenever the title screen is shown.
+/// Reveals the sky when the world does.
+fn show_sky(domes: Query<&mut Visibility, With<SkyDome>>) {
+    set_sky(domes, Visibility::Visible);
+}
+
+/// And hides it again on the way back to the menus.
 ///
-/// Without this the title screen inherited wherever the player had orbited to before
-/// quitting to it — so the same menu appeared at a different angle and zoom every time,
-/// which reads as a glitch rather than as a camera that was never told to move.
-///
-/// Framed rather than hidden behind an opaque panel, because the sky is the nicest
-/// thing on that screen and the only cost of keeping it is saying where to point.
-fn frame_menu_camera(
-    settings: Option<Res<CameraSettings>>,
-    cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
-) {
-    // `Option`, because the title screen is reached on a timer rather than a load gate
-    // and is genuinely reachable before `camera.ron` has parsed. Leaving the camera
-    // where it is for a frame or two is a much better failure than a panic.
-    let Some(settings) = settings else { return };
-    frame_camera(
-        cameras,
-        settings.menu_eye,
-        settings.menu_focus,
-        "menu_eye and menu_focus",
-    );
+/// The title screen used to inherit wherever the player had orbited to before quitting,
+/// so the same menu appeared at a different angle every time. The first fix pointed the
+/// camera somewhere fixed, which only chose *which* sky to look at; not drawing it is
+/// the answer that leaves nothing to choose.
+fn hide_sky(domes: Query<&mut Visibility, With<SkyDome>>) {
+    set_sky(domes, Visibility::Hidden);
+}
+
+fn set_sky(mut domes: Query<&mut Visibility, With<SkyDome>>, wanted: Visibility) {
+    for mut visibility in &mut domes {
+        // Guarded for the same reason `follow_camera` guards its write: assigning
+        // through `Mut` marks the component changed even when the value is identical,
+        // and visibility changes propagate to children.
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
 }
 
 /// Points every camera at `focus` from `eye`.
@@ -147,70 +213,52 @@ fn frame_camera(
     }
 }
 
-/// Applies skybox brightness from settings, and keeps it in step if the file is
-/// edited while running.
-fn apply_skybox_brightness(
-    settings: Option<Res<LightingSettings>>,
-    mut skyboxes: Query<&mut Skybox>,
-) {
-    let Some(settings) = settings else { return };
-    if !settings.is_changed() {
-        return;
-    }
-    for mut skybox in &mut skyboxes {
-        skybox.brightness = settings.skybox_brightness;
+/// Build sky parameters from settings. `to_color(..).to_linear()` converts the
+/// designer-facing sRGB tuples into the linear RGB the shader expects.
+fn sky_params(settings: &LightingSettings) -> SkyParams {
+    let lin = |rgb: Rgb| {
+        let c = to_color(rgb).to_linear();
+        Vec3::new(c.red, c.green, c.blue)
+    };
+    SkyParams {
+        horizon_color: lin(settings.sky_color),
+        cloud_coverage: settings.cloud_coverage,
+        zenith_color: lin(settings.zenith_color),
+        hex_scale: settings.hex_cloud_scale,
+        cloud_color: lin(settings.cloud_color),
+        cloud_softness: settings.cloud_softness,
+        cloud_roundness: settings.cloud_roundness,
+        cloud_noise: settings.cloud_noise,
     }
 }
 
-/// PNGs do not carry cubemap metadata, so they load as a single stacked 2D texture.
-/// Reinterpret it as a cube array texture the moment the image finishes loading.
-///
-/// Driven by `AssetEvent` rather than by polling a marker component: the load happens
-/// once, but the old query-every-frame version kept scanning for the rest of the run.
-/// Reacting to the event means the body only executes on the frame the asset lands.
-fn reinterpret_skybox_when_loaded(
-    mut asset_events: MessageReader<AssetEvent<Image>>,
-    mut images: ResMut<Assets<Image>>,
-    cameras: Query<&Skybox>,
+/// Push sky settings into the dome material, on load and on every hot reload.
+fn apply_sky_material(
+    settings: Res<LightingSettings>,
+    domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
+    mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
-    for event in asset_events.read() {
-        let AssetEvent::LoadedWithDependencies { id } = event else {
-            continue;
-        };
-
-        // Images load for all sorts of reasons; only touch one a camera uses as a skybox.
-        let is_skybox = cameras.iter().any(|skybox| {
-            skybox
-                .image
-                .as_ref()
-                .is_some_and(|handle| handle.id() == *id)
-        });
-        if !is_skybox {
-            continue;
+    for handle in &domes {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.params = sky_params(&settings);
         }
+    }
+}
 
-        let Some(mut image) = images.get_mut(*id) else {
-            continue;
-        };
-        if image.texture_descriptor.array_layer_count() == 1 {
-            // Bind the layer count first: `Assets::get_mut` hands back a change-detection
-            // `AssetMut` wrapper, so reading `image` inside the call's argument list would
-            // overlap with the mutable borrow the call itself takes.
-            let layers = image.height() / image.width();
-            #[expect(
-                clippy::expect_used,
-                reason = "the skybox asset ships with the game; a PNG that is not a \
-                          vertical stack of six square faces is a broken build, and \
-                          failing loudly beats rendering a black sky with no \
-                          explanation"
-            )]
-            image
-                .reinterpret_stacked_2d_as_array(layers)
-                .expect("skybox PNG should be a vertical stack of cube faces");
-            image.texture_view_descriptor = Some(TextureViewDescriptor {
-                dimension: Some(TextureViewDimension::Cube),
-                ..default()
-            });
+/// Keep the dome centred on the camera so the camera never reaches its far wall.
+fn follow_camera(
+    camera: Query<&Transform, (With<PanOrbitCamera>, Without<SkyDome>)>,
+    mut domes: Query<&mut Transform, With<SkyDome>>,
+) {
+    let Ok(cam) = camera.single() else {
+        return;
+    };
+    for mut dome in &mut domes {
+        // Guarded because writing through `Mut` marks the transform changed even when
+        // the value is identical, which would re-propagate and re-extract the dome
+        // every frame on a still camera — including on the menu screens.
+        if dome.translation.distance_squared(cam.translation) > f32::EPSILON {
+            dome.translation = cam.translation;
         }
     }
 }
@@ -356,10 +404,6 @@ mod tests {
         CameraSettings {
             gameplay_eye: (0.0, 44.0, 38.0),
             gameplay_focus: (0.0, 6.0, 0.0),
-            // Deliberately unlike the gameplay frame, so a test that confuses the two
-            // fails rather than passing on a coincidence.
-            menu_eye: (0.0, 12.0, 34.0),
-            menu_focus: (0.0, 9.0, 0.0),
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -434,23 +478,59 @@ mod tests {
         assert_full_map_frame(&app, entity);
     }
 
-    /// The title screen gets its own frame, not whatever the player left behind.
+    /// The sky is drawn in the world and nowhere else.
     ///
-    /// Reported from play as the menu appearing "at a random zoom of the scenario":
-    /// quitting to the title kept the camera exactly where gameplay had orbited it to,
-    /// so the same screen looked different every time. Nothing was moving the camera
-    /// back, because nothing had ever been asked to.
+    /// Reported from play as the menu appearing "at a random zoom of the scenario".
+    /// The first fix pointed the camera somewhere fixed, which only chose *which* sky
+    /// to look at; not drawing it at all leaves nothing to choose, and the menu is the
+    /// flat `ClearColor` instead.
+    ///
+    /// **Drives the whole plugin, not the system.** The predecessor of this test
+    /// registered its system by hand, so it proved a function worked and said nothing
+    /// about whether anything called it — and "nothing called it" was the entire defect
+    /// it had been written for.
     #[test]
-    fn the_title_screen_is_framed_every_time() {
-        // **The whole plugin, not just the system.** The bug was that nothing called
-        // the framing on the way back to the title — registering it by hand here would
-        // test a function that works and prove nothing about whether anything runs it,
-        // which is exactly the shape of the defect.
+    fn the_sky_belongs_to_gameplay() {
+        let mut app = sky_app();
+
+        // Before any gameplay at all. Splash and title both precede the first
+        // `OnEnter(Gameplay)`, so this is the one pass where the dome has never been
+        // shown — and the only one a first-run bug would show up in.
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Hidden),
+            "the dome was visible before gameplay had ever started"
+        );
+
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Visible),
+            "the world has no sky"
+        );
+
+        enter(&mut app, Screen::Title);
+        assert_eq!(
+            dome_visibility(&mut app),
+            Some(Visibility::Hidden),
+            "the sky followed the player back to the menu"
+        );
+
+        // Round again, because the bug this replaces was specifically about returning.
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(dome_visibility(&mut app), Some(Visibility::Visible));
+        enter(&mut app, Screen::Title);
+        assert_eq!(dome_visibility(&mut app), Some(Visibility::Hidden));
+    }
+
+    /// An app running the real camera plugin, with everything that plugin declares.
+    ///
+    /// It also carries orbit, pan and the sky material, so this has to supply what
+    /// those ask for even though they never run here: input for mouse and keyboard,
+    /// windowing for `CursorMoved`, assets for the dome mesh and its material. A
+    /// missing message or resource is a panic, not a skipped system.
+    fn sky_app() -> App {
         let mut app = App::new();
-        // The camera plugin also carries orbit, pan and skybox systems, so the test
-        // has to supply what those declare even though they never run here: input for
-        // the mouse and keyboard, windowing for `CursorMoved`, assets for the skybox.
-        // A missing message or resource is a panic, not a skipped system.
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin::default(),
@@ -458,70 +538,45 @@ mod tests {
             bevy::input::InputPlugin,
             bevy::window::WindowPlugin::default(),
         ));
-        app.init_asset::<Image>();
+        app.init_asset::<Mesh>();
+        app.add_plugins(crate::sky_material::plugin);
         app.init_state::<Screen>();
         app.insert_resource(camera_settings());
-        app.insert_resource(GameAssets {
-            hex_tile: Handle::default(),
-            player_pieces: [Handle::default(), Handle::default()],
-            skybox: Handle::default(),
-        });
         app.add_plugins(super::plugin);
-        let entity = app
+        // `spawn_camera` is on `Startup`, so the dome does not exist until a frame has
+        // run.
+        app.update();
+        app
+    }
+
+    fn dome_visibility(app: &mut App) -> Option<Visibility> {
+        let mut domes = app
             .world_mut()
-            .spawn((
-                Transform::from_xyz(1.0, 2.0, 3.0),
-                PanOrbitCamera::default(),
-            ))
-            .id();
-
-        enter(&mut app, Screen::Title);
-        assert_menu_frame(&app, entity);
-
-        // Orbit somewhere else, as playing would, then come back.
-        {
-            let mut moved = app.world_mut().entity_mut(entity);
-            if let Some(mut transform) = moved.get_mut::<Transform>() {
-                transform.translation = Vec3::new(-30.0, 4.0, 2.0);
-            }
-        }
-        enter(&mut app, Screen::Gameplay);
-        enter(&mut app, Screen::Title);
-        assert_menu_frame(&app, entity);
+            .query_filtered::<&Visibility, With<SkyDome>>();
+        domes.iter(app.world()).next().copied()
     }
 
-    fn assert_menu_frame(app: &App, entity: Entity) {
-        let transform = app
-            .world()
-            .entity(entity)
-            .get::<Transform>()
-            .expect("the camera should have a transform");
-        let eye = Vec3::new(0.0, 12.0, 34.0);
-        let focus = Vec3::new(0.0, 9.0, 0.0);
-
-        assert!(
-            transform.translation.distance(eye) < 1e-5,
-            "the menu inherited the camera instead of framing it; it is at {}",
-            transform.translation
-        );
-        let forward = transform.forward().as_vec3();
-        assert!(forward.dot((focus - eye).normalize()) > 0.9999);
-    }
-
-    /// A camera settings file that has not parsed yet must not take the game down.
+    /// Reaching the title screen before `camera.ron` has parsed must not take the game
+    /// down.
     ///
-    /// The title screen is reached on a wall-clock timer rather than a load gate, so it
-    /// is genuinely reachable before `camera.ron` exists as a resource. A plain
-    /// `Res<CameraSettings>` there is a panic, which is the same crash this project
-    /// already shipped once on this very screen.
+    /// The title screen arrives on a wall-clock timer rather than a load gate, so it
+    /// really is reachable before the settings exist. This project has shipped that
+    /// crash once already, on this very screen.
     #[test]
-    fn framing_the_title_without_settings_does_not_panic() {
+    fn the_title_screen_survives_missing_settings() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            StatesPlugin,
+            bevy::input::InputPlugin,
+            bevy::window::WindowPlugin::default(),
+        ));
+        app.init_asset::<Mesh>();
+        app.add_plugins(crate::sky_material::plugin);
         app.init_state::<Screen>();
-        app.add_systems(OnEnter(Screen::Title), frame_menu_camera);
-        app.world_mut()
-            .spawn((Transform::default(), PanOrbitCamera::default()));
+        // No `CameraSettings` on purpose.
+        app.add_plugins(super::plugin);
 
         enter(&mut app, Screen::Title);
     }

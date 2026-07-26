@@ -102,8 +102,9 @@ Idioms that look right but aren't:
   `Pointer<Click>` is still an `Event` for observers.
 - Required-component tuples (`Camera3d`, `Mesh3d`, `MeshMaterial3d`). No `*Bundle`.
 - `ButtonInput<T>`, never `Input<T>`. `Color::srgb`, never `Color::rgb`.
-- `GlobalAmbientLight` is a resource, not `AmbientLight`.
-- Physical light units: illuminance in lux, `Skybox::brightness` in cd/m².
+- `GlobalAmbientLight` is a resource, not `AmbientLight` (which is a per-camera
+  *component* in 0.19).
+- Physical light units: illuminance in lux, `EnvironmentMapLight::intensity` in cd/m².
 - **Cursor deltas via `CursorMoved`, never `MouseMotion`** — Wayland/WSLg does not
   deliver `MouseMotion` while a button is held. See `camera.rs::orbit_camera`.
 
@@ -111,7 +112,6 @@ Idioms that look right but aren't:
 
 Two of these aren't in the official migration guide:
 
-- `Skybox::image` is now `Option<Handle<Image>>`.
 - `DirectionalLight::shadows_enabled` → **`shadow_maps_enabled`**. *(Undocumented.)*
 - `Assets::get_mut` returns an `AssetMut` wrapper, not `&mut A`. Bindings need
   `mut`, and you can't read the value inside the argument list of a method that
@@ -132,7 +132,8 @@ change worked — look at the window.
 | Symptom | Cause |
 |---|---|
 | Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Skybox `AssetEvent` missed; PNG never reinterpreted as a cubemap |
+| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
+| Clouds smeared into streaks | Sky-projection singularity. Check from the *gameplay* camera: it looks down, so it sees the half of the sky a level screenshot never shows |
 | Stuck on "loading…" during initial startup | A RON settings file failed to parse |
 | Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
 

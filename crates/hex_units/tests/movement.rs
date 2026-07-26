@@ -113,7 +113,6 @@ fn test_app() -> App {
     app.insert_resource(GameAssets {
         hex_tile: Handle::default(),
         player_pieces: [Handle::default(), Handle::default()],
-        skybox: Handle::default(),
     });
     app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {

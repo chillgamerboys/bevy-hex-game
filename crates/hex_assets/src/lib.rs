@@ -33,7 +33,6 @@ pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
-const SKYBOX: &str = "textures/sky_boxes/Ryfjallet_cubemap.png";
 
 /// File extensions claimed by the generic settings loader.
 pub const CONFIG_EXTENSIONS: &[&str] = &["ron"];
@@ -69,8 +68,6 @@ pub struct GameAssets {
     pub hex_tile: Handle<Mesh>,
     /// The two primitives making up the player piece.
     pub player_pieces: [Handle<Mesh>; 2],
-    /// Cubemap for the sky, stored as a vertically stacked 2D PNG.
-    pub skybox: Handle<Image>,
 }
 
 impl GameAssets {
@@ -88,12 +85,11 @@ impl GameAssets {
             })
     }
 
-    fn handle_ids(&self) -> [UntypedAssetId; 4] {
+    fn handle_ids(&self) -> [UntypedAssetId; 3] {
         [
             self.hex_tile.id().untyped(),
             self.player_pieces[0].id().untyped(),
             self.player_pieces[1].id().untyped(),
-            self.skybox.id().untyped(),
         ]
     }
 }
@@ -107,6 +103,5 @@ fn load_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(GameAssets {
         hex_tile: primitive(HEX_MESH, 0),
         player_pieces: [primitive(PIECES_MESH, 0), primitive(PIECES_MESH, 1)],
-        skybox: asset_server.load(SKYBOX),
     });
 }
