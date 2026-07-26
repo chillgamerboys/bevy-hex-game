@@ -165,15 +165,15 @@ and `Component`, and every query names concrete components.
 ## Traps
 
 Several failure modes produce **no log output**. A clean log is not evidence a
-change worked — look at the window.
+change worked — look at the window. The sharpest three:
 
-| Symptom | Cause |
-|---|---|
-| Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
-| Clouds smeared into streaks | Sky-projection singularity. Check from the *gameplay* camera: it looks down, so it sees the half of the sky a level screenshot never shows |
-| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
-| Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
+- **Plain blue window** — assets not found (see "Always run through cargo").
+- **Black sky** — the sky shader failed to load, or the dome was culled.
+- **Appears frozen** — it is paused. The overlay exists because this was
+  indistinguishable from a hang.
+
+Full list, including the map-specific ones:
+[docs/development/troubleshooting.md](docs/development/troubleshooting.md).
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
 resource must take `Option<Res<T>>` — Bevy validates parameters *before* the body
@@ -234,16 +234,9 @@ terrain seed. Bevy 0.19, Rust 1.97.1, and 226 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
-Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
-auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, level-based movement, body size via headroom, a turn order with two
-tempos, a breadth-first pathfinder over stacked surfaces, a movement preview that draws
-the reachable set and the route before a click commits to either, and surface-aware
-targeting where height buys range.
-
-There are still no abilities and no lattices. Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other — so a route may
-be drawn straight through another piece.
+**What is built, what is a placeholder, and what each placeholder is waiting for
+lives in [docs/planning/status.md](docs/planning/status.md)** — the one doc allowed
+to be out of date. Everything else under `docs/` describes contracts.
 
 ## Known gaps
 

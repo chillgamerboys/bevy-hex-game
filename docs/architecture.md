@@ -191,54 +191,6 @@ Each screen tags what it spawns with `DespawnOnExit(Screen::X)`, and one generic
 system clears them on exit. Teardown is not a per-screen checklist somebody
 forgets to update.
 
-### The sky is a shader on a camera-following dome
-
-The sky is neither a cubemap nor Bevy's `Atmosphere`. It is a custom `Material`
-(`hex_world::sky_material::SkyMaterial`) whose fragment shader
-(`assets/shaders/sky.wgsl`) computes a colour per pixel from the view direction: a
-vertical horizon→zenith gradient with static hexagonal clouds.
-
-It renders on the inside of a large inverted sphere — the *sky dome* — spawned at
-`Startup` beside the camera. `SkyMaterial::specialize` sets `cull_mode = None` so
-the dome draws from within, and `follow_camera` pins the dome's translation to the
-camera every frame. Because the camera stays permanently at the dome's centre, the
-sky depends only on view *orientation*: clouds stay fixed on the celestial dome
-while panning and re-orient only while orbiting. The dome radius (500) is inside the
-camera's far plane and well outside the terrain and max zoom, and it is a
-`NotShadowCaster` — a 500-unit sphere would otherwise shadow the whole map.
-
-Choices worth knowing:
-
-- **Custom shader over `Atmosphere`.** Bevy 0.19's first-party atmospheric
-  scattering draws a physically-accurate clear sky but cannot draw clouds, and it
-  forces `hdr` + tonemapping on the camera, which would recolour the *entire* scene.
-  A dome shader keeps the change contained to the sky.
-- **Azimuthal-equidistant cloud projection.** Cloud cells are placed by the angle
-  *away from the zenith*, so a hex keeps the same angular size straight up as it does
-  near the horizon. The obvious `dir.xz / dir.y` (gnomonic) projection stretches
-  cells toward infinity near the horizon — it renders, and looks wrong, with no
-  error in the log.
-- **The lower hemisphere is mirrored onto the upper one** (`acos(abs(dir.y))`). The
-  projection has a second singularity at straight *down*, where cells smear into long
-  radial streaks. That sounds ignorable and is not: the gameplay camera looks down at
-  the map, so most of the sky on screen is *below* the horizon — the broken region is
-  the one you actually see. Sky-only screenshots aimed up or level never show it, which
-  is exactly how it shipped unnoticed the first time.
-- **The cloud field is a density, not a per-cell mask.** Each pixel sums a soft bump
-  from its hex cell *and its six neighbours*, then thresholds; that is what lets
-  adjacent clouds merge with no seam (a single-cell mask left a visible gap because
-  the fill stopped short of the shared edge). `cloud_roundness` blends the cell shape
-  hexagon→disc, and an fbm built on the shader's one `hash21` breaks the edges up.
-- **Anti-aliasing is analytic.** The cloud edge is a `smoothstep` whose width comes
-  from `fwidth()` of the density, so it stays ~1px crisp at any zoom or view angle.
-  This matters because MSAA (Bevy's default 4x) only smooths *geometry* edges, not a
-  colour discontinuity computed inside the fragment shader, and there is no
-  post-process AA in the project — a fixed-width edge shimmered and read as
-  low-resolution.
-
-Colours and cloud parameters come from `LightingSettings` and are pushed into the
-material by `apply_sky_material` on load and on every hot reload — see
-[CONTENT.md](CONTENT.md) for the knobs.
 
 ## States
 
@@ -322,20 +274,6 @@ This also explains frame rates varying between 60 and 120 across runs with no co
 change: ProMotion adapts on its own, and none of it was ours to control. The
 setting is real on Windows and Linux.
 
-## Things that fail silently
-
-Several failure modes here produce no log output at all. A clean log is not
-evidence that a change worked — **look at the window**.
-
-| Symptom | Cause |
-|---|---|
-| Plain blue window | Assets not found. Bevy fell back to `ClearColor` with no meshes. Check `BEVY_ASSET_ROOT` in `.cargo/config.toml` |
-| Black sky | The sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
-| Clouds smeared into streaks | A sky-projection singularity. Check the mirroring in `sky.wgsl`, and verify from the *gameplay* camera — it looks down, so it sees the half of the sky that a level screenshot never shows |
-| Terrain looks flat and washed out | Fill light competing with the sun. The terrain has no texture, so shadows are the only thing giving it shape; see `lighting.ron` |
-| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
-| Movement looks wrong | A speed unit conversion. Speeds are world units per **second** |
-| Game appears frozen | It is paused. The overlay exists precisely because this was indistinguishable from a hang |
 
 ## Testing
 
@@ -377,14 +315,3 @@ runs, varying headroom — or it will report a safety it does not provide.
 **These are headless.** A black sky, a wrong colour, or a mesh at the wrong scale
 still only show up by looking at the window.
 
-## Not yet done
-
-- **`bevy_lint`** is wired (`cfg(bevy_lint)` is declared, the `register_tool`
-  attribute is in place) but unusable: it supports Bevy 0.18 at most, and this is
-  0.19. Adopting it later costs no source changes.
-- **Bevy feature trimming.** `default-features = true` still. The `3d` collection
-  would cut compile time and binary size but risks silently dropping capability.
-- **The animation system** is still `Box<dyn Transformer>` trait objects, which is
-  why `Transformation` cannot derive `Reflect` and is invisible in the inspector.
-  It works and is correctly frame-timed; it is the most likely thing to be
-  rewritten when real gameplay lands.
