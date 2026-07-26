@@ -7,12 +7,17 @@
 //
 // FIELDS
 //
-//   name    what the button says
-//   blurb   one line underneath, saying what is interesting about this one
-//   world   the map file, as a path under `assets/`
-//   units   where the pieces start
+//   name      what the button says
+//   blurb     one line underneath, saying what is interesting about this one
+//   world     the map file, as a path under `assets/`
+//   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
+//   units     where the pieces start
 //
-// The `world` path is NOT checked by the compiler — nothing here knows what a map is,
+// `lighting` is what makes one scenario feel unlike another as much as its terrain
+// does -- it carries the sun's angle and colour, so it decides which way the shadows
+// fall, not just what the sky looks like.
+//
+// The `world` and `lighting` paths are NOT checked by the compiler — nothing here knows what a map is,
 // deliberately, so that this file does not have to be edited whenever the map format
 // changes. A typo is caught by a test that opens every world named here, so a wrong
 // path fails `cargo test` rather than at the loading screen.
@@ -31,6 +36,7 @@
             name: "The Crossing",
             blurb: "A river with one bridge over it, a mountain, and a switchback up the side.",
             world: "config/world.ron",
+            // No `lighting`, so this one gets `config/lighting.ron`.
             units: (
                 // The centre of the map, which on this world is the bridge deck --
                 // the river runs underneath.
@@ -43,8 +49,9 @@
         ),
         (
             name: "Rolling Hills",
-            blurb: "Open procedural ground. Nowhere to funnel through, so distance is the only obstacle.",
+            blurb: "Open procedural ground under a low sun. Nowhere to funnel through, so distance is the only obstacle.",
             world: "config/worlds/rolling-hills.ron",
+            lighting: "config/lighting/late-afternoon.ron",
             units: (
                 player: (x: 0, y: 0, z: 0),
 

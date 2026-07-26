@@ -45,8 +45,21 @@ pub struct Scenario {
     /// A path rather than the settings themselves, because this crate cannot name a
     /// terrain type — see the module documentation.
     pub world: String,
+    /// Asset path of the lighting file: sun, sky, clouds and fog.
+    ///
+    /// Optional, because most scenarios want the shipped look and requiring it would
+    /// mean every new entry copying a path it will never change. Called `lighting`
+    /// rather than `sky` because it also decides the sun's angle and colour, and so
+    /// which way the shadows fall.
+    #[serde(default = "shipped_lighting")]
+    pub lighting: String,
     /// Where the units start.
     pub units: ScenarioSettings,
+}
+
+/// The lighting a scenario gets when it does not name one.
+fn shipped_lighting() -> String {
+    "config/lighting.ron".to_owned()
 }
 
 /// Which scenario the title screen is offering to start.

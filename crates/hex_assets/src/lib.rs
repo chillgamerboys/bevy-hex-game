@@ -26,8 +26,8 @@ pub use loader::{
 };
 pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
 pub use settings::{
-    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, PlayerSettings,
-    PresentModeSetting, Rgb, ScenarioSettings,
+    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
+    PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -45,19 +45,26 @@ pub fn plugin(app: &mut App) {
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
+        .register_type::<MenuSettings>()
         .register_type::<ScenarioSettings>()
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
 
-    // `ScenarioSettings` is deliberately **not** loaded from a file any more. It is
-    // still the resource `spawn_units` reads, but its value now comes from whichever
-    // scenario was chosen, so the library is what gets loaded and the placements come
-    // out of it.
+    // Two types are deliberately **not** loaded from a fixed file here.
+    //
+    // `ScenarioSettings` is still the resource `spawn_units` reads, but its value now
+    // comes from whichever scenario was chosen, so the library is what gets loaded and
+    // the placements come out of it.
+    //
+    // `LightingSettings` is chosen the same way, by `hex_game::scenarios` — a scenario
+    // names its own sky. Loading it here as well would run both `insert_settings` and
+    // `apply_settings_choice` against one resource, and hold the loading screen open
+    // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
-        .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
+        .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
         .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS);
 }
 

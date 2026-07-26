@@ -1,0 +1,54 @@
+// Late afternoon: a low, warm sun and a heavier sky.
+//
+// Same format as `config/lighting.ron` — a scenario names one of these in
+// `scenarios.ron` and gets it instead of the shipped default. Everything in
+// CONTENT.md about editing lighting applies here too.
+//
+// Deliberately far from the default rather than a subtle variation. This exists to
+// make "each scenario brings its own sky" visible: if you cannot tell at a glance
+// which one you are in, the feature cannot be checked by looking, and looking is the
+// only way anything visual gets checked here.
+//
+// The tell that the SUN is being re-applied and not just the sky: shadows fall long
+// and across the map rather than short and down. If the sky changes and the shadows
+// do not, the dome is being repainted but the directional light is not.
+(
+    // Dimmer and much warmer than midday. Real late-afternoon sun is nearer 30000 lux,
+    // but the sky dome and ambient both read brighter than life, so this is tuned to
+    // look right rather than to measure right.
+    sun_illuminance: 6000.0,
+    sun_color: (1.0, 0.80, 0.55),
+
+    // Low in the sky and swung round the compass, so shadows stretch sideways. The
+    // first number is height; compare 11.4 in the default.
+    sun_rotation: (10.2, 2.1, 0.0),
+
+    // A little more fill than midday, tinted towards the sky. Long shadows cover more
+    // of the map, and pure-black ones read as holes rather than as shade.
+    ambient_brightness: 110.0,
+    ambient_color: (0.85, 0.88, 1.0),
+
+    // Still off. See CONTENT.md before turning it up.
+    sky_light_intensity: 0.0,
+    ground_color: (0.30, 0.24, 0.18),
+
+    // The giveaway: warm at the horizon, and still blue overhead. A flat orange sky
+    // reads as a filter over the whole screen rather than as a time of day.
+    sky_color: (0.95, 0.72, 0.48),
+    zenith_color: (0.20, 0.38, 0.70),
+
+    // More cloud than the default, lit warm and softened. Bigger cells (a smaller
+    // `hex_cloud_scale`) so they read as evening banks rather than as texture.
+    cloud_color: (1.0, 0.88, 0.80),
+    cloud_coverage: 0.34,
+    hex_cloud_scale: 11.0,
+    cloud_softness: 0.18,
+    cloud_roundness: 0.65,
+    cloud_noise: 0.4,
+
+    // Haze stays off, as it does everywhere. The fields are here so the file is a
+    // complete `LightingSettings` and can be experimented with in place.
+    fog_color: (0.72, 0.66, 0.66),
+    fog_sun_color: (1.0, 0.72, 0.42),
+    fog_density: 0.0,
+)

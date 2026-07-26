@@ -201,11 +201,11 @@ zenith_color: (0.25, 0.50, 0.85),  // straight up
 sky tone. Set the two close together for a flat, even sky; push them apart for a
 deeper, more dramatic one.
 
-**It is also the title screen's background.** The sky dome is drawn only during
-gameplay — the menus have no camera you can move, so a view of a sky you cannot look
-around is just a picture that changes for no reason. Off that screen the dome is
-hidden and `sky_color` is what remains. Change it and you change both, which is the
-intent: one sky, seen from inside during play and flat behind the menu.
+The sky dome is drawn **only during gameplay**. The menus have no camera you can move,
+so a view of a sky you cannot look around is a picture that changes for no reason —
+and once each scenario brought its own sky, the menu would have changed colour
+depending on which map you last played. The menus have their own file instead; see
+**The menus** below.
 
 The clouds sit on a hexagonal grid — a nod to the map — but are drawn as soft puffs
 that merge where they touch. Six values shape them:
@@ -233,6 +233,48 @@ cloud_noise:     0.3,   // 0.0 is clean-edged, ~0.5 is wispy and broken up
 For a clear blue sky, set `cloud_coverage: 0.0`. For an overcast one, raise coverage
 and push `cloud_noise` up. The colours take `(red, green, blue)` from `0.0` to `1.0`,
 the same as everywhere else.
+
+## The menus
+
+`menu.ron` is the splash, title and loading screens. One value so far:
+
+```ron
+background: (0.10, 0.11, 0.14),
+```
+
+It is a **flat, opaque panel**, not a view of anything. That is deliberate: the menus
+sit outside the world, and the world behind them is different for every scenario. A
+dark, desaturated colour works best, because the buttons are drawn as low-alpha white
+and need something dim to sit on.
+
+Its own file rather than a corner of `lighting.ron`, so the next thing a menu needs
+has somewhere obvious to go.
+
+## Giving a scenario its own sky
+
+`scenarios.ron` entries can name a lighting file:
+
+```ron
+(
+    name: "Rolling Hills",
+    world: "config/worlds/rolling-hills.ron",
+    lighting: "config/lighting/late-afternoon.ron",
+    units: ( ... ),
+),
+```
+
+Leave `lighting` out and the scenario gets `config/lighting.ron`, which is what most
+should do. A lighting file is a complete copy of that file's contents — start by
+copying it and changing what you want.
+
+It is called `lighting` rather than `sky` because it also sets **the sun's angle and
+colour**, so it decides which way the shadows fall. That is most of what makes a
+scenario feel like a different time of day; a changed sky with unchanged shadows just
+looks like a filter.
+
+Both `world` and `lighting` are paths, and neither is checked by the compiler. A typo
+fails `cargo test` rather than at the loading screen, but only because a test opens
+every file the scenarios name — keep it that way.
 
 ## One thing that will not do anything on a Mac
 

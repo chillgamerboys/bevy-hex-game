@@ -16,8 +16,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, ScenarioLibrary, SelectSettings, SelectedScenario, SettingsRegistry,
-    CONFIG_EXTENSIONS,
+    choose_settings, LightingSettings, ScenarioLibrary, SelectSettings, SelectedScenario,
+    SettingsRegistry, CONFIG_EXTENSIONS,
 };
 use hex_core::Screen;
 use hex_map::MapSettings;
@@ -27,6 +27,10 @@ pub(super) fn plugin(app: &mut App) {
     // until somebody has picked a scenario. It shares the registration `hex_map`
     // already did, which is idempotent, so plugin order does not matter here.
     app.select_settings::<MapSettings>(CONFIG_EXTENSIONS);
+    // Lighting is chosen the same way, so a scenario brings its own sky and sun.
+    // `hex_assets` no longer loads `lighting.ron` at startup -- two mechanisms writing
+    // one resource is the collision `hex_map` already had.
+    app.select_settings::<LightingSettings>(CONFIG_EXTENSIONS);
     app.init_resource::<SelectedScenario>();
     app.register_type::<SelectedScenario>();
     app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario);
@@ -58,6 +62,12 @@ fn apply_selected_scenario(
     info!("starting scenario: {}", scenario.name);
     commands.insert_resource(scenario.units.clone());
     choose_settings::<MapSettings>(&mut commands, &asset_server, &mut registry, &scenario.world);
+    choose_settings::<LightingSettings>(
+        &mut commands,
+        &asset_server,
+        &mut registry,
+        &scenario.lighting,
+    );
 }
 
 #[cfg(test)]
@@ -70,7 +80,9 @@ mod tests {
     use bevy::prelude::*;
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::{CubeCoord, ScenarioLibrary, SelectedScenario, SettingsRegistry};
+    use hex_assets::{
+        CubeCoord, LightingSettings, ScenarioLibrary, SelectedScenario, SettingsRegistry,
+    };
     use hex_core::Screen;
     use hex_map::MapSettings;
 
@@ -113,6 +125,31 @@ mod tests {
                 "scenario {:?} names a world that does not parse: {:?}",
                 scenario.name,
                 world.err()
+            );
+        }
+    }
+
+    /// Every lighting file a scenario names exists and parses.
+    ///
+    /// Same reasoning as the world check: the path is a plain string, so nothing else
+    /// can catch a typo. The failure it prevents is a loading screen that hangs — and
+    /// only for the one scenario nobody happened to start.
+    #[test]
+    fn every_scenario_names_lighting_that_exists_and_parses() {
+        for scenario in &library().scenarios {
+            let path = assets_dir().join(&scenario.lighting);
+            let text = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "scenario {:?} names lighting {:?}, which could not be read: {error}",
+                    scenario.name, scenario.lighting
+                )
+            });
+            let lighting: Result<LightingSettings, _> = ron::from_str(&text);
+            assert!(
+                lighting.is_ok(),
+                "scenario {:?} names lighting that does not parse: {:?}",
+                scenario.name,
+                lighting.err()
             );
         }
     }
@@ -175,17 +212,19 @@ mod tests {
     /// Bounded, and it fails naming what it was still waiting for. An unbounded loop
     /// here turns a regression into a CI job that hangs for its whole timeout with
     /// nothing to read.
-    fn settle(app: &mut App) -> MapSettings {
+    fn settle(app: &mut App) -> (MapSettings, LightingSettings) {
         for _ in 0..600 {
             app.update();
             if app.world().resource::<SettingsRegistry>().all_loaded() {
-                if let Some(settings) = app.world().get_resource::<MapSettings>() {
-                    return settings.clone();
+                let world = app.world().get_resource::<MapSettings>().cloned();
+                let lighting = app.world().get_resource::<LightingSettings>().cloned();
+                if let (Some(world), Some(lighting)) = (world, lighting) {
+                    return (world, lighting);
                 }
             }
         }
         panic!(
-            "the world never arrived; still waiting on {:?}",
+            "the scenario never arrived; still waiting on {:?}",
             app.world().resource::<SettingsRegistry>().pending_names()
         );
     }
@@ -198,7 +237,7 @@ mod tests {
         app.update();
     }
 
-    /// Choosing a scenario installs *its* world and *its* unit placements.
+    /// Choosing a scenario installs *its* world, *its* lighting and *its* placements.
     ///
     /// The second half is the whole test. An implementation that loads a world once and
     /// never re-chooses passes the first half and then plays the first scenario's map
@@ -215,7 +254,7 @@ mod tests {
         let mut app = test_app();
 
         choose(&mut app, 0);
-        let first = settle(&mut app);
+        let (first, first_light) = settle(&mut app);
         let first_units = app
             .world()
             .get_resource::<hex_assets::ScenarioSettings>()
@@ -229,7 +268,7 @@ mod tests {
         app.update();
 
         choose(&mut app, 1);
-        let second = settle(&mut app);
+        let (second, second_light) = settle(&mut app);
         let second_units = app
             .world()
             .get_resource::<hex_assets::ScenarioSettings>()
@@ -239,6 +278,10 @@ mod tests {
         assert_ne!(
             first, second,
             "both scenarios produced the same world, so the choice did nothing"
+        );
+        assert_ne!(
+            first_light, second_light,
+            "both scenarios produced the same lighting; the sky does not follow the scenario"
         );
         assert_ne!(
             (first_units.enemy.x, first_units.enemy.y),

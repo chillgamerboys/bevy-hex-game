@@ -159,6 +159,7 @@ mod tests {
                 name: "First".to_owned(),
                 blurb: "A map.".to_owned(),
                 world: "config/world.ron".to_owned(),
+                lighting: "config/lighting.ron".to_owned(),
                 units: ScenarioSettings {
                     player: at(0, 0, 0),
                     enemy: at(1, -1, 0),

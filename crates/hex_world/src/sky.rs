@@ -48,6 +48,16 @@ fn despawn_sun(mut commands: Commands, suns: Query<Entity, With<Sun>>) {
 #[derive(Component)]
 struct Sun;
 
+/// Puts the sun in the sky for whichever scenario is starting.
+///
+/// **`LightingSettings` is a hard `Res` here, and that is only safe because of the
+/// loading screen.** Each scenario names its own lighting file, so the resource does
+/// not exist until one has been chosen: `choose_settings` marks it pending and
+/// `enter_gameplay_when_ready` will not leave `Screen::Loading` until it arrives.
+///
+/// A test that enters `Screen::Gameplay` directly, skipping that gate, panics here
+/// rather than running without a sun. If you are reading this because of that panic,
+/// insert a `LightingSettings` into your harness.
 fn spawn_sun(mut commands: Commands, settings: Res<LightingSettings>) {
     commands.spawn((
         sun_light(&settings),
