@@ -6,7 +6,8 @@ Rust, and you do not need to rebuild anything.
 
 | File | Controls |
 |---|---|
-| `world.ron` | Map size, terrain shape, terrain seed, tile colour |
+| `world.ron` | Map size, terrain shape, terrain seed, how tall a voxel is |
+| `substances.ron` | What the world is made of — stone, dirt, grass — and their colours |
 | `camera.ron` | How fast the camera pans, how far it can zoom and tilt |
 | `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
 | `player.ron` | Player size, movement speed, colour |
@@ -30,6 +31,7 @@ How quickly you *see* the change depends on which file:
 | `camera.ron` | Straight away |
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
+| `substances.ron` | On the next world rebuild |
 | `lighting.ron` | On the next world rebuild |
 | `player.ron` | Movement speed straight away; size and colour on the next rebuild |
 
@@ -113,9 +115,27 @@ steps: [
 ],
 ```
 
-**A bigger map.** `grid_radius: 20` gives 1261 tiles. Be careful: the tile count
-grows quadratically, so `40` is 4921 tiles and `100` is over 30,000. Raise it a
-little at a time and watch the frame rate.
+**A new substance.** In `substances.ron`, copy an entry and change the name:
+
+```ron
+"sand": (
+    color: (0.85, 0.78, 0.55),
+    solid: true,
+    diggable: true,
+),
+```
+
+It will not appear in the world until a programmer makes the terrain use it, but the
+game will know about it. `air` must always be present — it means empty space.
+
+**A bigger map.** `grid_radius: 20` gives 1261 columns. Be careful: the tile count
+grows quadratically, so `40` is 4921 columns and `100` is over 30,000 — and each
+column draws several prisms, one per band of substance. Raise it a little at a time and
+watch the frame rate.
+
+**Chunkier terrain.** `level_height` in `world.ron` is how tall one voxel is. The
+default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain that reads
+better once you are digging into it.
 
 **Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
 (a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for

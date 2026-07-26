@@ -53,7 +53,7 @@ for the reasoning.
 crates/
   hex_core/       # hex coordinates, columns, app states, shared components
   hex_assets/     # asset handles, RON settings and their loader
-  hex_map/        # the map: terrain, tile spawning, map settings
+  hex_map/        # the map: voxels, terrain, tile spawning, map settings
   hex_world/      # sky and camera
   hex_gameplay/   # player, picking, movement, animation
   hex_dev/        # world inspector (dev feature only)
@@ -73,6 +73,7 @@ Start with the row that describes you.
 | Change how the game looks or feels, without code | [docs/CONTENT.md](docs/CONTENT.md) |
 | Work on the map, and I'm new here | [docs/ONBOARDING.md](docs/ONBOARDING.md) |
 | Work on the map, and I'm an AI agent | [crates/hex_map/CLAUDE.md](crates/hex_map/CLAUDE.md) |
+| Understand how the map works | [docs/MAP_MODEL.md](docs/MAP_MODEL.md) |
 | Understand why the project is shaped this way | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Contribute code anywhere | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

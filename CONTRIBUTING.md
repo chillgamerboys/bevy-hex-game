@@ -41,8 +41,8 @@ version:
 
 | Adding | Goes in |
 |---|---|
-| Hex math, columns, shared types, states, ordering sets | `hex_core` |
-| Terrain, tile spawning, map settings | `hex_map` |
+| Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` |
+| Voxels, terrain, tile spawning, map settings | `hex_map` |
 | Asset loading, shared settings | `hex_assets` |
 | Sky and camera | `hex_world` |
 | Rules: input, movement, interaction | `hex_gameplay` |

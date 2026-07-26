@@ -11,7 +11,7 @@ summary.
 | Crate | Version | Notes |
 |---|---|---|
 | `bevy` | `0.19` | |
-| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade |
+| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade. `a_star`, `field_of_view` and `field_of_movement` are compiled in but unused |
 | `bevy-inspector-egui` | `0.37` | Targets bevy 0.19. Isolated in `hex_dev`, `dev` feature only |
 | `ron` / `serde` | | Designer-facing settings |
 | `xxhash-rust`, `rand` | | Terrain hashing |
@@ -58,8 +58,14 @@ and tests without a renderer. It holds the test suite (17 tests).
   set — `.chain()` cannot express it, and a local chain that looks correct will race.
   The set boundary also supplies a sync point: `Commands`-spawned entities are not
   queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made.
-- **A position is a tile, not a coordinate.** Stacked columns at one coordinate are
-  not connected. Never key a map by `HexCoord` in a way that collapses a stack.
+- **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Stacked
+  columns at one coordinate are not connected. Never key anything by `HexCoord` in a
+  way that collapses a stack.
+- **The vertical axis is `level`, never `z`** — cube coordinates already use `x`, `y`
+  and `z`, and all three are horizontal.
+- **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
+  topmost solid voxel. Interior voxels have no entity, which is why targeting is
+  positional. See `docs/MAP_MODEL.md`.
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.
@@ -127,10 +133,12 @@ Runs on macOS/Metal, ~1647 entities in gameplay. Bevy 0.19, Rust 1.97.1. macOS i
 the primary dev machine; the WSL2 setup in the README belongs to another
 contributor and still works.
 
-Structurally complete as a skeleton: workspace boundaries, CI, linting,
-dependency auditing, a state machine, a RON content pipeline, and the first tests.
-Gameplay itself is still the 2022 prototype — a grid, a camera, and a piece that
-walks between tiles. The design doc is what comes next.
+Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
+auditing, a state machine, a RON content pipeline, a voxel map with substances and
+destruction, and level-based movement.
+
+There is still no turn system, no abilities, and no pathfinder — `route` walks a
+straight line and gives up when blocked.
 
 ## Known gaps
 
