@@ -49,6 +49,12 @@ surface `TilePos`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
 entities. See `crates/hex_map/CLAUDE.md`. Cargo isolates the implementation, but
 malformed components can still break gameplay at runtime.
 
+**Ownership cuts both ways.** `hex_units` and `hex_combat` belong to the other person,
+and a review comment on a *design* question inside someone else's crate is an argument
+rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
+broken boundaries are the exception and should block. See
+`docs/ARCHITECTURE.md#ownership-cuts-both-ways`.
+
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
 
@@ -168,15 +174,16 @@ allowed to be wrong.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and more than 130 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and more than 180 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
 Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
 auditing, a state machine, a RON content pipeline, a voxel map with substances and
 destruction, level-based movement, body size via headroom, a turn order with two
-tempos, a breadth-first pathfinder over stacked surfaces, and a movement preview that
-draws the reachable set and the route before a click commits to either.
+tempos, a breadth-first pathfinder over stacked surfaces, a movement preview that draws
+the reachable set and the route before a click commits to either, and surface-aware
+targeting where height buys range.
 
 There are still no abilities and no lattices. Bodies are one hex wide; there is no
 footprint for anything larger, and units do not obstruct each other — so a route may

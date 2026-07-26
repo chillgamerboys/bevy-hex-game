@@ -173,6 +173,12 @@ movement uses.
 them. Horizontal separation is genuinely zero and someone directly overhead can act on
 you. The stacking rule governs where you can *walk*; it does not make people invisible.
 
+That last one was raised in review as a collapsed stack and kept anyway, deliberately —
+see [ARCHITECTURE.md](ARCHITECTURE.md#ownership-cuts-both-ways) for why a design call
+inside this crate is settled by its owner. If it turns out to play badly, the thing to
+change is this rule, not the reading of it: both readings were defensible and the
+argument is recorded on PR #46 rather than lost.
+
 ## Not built, and not next
 
 Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:

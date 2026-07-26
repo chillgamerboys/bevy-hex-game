@@ -42,6 +42,28 @@ components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can 
 break movement or presentation. Cargo protects the dependency graph; tests and visual
 review protect the component contract.
 
+### Ownership cuts both ways
+
+The map is one person's; **`hex_units` and `hex_combat` are the other's**. The split is
+not only about compile times — it is about who gets to decide.
+
+Review across that line is welcome and has caught real bugs in both directions. But a
+comment on a *design* question inside somebody else's crate is an argument, not a veto:
+whether height should help or hinder, what starts a fight, what a turn costs. The owner
+answers it, writes down why, and moves. Blocking on agreement about taste would stall
+work neither person is responsible for.
+
+That has already happened once and is worth knowing about, because the code now
+deliberately does **not** do what a blocking review comment asked. Engagement keeps two
+units at one coordinate in the same fight however tall the column between them — see
+[GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md#the-high-ground) for the reasoning. The reviewer
+read it as a collapsed stack; it is the high ground working. Both readings are
+defensible, and the deciding vote went to the crate's owner rather than to whoever
+commented last.
+
+**Contract bugs are the exception.** A wrong component on a tile entity, a broken
+boundary, a crash — those are not taste and either owner should block on them.
+
 The map reaches the rest of the game **only through components**. Tiles are spawned
 carrying a `HexTile` marker, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId` and
 `Headroom`; `hex_units` queries those. Nothing outside `hex_map` references
