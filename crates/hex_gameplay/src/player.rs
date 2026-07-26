@@ -2,68 +2,46 @@ use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 
-use hex_assets::{to_color, GameAssets, PlayerSettings};
-use hex_core::{GameplaySetup, HexCoord, HexSpan, HexTile, Screen};
+use hex_assets::{to_color, GameAssets, PlayerSettings, SubstanceTable};
+use hex_core::{GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos};
 
 use crate::animation::Transformation;
-use crate::pathing::{HexPathingLine, PathStep};
+use crate::movement::{route, Body, Footing, Standing};
+use crate::pathing::HexPathingLine;
 
-/// Tiles as gameplay sees them: a coordinate and the column it occupies.
+/// Tiles as gameplay sees them.
 ///
-/// Gameplay reads terrain off the entities rather than from a map resource, so it
-/// has no dependency on `hex_map` at all. However the map is generated or stored,
-/// this query keeps working.
-type TileQuery<'w, 's> = Query<'w, 's, (&'static HexCoord, &'static HexSpan), With<HexTile>>;
+/// Terrain is read off the entities rather than from a map resource, so gameplay has
+/// no dependency on `hex_map` at all. However the map is generated or stored, this
+/// query keeps working.
+///
+/// [`Headroom`] comes along because standability depends on it, but the query does not
+/// filter on it: what counts as enough room depends on the body asking, so the filter
+/// belongs in [`Footing::from_tiles`] where the body is known.
+type TileQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TilePos,
+        &'static HexSpan,
+        &'static SubstanceId,
+        &'static Headroom,
+    ),
+    With<HexTile>,
+>;
 
 /// Which column a piece is standing on.
 ///
-/// A coordinate is not enough: columns stacked at one coordinate are separate
-/// places, so a piece on a bridge and a piece on the ground beneath it share an
-/// address but not a location. See the rule in [`hex_core::hex`].
+/// A coordinate is not enough: columns stacked at one coordinate are separate places,
+/// so a piece on a bridge and a piece on the ground beneath it share an address but
+/// not a location.
 #[derive(Component, Debug, Clone, Copy)]
-pub struct StandsOn(pub PathStep);
-
-/// Picks the route a piece takes between two columns.
-///
-/// **Placeholder.** It walks the straight line of coordinates between the two ends
-/// and, at each, steps onto whichever column is closest in height to the one before.
-/// That is enough to stop a piece teleporting between stacked columns, but it is not
-/// a movement rule: it ignores how big a step is, so it will happily walk up a cliff.
-///
-/// Replacing this is movement design — step limits, stairs, and the abilities that
-/// bypass them. `hexx`'s `a_star` is already compiled in and is the obvious basis.
-fn route(from: PathStep, to: PathStep, tiles: &TileQuery) -> Vec<PathStep> {
-    let mut steps = vec![from];
-
-    for coord in from.coord.line_between(to.coord).into_iter().skip(1) {
-        let previous_top = steps.last().map_or(from.span.top, |step| step.span.top);
-
-        // Of the columns at this coordinate, take the one nearest in height to where
-        // we just were. Never collapse the stack to "the highest".
-        let nearest = tiles
-            .iter()
-            .filter(|(tile_coord, _)| **tile_coord == coord)
-            .min_by(|(_, a), (_, b)| {
-                let da = (a.top - previous_top).abs();
-                let db = (b.top - previous_top).abs();
-                da.total_cmp(&db)
-            })
-            .map(|(tile_coord, span)| PathStep {
-                coord: *tile_coord,
-                span: *span,
-            });
-
-        if let Some(step) = nearest {
-            steps.push(step);
-        }
-    }
-
-    steps
-}
+pub struct StandsOn(pub Standing);
 
 /// Registers the player, its spawning, and click-to-move.
 pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
+        .register_type::<Body>()
         // `Actors` runs after `Terrain`, where `hex_map` spawns the tiles this
         // system queries to find the surface to stand on. The set boundary also
         // provides the sync point that makes those tiles queryable at all —
@@ -94,27 +72,39 @@ fn on_tile_clicked(
     event: On<Pointer<Click>>,
     mut commands: Commands,
     tiles: TileQuery,
-    players: Query<(Entity, &StandsOn), With<Player>>,
+    players: Query<(Entity, &StandsOn, &Body), With<Player>>,
     settings: Option<Res<PlayerSettings>>,
+    table: Option<Res<SubstanceTable>>,
 ) {
-    let Some(settings) = settings else {
+    let (Some(settings), Some(table)) = (settings, table) else {
         return;
     };
 
     // The click identifies a tile *entity*, which resolves to one specific column
-    // even where several share a coordinate. That is why picking is the right input
-    // for this: it never has to guess which column was meant.
+    // even where several share a coordinate. Picking is the right input for exactly
+    // that reason: it never has to guess which column was meant.
     let clicked = event.event_target();
-    let Ok((coord, span)) = tiles.get(clicked) else {
+    let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
     };
-    let destination = PathStep {
-        coord: *coord,
-        span: *span,
-    };
 
-    for (entity, standing) in players.iter() {
-        let steps = route(standing.0, destination, &tiles);
+    for (entity, standing, body) in players.iter() {
+        // Footing and the destination are resolved per body, because whether a column
+        // can be stood on depends on who is asking — a crawlspace is footing for a
+        // small creature and a wall for a large one. With one player this is the same
+        // work as hoisting it out of the loop; with a mixed party it is the difference
+        // between right and wrong.
+        let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+        let Some(destination) = footing.at(*pos) else {
+            continue;
+        };
+
+        // No route is a legitimate answer: terrain is not guaranteed connected, and
+        // a cliff, a gap, or a ceiling too low to fit under means the piece simply
+        // does not move.
+        let Some(steps) = route(standing.0, destination, &footing) else {
+            continue;
+        };
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
         commands
             .entity(entity)
@@ -132,21 +122,23 @@ fn spawn_player(
     assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     tiles: TileQuery,
+    table: Res<SubstanceTable>,
     settings: Res<PlayerSettings>,
 ) {
     let material = materials.add(StandardMaterial::from(to_color(settings.color)));
 
-    // Stand on the lowest column at the origin — the ground, rather than any bridge
-    // built over it. Falls back to ground level if the map put nothing there, rather
-    // than refusing to spawn a player.
+    let body = Body {
+        levels_tall: settings.levels_tall,
+    };
+
+    // Stand on the lowest column at the origin that this body fits on — the ground,
+    // rather than any bridge built over it.
     let coord = HexCoord::ORIGIN;
-    let span = tiles
-        .iter()
-        .filter(|(tile_coord, _)| **tile_coord == coord)
-        .map(|(_, span)| *span)
-        .min_by(|a, b| a.top.total_cmp(&b.top))
-        .unwrap_or_else(|| HexSpan::from_ground(f32::EPSILON));
-    let standing = PathStep { coord, span };
+    let footing = Footing::from_tiles(tiles.iter(), &table, body);
+    let standing = footing.ground(coord).unwrap_or(Standing {
+        pos: TilePos::new(coord, 0),
+        span: HexSpan::new(0.0, f32::EPSILON),
+    });
     let position = standing.world_position();
     let scale = Vec3::splat(settings.scale);
 
@@ -165,6 +157,7 @@ fn spawn_player(
             Visibility::default(),
             Player,
             StandsOn(standing),
+            body,
             Name::new("Player"),
         ))
         .with_children(|parent| {

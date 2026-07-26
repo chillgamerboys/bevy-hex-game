@@ -12,5 +12,10 @@ ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
 thiserror = "2.0.19"
 
+[dev-dependencies]
+# Parses the glTF JSON chunk so a test can check the geometry constants against
+# the actual mesh. Dev-only; never shipped.
+serde_json = "1"
+
 [lints]
 workspace = true

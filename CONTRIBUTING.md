@@ -41,8 +41,8 @@ version:
 
 | Adding | Goes in |
 |---|---|
-| Hex math, columns, shared types, states, ordering sets | `hex_core` |
-| Terrain, tile spawning, map settings | `hex_map` |
+| Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` |
+| Voxels, terrain, tile spawning, map settings | `hex_map` |
 | Asset loading, shared settings | `hex_assets` |
 | Sky and camera | `hex_world` |
 | Rules: input, movement, interaction | `hex_gameplay` |
@@ -85,6 +85,36 @@ relaxed inside `#[test]` functions — a panic there is the failure signal.
 - Speeds are world units per **second**, driven by `Res<Time>`. Never `SystemTime`.
 
 ## Commits and PRs
+
+### Branch off `dev`, and open your PR against `dev`
+
+```
+feat/whatever  ──PR──►  dev  ──PR──►  main
+```
+
+```sh
+git checkout dev && git pull
+git checkout -b feat/your-thing
+# ...work...
+gh pr create --base dev
+```
+
+**`dev` is permanent.** It is the integration branch, not a release branch that gets
+tidied up afterwards — never delete it. Feature branches are deleted once merged;
+`dev` is not.
+
+`main` moves only by merging `dev` into it, as a deliberate promotion after someone
+has actually played the game. That gap exists for a specific reason: **CI cannot see
+anything.** It will happily pass a black sky, a hairline gap between every tile, or a
+piece standing inside the terrain — all three have happened here, green across the
+compiler, clippy, the full test suite and five CI jobs. `dev` is where work is allowed
+to be wrong until a human has looked at the window.
+
+If you open a PR against `main` by mistake, retarget it rather than merging:
+
+```sh
+gh pr edit <N> --base dev
+```
 
 Branch prefixes: `chore/`, `fix/`, `perf/`, `feat/`, `docs/`.
 

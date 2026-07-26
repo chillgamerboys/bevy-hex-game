@@ -72,18 +72,33 @@ HexCoord::ORIGIN                // the centre
 
 Only two are stored; the third is worked out. You never see that.
 
-### Columns
+### Voxels and columns
 
-**A hex is a column, not a height.** It has a bottom and a top:
+The world is made of **hex prisms stacked in columns**. Each one is at a *level* —
+how far up it is, counting from the bedrock floor at level 0 — and is made of some
+*substance*: stone, dirt, grass.
 
-```rust
-HexSpan::from_ground(3.0)   // ordinary ground, 0.0 up to 3.0
-HexSpan::new(8.0, 10.0)     // a platform floating in mid-air
+```
+level 4   grass
+level 3   dirt
+level 2   air        ← a cave
+level 1   stone
+level 0   bedrock
 ```
 
-Right now every column starts at ground level, because the terrain is a simple
-height field. The type is built for more than that: **a bridge over open ground is
-two tile entities at the same coordinate**, one on the ground and one in the air.
+A **position** is a coordinate plus a level. That is how everything in the world is
+addressed, and it is what makes a bridge and the ground beneath it different places.
+
+One thing that surprises people: **a tile you see is usually several voxels**. Runs of
+the same substance are merged into one prism, so a fifteen-level stone column is drawn
+once rather than fifteen times. That keeps the game fast, and it means a voxel buried
+inside a column has no object of its own — it is found by position.
+
+Because of that, a tile also carries its **headroom**: how many clear voxels sit above
+it. Zero means the tile is buried inside a column, so it is solid rock rather than
+somewhere to stand. A small number means a low ceiling — a character is two levels
+tall, so a one-voxel gap under a bridge is a wall to it and a corridor to something
+smaller. **Whether terrain is walkable depends on who is walking.**
 
 There is a rule about those, and it is a game-design decision rather than a
 technical one:
@@ -101,7 +116,7 @@ becomes unreachable.
 ```
 crates/
   hex_map/       ← YOURS. terrain, tiles, map settings
-  hex_core/      shared vocabulary — HexCoord, HexSpan
+  hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
   hex_world/     camera and sky
   hex_gameplay/  the player and movement
@@ -161,6 +176,7 @@ created yet. Usually a system in the wrong stage; see the scheduling notes in
 
 | | |
 |---|---|
+| [MAP_MODEL.md](MAP_MODEL.md) | How the map works: voxels, substances, and the rules |
 | [`crates/hex_map/CLAUDE.md`](../crates/hex_map/CLAUDE.md) | The rules for your crate. Your AI agent reads this automatically |
 | [CONTENT.md](CONTENT.md) | Changing settings without code |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Why the project is shaped this way |

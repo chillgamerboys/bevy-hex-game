@@ -27,9 +27,15 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
+use std::collections::HashMap;
+
 use hex_assets::GameAssets;
-use hex_core::{GameplaySetup, HexCoord, HexGrid, HexSpan, HexTile, Screen};
-use hex_map::{HeightMap, MapSettings, PerlinStepSettings, TerrainSettings};
+use hex_assets::{Substance, SubstanceFile, SubstanceTable};
+use hex_core::{
+    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
+    TerrainEdit, TilePos, MAX_HEADROOM,
+};
+use hex_map::{MapSettings, PerlinStepSettings, TerrainSettings, VoxelMap};
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
 /// tile-count formula is a meaningful check.
@@ -71,16 +77,22 @@ fn test_app() -> App {
         skybox: Handle::default(),
     });
 
+    app.insert_resource(substance_table());
+
     app.insert_resource(MapSettings {
         grid_radius: TEST_RADIUS,
-        height_scale: 0.4,
+        level_height: 0.4,
         tile_color: (1.0, 0.8, 0.8),
         terrain: TerrainSettings {
             seed: Some(20_260_725),
+            // Taller than the shipped default. The banding puts dirt in the top two
+            // levels, so shallow terrain produces nothing but one-voxel runs — and a
+            // one-voxel run cannot be split, only removed. Digging needs depth to be
+            // worth testing.
             steps: vec![PerlinStepSettings {
                 x_freq: 0.035,
                 y_freq: 0.05,
-                magnitude: 3.0,
+                magnitude: 14.0,
             }],
         },
     });
@@ -92,6 +104,31 @@ fn test_app() -> App {
         app.cleanup();
     }
     app
+}
+
+/// The substances the generator expects, built directly rather than loaded from RON.
+///
+/// The asset pipeline has its own tests; depending on it here would only add a way
+/// for these to fail for unrelated reasons.
+fn substance_table() -> SubstanceTable {
+    let mut substances = bevy::platform::collections::HashMap::default();
+    for (name, solid, diggable) in [
+        ("air", false, false),
+        ("bedrock", true, false),
+        ("dirt", true, true),
+        ("grass", true, true),
+        ("stone", true, true),
+    ] {
+        substances.insert(
+            name.to_owned(),
+            Substance {
+                color: (0.5, 0.5, 0.5),
+                solid,
+                diggable,
+            },
+        );
+    }
+    SubstanceTable::from_file(&SubstanceFile { substances })
 }
 
 /// Runs the app until it has entered gameplay and the world has settled.
@@ -112,14 +149,19 @@ fn tile_count(app: &mut App) -> usize {
         .count()
 }
 
+/// Every column produces at least one entity, and typically several — one per
+/// substance run.
 #[test]
 fn entering_gameplay_spawns_a_full_grid() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    // A hexagon of radius r holds 3r² + 3r + 1 tiles.
-    let expected = (3 * TEST_RADIUS * TEST_RADIUS + 3 * TEST_RADIUS + 1) as usize;
-    assert_eq!(tile_count(&mut app), expected);
+    // A hexagon of radius r holds 3r² + 3r + 1 columns.
+    let columns = (3 * TEST_RADIUS * TEST_RADIUS + 3 * TEST_RADIUS + 1) as usize;
+    assert!(
+        tile_count(&mut app) >= columns,
+        "every column should spawn at least one prism"
+    );
 }
 
 #[test]
@@ -169,25 +211,304 @@ fn every_tile_transform_matches_its_span() {
     assert!(checked > 0, "no tiles were checked");
 }
 
-/// Today's terrain is a height field, so every column starts at ground level.
+/// Generated terrain is solid from the bedrock floor upward, with no gaps.
 ///
-/// Not a rule the map has to keep — floating platforms are the point of `HexSpan`.
-/// It is here so that when it *does* change, the change is deliberate and shows up
-/// in a diff rather than passing unnoticed.
+/// Digging needs something to dig through, so a column starting above ground would be
+/// a hole nothing could stand in. Floating spans are legal in general — that is what
+/// `HexSpan` is for — but the *generator* must not produce them.
 #[test]
-fn todays_terrain_rests_on_the_ground() {
+fn generated_terrain_is_solid_to_the_floor() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let mut query = app.world_mut().query_filtered::<&HexSpan, With<HexTile>>();
-    for span in query.iter(app.world()) {
-        assert!(
-            span.bottom.abs() < f32::EPSILON,
-            "expected ground-resting columns, found one starting at {}",
-            span.bottom
-        );
-        assert!(span.height() > 0.0, "a column must have positive height");
+    let map = app
+        .world()
+        .get_resource::<VoxelMap>()
+        .expect("gameplay should have generated a world");
+
+    for (coord, column) in map.columns() {
+        assert!(!column.is_empty(), "{coord:?} has no ground at all");
+        for level in 0..column.top() {
+            assert!(
+                !column.get(level).is_air(),
+                "{coord:?} has a gap at level {level}; generated terrain should be solid"
+            );
+        }
     }
+}
+
+/// Every column has at least one level above bedrock.
+///
+/// Bedrock is deliberately not diggable, so a column of nothing but bedrock would be a
+/// permanent hole in the world.
+#[test]
+fn no_column_is_bare_bedrock() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let map = app
+        .world()
+        .get_resource::<VoxelMap>()
+        .expect("gameplay should have generated a world");
+
+    for (coord, column) in map.columns() {
+        assert!(
+            column.top() >= 2,
+            "{coord:?} is bare bedrock at height {}",
+            column.top()
+        );
+    }
+}
+
+/// Entity count scales with substance *variety*, not with depth.
+///
+/// This is what makes voxel storage affordable. Without run-merging, a radius-20
+/// world with bedrock depth would be tens of thousands of entities.
+#[test]
+fn entities_scale_with_runs_not_voxels() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let voxels: usize = {
+        let map = app
+            .world()
+            .get_resource::<VoxelMap>()
+            .expect("gameplay should have generated a world");
+        map.columns()
+            .map(|(_, column)| usize::try_from(column.top()).unwrap_or(0))
+            .sum()
+    };
+
+    let tiles = tile_count(&mut app);
+    assert!(
+        tiles < voxels,
+        "{tiles} entities for {voxels} voxels — runs are not being merged"
+    );
+}
+
+/// Every tile carries what it is made of and where it sits, so gameplay can ask
+/// whether it is solid or diggable without knowing how the map is stored.
+#[test]
+fn tiles_carry_their_substance_and_position() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&SubstanceId, &TilePos, &HexCoord), With<HexTile>>();
+
+    let mut checked = 0;
+    for (substance, pos, coord) in query.iter(app.world()) {
+        assert!(!substance.is_air(), "air should not be spawned as a prism");
+        assert_eq!(pos.coord, *coord, "a tile's position must match its column");
+        checked += 1;
+    }
+    assert!(checked > 0, "no tiles were checked");
+}
+
+/// Exactly one run per column has headroom, and it is the topmost one.
+///
+/// This is the map's half of a contract gameplay cannot check for itself: a run knows
+/// its own extent but nothing about what is stacked on it, so only the map can say
+/// which runs have air above them. Getting it wrong is what put the player inside the
+/// terrain and left every route walking through the bedrock.
+///
+/// Only the top run of each column has headroom, and under open sky it saturates.
+///
+/// This is the map's half of a contract gameplay cannot check for itself: a run knows
+/// its own extent but nothing about what is stacked on it, so only the map can measure
+/// the space above. Getting it wrong is what put the player inside the terrain and
+/// left every route walking through the bedrock.
+///
+/// Generated terrain has no caves or overhangs, so exactly one run per column has room
+/// above it and that room is open sky. A column with a bridge over it would report the
+/// gap instead, which the platform test below covers.
+#[test]
+fn only_the_top_of_each_column_has_headroom() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+
+    let mut tops: HashMap<HexCoord, Level> = HashMap::new();
+    let mut clear_per_column: HashMap<HexCoord, usize> = HashMap::new();
+    let mut clear_levels: HashMap<HexCoord, Level> = HashMap::new();
+
+    for (pos, headroom) in query.iter(app.world()) {
+        let top = tops.entry(pos.coord).or_insert(pos.level);
+        *top = (*top).max(pos.level);
+        if headroom.0 > 0 {
+            *clear_per_column.entry(pos.coord).or_insert(0) += 1;
+            clear_levels.insert(pos.coord, pos.level);
+            assert_eq!(
+                headroom.0, MAX_HEADROOM,
+                "the surface of column {:?} is under open sky and should saturate",
+                pos.coord
+            );
+        }
+    }
+
+    assert!(!tops.is_empty(), "no tiles were checked");
+    for (coord, top) in &tops {
+        assert_eq!(
+            clear_per_column.get(coord).copied().unwrap_or(0),
+            1,
+            "column {coord:?} should have exactly one run with room above it"
+        );
+        assert_eq!(
+            clear_levels.get(coord).copied(),
+            Some(*top),
+            "the run with room above it in column {coord:?} should be its topmost"
+        );
+    }
+}
+
+/// Headroom under a platform is the size of the gap, not open sky.
+///
+/// This is what makes a body's size mean anything: build a roof two levels up and the
+/// ground below reports 2, so a three-level body no longer fits there. Without this,
+/// every surface would look infinitely tall and overhangs would be free to walk under.
+#[test]
+fn a_platform_overhead_reduces_the_headroom_below() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let coord = HexCoord::ORIGIN;
+    let (surface, stone) = {
+        let world = app.world();
+        let map = world
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist");
+        let table = world
+            .get_resource::<SubstanceTable>()
+            .expect("a substance table should exist");
+        (
+            map.surface(coord).expect("the origin should have ground"),
+            table.id("stone").expect("stone should be defined"),
+        )
+    };
+
+    // A roof three levels above the surface leaves exactly two clear voxels between.
+    let gap = 2;
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: TilePos::new(coord, surface + gap + 1),
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &Headroom), With<HexTile>>();
+    let headroom = query
+        .iter(app.world())
+        .find(|(pos, _)| pos.coord == coord && pos.level == surface)
+        .map(|(_, headroom)| headroom.0)
+        .expect("the original surface should still be a tile");
+
+    assert_eq!(
+        headroom, gap,
+        "the ground under a platform should report the gap, not open sky"
+    );
+}
+
+/// Digging a voxel out of the middle of a run splits it in two, which is what makes
+/// caves and tunnels fall out of the same mechanism as everything else.
+///
+/// The run has to be at least three levels deep. Clearing a run that is only one
+/// voxel tall *removes* it rather than splitting it, so entity count goes down — a
+/// first version of this test picked an arbitrary level, hit a single-voxel dirt
+/// band, and failed with 156 -> 155.
+#[test]
+fn clearing_a_voxel_splits_a_run() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let before = tile_count(&mut app);
+
+    // Find a run thick enough that hollowing its middle leaves material either side.
+    let target = {
+        let map = app
+            .world()
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist");
+        map.columns()
+            .find_map(|(coord, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .find(|run| run.levels() >= 3)
+                    .map(|run| TilePos::new(coord, run.bottom + 1))
+            })
+            .expect("generated terrain should contain at least one run three levels deep")
+    };
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    let after = tile_count(&mut app);
+    let map = app
+        .world()
+        .get_resource::<VoxelMap>()
+        .expect("a world should exist");
+
+    assert!(map.get(target).is_air(), "the dug voxel should be air");
+    assert!(
+        !map.get(target.below()).is_air(),
+        "material below the hole should survive"
+    );
+    assert!(
+        !map.get(target.above()).is_air(),
+        "material above the hole should survive"
+    );
+    assert_eq!(
+        after,
+        before + 1,
+        "splitting one run into two should add exactly one entity"
+    );
+}
+
+/// Building above the surface leaves the space between as air — a floating platform.
+#[test]
+fn setting_a_voxel_above_the_surface_builds_a_platform() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let coord = HexCoord::ORIGIN;
+    let (surface, stone) = {
+        let world = app.world();
+        let map = world
+            .get_resource::<VoxelMap>()
+            .expect("a world should exist");
+        let table = world
+            .get_resource::<SubstanceTable>()
+            .expect("a substance table should exist");
+        (
+            map.surface(coord).expect("the origin should have ground"),
+            table.id("stone").expect("stone should be defined"),
+        )
+    };
+
+    let platform = TilePos::new(coord, surface + 4);
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: platform,
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    let map = app
+        .world()
+        .get_resource::<VoxelMap>()
+        .expect("a world should exist");
+    assert_eq!(map.get(platform), stone, "the platform should exist");
+    assert!(
+        map.get(TilePos::new(coord, surface + 2)).is_air(),
+        "the space beneath a floating platform stays empty"
+    );
 }
 
 /// Leaving gameplay must remove everything the map built. A leak here would grow
@@ -238,39 +559,31 @@ fn gameplay_can_be_re_entered() {
     );
 }
 
-/// The height map has to exist before the tiles that read it.
+/// The world has to exist before the tiles built from it.
 ///
 /// Directly guards `GameplaySetup::Resources` running before `::Terrain`. Systems in
 /// one `OnEnter` schedule run in unspecified order unless a set says otherwise, and
 /// the two live in different crates, so `.chain()` cannot express it.
 #[test]
-fn the_height_map_exists_once_gameplay_starts() {
+fn the_world_exists_once_gameplay_starts() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
-    let height_map = app.world().get_resource::<HeightMap>();
-    assert!(
-        height_map.is_some(),
-        "terrain spawned without its height map"
-    );
+    let map = app.world().get_resource::<VoxelMap>();
+    assert!(map.is_some(), "tiles spawned without a world to build from");
 }
 
-/// Every tile is at a distinct coordinate, and all of them lie within the radius.
+/// Every column within the radius is represented, and nothing outside it is.
 ///
-/// Stacked columns are legal — that is what `HexSpan` is for — but today's generator
-/// makes none, so a duplicate coordinate means the range iteration went wrong.
+/// Coordinates now repeat — one entity per substance run — so this checks coverage
+/// rather than uniqueness.
 #[test]
-fn tiles_cover_the_radius_without_duplicates() {
+fn tiles_cover_the_radius_and_nothing_beyond() {
     let mut app = test_app();
     enter_gameplay(&mut app);
 
     let mut query = app.world_mut().query_filtered::<&HexCoord, With<HexTile>>();
     let coords: Vec<HexCoord> = query.iter(app.world()).copied().collect();
-
-    let mut unique = coords.clone();
-    unique.sort_by_key(|c| (c.x(), c.y()));
-    unique.dedup();
-    assert_eq!(unique.len(), coords.len(), "a coordinate was spawned twice");
 
     for coord in &coords {
         assert!(
@@ -278,4 +591,10 @@ fn tiles_cover_the_radius_without_duplicates() {
             "{coord:?} lies outside the configured radius"
         );
     }
+
+    let mut unique = coords;
+    unique.sort_by_key(|c| (c.x(), c.y()));
+    unique.dedup();
+    let expected = (3 * TEST_RADIUS * TEST_RADIUS + 3 * TEST_RADIUS + 1) as usize;
+    assert_eq!(unique.len(), expected, "some columns were not spawned");
 }

@@ -21,11 +21,32 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_assets::{GameAssets, PlayerSettings};
-use hex_core::{GameplaySetup, HexCoord, HexSpan, HexTile, Screen};
+use hex_assets::{Substance, SubstanceFile, SubstanceTable};
+use hex_core::{
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos, MAX_HEADROOM,
+};
 use hex_gameplay::player::{Player, StandsOn};
 
-/// Height of the fake ground these tests stand things on.
+/// World height of the fake ground these tests stand things on.
 const GROUND: f32 = 2.0;
+
+/// The level of that ground's surface.
+const GROUND_LEVEL: hex_core::Level = 1;
+
+/// The one solid substance the fake terrain is made of. Id 1, since sorted names put
+/// `air` at 0 and `stone` next.
+const STONE: SubstanceId = SubstanceId(1);
+
+/// How tall the test player is, matching what the game ships.
+const BODY_LEVELS: hex_core::Level = 2;
+
+/// A coordinate roofed over with only one clear voxel — too low for the player.
+///
+/// Deliberately on the opposite side of the origin from the destination used by
+/// `clicking_a_tile_moves_the_player`: a straight-line route through here would be
+/// blocked, so putting it on that line would make an unrelated test fail for a
+/// reason that has nothing to do with what it checks.
+const CRAWLSPACE: HexCoord = HexCoord::new_cubic(-2, 2, 0);
 
 /// A headless app with gameplay wired up, and a stand-in for the map.
 ///
@@ -64,10 +85,12 @@ fn test_app() -> App {
         player_pieces: [Handle::default(), Handle::default()],
         skybox: Handle::default(),
     });
+    app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
         color: (1.0, 0.2, 0.2),
+        levels_tall: BODY_LEVELS,
     });
 
     app.add_plugins(hex_gameplay::plugin);
@@ -79,10 +102,69 @@ fn test_app() -> App {
     app
 }
 
+/// Flat ground across a small patch — as **two stacked runs per column**, which is
+/// what the real map produces.
+///
+/// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this structure
+/// exists to enforce — so the tiles are spawned by the test itself. That is not a
+/// workaround: gameplay consumes `TilePos`, `HexSpan`, `SubstanceId` and [`Headroom`],
+/// and anything producing those will do.
+///
+/// The layering is the whole point. An earlier version of this fixture spawned **one**
+/// tile per coordinate, so every tile was trivially the surface and a bug that
+/// confused a buried run for a surface could not show up. It shipped: the player stood
+/// on the bedrock at the bottom of the column and every route walked underground and
+/// arrived nowhere. Terrain in this test has to be layered or it is not terrain.
 fn spawn_fake_terrain(mut commands: Commands) {
     for coord in HexCoord::ORIGIN.within_radius(3) {
-        commands.spawn((HexTile, coord, HexSpan::from_ground(GROUND)));
+        // Buried: solid, and deliberately with no room above it. Nothing may stand
+        // here, however solid it is.
+        commands.spawn((
+            HexTile,
+            coord,
+            TilePos::new(coord, GROUND_LEVEL - 1),
+            HexSpan::new(0.0, GROUND - 1.0),
+            STONE,
+            Headroom(0),
+        ));
+        // The surface. Open sky everywhere except the crawlspace, which is roofed so
+        // low that the player cannot fit even though the ground is perfectly good.
+        let headroom = if coord == CRAWLSPACE {
+            BODY_LEVELS - 1
+        } else {
+            MAX_HEADROOM
+        };
+        commands.spawn((
+            HexTile,
+            coord,
+            TilePos::new(coord, GROUND_LEVEL),
+            HexSpan::new(GROUND - 1.0, GROUND),
+            STONE,
+            Headroom(headroom),
+        ));
     }
+}
+
+/// A substance table with one solid substance, matching `STONE`.
+fn substance_table() -> SubstanceTable {
+    let mut substances = bevy::platform::collections::HashMap::default();
+    substances.insert(
+        "air".to_owned(),
+        Substance {
+            color: (0.0, 0.0, 0.0),
+            solid: false,
+            diggable: false,
+        },
+    );
+    substances.insert(
+        "stone".to_owned(),
+        Substance {
+            color: (0.5, 0.5, 0.5),
+            solid: true,
+            diggable: true,
+        },
+    );
+    SubstanceTable::from_file(&SubstanceFile { substances })
 }
 
 /// Fires a click at `entity`, as the picking backend would.
@@ -153,7 +235,7 @@ fn the_player_knows_which_column_it_is_on() {
         .copied()
         .expect("a player should exist during gameplay");
 
-    assert_eq!(standing.0.coord, HexCoord::ORIGIN);
+    assert_eq!(standing.0.pos.coord, HexCoord::ORIGIN);
     assert!((standing.0.span.top - GROUND).abs() < 1e-4);
 }
 
@@ -193,13 +275,15 @@ fn clicking_a_tile_moves_the_player() {
     enter_gameplay(&mut app);
 
     let destination = HexCoord::new_cubic(2, -2, 0);
+    // The surface run, not the buried one under it — that is the face a click would
+    // actually land on.
     let mut tiles = app
         .world_mut()
-        .query_filtered::<(Entity, &HexCoord), With<HexTile>>();
+        .query_filtered::<(Entity, &HexCoord, &Headroom), With<HexTile>>();
     let target = tiles
         .iter(app.world())
-        .find(|(_, coord)| **coord == destination)
-        .map(|(entity, _)| entity)
+        .find(|(_, coord, headroom)| **coord == destination && headroom.0 > 0)
+        .map(|(entity, _, _)| entity)
         .expect("the fake terrain covers this coordinate");
 
     let window = app.world_mut().spawn(Window::default()).id();
@@ -214,8 +298,84 @@ fn clicking_a_tile_moves_the_player() {
         .expect("a player should exist");
 
     assert_eq!(
-        standing.0.coord, destination,
+        standing.0.pos.coord, destination,
         "clicking a tile should move the player onto that column"
+    );
+    assert_eq!(
+        standing.0.pos.level, GROUND_LEVEL,
+        "the player should arrive on the surface, not inside the column"
+    );
+}
+
+/// Regression test for the buried-run bug.
+///
+/// A column is several stacked runs, and only the top one is a surface. Treating
+/// every run as standable made the bedrock at the bottom look exactly as good as the
+/// grass on top — so the player spawned inside the terrain, and routes walked the
+/// buried layer, never arrived at the clicked tile, and returned "no route". Both
+/// visible symptoms, one cause.
+///
+/// The fix is [`Headroom`]: the map reports how much space sits above each run,
+/// because a run knows its own extent but nothing about what is stacked on it. Zero
+/// means buried.
+#[test]
+fn buried_runs_are_not_standable() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut buried = app.world_mut().query_filtered::<&Headroom, With<HexTile>>();
+    assert!(
+        buried.iter(app.world()).any(|headroom| headroom.0 == 0),
+        "the fixture must contain buried runs or this test proves nothing"
+    );
+
+    let mut players = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let standing = players
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a player should exist");
+
+    assert_eq!(
+        standing.0.pos.level, GROUND_LEVEL,
+        "the player stood on a buried run instead of the surface"
+    );
+}
+
+/// Clicking ground the player is too tall to stand on does nothing.
+///
+/// The terrain is perfectly solid and one flat step away — the only thing wrong with
+/// it is a ceiling one voxel up. A shorter piece would walk straight in. This is the
+/// end-to-end version of the size rule, through a real click on a real tile entity.
+#[test]
+fn clicking_a_space_too_low_to_fit_does_not_move_the_player() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &HexCoord, &Headroom), With<HexTile>>();
+    let target = tiles
+        .iter(app.world())
+        .find(|(_, coord, headroom)| **coord == CRAWLSPACE && headroom.0 > 0)
+        .map(|(entity, _, _)| entity)
+        .expect("the crawlspace is part of the fake terrain");
+
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    app.update();
+
+    let mut players = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let standing = players
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a player should exist");
+
+    assert_eq!(
+        standing.0.pos.coord,
+        HexCoord::ORIGIN,
+        "the player squeezed into a space too low for it"
     );
 }
 

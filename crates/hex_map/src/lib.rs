@@ -40,9 +40,12 @@ pub mod generator;
 pub mod grid;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
+/// Voxel storage and the run-merging that turns it into prisms.
+pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use settings::{MapSettings, PerlinStepSettings, TerrainSettings};
+pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 
 /// Registers map settings, terrain generation, and tile spawning.
 pub fn plugin(app: &mut App) {

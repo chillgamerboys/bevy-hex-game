@@ -14,6 +14,8 @@
 use bevy::prelude::*;
 use serde::Deserialize;
 
+use hex_core::Level;
+
 /// A colour written as `(r, g, b)` in sRGB, each component 0.0–1.0.
 ///
 /// A plain tuple rather than Bevy's `Color`, whose serialized form is an
@@ -77,6 +79,13 @@ pub struct PlayerSettings {
     pub speed: f32,
     /// Colour of the player piece.
     pub color: Rgb,
+    /// How many levels tall the piece is.
+    ///
+    /// It needs this much clear space above a surface to stand there, so raising it
+    /// makes low tunnels and gaps under bridges impassable. Deliberately *not* called
+    /// `height`: that word is taken by terrain, and confusing the two is a silent
+    /// geometric bug.
+    pub levels_tall: Level,
 }
 
 /// `assets/config/display.ron` — window and presentation.
