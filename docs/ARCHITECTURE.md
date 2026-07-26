@@ -164,6 +164,38 @@ Each screen tags what it spawns with `DespawnOnExit(Screen::X)`, and one generic
 system clears them on exit. Teardown is not a per-screen checklist somebody
 forgets to update.
 
+### The sky is a shader on a camera-following dome
+
+The sky is neither a cubemap nor Bevy's `Atmosphere`. It is a custom `Material`
+(`hex_world::sky_material::SkyMaterial`) whose fragment shader
+(`assets/shaders/sky.wgsl`) computes a colour per pixel from the view direction: a
+vertical horizon→zenith gradient with static hexagonal clouds.
+
+It renders on the inside of a large inverted sphere — the *sky dome* — spawned at
+`Startup` beside the camera. `SkyMaterial::specialize` sets `cull_mode = None` so
+the dome draws from within, and `follow_camera` pins the dome's translation to the
+camera every frame. Because the camera stays permanently at the dome's centre, the
+sky depends only on view *orientation*: clouds stay fixed on the celestial dome
+while panning and re-orient only while orbiting. The dome radius (500) is inside the
+camera's far plane and well outside the terrain and max zoom, and it is a
+`NotShadowCaster` — a 500-unit sphere would otherwise shadow the whole map.
+
+Two choices worth knowing:
+
+- **Custom shader over `Atmosphere`.** Bevy 0.19's first-party atmospheric
+  scattering draws a physically-accurate clear sky but cannot draw clouds, and it
+  forces `hdr` + tonemapping on the camera, which would recolour the *entire* scene.
+  A dome shader keeps the change contained to the sky.
+- **Azimuthal-equidistant cloud projection.** Cloud cells are placed by the angle
+  *away from the zenith*, so a hex keeps the same angular size straight up as it does
+  near the horizon. The obvious `dir.xz / dir.y` (gnomonic) projection stretches
+  cells toward infinity near the horizon — it renders, and looks wrong, with no
+  error in the log.
+
+Colours and cloud parameters come from `LightingSettings` and are pushed into the
+material by `apply_sky_material` on load and on every hot reload — see
+[CONTENT.md](CONTENT.md) for the knobs.
+
 ## States
 
 ```

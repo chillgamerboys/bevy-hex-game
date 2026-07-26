@@ -9,7 +9,7 @@ Rust, and you do not need to recompile the game.
 | `world.ron` | Map size, terrain shape, terrain seed, how tall a voxel is |
 | `substances.ron` | What the world is made of — stone, dirt, grass — and their colours |
 | `camera.ron` | How fast the camera pans, how far it can zoom and tilt |
-| `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
+| `lighting.ron` | Sun brightness and angle, the sky gradient and its hex clouds, ambient light |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
 | `display.ron` | Vsync / frame rate behaviour |
 
@@ -147,6 +147,41 @@ better once you are digging into it.
 **Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
 (a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for
 overcast; `100000.0` is direct noon sun. Rebuild the world to see it.
+
+**The sky and its clouds.** The sky is drawn procedurally — a vertical colour
+gradient with hexagonal clouds — and every part of it lives in `lighting.ron`.
+Unlike the sun, these update **straight away**: edit, save, and the sky changes while
+you watch. It is the easiest thing in the game to tune.
+
+The gradient runs between two colours:
+
+```ron
+sky_color:    (0.55, 0.80, 0.95),  // at the horizon
+zenith_color: (0.25, 0.50, 0.85),  // straight up
+```
+
+`sky_color` doubles as the fallback colour behind everything, so keep it a believable
+sky tone. Set the two close together for a flat, even sky; push them apart for a
+deeper, more dramatic one.
+
+The clouds are hexagons — a nod to the grid — shaped by four more values:
+
+```ron
+cloud_color:     (0.97, 0.98, 1.0),  // usually near-white
+cloud_coverage:  0.4,   // 0.0 is a clear sky, 1.0 clouds every cell
+hex_cloud_scale: 13.0,  // bigger = smaller and more numerous clouds
+cloud_softness:  0.12,  // 0.02 is crisp-edged, 0.3 is soft and fluffy
+```
+
+- **`cloud_coverage`** is how much of the sky is clouded, from none to solid.
+- **`hex_cloud_scale`** sets cloud *size* — but inverted: turn it **up** for many
+  small hexes, **down** for a few big ones.
+- **`cloud_softness`** blurs the hex edges. Low keeps them sharp and geometric; high
+  makes them read as soft clouds that happen to be hex-shaped.
+
+For a clear blue sky, set `cloud_coverage: 0.0`. For an overcast one, raise coverage
+and soften the edges. The colours take `(red, green, blue)` from `0.0` to `1.0`, the
+same as everywhere else.
 
 ## One thing that will not do anything on a Mac
 
