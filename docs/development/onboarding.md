@@ -204,6 +204,8 @@ created yet. Usually a system in the wrong stage; see the scheduling notes in
 | [config.md](config.md) | Changing settings without code |
 | [architecture.md](../architecture.md) | Why the project is shaped this way |
 | [CONTRIBUTING.md](../../CONTRIBUTING.md) | House style and the checks |
+| [troubleshooting.md](troubleshooting.md) | When the window looks wrong and the log says nothing |
+| [the docs index](../README.md) | Everything else, and who each doc is for |
 
 If something in here turns out to be wrong or missing, changing it is a perfectly
 good first pull request.
