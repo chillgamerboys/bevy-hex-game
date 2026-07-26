@@ -35,8 +35,9 @@ walking a ramp of adjacent surfaces that descends one level at a time, or using 
 ability that explicitly bypasses the rule — a teleport, a tunnel.
 
 This is a design decision, and it means a position is a `TilePos`, never a `HexCoord`.
-There is one `Column` per coordinate, but separate exposed solid runs within it are
-unrelated places that happen to share a horizontal address.
+There is one `Column` per coordinate, but separate material runs within it are
+unrelated positions that happen to share a horizontal address. Only runs whose
+substance is solid can become places to stand.
 
 **Never key anything by `HexCoord` in a way that collapses a stack.** A
 `HashMap<HexCoord, f32>` keeping only the highest surface silently makes every lower
@@ -109,10 +110,10 @@ under a megabyte and the correctness difference is what matters.
 
 This is the part worth understanding before changing anything.
 
-**One entity per voxel would be about 25,000 entities.** Instead the spawn pass merges
-vertical runs of the same substance into a single prism, so a fifteen-level stone column
-is one entity. Measured: **3,400–4,100 entities at 60 FPS**, the spread being how much
-the terrain seed varies the number of substance bands.
+**One entity per voxel would be tens of thousands of entities on a deep map.** Instead
+the spawn pass merges vertical runs of the same substance into a single prism, so a
+fifteen-level stone column is one entity. The rendered entity count therefore follows
+the number of substance bands rather than the number of stored voxels.
 
 Two consequences:
 
@@ -121,10 +122,11 @@ Two consequences:
   a tunnelling spell targets — is addressable only by `TilePos`. This is why targeting
   is positional rather than entity-based.
 
-A tile is tagged with the `TilePos` of its **topmost solid voxel**: the thing a piece
-standing there stands on. Tagging the base instead would force gameplay to know the
-level height to work the surface out, which would put a dependency on the map back into
-movement.
+A tile is tagged with the `TilePos` of its run's **topmost material voxel**. Gameplay
+then combines that position with the substance's `solid` flag before treating it as
+footing; a water run is rendered but is not standable. Tagging the base instead would
+force gameplay to know the level height to work the surface out, which would put a
+dependency on the map back into movement.
 
 ## What each crate sees
 
@@ -161,7 +163,7 @@ and the map applies it. That is the whole write path.
 | | |
 |---|---|
 | A tile entity covers a **run**, not a voxel | its `HexSpan` may be many levels tall |
-| A tile's `TilePos` is its **surface** | the topmost solid voxel, not the base |
+| A tile's `TilePos` is its **run surface** | the topmost material voxel, not the base |
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Air is never spawned | so an air-filled cave is a gap between two entities |

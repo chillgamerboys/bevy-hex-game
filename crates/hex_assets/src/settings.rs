@@ -31,6 +31,10 @@ pub fn to_color((r, g, b): Rgb) -> Color {
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct CameraSettings {
+    /// Camera position applied whenever gameplay starts.
+    pub gameplay_eye: (f32, f32, f32),
+    /// Point the camera looks at and orbits around whenever gameplay starts.
+    pub gameplay_focus: (f32, f32, f32),
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -121,5 +125,25 @@ impl From<PresentModeSetting> for bevy::window::PresentMode {
             PresentModeSetting::NoVsync => Self::AutoNoVsync,
             PresentModeSetting::Mailbox => Self::Mailbox,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shipped_camera_frames_the_showcase() {
+        let camera: CameraSettings =
+            ron::from_str(include_str!("../../../assets/config/camera.ron"))
+                .expect("the shipped camera settings should parse");
+        let (eye_x, eye_y, eye_z) = camera.gameplay_eye;
+        let (focus_x, focus_y, focus_z) = camera.gameplay_focus;
+        assert!(eye_x.abs() < f32::EPSILON);
+        assert!((eye_y - 44.0).abs() < f32::EPSILON);
+        assert!((eye_z - 38.0).abs() < f32::EPSILON);
+        assert!(focus_x.abs() < f32::EPSILON);
+        assert!((focus_y - 6.0).abs() < f32::EPSILON);
+        assert!(focus_z.abs() < f32::EPSILON);
     }
 }

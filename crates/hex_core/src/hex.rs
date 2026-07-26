@@ -28,10 +28,10 @@
 //! # Spans, not heights
 //!
 //! A coordinate does not have *a* height. Its one voxel column can expose one or more
-//! solid runs, each described by a [`HexSpan`] with a bottom and a top. Floating
-//! platforms, overhangs and caves are therefore representable rather than being
-//! special cases bolted onto a single elevation. Terrain generation lives in
-//! `hex_map`; this crate only defines the vocabulary.
+//! non-air material runs, each described by a [`HexSpan`] with a bottom and a top.
+//! Floating platforms, water, overhangs and caves are therefore representable rather
+//! than being special cases bolted onto a single elevation. Terrain generation lives
+//! in `hex_map`; this crate only defines the vocabulary.
 //!
 //! # A position is a tile, not a coordinate
 //!

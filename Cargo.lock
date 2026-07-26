@@ -3255,6 +3255,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "rand 0.8.7",
+ "ron",
  "serde",
  "xxhash-rust",
 ]

@@ -6,9 +6,9 @@ Rust, and you do not need to recompile the game.
 
 | File | Controls |
 |---|---|
-| `world.ron` | Map size, terrain shape, terrain seed, how tall a voxel is |
-| `substances.ron` | What the world is made of — stone, dirt, grass — and their colours |
-| `camera.ron` | How fast the camera pans, how far it can zoom and tilt |
+| `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
+| `substances.ron` | What the world is made of — including water and metal — and its colours |
+| `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
 | `display.ron` | Vsync / frame rate behaviour |
@@ -28,7 +28,7 @@ How quickly you *see* the change depends on which file:
 
 | File | When it takes effect |
 |---|---|
-| `camera.ron` | Straight away |
+| `camera.ron` | Movement values straight away; initial frame on the next rebuild |
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
@@ -91,27 +91,38 @@ git checkout assets/config/
 
 ## Things worth trying
 
-**A world you can come back to.** By default the terrain is different every launch.
-In `world.ron`:
+**Tune the showcase map.** The default `Showcase((...))` preset is deterministic.
+Its important controls are all grouped in `world.ron`:
 
 ```ron
-seed: Some(20260725),
+valley_level: 15,
+gentle_max_level: 19,
+gentle_terrace_width: 2,
 ```
 
-Any number works. The same number always produces the same map, so if you find a
-map you like, write the number down.
+The river waypoints, bridge lanes, summit, and ordered switchback are cube
+coordinates. Every coordinate must sum to zero and stay inside `grid_radius`.
+The file is validated as one map: the river must reach both boundaries, the bridge
+must clear the water, and the switchback must be contiguous and long enough to climb
+one level at a time. An invalid save is reported in the terminal and the previous
+valid settings remain active.
 
-**Bumpier terrain.** In `world.ron`, `magnitude` is how tall the hills are and
-`x_freq` / `y_freq` are how close together. Bigger frequencies mean rougher ground:
+**Use procedural terrain instead.** Replace the `terrain: Showcase((...))` value
+with the retained Perlin preset:
 
 ```ron
-steps: [
-    (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
-],
+terrain: Perlin((
+    // None chooses a new map each launch; Some(number) is reproducible.
+    seed: Some(20260725),
+    steps: [
+        (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+    ],
+)),
 ```
 
-Add a second line with a *higher* frequency and *smaller* magnitude to lay fine
-detail over the broad shape:
+Higher frequency means bumpier terrain; magnitude is how much height an octave
+contributes. Add another entry with a higher frequency and smaller magnitude for
+fine detail:
 
 ```ron
 steps: [
@@ -135,10 +146,10 @@ Saving the file registers it with the game. It will not appear in generated terr
 until the generation code selects it. `air` must always be present — it means empty
 space.
 
-**A bigger map.** `grid_radius: 20` gives 1261 columns. Be careful: the tile count
-grows quadratically, so `40` is 4921 columns and `100` is over 30,000 — and each
-column draws several prisms, one per band of substance. Raise it a little at a time and
-watch the frame rate.
+**A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
+and `40` gives 4921. The Showcase river endpoints must move to the new boundary when
+its radius changes, so changing only `grid_radius` is intentionally rejected. Perlin
+has no boundary features and can be resized directly.
 
 **Chunkier terrain.** `level_height` in `world.ron` is how tall one voxel is. The
 default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain that reads

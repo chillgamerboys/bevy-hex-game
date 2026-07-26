@@ -13,6 +13,7 @@ pub fn plugin(app: &mut App) {
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the skybox behind them.
         .add_systems(Startup, spawn_camera)
+        .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
         .add_systems(Update, apply_skybox_brightness.in_set(AppSystems::Update))
         .add_systems(
             Update,
@@ -69,6 +70,39 @@ fn spawn_camera(mut commands: Commands, assets: Res<GameAssets>) {
             ..default()
         },
     ));
+}
+
+/// Restores the designer-authored full-map view whenever gameplay begins.
+fn frame_gameplay_camera(
+    settings: Res<CameraSettings>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
+) {
+    let (eye_x, eye_y, eye_z) = settings.gameplay_eye;
+    let (focus_x, focus_y, focus_z) = settings.gameplay_focus;
+    let eye = Vec3::new(eye_x, eye_y, eye_z);
+    let focus = Vec3::new(focus_x, focus_y, focus_z);
+    let offset = eye - focus;
+
+    if !eye.is_finite() || !focus.is_finite() || offset.length_squared() <= f32::EPSILON {
+        warn!("camera.ron: gameplay_eye and gameplay_focus must be finite, distinct points");
+        return;
+    }
+
+    // Looking straight along the usual up vector is degenerate. The shipped frame
+    // is oblique, but choosing a fallback keeps a live settings edit recoverable.
+    let direction = offset.normalize();
+    let up = if direction.cross(Vec3::Y).length_squared() <= f32::EPSILON {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    };
+
+    for (mut transform, mut camera) in &mut cameras {
+        transform.translation = eye;
+        transform.look_at(focus, up);
+        camera.focus = focus;
+        camera.radius = offset.length();
+    }
 }
 
 /// Applies skybox brightness from settings, and keeps it in step if the file is
@@ -267,4 +301,89 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
         .single()
         .expect("expected exactly one primary window");
     Vec2::new(window.width(), window.height())
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::state::app::StatesPlugin;
+
+    use super::*;
+
+    fn camera_settings() -> CameraSettings {
+        CameraSettings {
+            gameplay_eye: (0.0, 44.0, 38.0),
+            gameplay_focus: (0.0, 6.0, 0.0),
+            pan_speed: 0.4,
+            pan_speed_offset: 10.0,
+            min_pitch: 0.25,
+            max_pitch: 0.95,
+            min_zoom: 5.0,
+            max_zoom: 60.0,
+            zoom_sensitivity: 0.2,
+        }
+    }
+
+    fn enter(app: &mut App, screen: Screen) {
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(screen);
+        app.update();
+    }
+
+    fn assert_full_map_frame(app: &App, entity: Entity) {
+        let transform = app
+            .world()
+            .entity(entity)
+            .get::<Transform>()
+            .expect("the camera should have a transform");
+        let camera = app
+            .world()
+            .entity(entity)
+            .get::<PanOrbitCamera>()
+            .expect("the camera should have pan/orbit state");
+        let eye = Vec3::new(0.0, 44.0, 38.0);
+        let focus = Vec3::new(0.0, 6.0, 0.0);
+
+        assert!(transform.translation.distance(eye) < 1e-5);
+        assert!(camera.focus.distance(focus) < 1e-5);
+        assert!((camera.radius - eye.distance(focus)).abs() < 1e-5);
+        let forward = transform.forward().as_vec3();
+        assert!(forward.dot((focus - eye).normalize()) > 0.9999);
+    }
+
+    #[test]
+    fn gameplay_entry_frames_the_map_every_time() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(camera_settings());
+        app.add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                PanOrbitCamera::default(),
+            ))
+            .id();
+
+        enter(&mut app, Screen::Gameplay);
+        assert_full_map_frame(&app, entity);
+
+        enter(&mut app, Screen::Title);
+        {
+            let mut entity_mut = app.world_mut().entity_mut(entity);
+            entity_mut
+                .get_mut::<Transform>()
+                .expect("the camera should have a transform")
+                .translation = Vec3::splat(-50.0);
+            let mut camera = entity_mut
+                .get_mut::<PanOrbitCamera>()
+                .expect("the camera should have pan/orbit state");
+            camera.focus = Vec3::splat(20.0);
+            camera.radius = 2.0;
+        }
+
+        enter(&mut app, Screen::Gameplay);
+        assert_full_map_frame(&app, entity);
+    }
 }

@@ -28,9 +28,9 @@
 //! # Columns
 //!
 //! There is one voxel [`Column`] per coordinate. Rendering merges each contiguous
-//! solid run into an entity carrying a [`HexSpan`](hex_core::HexSpan) with a `bottom`
-//! and a `top`. Floating platforms, overhangs, and bridges are separate runs within
-//! that same column.
+//! non-air material run into an entity carrying a [`HexSpan`](hex_core::HexSpan) with
+//! a `bottom` and a `top`. Floating platforms, water, overhangs, and bridges are
+//! separate runs within that same column.
 
 use bevy::prelude::*;
 
@@ -40,11 +40,16 @@ pub mod generator;
 pub mod grid;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
+/// Pure construction of complete voxel maps from terrain presets.
+mod terrain;
 /// Voxel storage and the run-merging that turns it into prisms.
 pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
-pub use settings::{MapSettings, PerlinStepSettings, TerrainSettings};
+pub use settings::{
+    BridgeSettings, CubeCoord, MapSettings, MountainSettings, PerlinSettings, PerlinStepSettings,
+    RiverSettings, ShowcaseSettings, TerrainSettings,
+};
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 
 /// Registers map settings, terrain generation, and tile spawning.
