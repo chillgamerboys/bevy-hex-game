@@ -113,8 +113,8 @@ fn despawn_units(mut commands: Commands, units: Query<Entity, With<Faction>>) {
     }
 }
 
-/// Global picking observer: when any `HexTile` is clicked, animate the player
-/// over to that tile along a hex-by-hex straight line.
+/// Global picking observer: when any `HexTile` is clicked, animate the player over to
+/// that tile, one hex at a time along the route the search found.
 ///
 /// `PlayerSettings` is taken as an `Option` because observers are global and fire on
 /// every click, including clicks on menus, where settings-derived resources may be

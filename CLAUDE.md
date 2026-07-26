@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a seven-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
 
 Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -11,7 +11,7 @@ summary.
 | Crate | Version | Notes |
 |---|---|---|
 | `bevy` | `0.19` | |
-| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade. `a_star`, `field_of_view` and `field_of_movement` are compiled in but unused |
+| `hexx` | `0.24` | **No Bevy features.** Pins only `glam`, so it can never gate a Bevy upgrade. `a_star` and `field_of_movement` are compiled in but **unusable** — both key on `Hex` alone, which cannot express two surfaces stacked at one coordinate. Pathfinding is `hex_units::movement::Reach`, over `TilePos` |
 | `bevy-inspector-egui` | `0.37` | Targets bevy 0.19. Isolated in `hex_dev`, `dev` feature only |
 | `ron` / `serde` | | Designer-facing settings |
 | `xxhash-rust`, `rand` | | Terrain hashing |
@@ -164,17 +164,18 @@ allowed to be wrong.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and more than 90 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and more than 130 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
 Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
 auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, level-based movement, and body size via headroom.
+destruction, level-based movement, body size via headroom, a turn order with two
+tempos, and a breadth-first pathfinder over stacked surfaces.
 
-There is still no turn system, no abilities, and no pathfinder — `route` walks a
-straight line and gives up when blocked. Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other.
+There are still no abilities and no lattices. Bodies are one hex wide; there is no
+footprint for anything larger, and units do not obstruct each other — so a route may
+be drawn straight through another piece.
 
 ## Known gaps
 

@@ -216,10 +216,15 @@ impl HexCoord {
 
     /// The underlying [`hexx`] coordinate.
     ///
-    /// Public so that map and gameplay code can reach hexx's algorithms —
-    /// `a_star`, `field_of_view`, `field_of_movement` — and its dense storage types,
-    /// all of which are already compiled in. Reimplementing those is exactly the
-    /// work adopting hexx was meant to avoid.
+    /// Public so that map and gameplay code can reach hexx's algorithms and its dense
+    /// storage types, all of which are already compiled in. Reimplementing those is
+    /// exactly the work adopting hexx was meant to avoid.
+    ///
+    /// **Not all of them survive contact with a stacked map.** `a_star` and
+    /// `field_of_movement` are keyed on `Hex` alone, so a bridge and the ground
+    /// beneath it are one node to them. Anything that has to distinguish the two needs
+    /// a [`TilePos`](crate::TilePos); pathfinding accordingly lives in
+    /// `hex_units::movement` rather than being delegated here.
     ///
     /// `Hex` is two `i32`s and carries no `glam` types, so passing it around does not
     /// reopen the version-skew question that keeps hexx's Bevy features switched off.

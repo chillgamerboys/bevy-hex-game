@@ -144,9 +144,10 @@ fn nearest_foe(
 /// The steps to take toward `target`, stopping adjacent to it and within `budget`.
 ///
 /// [`None`] when there is nowhere to go — no route, already adjacent, or no movement
-/// left. `route` is a straight line and gives up when blocked, so an enemy behind a
-/// wall simply stands there. That is a visible limitation rather than a hidden one,
-/// and `hexx::a_star` is the intended fix.
+/// left. `route` searches the whole standable graph, so an enemy behind a wall walks
+/// around it rather than standing there, and the clamp to `budget` below is the
+/// ordinary case rather than the rare one: closing a long distance simply takes
+/// several turns.
 fn approach(
     from: Standing,
     target: Standing,

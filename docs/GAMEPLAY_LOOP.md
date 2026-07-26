@@ -104,9 +104,11 @@ part of a map is worth testing and press `BACKSPACE` then `ENTER` to rebuild. Se
 
 Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:
 
-- **A pathfinder.** `route` walks a straight line and gives up when blocked, so an
-  enemy behind a wall stands still. `hexx::a_star` is compiled in and unused.
-- **Units obstructing each other.** Two units can occupy the same surface. An
-  occupancy map over unit positions would fix it and lives entirely in `hex_combat`.
+- **Terrain that costs something to cross.** `Reach` charges one per step, so the
+  shortest route is the one taken and breadth-first order is enough to find it. Mud,
+  ice or a climb would each need a priority queue, and none of them are designed.
+- **Units obstructing each other.** Two units can occupy the same surface, and the
+  pathfinder will happily route one straight through another. An occupancy map over
+  unit positions would fix both and lives entirely in `hex_combat`.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.

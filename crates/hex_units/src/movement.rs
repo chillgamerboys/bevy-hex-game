@@ -18,18 +18,19 @@
 //!
 //! # Finding a way
 //!
-//! [`Reach`](crate::movement::Reach) floods outward from a surface and records how it got to each one, so a
-//! single search answers both "where can this piece go" and "how does it get to that
-//! particular tile". [`route`] is the one-destination convenience on top.
+//! [`Reach`](crate::movement::Reach) floods outward from a surface and records how it
+//! got to each one, so a single search answers both "where can this piece go" and "how
+//! does it get to that particular tile". [`route`] is the one-destination convenience
+//! on top.
 //!
 //! **`hexx::a_star` cannot be used here, despite being compiled in.** Its signature is
 //! keyed on `Hex` alone, so it has nowhere to put a level: a bridge and the ground
 //! beneath it are the same node to it, and pathing through one would let a piece
 //! teleport to the other. `field_of_movement` has the same problem — it returns a
-//! `HashSet<Hex>`. The search has to run over [`TilePos`](hex_core::TilePos), which is why
-//! out here rather than delegated. Earlier versions of this file, and of the project
-//! documentation, recommended switching to `hexx`; that advice predates the voxel map
-//! and following it would silently collapse every stack.
+//! `HashSet<Hex>`. The search has to run over [`TilePos`](hex_core::TilePos), which is
+//! why it is written out here rather than delegated. Earlier versions of this file, and
+//! of the project documentation, recommended switching to `hexx`; that advice predates
+//! the voxel map and following it would silently collapse every stack.
 //!
 //! Steps all cost one. Breadth-first order is therefore shortest-first, and no
 //! priority queue is needed — the day terrain costs differ to cross, that stops being

@@ -44,12 +44,13 @@ const BODY_LEVELS: hex_core::Level = 2;
 /// A coordinate roofed over with only one clear voxel — too low for the player.
 ///
 /// Deliberately on the opposite side of the origin from the destination used by
-/// `clicking_a_tile_moves_the_player`: a straight-line route through here would be
-/// blocked, so putting it on that line would make an unrelated test fail for a
-/// reason that has nothing to do with what it checks.
+/// `clicking_a_tile_moves_the_player`. That mattered more when `route` walked a
+/// straight line and this would have blocked it outright; the search now goes around
+/// obstacles, so the worst it could do is lengthen an unrelated test's path. Keeping
+/// the fixtures apart still means neither test can fail for the other's reason.
 const CRAWLSPACE: HexCoord = HexCoord::new_cubic(-2, 2, 0);
 
-/// Where the enemy starts. Off both the crawlspace and the line the click-to-move
+/// Where the enemy starts. Off both the crawlspace and the route the click-to-move
 /// test walks, so neither test can fail for the other's reason.
 const ENEMY_START: HexCoord = HexCoord::new_cubic(1, 1, -2);
 
