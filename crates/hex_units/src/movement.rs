@@ -128,8 +128,10 @@ impl Footing {
     /// Two independent conditions, from two different places:
     ///
     /// - **Solid**, read from the substance table. Air is never spawned as a prism,
-    ///   but a future non-solid substance such as water would be, and stepping onto it
-    ///   should not silently work.
+    ///   but **water is** — the showcase map's river publishes ordinary tile entities
+    ///   whose substance happens not to be solid. A tile's [`TilePos`] marks its
+    ///   topmost *material* voxel, which is not the same as its topmost standable one,
+    ///   so this check is the only thing between a piece and walking onto the river.
     /// - **Room enough**, from the [`Headroom`] the map reports. Zero headroom means
     ///   the tile is buried inside a column and is not a surface at all; too little
     ///   means the body does not fit.
@@ -150,9 +152,10 @@ impl Footing {
             if !table.is_solid(*substance) || !body.admits(*headroom) {
                 continue;
             }
-            // The tile's `TilePos` is already its topmost solid voxel, so the
-            // standable position is exactly that — gameplay never has to know how
-            // tall a level is, which is what keeps `level_height` inside the map.
+            // This run passed the solid-substance check, and its `TilePos` is already
+            // its topmost material voxel, so the standable position is exactly that.
+            // Gameplay never has to know how tall a level is, which keeps
+            // `level_height` inside the map.
             let standing = Standing {
                 pos: *pos,
                 span: *span,
@@ -717,8 +720,8 @@ mod tests {
         assert_eq!(steps.len(), 1);
     }
 
-    /// Non-solid substances are not standable, so a future water or lava tile does
-    /// not silently become walkable.
+    /// Non-solid substances are not standable, which stopped being hypothetical when
+    /// the showcase map added a river. Water is drawn as a prism like any other run.
     #[test]
     fn non_solid_substances_are_not_standable() {
         let coord = HexCoord::ORIGIN;

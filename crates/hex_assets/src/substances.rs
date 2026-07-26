@@ -203,6 +203,11 @@ mod tests {
         SubstanceFile { substances }
     }
 
+    fn shipped_file() -> SubstanceFile {
+        ron::from_str(include_str!("../../../assets/config/substances.ron"))
+            .expect("the shipped substance file should parse")
+    }
+
     #[test]
     fn air_is_always_id_zero() {
         let table = SubstanceTable::from_file(&test_file());
@@ -323,5 +328,22 @@ mod tests {
         let table = SubstanceTable::from_file(&file);
         assert_eq!(table.name(SubstanceId::AIR), Some("air"));
         assert!(!table.is_solid(SubstanceId::AIR));
+    }
+
+    #[test]
+    fn showcase_substances_have_the_required_behaviour() {
+        let table = SubstanceTable::from_file(&shipped_file());
+        let gravel = table.id("gravel").expect("gravel should be registered");
+        let water = table.id("water").expect("water should be registered");
+        let metal = table.id("metal").expect("metal should be registered");
+        let bedrock = table.id("bedrock").expect("bedrock should be registered");
+
+        assert!(table.is_solid(gravel));
+        assert!(table.is_diggable(gravel));
+        assert!(!table.is_solid(water), "water must not be footing");
+        assert!(table.is_diggable(water), "water should be clearable");
+        assert!(table.is_solid(metal));
+        assert!(table.is_diggable(metal));
+        assert!(!table.is_diggable(bedrock));
     }
 }

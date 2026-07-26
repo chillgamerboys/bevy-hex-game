@@ -40,6 +40,18 @@ const GROUND_LEVEL: hex_core::Level = 1;
 /// `air` at 0 and `stone` next.
 const STONE: SubstanceId = SubstanceId(1);
 
+/// Not solid, but a real voxel all the same — id 2, after `air` and `stone`.
+const WATER: SubstanceId = SubstanceId(2);
+
+/// A coordinate whose surface run is water rather than stone.
+///
+/// Three hexes out, on the rim of the fixture. Placing it at two put it inside the
+/// budget of `combat_tints_exactly_what_this_turn_can_reach`, whose count is spelled
+/// out by hand — so flooding one tile silently changed an unrelated test's expected
+/// answer, and that test caught it. Fixtures stay out of each other's way here for the
+/// same reason `CRAWLSPACE` does.
+const POOL: HexCoord = HexCoord::new_cubic(0, 3, -3);
+
 /// How tall the test player is, matching what the game ships.
 const BODY_LEVELS: hex_core::Level = 2;
 
@@ -160,7 +172,7 @@ fn spawn_fake_terrain(mut commands: Commands) {
             coord,
             TilePos::new(coord, GROUND_LEVEL),
             HexSpan::new(GROUND - 1.0, GROUND),
-            STONE,
+            if coord == POOL { WATER } else { STONE },
             Headroom(headroom),
         ));
     }
@@ -182,6 +194,17 @@ fn substance_table() -> SubstanceTable {
         Substance {
             color: (0.5, 0.5, 0.5),
             solid: true,
+            diggable: true,
+        },
+    );
+    // Rendered, but never footing. Added when the showcase map introduced a river:
+    // the map publishes a water run as an ordinary tile entity, and the *only* thing
+    // stopping a piece walking onto it is gameplay checking `solid`.
+    substances.insert(
+        "water".to_owned(),
+        Substance {
+            color: (0.1, 0.3, 0.65),
+            solid: false,
             diggable: true,
         },
     );
@@ -783,5 +806,82 @@ fn combat_moves_the_ring_onto_the_acting_unit() {
         count::<With<UnitRing>>(&mut app),
         1,
         "the selection ring and the turn ring should never both be drawn"
+    );
+}
+
+/// Water is rendered as an ordinary tile but is never somewhere to stand.
+///
+/// The showcase map added a river, and the map publishes a water run exactly like a
+/// stone one: same components, same `HexTile`, a `TilePos` at its topmost **material**
+/// voxel. The only thing between a piece and walking onto the river is `Footing`
+/// checking the substance's `solid` flag — so that check is a gameplay contract, not
+/// an implementation detail, and it belongs in a test that would fail without it.
+#[test]
+fn water_is_drawn_but_is_not_footing() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let mut tinted = app
+        .world_mut()
+        .query_filtered::<&TilePos, With<RangeOverlay>>();
+    let reachable: Vec<TilePos> = tinted.iter(app.world()).copied().collect();
+
+    assert!(
+        !reachable.is_empty(),
+        "setup failed — nothing was reachable at all"
+    );
+    assert!(
+        !reachable.iter().any(|pos| pos.coord == POOL),
+        "the river was offered as somewhere to walk to"
+    );
+}
+
+/// And a click on it does nothing, rather than walking the piece onto the water.
+///
+/// The tint and the click have to agree. A tile lit as reachable that then refuses —
+/// or one left dark that accepts — is worse than either rule alone, because it teaches
+/// the player that the highlight cannot be trusted.
+#[test]
+fn clicking_water_does_not_move_the_player() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &TilePos, &SubstanceId), With<HexTile>>();
+    let pool = tiles
+        .iter(app.world())
+        .find(|(_, pos, substance)| pos.coord == POOL && **substance == WATER)
+        .map(|(entity, _, _)| entity)
+        .expect("the fixture floods this coordinate");
+
+    let before = single::<With<Player>>(&mut app).expect("a player should exist");
+    let mut standing = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let start = standing
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a player should exist")
+        .0
+        .pos;
+
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, pool, window);
+    app.update();
+
+    let mut after = app.world_mut().query_filtered::<&StandsOn, With<Player>>();
+    let ended = after
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("the player should still exist")
+        .0
+        .pos;
+
+    assert_eq!(ended, start, "the player waded into the river");
+    assert!(
+        app.world().get_entity(before).is_ok(),
+        "the player should not have been despawned"
     );
 }

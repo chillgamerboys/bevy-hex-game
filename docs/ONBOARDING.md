@@ -146,10 +146,10 @@ worth having, because those files are shared.
 
 The contract you must keep is that every rendered tile carries **`HexTile`,
 `HexCoord`, a surface `TilePos`, `HexSpan`, `SubstanceId`, and `Headroom`**.
-`TilePos` names the topmost solid voxel in the rendered run, not its base, and
-`Headroom` reports the clear levels above it. That is how the rest of the game
-finds out what and where the ground is. Everything behind that interface is yours
-to change.
+`TilePos` names the topmost material voxel in the rendered run, not its base;
+`SubstanceId` says whether it is solid, and `Headroom` reports the clear levels above
+it. That is how the rest of the game finds out what and where the ground is.
+Everything behind that interface is yours to change.
 
 Both `world.ron` and `substances.ron` are map-owned content. Their loading machinery
 and the shared `SubstanceTable` live in `hex_assets`, because gameplay also needs

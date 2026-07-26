@@ -75,8 +75,9 @@ query tiles without depending on how they are generated or drawn.
 ## Positions are voxels, not coordinates
 
 A unit is not *at* `HexCoord(3, -1)`. It is on a **specific voxel** there —
-`TilePos { coord, level }`. One `Column` owns that coordinate, but separate exposed
-solid runs within it are unrelated places that happen to share a horizontal address.
+`TilePos { coord, level }`. One `Column` owns that coordinate, but separate material
+runs within it are unrelated positions that happen to share a horizontal address.
+Only solid substances provide places to stand.
 
 The vertical axis is called **`level`**, never `z`: cube coordinates already use `x`,
 `y` and `z` and all three are horizontal.

@@ -87,7 +87,7 @@ impl Column {
         self.trim();
     }
 
-    /// Drops trailing air so `len` always means "one past the highest solid voxel".
+    /// Drops trailing air so `len` means "one past the highest non-air voxel".
     ///
     /// Without this, digging the top off a column would leave the space allocated and
     /// [`Self::top`] would keep reporting the old height — so a piece would try to
@@ -104,11 +104,11 @@ impl Column {
         Level::try_from(self.voxels.len()).unwrap_or(Level::MAX)
     }
 
-    /// The highest solid level, or [`None`] if the column is entirely air.
+    /// The highest non-air level, or [`None`] if the column is entirely air.
     ///
-    /// This is the surface something standing here occupies — but note it says
-    /// nothing about what is *below*: a column can be solid at the top and hollow
-    /// underneath.
+    /// This is the column's visible material surface, which is not necessarily
+    /// standable: substances such as water are non-solid. It also says nothing about
+    /// what is *below*; a column can have material at the top and air underneath.
     #[must_use]
     pub fn surface(&self) -> Option<Level> {
         self.top()
@@ -116,7 +116,7 @@ impl Column {
             .filter(|_| !self.voxels.is_empty())
     }
 
-    /// Whether the column has no solid voxels at all.
+    /// Whether the column has no non-air voxels at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.voxels.is_empty()
@@ -192,7 +192,7 @@ impl VoxelMap {
         self.columns.is_empty()
     }
 
-    /// The highest solid level at a coordinate, if any.
+    /// The highest non-air level at a coordinate, if any.
     #[must_use]
     pub fn surface(&self, coord: HexCoord) -> Option<Level> {
         self.columns.get(&coord).and_then(Column::surface)

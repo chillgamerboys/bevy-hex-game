@@ -10,9 +10,10 @@ Everything about the map:
 | File | Holds |
 |---|---|
 | `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
-| `src/generator.rs` | Terrain height generation. `HeightMap`, `HeightGenerator`, Perlin |
-| `src/grid.rs` | Building the world and turning it into tile entities |
-| `src/settings.rs` | Designer-facing settings, loaded from `assets/config/world.ron` |
+| `src/generator.rs` | The optional Perlin height field |
+| `src/terrain.rs` | Pure `MapSettings + palette -> VoxelMap` construction for every preset |
+| `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
+| `src/settings.rs` | Validated designer-facing settings from `assets/config/world.ron` |
 
 Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
 non-programmer.
@@ -23,7 +24,7 @@ explains the voxel representation and the rules everything else depends on.
 ## Your compile-time blast radius is bounded, deliberately
 
 **Nothing depends on `hex_map` except the binary.** `hex_core`, `hex_assets`,
-`hex_world` and `hex_units` cannot see it. Cargo enforces this — a `use hex_map::`
+`hex_world` and `hex_gameplay` cannot see it. Cargo enforces this — a `use hex_map::`
 in any of them fails to compile.
 
 The consequence is that those crates cannot import map internals. It is still
@@ -47,7 +48,7 @@ commands.spawn((
 ));
 ```
 
-`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
 write interface.
 
@@ -82,16 +83,17 @@ to — nothing outside this crate references it.
 
 ### `TilePos` is the surface, not the base
 
-A tile entity covers a **run** of voxels. Its `TilePos` must be the topmost solid one,
-because that is what a piece standing there stands on. Tagging the base would force
-gameplay to know `level_height` to work the surface out, which puts a dependency on
-this crate straight back into movement — the exact thing the split prevents.
+A tile entity covers a **run** of one non-air substance. Its `TilePos` must be that
+run's topmost material voxel. Gameplay combines the position with the substance's
+`solid` flag before treating it as footing. Tagging the base would force gameplay to
+know `level_height` to work the surface out, which puts a dependency on this crate
+straight back into movement — the exact thing the split prevents.
 
 ### Storage is not rendering
 
-One entity per voxel would be ~25,000 at radius 20. The spawn pass merges vertical runs
-of the same substance into one prism; measured, that is 3,400–4,100 entities at 60 FPS,
-varying with the terrain seed.
+One entity per voxel would be tens of thousands on a deep map. The spawn pass merges
+vertical runs of the same substance into one prism, keeping the rendered entity count
+proportional to material bands rather than depth.
 
 Interior voxels therefore have **no entity**. That is why targeting is positional.
 
@@ -133,8 +135,8 @@ gives the level difference a step rule compares against.
 
 The tests enforce these; they are here so you know *why*.
 
-- **Generated terrain is solid from level 0 up.** Digging needs something to dig
-  through, and a column starting above ground is a hole nothing can stand in.
+- **Every ground foundation is solid from level 0 to its surface.** Intentional
+  features may then add non-solid water or a floating bridge with air beneath it.
 - **Every column has at least one level above bedrock.** Bedrock is not diggable, so
   bare bedrock is a permanent hole.
 - **Terrain edits preserve non-diggable voxels.** `Clear`, setting air, or replacing
@@ -171,7 +173,7 @@ Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 ```rust
 GameplaySetup::Resources   // generate and insert VoxelMap
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
-GameplaySetup::Actors      // hex_units's, not yours; needs tiles to exist
+GameplaySetup::Actors      // hex_gameplay's, not yours; needs tiles to exist
 ```
 
 **Do not put tile spawning outside `Terrain`.** Systems in one `OnEnter` schedule run
@@ -191,7 +193,7 @@ A clean log is not evidence a change worked. **Look at the window.**
 | Plain blue window | Assets not found — run through `cargo`, never the binary directly |
 | Tiles in the wrong place, no error | Transform disagrees with the span |
 | Stuck on "loading…" during initial startup | `world.ron` failed to parse. The terminal names the line |
-| Terrain differs every run | `seed: None` in `world.ron`. Set a number to reproduce a map |
+| Perlin terrain differs every run | Its preset has `seed: None`. Set a number to reproduce it |
 | Tile scaled to nothing | A zero-height span. `HexSpan::new` refuses these; check you used it |
 | Digging removes an entity instead of adding one | The run was one voxel tall. Only clearing the *middle* of a taller run splits it |
 | A piece floats above or sinks into terrain | The tile's `TilePos` is its base rather than its surface |
@@ -210,21 +212,12 @@ Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but t
 world is only rebuilt on entering gameplay — press `BACKSPACE` then `ENTER` to see
 terrain changes.
 
-### Putting pieces on your terrain
+`terrain::build_map` is pure: settings and a substance palette go in, and a complete
+`VoxelMap` comes out. Keep ECS resources, commands, and rendering out of it.
 
-`assets/config/scenario.ron` holds two cube coordinates: where the player starts and
-where the enemy starts. Move them onto the part of the map you want to try out, then
-`BACKSPACE`/`ENTER` to rebuild.
-
-This is the fastest way to answer questions the tests cannot: is that ridge actually
-climbable, can a piece cross the bridge, is the far side of the valley reachable at
-all. A coordinate that does not sum to zero, or that has no standable ground, falls
-back to the centre of the map and says so in the terminal rather than failing to
-start.
-
-`HeightGenerator` implementations **must be pure**: the same coordinate must always
-give the same height. Results are cached, so an impure generator produces terrain
-that changes depending on what has been looked at.
+`HeightGenerator` implementations used by the optional Perlin preset must also be
+pure. Results are cached, so an impure generator produces terrain that changes
+depending on what has been looked at.
 
 ## Before you finish
 

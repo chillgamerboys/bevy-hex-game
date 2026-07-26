@@ -3,23 +3,88 @@
 // Safe to edit while the game is running: saving reloads these settings. The
 // existing world does not rebuild automatically; press BACKSPACE, then ENTER.
 (
-    // Tiles from the centre to the edge. The grid holds 3r^2 + 3r + 1 tiles, so
-    // this grows quadratically -- 20 is 1261 tiles, 40 would be 4921.
-    grid_radius: 20,
+    // Radius 12 is 469 columns: small enough to inspect as one complete test map.
+    grid_radius: 12,
 
-    // World height of one voxel level. Larger means chunkier, more dramatic terrain.
+    // World height of one voxel level.
     level_height: 0.4,
 
-    terrain: (
-        // Set a number for a world you can reproduce, e.g. Some(20260725).
-        // None picks a new one every launch.
-        seed: None,
+    terrain: Showcase((
+        valley_level: 15,
 
-        // Octaves of noise, added together. Higher frequency means bumpier;
-        // magnitude is how much height that octave contributes. Add more entries
-        // for finer detail on top of the broad shape.
-        steps: [
-            (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+        // The foreground rises one level for each two hexes away from the river.
+        gentle_max_level: 19,
+        gentle_terrace_width: 2,
+
+        river: (
+            // Consecutive waypoints are joined with hex lines, then expanded by one
+            // tile on each side to make a connected three-hex-wide river.
+            path: [
+                (x: -12, y:  1, z: 11),
+                (x:  -7, y:  1, z:  6),
+                (x:  -3, y:  0, z:  3),
+                (x:   2, y:  0, z: -2),
+                (x:   7, y: -1, z: -6),
+                (x:  12, y: -1, z: -11),
+            ],
+            half_width: 1,
+            bed_level: 12,
+            water_bottom: 13,
+            water_top: 14,
+        ),
+
+        bridge: (
+            // Two adjacent lanes, running across the river and onto both banks.
+            lane_xs: [0, 1],
+            y_min: -3,
+            y_max: 3,
+            deck_level: 16,
+        ),
+
+        mountain: (
+            summit: (x: 3, y: -9, z: 6),
+            base_level: 15,
+            peak_level: 30,
+            falloff_per_hex: 3,
+            exposed_stone_level: 23,
+        ),
+
+        // A deliberately long switchback. The generator interpolates levels 16-30
+        // over this ordered path, so every consecutive step rises by at most one.
+        switchback: [
+            (x:  0, y: -3, z: 3),
+            (x: -1, y: -3, z: 4),
+            (x: -2, y: -3, z: 5),
+            (x: -2, y: -4, z: 6),
+            (x: -2, y: -5, z: 7),
+            (x: -1, y: -5, z: 6),
+            (x:  0, y: -5, z: 5),
+            (x:  1, y: -5, z: 4),
+            (x:  2, y: -5, z: 3),
+            (x:  2, y: -6, z: 4),
+            (x:  1, y: -6, z: 5),
+            (x:  0, y: -6, z: 6),
+            (x: -1, y: -6, z: 7),
+            (x: -1, y: -7, z: 8),
+            (x:  0, y: -7, z: 7),
+            (x:  1, y: -7, z: 6),
+            (x:  2, y: -7, z: 5),
+            (x:  3, y: -7, z: 4),
+            (x:  3, y: -8, z: 5),
+            (x:  2, y: -8, z: 6),
+            (x:  1, y: -8, z: 7),
+            (x:  1, y: -9, z: 8),
+            (x:  2, y: -9, z: 7),
+            (x:  3, y: -9, z: 6),
         ],
-    ),
+    )),
+
+    // The original procedural preset remains available:
+    //
+    // terrain: Perlin((
+    //     seed: Some(20260725),
+    //     steps: [
+    //         (x_freq: 0.035, y_freq: 0.05, magnitude: 3.0),
+    //     ],
+    // )),
 )
