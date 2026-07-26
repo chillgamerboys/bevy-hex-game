@@ -23,7 +23,8 @@ use bevy::state::app::StatesPlugin;
 use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos, MAX_HEADROOM,
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos,
+    MAX_HEADROOM,
 };
 use hex_units::{Enemy, Faction, Player, StandsOn};
 
@@ -64,6 +65,10 @@ fn test_app() -> App {
     app.init_asset::<Mesh>();
     app.init_asset::<StandardMaterial>();
     app.init_state::<Screen>();
+    // The real app registers this in `screens/gameplay.rs`. Without it there is no
+    // `State<Mode>` at all, and click-to-move correctly refuses to act — which looks
+    // exactly like a movement bug from inside a test.
+    app.add_sub_state::<Mode>();
 
     app.configure_sets(
         OnEnter(Screen::Gameplay),

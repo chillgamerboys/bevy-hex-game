@@ -16,7 +16,9 @@ use hex_anim::Transformation;
 use hex_assets::{
     to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioSettings, SubstanceTable,
 };
-use hex_core::{GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos};
+use hex_core::{
+    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn,
+};
 
 use crate::movement::{route, Body, Footing, Standing};
 use crate::pathing::HexPathingLine;
@@ -55,7 +57,7 @@ pub struct StandsOn(pub Standing);
 /// A component rather than a `Player`-or-not check, so "is this hostile to me" is one
 /// comparison and does not have to enumerate every unit type that exists. Neutral
 /// parties and enemies that turn on each other both fit without a new mechanism.
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[reflect(Component)]
 pub enum Faction {
     /// The party the player controls.
@@ -123,11 +125,23 @@ fn on_tile_clicked(
     event: On<Pointer<Click>>,
     mut commands: Commands,
     tiles: TileQuery,
-    players: Query<(Entity, &StandsOn, &Body), With<Player>>,
+    mut players: Query<(Entity, &StandsOn, &Body, Option<&mut Turn>), With<Player>>,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
+    mode: Option<Res<State<Mode>>>,
 ) {
     let (Some(settings), Some(table)) = (settings, table) else {
+        return;
+    };
+
+    // Every resource here is an `Option`. Observers are global: this one fires on the
+    // title screen, in menus, and before anything has loaded. Bevy validates system
+    // parameters *before* the body runs, so a plain `Res<T>` panics in those states
+    // no matter what the body checks — which is a crash this codebase has already
+    // shipped once.
+    //
+    // No mode at all means we are not in gameplay, so a click cannot be a move.
+    let Some(mode) = mode else {
         return;
     };
 
@@ -139,7 +153,13 @@ fn on_tile_clicked(
         return;
     };
 
-    for (entity, standing, body) in players.iter() {
+    for (entity, standing, body, turn) in players.iter_mut() {
+        // In combat a click is only a move if it is this unit's turn. Out of combat
+        // everything moves freely — that is the whole difference between the modes.
+        if *mode.get() == Mode::Combat && turn.is_none() {
+            continue;
+        }
+
         // Footing and the destination are resolved per body, because whether a column
         // can be stood on depends on who is asking — a crawlspace is footing for a
         // small creature and a wall for a large one. With one player this is the same
@@ -156,6 +176,19 @@ fn on_tile_clicked(
         let Some(steps) = route(standing.0, destination, &footing) else {
             continue;
         };
+
+        // A route of N columns costs N-1 steps: the first entry is where the piece
+        // already stands.
+        let cost = u32::try_from(steps.len().saturating_sub(1)).unwrap_or(u32::MAX);
+        if let Some(mut turn) = turn {
+            if cost > turn.movement_left {
+                // Too far for what is left of this turn. Refusing outright rather
+                // than walking partway keeps the click meaning one thing.
+                continue;
+            }
+            turn.movement_left -= cost;
+        }
+
         let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
         commands
             .entity(entity)

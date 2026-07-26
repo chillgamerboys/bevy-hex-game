@@ -102,6 +102,7 @@ impl Plugin for AppPlugin {
             hex_map::plugin,
             hex_world::plugin,
             hex_units::plugin,
+            hex_combat::plugin,
             screens::plugin,
             menus::plugin,
         ));

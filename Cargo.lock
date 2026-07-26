@@ -3212,6 +3212,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_combat"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "hex_anim",
+ "hex_core",
+ "hex_units",
+]
+
+[[package]]
 name = "hex_core"
 version = "0.1.0"
 dependencies = [
@@ -3239,6 +3249,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "hex_assets",
+ "hex_combat",
  "hex_core",
  "hex_dev",
  "hex_map",
