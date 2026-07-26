@@ -10,27 +10,21 @@ use hex_core::{AppSystems, GameplaySetup, Screen};
 /// look can be explored from `lighting.ron` without a code change, and default to
 /// values that render exactly as the game did before they were added.
 pub fn plugin(app: &mut App) {
-    // Lighting is applied once settings have loaded rather than at startup, since
-    // the values now come from a file that is still loading at that point.
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        (apply_sky_settings, spawn_sun).in_set(GameplaySetup::Terrain),
+        spawn_sun.in_set(GameplaySetup::Terrain),
     )
     .add_systems(OnExit(Screen::Gameplay), despawn_sun)
-    // The sky light and haze live on the camera, which outlives gameplay, so these
-    // run always rather than per screen.
+    // Everything the settings drive is applied on change rather than per screen: the
+    // sky light and haze live on the camera, which outlives gameplay, and the ambient
+    // fill is a resource that persists across state transitions. Gated on the settings
+    // having changed, so these do no work on the vast majority of frames.
     .add_systems(
         Update,
-        (reload_lighting, apply_view_lighting).in_set(AppSystems::Update),
+        (reload_lighting, apply_view_lighting)
+            .in_set(AppSystems::Update)
+            .run_if(resource_exists_and_changed::<LightingSettings>),
     );
-}
-
-fn apply_sky_settings(
-    mut commands: Commands,
-    mut ambient: ResMut<GlobalAmbientLight>,
-    settings: Res<LightingSettings>,
-) {
-    apply_ambient(&mut commands, &mut ambient, &settings);
 }
 
 /// The uniform fill, and the colour behind everything the dome does not cover.
@@ -77,23 +71,19 @@ fn sun_transform(settings: &LightingSettings) -> Transform {
     Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, x, y, z))
 }
 
-/// Re-applies the sun and the ambient fill when `lighting.ron` is edited.
+/// Applies the sun and the ambient fill, on load and on every edit of `lighting.ron`.
 ///
-/// Without this the sun only picked up a change on the next `OnEnter(Gameplay)`, so
-/// tuning a light angle meant a round trip through the title screen. The sun exists
-/// only during gameplay, so off that screen the query is simply empty.
+/// This is the only thing that writes them. The sun previously only picked a change up
+/// on the next `OnEnter(Gameplay)`, so tuning a light angle meant a round trip through
+/// the title screen; the ambient fill is a resource that persists across screens, so it
+/// needs applying once rather than per entry. The sun itself exists only during
+/// gameplay, so off that screen the query is simply empty.
 fn reload_lighting(
     mut commands: Commands,
-    settings: Option<Res<LightingSettings>>,
+    settings: Res<LightingSettings>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut suns: Query<(&mut DirectionalLight, &mut Transform), With<Sun>>,
 ) {
-    let Some(settings) = settings else {
-        return;
-    };
-    if !settings.is_changed() {
-        return;
-    }
     apply_ambient(&mut commands, &mut ambient, &settings);
     for (mut light, mut transform) in &mut suns {
         *light = sun_light(&settings);
@@ -116,17 +106,10 @@ fn reload_lighting(
 /// and the dome is drawn by our own material, which never calls it.
 fn apply_view_lighting(
     mut commands: Commands,
-    settings: Option<Res<LightingSettings>>,
+    settings: Res<LightingSettings>,
     mut images: ResMut<Assets<Image>>,
     cameras: Query<Entity, With<Camera3d>>,
 ) {
-    let Some(settings) = settings else {
-        return;
-    };
-    if !settings.is_changed() {
-        return;
-    }
-
     for entity in &cameras {
         if settings.sky_light_intensity > 0.0 {
             // Rebuilt rather than patched in place. This runs once per edit of the

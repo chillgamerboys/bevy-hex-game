@@ -4,7 +4,6 @@
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey, MaterialPlugin};
 use bevy::prelude::*;
-use bevy::reflect::TypePath;
 use bevy::render::render_resource::{
     AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
 };
@@ -14,7 +13,7 @@ use bevy::shader::ShaderRef;
 ///
 /// Field order and types must match `struct SkyParams` in `assets/shaders/sky.wgsl`
 /// exactly — `encase` lays out `Vec3 + f32` pairs to match the WGSL `vec3 + f32`.
-#[derive(Clone, ShaderType)]
+#[derive(Clone, ShaderType, Reflect)]
 pub(crate) struct SkyParams {
     pub horizon_color: Vec3,
     pub cloud_coverage: f32,
@@ -27,7 +26,10 @@ pub(crate) struct SkyParams {
 }
 
 /// Material that renders the procedural sky onto the dome.
-#[derive(Asset, TypePath, AsBindGroup, Clone)]
+///
+/// `TypePath` is not derived explicitly: `Reflect` generates one, and having both is a
+/// conflicting-implementation error. `Asset` needs it as a supertrait either way.
+#[derive(Asset, AsBindGroup, Clone, Reflect)]
 pub(crate) struct SkyMaterial {
     #[uniform(0)]
     pub params: SkyParams,
@@ -53,4 +55,8 @@ impl Material for SkyMaterial {
 /// Registers the procedural sky material.
 pub fn plugin(app: &mut App) {
     app.add_plugins(MaterialPlugin::<SkyMaterial>::default());
+    // `register_asset_reflect` rather than `register_type`: the inspector lists assets
+    // by filtering the registry for `ReflectAsset`, which only this adds. With plain
+    // `register_type` the material is registered and still never appears.
+    app.register_asset_reflect::<SkyMaterial>();
 }

@@ -13,20 +13,27 @@ use crate::sky_material::{SkyMaterial, SkyParams};
 const SKY_DOME_RADIUS: f32 = 500.0;
 
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
-#[derive(Component)]
+#[derive(Component, Reflect)]
+#[reflect(Component)]
 struct SkyDome;
 
 /// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
+        .register_type::<SkyDome>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
+        // Only the material push depends on the settings; the dome has to follow the
+        // camera every frame regardless.
         .add_systems(
             Update,
-            (apply_sky_material, follow_camera).in_set(AppSystems::Update),
+            apply_sky_material
+                .in_set(AppSystems::Update)
+                .run_if(resource_exists_and_changed::<LightingSettings>),
         )
+        .add_systems(Update, follow_camera.in_set(AppSystems::Update))
         // Camera control is gameplay-only, so dragging over a menu does not
         // silently move the world behind it.
         .add_systems(
@@ -170,16 +177,10 @@ fn sky_params(settings: &LightingSettings) -> SkyParams {
 
 /// Push sky settings into the dome material, on load and on every hot reload.
 fn apply_sky_material(
-    settings: Option<Res<LightingSettings>>,
+    settings: Res<LightingSettings>,
     domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
-    let Some(settings) = settings else {
-        return;
-    };
-    if !settings.is_changed() {
-        return;
-    }
     for handle in &domes {
         if let Some(mut material) = materials.get_mut(&handle.0) {
             material.params = sky_params(&settings);
