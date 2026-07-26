@@ -110,7 +110,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // away from the zenith, so a hex covers the same angular size straight up as it
     // does near the horizon. A plain `dir.xz / dir.y` (gnomonic) projection instead
     // stretches cells to infinity as the view approaches the horizon.
-    let theta = acos(clamp(dir.y, -1.0, 1.0));
+    // `abs` mirrors the lower hemisphere onto the upper one, which keeps `theta` in
+    // [0, pi/2] and away from the projection's singularity at straight down — cells
+    // near it stretch into long radial streaks. The mirroring is not cosmetic: the
+    // gameplay camera looks *down*, so most of the sky on screen is below the horizon
+    // and has to carry proper clouds rather than smears.
+    let theta = acos(clamp(abs(dir.y), 0.0, 1.0));
     let azim = atan2(dir.z, dir.x);
     let p = vec2<f32>(cos(azim), sin(azim)) * theta * sky.hex_scale;
 
