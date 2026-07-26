@@ -17,12 +17,14 @@ use bevy::prelude::*;
 
 pub mod loader;
 pub mod settings;
+pub mod substances;
 
 pub use loader::{LoadSettings, SettingsRegistry};
 pub use settings::{
     to_color, CameraSettings, DisplaySettings, LightingSettings, PlayerSettings,
     PresentModeSetting, Rgb,
 };
+pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
@@ -41,6 +43,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<LightingSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>();
+
+    app.add_plugins(substances::plugin);
 
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<LightingSettings>("config/lighting.ron", CONFIG_EXTENSIONS)

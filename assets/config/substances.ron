@@ -1,0 +1,45 @@
+// What the world is made of.
+//
+// Each entry is a substance a voxel can be. Add one by adding an entry here — no
+// code change is needed.
+//
+// `air` is special and must always be present: it means empty space, and the game
+// checks for it constantly. Everything else is yours.
+(
+    substances: {
+        "air": (
+            // Never drawn. The colour is here only so the list has one shape.
+            color: (0.0, 0.0, 0.0),
+            // Nothing stands on air.
+            solid: false,
+            // There is nothing to dig out of it.
+            diggable: false,
+        ),
+
+        "grass": (
+            color: (0.35, 0.62, 0.30),
+            solid: true,
+            diggable: true,
+        ),
+
+        "dirt": (
+            color: (0.45, 0.33, 0.22),
+            solid: true,
+            diggable: true,
+        ),
+
+        "stone": (
+            color: (0.55, 0.55, 0.58),
+            solid: true,
+            diggable: true,
+        ),
+
+        // The floor of the world. Not diggable, so nothing can tunnel out the
+        // bottom of the map.
+        "bedrock": (
+            color: (0.25, 0.24, 0.28),
+            solid: true,
+            diggable: false,
+        ),
+    },
+)
