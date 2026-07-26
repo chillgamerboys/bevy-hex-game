@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use hex_assets::{to_color, GameAssets, PlayerSettings, SubstanceTable};
 use hex_core::{GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos};
 
-use crate::animation::Transformation;
+use hex_anim::Transformation;
+
 use crate::movement::{route, Body, Footing, Standing};
 use crate::pathing::HexPathingLine;
 

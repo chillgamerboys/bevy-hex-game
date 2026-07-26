@@ -5,8 +5,6 @@
 
 use bevy::prelude::*;
 
-/// Generic transform animation, independent of hexes.
-pub mod animation;
 /// Which columns a piece may step between.
 pub mod movement;
 /// Hex-specific movement along a route of columns.
@@ -18,6 +16,9 @@ pub use movement::{route, Body, Footing, Standing, MAX_STEP};
 pub use player::Player;
 
 /// Adds every gameplay system.
+///
+/// `hex_anim` is added here rather than by the binary because this crate is its only
+/// consumer: the animation engine is a dependency of movement, not a peer of it.
 pub fn plugin(app: &mut App) {
-    app.add_plugins((animation::plugin, player::plugin));
+    app.add_plugins((hex_anim::plugin, player::plugin));
 }

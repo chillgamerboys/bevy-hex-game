@@ -1,0 +1,16 @@
+[package]
+name = "hex_anim"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Generic transform animation, driven by the engine clock. Knows nothing about hexes."
+
+# Deliberately depends on neither hex_assets nor anything hex-shaped. This crate is
+# a tweening engine; the moment it learns what a tile is, it stops being reusable and
+# starts being gameplay. Cargo is what keeps that honest.
+[dependencies]
+bevy = { workspace = true }
+hex_core = { workspace = true }
+
+[lints]
+workspace = true
