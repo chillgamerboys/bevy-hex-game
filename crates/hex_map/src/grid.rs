@@ -31,7 +31,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<TilePos>()
         .register_type::<Headroom>()
         .add_message::<TerrainEdit>()
-        // Split across two sets rather than chained locally: `hex_gameplay` spawns
+        // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
         // local `.chain()` cannot order systems in another crate.
         .add_systems(

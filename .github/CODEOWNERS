@@ -14,7 +14,7 @@
 /assets/config/world.ron @chillgamerboys
 
 # Gameplay: the player, movement, and whatever turn system arrives.
-/crates/hex_gameplay/   @chillgamerboys
+/crates/hex_units/   @chillgamerboys
 
 # Shared vocabulary. A change here affects everyone by definition — HexCoord,
 # HexSpan, the screen states, and the ordering sets all live here.

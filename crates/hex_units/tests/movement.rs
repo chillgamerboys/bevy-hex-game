@@ -20,12 +20,12 @@ use bevy::picking::pointer::{Location, PointerButton, PointerId};
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_assets::{GameAssets, PlayerSettings};
+use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Screen, SubstanceId, TilePos, MAX_HEADROOM,
 };
-use hex_gameplay::player::{Player, StandsOn};
+use hex_units::{Enemy, Faction, Player, StandsOn};
 
 /// World height of the fake ground these tests stand things on.
 const GROUND: f32 = 2.0;
@@ -48,9 +48,13 @@ const BODY_LEVELS: hex_core::Level = 2;
 /// reason that has nothing to do with what it checks.
 const CRAWLSPACE: HexCoord = HexCoord::new_cubic(-2, 2, 0);
 
+/// Where the enemy starts. Off both the crawlspace and the line the click-to-move
+/// test walks, so neither test can fail for the other's reason.
+const ENEMY_START: HexCoord = HexCoord::new_cubic(1, 1, -2);
+
 /// A headless app with gameplay wired up, and a stand-in for the map.
 ///
-/// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this whole
+/// `hex_units` cannot depend on `hex_map` — that is the boundary this whole
 /// structure exists to enforce — so the tiles here are spawned by the test itself.
 /// That is not a workaround: it is the point. Gameplay consumes `HexCoord` and
 /// `HexSpan` components, and anything producing those will do.
@@ -92,8 +96,16 @@ fn test_app() -> App {
         color: (1.0, 0.2, 0.2),
         levels_tall: BODY_LEVELS,
     });
+    app.insert_resource(ScenarioSettings {
+        player: CubeCoord { x: 0, y: 0, z: 0 },
+        enemy: CubeCoord {
+            x: ENEMY_START.x(),
+            y: ENEMY_START.y(),
+            z: ENEMY_START.z(),
+        },
+    });
 
-    app.add_plugins(hex_gameplay::plugin);
+    app.add_plugins(hex_units::plugin);
 
     while app.plugins_state() != PluginsState::Cleaned {
         app.finish();
@@ -105,7 +117,7 @@ fn test_app() -> App {
 /// Flat ground across a small patch — as **two stacked runs per column**, which is
 /// what the real map produces.
 ///
-/// `hex_gameplay` cannot depend on `hex_map` — that is the boundary this structure
+/// `hex_units` cannot depend on `hex_map` — that is the boundary this structure
 /// exists to enforce — so the tiles are spawned by the test itself. That is not a
 /// workaround: gameplay consumes `TilePos`, `HexSpan`, `SubstanceId` and [`Headroom`],
 /// and anything producing those will do.
@@ -259,7 +271,7 @@ fn clicking_before_settings_load_does_not_panic() {
     app.init_state::<Screen>();
     // No GameAssets, no PlayerSettings: the state the game is in on the title
     // screen, before the loading screen has run.
-    app.add_plugins(hex_gameplay::plugin);
+    app.add_plugins(hex_units::plugin);
     app.update();
 
     let window = app.world_mut().spawn(Window::default()).id();
@@ -405,4 +417,94 @@ fn the_player_does_not_leak_across_screens() {
         .iter(app.world())
         .count();
     assert_eq!(count, 1, "re-entering should give exactly one player");
+}
+
+/// Teardown is keyed on [`Faction`], not on `Player`, so every unit is covered by the
+/// same system. An enemy that outlived the screen would accumulate one per visit —
+/// invisible until the fourth or fifth time somebody re-entered.
+#[test]
+fn no_unit_leaks_across_screens() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    let count = app
+        .world_mut()
+        .query_filtered::<Entity, With<Faction>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(count, 0, "a unit outlived the gameplay screen");
+
+    enter_gameplay(&mut app);
+    let count = app
+        .world_mut()
+        .query_filtered::<Entity, With<Faction>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(
+        count, 2,
+        "re-entering should give exactly the player and one enemy"
+    );
+}
+
+/// The enemy stands *on* its scenario coordinate, not at the world origin and not
+/// inside the terrain — the same regression the player already has a test for, which
+/// a second unit is perfectly capable of reproducing independently.
+#[test]
+fn the_enemy_spawns_where_the_scenario_says() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let mut query = app
+        .world_mut()
+        .query_filtered::<(&StandsOn, &Transform), With<Enemy>>();
+    let (standing, transform) = query
+        .iter(app.world())
+        .next()
+        .expect("an enemy should exist during gameplay");
+
+    assert_eq!(
+        standing.0.pos.coord, ENEMY_START,
+        "the enemy ignored its scenario coordinate"
+    );
+    assert_eq!(
+        standing.0.pos.level, GROUND_LEVEL,
+        "the enemy stood on a buried run instead of the surface"
+    );
+    assert!(
+        (transform.translation.y - GROUND).abs() < 1e-4,
+        "enemy is at y={} but the ground is at {GROUND}",
+        transform.translation.y
+    );
+}
+
+/// A coordinate whose components do not sum to zero is a designer's typo, not a
+/// crash. It falls back to the centre of the map and says so.
+#[test]
+fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
+    let mut app = test_app();
+    app.insert_resource(ScenarioSettings {
+        player: CubeCoord { x: 0, y: 0, z: 0 },
+        // 1 + 1 + 1 is not 0, so this is not a hex.
+        enemy: CubeCoord { x: 1, y: 1, z: 1 },
+    });
+    enter_gameplay(&mut app);
+
+    let mut query = app.world_mut().query_filtered::<&StandsOn, With<Enemy>>();
+    let standing = query
+        .iter(app.world())
+        .next()
+        .copied()
+        .expect("a bad coordinate should still produce an enemy");
+
+    assert_eq!(
+        standing.0.pos.coord,
+        HexCoord::ORIGIN,
+        "an impossible coordinate should fall back to the centre"
+    );
 }

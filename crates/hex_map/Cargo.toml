@@ -10,7 +10,7 @@ description = "The map: terrain generation, tile spawning, and map settings."
 # cannot see it. That is deliberate: this is the crate the map owner works in.
 #
 # It talks to the rest of the game through `hex_core`'s vocabulary: it spawns
-# entities carrying `HexCoord` and `HexSpan`, and `hex_gameplay` reads those
+# entities carrying `HexCoord` and `HexSpan`, and `hex_units` reads those
 # components off the entities rather than reaching for anything defined here.
 [dependencies]
 bevy = { workspace = true }

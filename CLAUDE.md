@@ -35,10 +35,10 @@ a plain blue window with only `Path not found` in the log.
 ## Workspace
 
 ```
-hex_core → hex_assets → {hex_map, hex_world, hex_gameplay, hex_dev} → hex_game
+hex_core → hex_assets → {hex_map, hex_world, hex_units, hex_dev} → hex_game
 ```
 
-**`hex_map`, `hex_world` and `hex_gameplay` must not depend on each other.** Shared
+**`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
@@ -180,5 +180,5 @@ footprint for anything larger, and units do not obstruct each other.
   can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
   rewritten when gameplay lands.
 - **Headless integration tests** live in `crates/hex_map/tests/` and
-  `crates/hex_gameplay/tests/`. They cannot see anything visual — a black sky or a
+  `crates/hex_units/tests/`. They cannot see anything visual — a black sky or a
   mistransformed tile still needs a human looking at the window.

@@ -83,7 +83,7 @@ impl Plugin for AppPlugin {
         app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
 
         // World construction is split across crates — `hex_map` builds the terrain,
-        // `hex_gameplay` spawns the player onto it — and systems in the same
+        // `hex_units` spawns the player onto it — and systems in the same
         // `OnEnter` schedule otherwise run in unspecified order. Chaining also gives
         // each step a sync point, so entities spawned by one set are queryable by
         // the next.
@@ -101,7 +101,7 @@ impl Plugin for AppPlugin {
             hex_assets::plugin,
             hex_map::plugin,
             hex_world::plugin,
-            hex_gameplay::plugin,
+            hex_units::plugin,
             screens::plugin,
             menus::plugin,
         ));

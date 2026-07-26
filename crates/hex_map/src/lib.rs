@@ -3,7 +3,7 @@
 //! # This crate is a leaf
 //!
 //! Nothing depends on `hex_map` except the binary that wires it up. `hex_world`,
-//! `hex_gameplay`, `hex_core` and `hex_assets` cannot see it, which means changes
+//! `hex_units`, `hex_core` and `hex_assets` cannot see it, which means changes
 //! here cannot break the camera, the player, the screens or the menus. Cargo
 //! enforces that — it is not a convention to remember.
 //!
@@ -15,7 +15,7 @@
 //! Through components, not through this crate's types.
 //!
 //! Tile entities are spawned carrying [`HexCoord`](hex_core::HexCoord) and
-//! [`HexSpan`](hex_core::HexSpan) — both defined in `hex_core`. `hex_gameplay`
+//! [`HexSpan`](hex_core::HexSpan) — both defined in `hex_core`. `hex_units`
 //! queries those components off the entities. It never reads [`HeightMap`] or any
 //! other type defined here.
 //!

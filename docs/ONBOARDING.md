@@ -119,7 +119,7 @@ crates/
   hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
   hex_world/     camera and sky
-  hex_gameplay/  the player and movement
+  hex_units/  the player and movement
   hex_dev/       the inspector
   hex_game/      wiring it all together
 assets/

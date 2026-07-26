@@ -45,11 +45,11 @@ version:
 | Voxels, terrain, tile spawning, map settings | `hex_map` |
 | Asset loading, shared settings | `hex_assets` |
 | Sky and camera | `hex_world` |
-| Rules: input, movement, interaction | `hex_gameplay` |
+| Rules: input, movement, interaction | `hex_units` |
 | A debug tool | `hex_dev` |
 | A screen or menu | `hex_game` |
 
-**`hex_map`, `hex_world` and `hex_gameplay` may not depend on each other.** If you
+**`hex_map`, `hex_world` and `hex_units` may not depend on each other.** If you
 need something in more than one, it belongs in `hex_core`. Cargo will stop you either
 way; this is just the reason.
 

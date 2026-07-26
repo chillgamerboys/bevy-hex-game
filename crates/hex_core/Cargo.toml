@@ -8,7 +8,7 @@ description = "Shared vocabulary and pure domain logic: hex coordinates, terrain
 # Deliberately depends on Bevy's sub-crates rather than the `bevy` facade: this
 # crate has no rendering and no `App`, so it must stay buildable and testable
 # without pulling in a renderer. Anything needing `bevy::prelude` belongs in
-# hex_world or hex_gameplay instead.
+# hex_world or hex_units instead.
 [dependencies]
 bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
 bevy_math = { workspace = true }

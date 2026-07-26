@@ -23,7 +23,7 @@ explains the voxel representation and the rules everything else depends on.
 ## Your blast radius is bounded, deliberately
 
 **Nothing depends on `hex_map` except the binary.** `hex_core`, `hex_assets`,
-`hex_world` and `hex_gameplay` cannot see it. Cargo enforces this — a `use hex_map::`
+`hex_world` and `hex_units` cannot see it. Cargo enforces this — a `use hex_map::`
 in any of them fails to compile.
 
 The consequence: **you cannot break gameplay, the camera, the sky, the screens or
@@ -46,7 +46,7 @@ commands.spawn((
 ));
 ```
 
-`hex_gameplay` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
+`hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
 `With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
 write interface.
 
@@ -167,7 +167,7 @@ Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 ```rust
 GameplaySetup::Resources   // insert resources — the height map goes here
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
-GameplaySetup::Actors      // hex_gameplay's, not yours; needs tiles to exist
+GameplaySetup::Actors      // hex_units's, not yours; needs tiles to exist
 ```
 
 **Do not put tile spawning outside `Terrain`.** Systems in one `OnEnter` schedule run
@@ -205,6 +205,18 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but the
 world is only rebuilt on entering gameplay — press `BACKSPACE` then `ENTER` to see
 terrain changes.
+
+### Putting pieces on your terrain
+
+`assets/config/scenario.ron` holds two cube coordinates: where the player starts and
+where the enemy starts. Move them onto the part of the map you want to try out, then
+`BACKSPACE`/`ENTER` to rebuild.
+
+This is the fastest way to answer questions the tests cannot: is that ridge actually
+climbable, can a piece cross the bridge, is the far side of the valley reachable at
+all. A coordinate that does not sum to zero, or that has no standable ground, falls
+back to the centre of the map and says so in the terminal rather than failing to
+start.
 
 `HeightGenerator` implementations **must be pure**: the same coordinate must always
 give the same height. Results are cached, so an impure generator produces terrain

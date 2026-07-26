@@ -55,7 +55,7 @@ crates/
   hex_assets/     # asset handles, RON settings and their loader
   hex_map/        # the map: voxels, terrain, tile spawning, map settings
   hex_world/      # sky and camera
-  hex_gameplay/   # player, picking, movement, animation
+  hex_units/   # player, picking, movement, animation
   hex_dev/        # world inspector (dev feature only)
   hex_game/       # the binary: app setup, screens, menus
 assets/

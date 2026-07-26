@@ -1,7 +1,7 @@
 //! App-wide vocabulary: screen states, pause state, and system ordering.
 //!
 //! These live in `hex_core` rather than in the binary because `hex_world` and
-//! `hex_gameplay` both need to gate systems on them, and those two crates are
+//! `hex_units` both need to gate systems on them, and those two crates are
 //! forbidden from depending on each other.
 
 use bevy_ecs::prelude::*;
@@ -49,7 +49,7 @@ pub struct PausableSystems;
 ///
 /// Building a world has a dependency chain — resources, then the terrain, then the
 /// things standing on the terrain — and each step lives in a different crate.
-/// `hex_map` builds the map; `hex_gameplay` spawns the player onto it. Systems added
+/// `hex_map` builds the map; `hex_units` spawns the player onto it. Systems added
 /// to the same `OnEnter` schedule otherwise run in **unspecified order**, and
 /// `.chain()` cannot express ordering across a crate boundary because neither crate
 /// can see the other's systems.

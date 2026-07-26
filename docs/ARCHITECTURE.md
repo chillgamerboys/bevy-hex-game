@@ -12,7 +12,7 @@ contact with the next change.
                        │
       ┌───────────┬────┴────┬───────────┐
       │           │         │           │
-  hex_world   hex_gameplay  hex_map   hex_dev
+  hex_world   hex_units  hex_map   hex_dev
       │           │         │           │
       └───────────┴────┬────┴───────────┘
                        │
@@ -33,7 +33,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_gameplay` | Player, picking, movement, body size, animation | `hex_core`, `hex_assets` |
+| `hex_units` | Player, picking, movement, body size, animation | `hex_core`, `hex_assets` |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy only |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
 
@@ -45,7 +45,7 @@ camera, the sky, the screens or the menus, because none of them can see it.
 
 The map reaches the rest of the game **only through components**. Tiles are spawned
 carrying a `HexCoord`, a `TilePos`, a `HexSpan`, a `SubstanceId` and a `Headroom`;
-`hex_gameplay` queries those. Nothing outside `hex_map` references `VoxelMap` or any
+`hex_units` queries those. Nothing outside `hex_map` references `VoxelMap` or any
 generator, so terrain storage and generation can be replaced wholesale without anyone
 noticing.
 
@@ -58,12 +58,12 @@ into the map, so a spell that digs or builds requests it and the map applies it.
 
 See [MAP_MODEL.md](MAP_MODEL.md) for the voxel model itself.
 
-`hex_gameplay`'s integration tests spawn their own stand-in terrain, which is the
+`hex_units`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
 
 ### The rule that carries the most weight
 
-**`hex_world`, `hex_gameplay` and `hex_map` must never depend on each other.**
+**`hex_world`, `hex_units` and `hex_map` must never depend on each other.**
 
 Presentation, rules and content are the three things that most want to reach into
 each other, and the ones that become most painful to separate once they have. Before
@@ -97,7 +97,7 @@ than fixed — an abstraction that *can* express the forbidden thing eventually 
 
 A step is one level, so the rule is an integer comparison rather than a float
 epsilon — which is the concrete payoff for quantising the vertical axis. Which
-abilities ignore the rule is movement design and lives in `hex_gameplay`.
+abilities ignore the rule is movement design and lives in `hex_units`.
 
 ### Why `hex_core` avoids the `bevy` facade
 
@@ -134,7 +134,7 @@ sets make the intended order explicit:
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 
-The first: `hex_map` builds the world; `hex_gameplay` spawns the player that
+The first: `hex_map` builds the world; `hex_units` spawns the player that
 stands on the tiles built from it. Both run in the same `OnEnter` schedule, and the
 crates cannot see each other, so `.chain()` could not express the dependency. A local
 chain looked correct and raced in practice — a nondeterministic panic that would most
@@ -244,14 +244,14 @@ evidence that a change worked — **look at the window**.
 
 Two layers, 94 tests.
 
-**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_gameplay`, none of
+**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
 which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
 the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
 id assignment, and the movement rules — including that a two-level body is refused a
 one-voxel crawlspace a one-level body walks into.
 
 **Integration tests** run a headless `App` with `MinimalPlugins` and inspect the
-world afterwards — `crates/hex_map/tests/` and `crates/hex_gameplay/tests/`. They
+world afterwards — `crates/hex_map/tests/` and `crates/hex_units/tests/`. They
 exist because every bug found in this codebase was found by a person clicking, and
 the worst of them were green across compiler, clippy, unit tests and CI.
 

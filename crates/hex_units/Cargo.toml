@@ -1,9 +1,9 @@
 [package]
-name = "hex_gameplay"
+name = "hex_units"
 version.workspace = true
 edition.workspace = true
 publish = false
-description = "Player, input, picking, and movement."
+description = "The things that stand on the map: bodies, positions, and where they may step."
 
 # Must NOT depend on hex_world or hex_map. The three talk through components and
 # states defined in hex_core; cargo is what enforces that.

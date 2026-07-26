@@ -11,6 +11,7 @@ Rust, and you do not need to rebuild anything.
 | `camera.ron` | How fast the camera pans, how far it can zoom and tilt |
 | `lighting.ron` | Sun brightness and angle, sky colour, ambient light |
 | `player.ron` | Player size, movement speed, colour, how many levels tall |
+| `scenario.ron` | Where the player and the enemy start — **use this to test a map** |
 | `display.ron` | Vsync / frame rate behaviour |
 
 ## Seeing your changes
@@ -34,6 +35,7 @@ How quickly you *see* the change depends on which file:
 | `substances.ron` | On the next world rebuild |
 | `lighting.ron` | On the next world rebuild |
 | `player.ron` | Movement speed straight away; size, colour and `levels_tall` on the next rebuild |
+| `scenario.ron` | On the next world rebuild |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then
 `ENTER` to start again. It takes under a second and picks up your edit.
