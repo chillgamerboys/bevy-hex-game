@@ -38,13 +38,11 @@
             world: "config/world.ron",
             // No `lighting`, so this one gets `config/lighting.ron`.
             units: (
-                // The centre of the map, which on this world is the bridge deck --
-                // the river runs underneath.
-                player: (x: 0, y: 0, z: 0),
+                // Opposite ends of the bridge, so the first movement test is the
+                // crossing this scenario is built around.
+                player: (x: 0, y: 4, z: -4),
 
-                // Six hexes east: far enough to walk around before anything happens,
-                // close enough to find without hunting.
-                enemy: (x: 6, y: -6, z: 0),
+                enemy: (x: 0, y: -4, z: 4),
             ),
         ),
         (

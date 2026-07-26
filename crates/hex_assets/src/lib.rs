@@ -24,7 +24,7 @@ pub mod substances;
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
-pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
+pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
     to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
     PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,

@@ -39,8 +39,8 @@ How quickly you *see* the change depends on which file:
 | `scenarios.ron` | On the next world rebuild |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then
-`ENTER` to start again. It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
+the scenario you want to start again. It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either

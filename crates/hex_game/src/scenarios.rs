@@ -16,8 +16,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, LightingSettings, ScenarioLibrary, SelectSettings, SelectedScenario,
-    SettingsRegistry, CONFIG_EXTENSIONS,
+    choose_settings, LightingSettings, Scenario, SelectSettings, SettingsRegistry,
+    CONFIG_EXTENSIONS,
 };
 use hex_core::Screen;
 use hex_map::MapSettings;
@@ -31,33 +31,37 @@ pub(super) fn plugin(app: &mut App) {
     // `hex_assets` no longer loads `lighting.ron` at startup -- two mechanisms writing
     // one resource is the collision `hex_map` already had.
     app.select_settings::<LightingSettings>(CONFIG_EXTENSIONS);
-    app.init_resource::<SelectedScenario>();
-    app.register_type::<SelectedScenario>();
     app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario);
 }
+
+/// The exact scenario whose button was clicked.
+///
+/// The library can hot-reload between the title-screen click and the next frame's
+/// `OnEnter(Loading)`. Carrying the entry itself keeps a reorder or removal from
+/// changing what that click means.
+#[derive(Resource, Debug, Clone)]
+pub(super) struct ScenarioToLoad(pub(super) Scenario);
 
 /// Asks for the chosen scenario's world, and installs its unit placements.
 fn apply_selected_scenario(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut registry: ResMut<SettingsRegistry>,
-    library: Option<Res<ScenarioLibrary>>,
-    selected: Res<SelectedScenario>,
+    pending: Option<Res<ScenarioToLoad>>,
+    mut next: ResMut<NextState<Screen>>,
 ) {
-    let Some(scenario) = library
-        .as_deref()
-        .and_then(|library| library.scenarios.get(selected.0))
-    else {
-        // Reachable if `scenarios.ron` hot-reloads shorter than the current selection.
-        // Returning without marking anything pending is the important part: leaving a
-        // pending entry here would hold the loading screen up for a file nobody asked
-        // for, with no way back.
-        error!(
-            "no scenario at index {} — the world will be whatever was last loaded",
-            selected.0
-        );
+    let Some(pending) = pending else {
+        // A direct state transition (for example from the inspector) must not let the
+        // loading gate reuse a previous scenario or enter gameplay without settings.
+        // State changes requested from OnEnter are applied before the PostUpdate
+        // readiness gate, so returning to title is sufficient and leaves the registry
+        // truthful.
+        next.set(Screen::Title);
+        error!("loading entered without a clicked scenario; returning to the title screen");
         return;
     };
+    let scenario = pending.0.clone();
+    commands.remove_resource::<ScenarioToLoad>();
 
     info!("starting scenario: {}", scenario.name);
     commands.insert_resource(scenario.units.clone());
@@ -80,11 +84,11 @@ mod tests {
     use bevy::prelude::*;
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::{
-        CubeCoord, LightingSettings, ScenarioLibrary, SelectedScenario, SettingsRegistry,
-    };
+    use hex_assets::{CubeCoord, LightingSettings, ScenarioLibrary, SettingsRegistry};
     use hex_core::Screen;
     use hex_map::MapSettings;
+
+    use super::ScenarioToLoad;
 
     fn library() -> ScenarioLibrary {
         ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
@@ -226,6 +230,20 @@ mod tests {
         }
     }
 
+    /// The showcase starts with one unit at each end of its defining crossing.
+    #[test]
+    fn the_crossing_starts_units_at_opposite_bridge_landings() {
+        let library = library();
+        let crossing = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "The Crossing")
+            .expect("the shipped library should contain The Crossing");
+
+        assert_eq!(crossing.units.player, CubeCoord { x: 0, y: 4, z: -4 });
+        assert_eq!(crossing.units.enemy, CubeCoord { x: 0, y: -4, z: 4 });
+    }
+
     /// A harness that can actually reach gameplay, with no renderer.
     ///
     /// `BEVY_ASSET_ROOT` is set for test binaries too, so `config/world.ron` and the
@@ -243,6 +261,53 @@ mod tests {
             app.cleanup();
         }
         app
+    }
+
+    fn enter_gameplay_if_registry_is_ready(
+        registry: Res<SettingsRegistry>,
+        mut next: ResMut<NextState<Screen>>,
+    ) {
+        if registry.all_loaded() {
+            next.set(Screen::Gameplay);
+        }
+    }
+
+    /// Loading is only valid after a scenario button has supplied a snapshot.
+    ///
+    /// The loading gate runs in PostUpdate, after the return requested from OnEnter
+    /// has already taken effect.
+    #[test]
+    fn loading_without_a_scenario_snapshot_returns_to_title() {
+        let mut app = test_app();
+        app.add_systems(
+            PostUpdate,
+            enter_gameplay_if_registry_is_ready.run_if(in_state(Screen::Loading)),
+        );
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Loading);
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert!(
+            app.world().resource::<SettingsRegistry>().all_loaded(),
+            "returning to title left the settings registry falsely pending"
+        );
+        assert!(
+            !app.world()
+                .contains_resource::<hex_assets::ScenarioSettings>(),
+            "loading without a click reused stale scenario placements"
+        );
+
+        assert_ne!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Gameplay,
+            "the loading gate reused a previous world without a scenario click"
+        );
     }
 
     /// Runs frames until the world for the chosen scenario has been installed.
@@ -268,7 +333,14 @@ mod tests {
     }
 
     fn choose(app: &mut App, index: usize) {
-        app.world_mut().resource_mut::<SelectedScenario>().0 = index;
+        let scenario = app
+            .world()
+            .resource::<ScenarioLibrary>()
+            .scenarios
+            .get(index)
+            .cloned()
+            .expect("the requested scenario should exist");
+        app.insert_resource(ScenarioToLoad(scenario));
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Loading);

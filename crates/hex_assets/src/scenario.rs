@@ -62,14 +62,6 @@ fn shipped_lighting() -> String {
     "config/lighting.ron".to_owned()
 }
 
-/// Which scenario the title screen is offering to start.
-///
-/// Survives leaving gameplay, so returning to the title screen shows the last choice
-/// still selected rather than resetting to the top of the list.
-#[derive(Resource, Reflect, Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[reflect(Resource)]
-pub struct SelectedScenario(pub usize);
-
 #[cfg(test)]
 mod tests {
     use super::*;

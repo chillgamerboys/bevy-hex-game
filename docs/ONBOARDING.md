@@ -14,10 +14,9 @@ cargo dev
 ```
 
 The first build takes 10–20 minutes; it is compiling the entire game engine. After
-that it is seconds. You should get a window with a hex grid, a red piece in the
-middle, and a sky.
+that it is seconds. You should get a title screen listing the available scenarios.
 
-Press `ENTER` at the title screen. Then:
+Click **The Crossing**. You should get a hex grid, two pieces, and a sky. Then:
 
 | | |
 |---|---|

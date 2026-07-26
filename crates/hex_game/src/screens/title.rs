@@ -16,10 +16,11 @@
 //! has already shipped that crash once on this very screen.
 
 use bevy::prelude::*;
-use hex_assets::{ScenarioLibrary, SelectedScenario};
+use hex_assets::{Scenario, ScenarioLibrary};
 use hex_core::Screen;
 
 use crate::menus::widgets::{blurb, button, label, LABEL, MUTED};
+use crate::scenarios::ScenarioToLoad;
 
 use super::{despawn_screen, screen_root};
 
@@ -37,9 +38,11 @@ pub(super) fn plugin(app: &mut App) {
 #[derive(Component)]
 struct ScenarioList;
 
-/// A button that starts the scenario at this index.
+/// A button carrying the exact scenario it will start.
 #[derive(Component)]
-struct StartsScenario(usize);
+struct StartsScenario {
+    scenario: Scenario,
+}
 
 /// The line that stands in for the list until the library has loaded.
 #[derive(Component)]
@@ -109,9 +112,14 @@ fn rebuild_scenario_list(
         commands.entity(stale).despawn();
     }
 
-    for (index, scenario) in library.scenarios.iter().enumerate() {
+    for scenario in &library.scenarios {
         let entry = commands
-            .spawn((button("Scenario"), StartsScenario(index)))
+            .spawn((
+                button("Scenario"),
+                StartsScenario {
+                    scenario: scenario.clone(),
+                },
+            ))
             .with_children(|entry| {
                 entry.spawn(label(scenario.name.clone()));
                 entry.spawn(blurb(scenario.blurb.clone()));
@@ -123,13 +131,13 @@ fn rebuild_scenario_list(
 
 /// Starts whichever scenario was clicked.
 fn start_chosen_scenario(
+    mut commands: Commands,
     clicked: Query<(&Interaction, &StartsScenario), Changed<Interaction>>,
-    mut selected: ResMut<SelectedScenario>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     for (interaction, starts) in &clicked {
         if *interaction == Interaction::Pressed {
-            selected.0 = starts.0;
+            commands.insert_resource(ScenarioToLoad(starts.scenario.clone()));
             next.set(Screen::Loading);
         }
     }
@@ -153,32 +161,48 @@ mod tests {
         CubeCoord { x, y, z }
     }
 
-    fn library() -> ScenarioLibrary {
-        ScenarioLibrary {
-            scenarios: vec![Scenario {
-                name: "First".to_owned(),
-                blurb: "A map.".to_owned(),
-                world: "config/world.ron".to_owned(),
-                lighting: "config/lighting.ron".to_owned(),
-                units: ScenarioSettings {
-                    player: at(0, 0, 0),
-                    enemy: at(1, -1, 0),
-                },
-            }],
+    fn scenario(name: &str, enemy: CubeCoord) -> Scenario {
+        Scenario {
+            name: name.to_owned(),
+            blurb: "A map.".to_owned(),
+            world: "config/world.ron".to_owned(),
+            lighting: "config/lighting.ron".to_owned(),
+            units: ScenarioSettings {
+                player: at(0, 0, 0),
+                enemy,
+            },
         }
     }
 
-    fn test_app() -> App {
+    fn library() -> ScenarioLibrary {
+        ScenarioLibrary {
+            scenarios: vec![scenario("First", at(1, -1, 0))],
+        }
+    }
+
+    fn two_scenario_library() -> ScenarioLibrary {
+        ScenarioLibrary {
+            scenarios: vec![
+                scenario("First", at(1, -1, 0)),
+                scenario("Second", at(2, -2, 0)),
+            ],
+        }
+    }
+
+    fn test_app_with(library: ScenarioLibrary) -> App {
         let mut app = App::new();
         // `InputPlugin` because `handle_input` reads `ButtonInput<KeyCode>`, which
         // `MinimalPlugins` does not provide -- and a missing system parameter is a
         // panic rather than a skipped system.
         app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
         app.init_state::<Screen>();
-        app.init_resource::<SelectedScenario>();
-        app.insert_resource(library());
+        app.insert_resource(library);
         app.add_plugins(super::plugin);
         app
+    }
+
+    fn test_app() -> App {
+        test_app_with(library())
     }
 
     fn go_to(app: &mut App, screen: Screen) {
@@ -194,6 +218,15 @@ mod tests {
             .world_mut()
             .query_filtered::<Entity, With<StartsScenario>>();
         query.iter(app.world()).count()
+    }
+
+    fn button_named(app: &mut App, name: &str) -> Entity {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &StartsScenario)>();
+        query
+            .iter(world)
+            .find_map(|(entity, starts)| (starts.scenario.name == name).then_some(entity))
+            .expect("the requested scenario button should exist")
     }
 
     /// The menu still has its scenarios when you come back to it.
@@ -240,7 +273,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
         app.init_state::<Screen>();
-        app.init_resource::<SelectedScenario>();
         app.add_plugins(super::plugin);
 
         go_to(&mut app, Screen::Title);
@@ -251,5 +283,48 @@ mod tests {
         app.update();
 
         assert_eq!(buttons(&mut app), 1, "the library arrived and was ignored");
+    }
+
+    /// A click means the entry that was drawn, even if a hot reload has reordered the
+    /// library before that click is processed.
+    #[test]
+    fn reordering_the_library_cannot_change_an_in_flight_click() {
+        let mut app = test_app_with(two_scenario_library());
+        go_to(&mut app, Screen::Title);
+        let first_button = button_named(&mut app, "First");
+
+        let mut reordered = two_scenario_library();
+        reordered.scenarios.reverse();
+        app.insert_resource(reordered);
+        app.world_mut()
+            .entity_mut(first_button)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let pending = app.world().resource::<ScenarioToLoad>();
+        assert_eq!(
+            pending.0.name, "First",
+            "the old First button was reinterpreted through the reordered library"
+        );
+    }
+
+    /// Removing an entry cannot invalidate a click that already landed on its button.
+    #[test]
+    fn removing_the_clicked_entry_cannot_invalidate_an_in_flight_click() {
+        let mut app = test_app_with(two_scenario_library());
+        go_to(&mut app, Screen::Title);
+        let second_button = button_named(&mut app, "Second");
+
+        app.insert_resource(library());
+        app.world_mut()
+            .entity_mut(second_button)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let pending = app.world().resource::<ScenarioToLoad>();
+        assert_eq!(
+            pending.0.name, "Second",
+            "removing Second from the library discarded the click on its existing button"
+        );
     }
 }
