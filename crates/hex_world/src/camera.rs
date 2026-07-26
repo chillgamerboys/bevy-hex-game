@@ -297,6 +297,45 @@ fn pan_camera(
     }
 }
 
+/// Applies one vertical drag while keeping the camera inside its configured pitch arc.
+///
+/// Pitch is measured as the signed angle downward from the horizon. The settings store
+/// the limits as fractions of a quarter-turn, so `0.0` is level and `1.0` is straight
+/// down. Integrating the scalar angle before building the quaternion avoids losing
+/// which side of straight down a large cursor movement crossed.
+fn apply_pitch_delta(rotation: Quat, downward_delta: f32, min_pitch: f32, max_pitch: f32) -> Quat {
+    if !downward_delta.is_finite()
+        || !min_pitch.is_finite()
+        || !max_pitch.is_finite()
+        || !(0.0..=1.0).contains(&min_pitch)
+        || !(0.0..=1.0).contains(&max_pitch)
+        || min_pitch > max_pitch
+    {
+        return rotation;
+    }
+
+    let current = downward_pitch(rotation);
+    if !current.is_finite() {
+        return rotation;
+    }
+
+    let min_angle = min_pitch * std::f32::consts::FRAC_PI_2;
+    let max_angle = max_pitch * std::f32::consts::FRAC_PI_2;
+    let wanted = current + downward_delta;
+    let clamped = wanted.max(min_angle).min(max_angle);
+
+    // A negative local-X rotation pitches the camera downward, so moving from
+    // `current` to `clamped` uses their difference in this order.
+    rotation * Quat::from_rotation_x(current - clamped)
+}
+
+/// Signed angle downward from the horizon for a camera rotation.
+fn downward_pitch(rotation: Quat) -> f32 {
+    let forward_y = (rotation * Vec3::NEG_Z).y;
+    let up_y = (rotation * Vec3::Y).y;
+    (-forward_y).atan2(up_y)
+}
+
 /// Pan the camera with WASD, zoom with scroll wheel, orbit with right mouse drag.
 ///
 /// Uses `CursorMoved` rather than raw `MouseMotion` because Wayland (and therefore
@@ -347,24 +386,13 @@ fn orbit_camera(
             let delta_x = rotation_move.x / window.x * std::f32::consts::PI * 2.0;
             let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
             let yaw = Quat::from_rotation_y(-delta_x);
-            let pitch = Quat::from_rotation_x(-delta_y);
             transform.rotation = yaw * transform.rotation; // rotate around global y axis
-            transform.rotation *= pitch; // rotate around local x axis
-
-            // assert pitch limits
-            let mut tilt = (transform.rotation * Vec3::Y).y;
-            let below_board = (transform.rotation * Vec3::Z).y < 0.0;
-            if below_board {
-                tilt = 2. - tilt;
-            }
-            let mut adjustment = 0.0;
-            if tilt < settings.min_pitch {
-                adjustment = settings.min_pitch - tilt;
-            } else if tilt > settings.max_pitch {
-                adjustment = settings.max_pitch - tilt;
-            } //TODO: max down tilt is a little buggy
-            let adjustment = Quat::from_rotation_x(adjustment);
-            transform.rotation *= adjustment;
+            transform.rotation = apply_pitch_delta(
+                transform.rotation,
+                delta_y,
+                settings.min_pitch,
+                settings.max_pitch,
+            );
         } else if scroll.abs() > 0.0 {
             any = true;
             pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
@@ -440,6 +468,75 @@ mod tests {
         assert!((camera.radius - eye.distance(focus)).abs() < 1e-5);
         let forward = transform.forward().as_vec3();
         assert!(forward.dot((focus - eye).normalize()) > 0.9999);
+    }
+
+    fn rotation_at_pitch(angle: f32) -> Quat {
+        Quat::from_rotation_x(-angle)
+    }
+
+    fn assert_pitch(rotation: Quat, expected: f32) {
+        let actual = downward_pitch(rotation);
+        assert!(
+            (actual - expected).abs() < 1e-5,
+            "expected pitch {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn pitch_delta_clamps_to_angular_limits() {
+        let min_pitch = 0.25;
+        let max_pitch = 0.95;
+        let min_angle = min_pitch * std::f32::consts::FRAC_PI_2;
+        let max_angle = max_pitch * std::f32::consts::FRAC_PI_2;
+        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
+
+        assert_pitch(
+            apply_pitch_delta(rotation_at_pitch(middle), -10.0, min_pitch, max_pitch),
+            min_angle,
+        );
+        assert_pitch(
+            apply_pitch_delta(rotation_at_pitch(middle), 10.0, min_pitch, max_pitch),
+            max_angle,
+        );
+        assert_pitch(
+            apply_pitch_delta(rotation_at_pitch(middle), 0.1, min_pitch, max_pitch),
+            middle + 0.1,
+        );
+    }
+
+    #[test]
+    fn pitch_delta_cannot_flip_across_straight_down() {
+        let min_pitch = 0.25;
+        let max_pitch = 0.95;
+        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
+
+        // One full-window cursor jump produces a PI-radian delta. Applying that raw
+        // before measuring the tilt used to cross straight down and leave the camera
+        // inverted instead of at its lower-looking limit.
+        let rotation = apply_pitch_delta(
+            rotation_at_pitch(middle),
+            std::f32::consts::PI,
+            min_pitch,
+            max_pitch,
+        );
+
+        assert_pitch(rotation, max_pitch * std::f32::consts::FRAC_PI_2);
+        assert!((rotation * Vec3::Y).y > 0.0, "the camera ended upside down");
+    }
+
+    #[test]
+    fn pitch_delta_preserves_yaw() {
+        let yaw = 1.1;
+        let middle = 0.5 * std::f32::consts::FRAC_PI_2;
+        let before = Quat::from_rotation_y(yaw) * rotation_at_pitch(middle);
+        let after = apply_pitch_delta(before, 0.2, 0.25, 0.95);
+        let before_heading = (before * Vec3::NEG_Z).xz().normalize();
+        let after_heading = (after * Vec3::NEG_Z).xz().normalize();
+
+        assert!(
+            before_heading.dot(after_heading) > 0.9999,
+            "local pitch changed the camera's yaw"
+        );
     }
 
     #[test]

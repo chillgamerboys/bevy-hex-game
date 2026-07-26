@@ -1,7 +1,7 @@
 // Grid shape and terrain generation.
 //
 // Safe to edit while the game is running: saving reloads these settings. The
-// existing world does not rebuild automatically; press BACKSPACE, then ENTER.
+// existing world does not rebuild automatically; press BACKSPACE, then click its scenario.
 (
     // Radius 12 is 469 columns: small enough to inspect as one complete test map.
     grid_radius: 12,

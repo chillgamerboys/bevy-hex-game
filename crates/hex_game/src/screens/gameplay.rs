@@ -43,10 +43,14 @@ fn spawn_hud(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(12.0),
                 left: Val::Px(12.0),
+                right: Val::Px(12.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.03, 0.04, 0.05, 0.78)),
             // Without this the HUD swallows clicks on any tile behind it, and
-            // click-to-move silently stops working in the bottom-left corner.
+            // click-to-move silently stops working along the bottom edge.
             Pickable::IGNORE,
             DespawnOnExit(Screen::Gameplay),
         ))
@@ -55,7 +59,8 @@ fn spawn_hud(mut commands: Commands) {
                 HudText,
                 Text::new(exploring_hint()),
                 TextFont::from_font_size(14.0),
-                TextColor(Color::srgba(0.9, 0.9, 0.9, 0.7)),
+                TextColor(Color::srgb(0.94, 0.94, 0.94)),
+                Pickable::IGNORE,
             ));
         });
 }
@@ -130,5 +135,41 @@ fn handle_input(
     // Backspace rather than Escape, which is taken by pause.
     if keys.just_pressed(KeyCode::Backspace) {
         next_screen.set(Screen::Title);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::MinimalPlugins;
+
+    use super::*;
+
+    /// Every layer of the full-width HUD must let world picks pass through.
+    ///
+    /// Pickability is per entity, so ignoring only the backing node still leaves its
+    /// text able to swallow tile clicks.
+    #[test]
+    fn gameplay_hud_does_not_block_tile_clicks() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Startup, spawn_hud);
+        app.update();
+
+        let mut roots = app
+            .world_mut()
+            .query_filtered::<&Pickable, With<BackgroundColor>>();
+        assert!(
+            roots
+                .iter(app.world())
+                .any(|pickable| *pickable == Pickable::IGNORE),
+            "the HUD backing node blocks world picks"
+        );
+
+        let mut labels = app.world_mut().query_filtered::<&Pickable, With<HudText>>();
+        assert_eq!(
+            labels.iter(app.world()).next(),
+            Some(&Pickable::IGNORE),
+            "the HUD text blocks world picks"
+        );
     }
 }
