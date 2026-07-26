@@ -56,7 +56,7 @@ work neither person is responsible for.
 That has already happened once and is worth knowing about, because the code now
 deliberately does **not** do what a blocking review comment asked. Engagement keeps two
 units at one coordinate in the same fight however tall the column between them — see
-[GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md#the-high-ground) for the reasoning. The reviewer
+[systems/combat.md](systems/combat.md#the-high-ground) for the reasoning. The reviewer
 read it as a collapsed stack; it is the high ground working. Both readings are
 defensible, and the deciding vote went to the crate's owner rather than to whoever
 commented last.
@@ -77,7 +77,7 @@ from the inside of a column — let alone whether a body fits in the space above
 Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
 into the map, so a spell that digs or builds requests it and the map applies it.
 
-See [MAP_MODEL.md](MAP_MODEL.md) for the voxel model itself.
+See [systems/map.md](systems/map.md) for the voxel model itself.
 
 `hex_units`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
@@ -228,7 +228,7 @@ the chance to reject it.
 ## Settings
 
 Tunable values live in `assets/config/*.ron` and are editable without Rust. See
-[CONTENT.md](CONTENT.md).
+[development/config.md](development/config.md).
 
 On initial load, settings resources are **absent** until their file parses rather
 than falling back to a default. A default that silently diverges from what someone

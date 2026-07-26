@@ -9,7 +9,7 @@ the map-side work is stated per ask. Background and evidence:
 [roadmap.md](roadmap.md).
 
 The framing follows
-[ARCHITECTURE.md](../ARCHITECTURE.md#ownership-cuts-both-ways): design
+[architecture.md](../architecture.md#ownership-cuts-both-ways): design
 inside the map crate is yours; these asks only extend the published
 component/message contract, and each one says exactly where the boundary
 sits.
@@ -34,7 +34,7 @@ PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
 
 ## A′ — Movement classes (now via traversal profiles)
 
-**Need** ([DESIGN.md](../DESIGN.md#map)): swamp passable only to some
+**Need** ([the design](../design/game.md#map)): swamp passable only to some
 units, lava only to flying ones, water to swimmers.
 
 **Shape now that the pipeline has landed**: future movement modes become

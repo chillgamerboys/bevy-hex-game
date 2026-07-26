@@ -19,7 +19,7 @@ Everything about the map:
 Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
 non-programmer.
 
-**Read [`docs/MAP_MODEL.md`](../../docs/MAP_MODEL.md) before changing the model.** It
+**Read [`docs/systems/map.md`](../../docs/systems/map.md) before changing the model.** It
 explains the voxel representation and the rules everything else depends on.
 
 ## Your compile-time blast radius is bounded, deliberately
@@ -248,7 +248,7 @@ wrong until a person has looked at it.
 
 ## Further reading
 
-- [`docs/ONBOARDING.md`](../../docs/ONBOARDING.md) — start here if the vocabulary is new
-- [`docs/CONTENT.md`](../../docs/CONTENT.md) — editing settings without code
-- [`docs/ARCHITECTURE.md`](../../docs/ARCHITECTURE.md) — the whole crate graph and why
+- [`docs/development/onboarding.md`](../../docs/development/onboarding.md) — start here if the vocabulary is new
+- [`docs/development/config.md`](../../docs/development/config.md) — editing settings without code
+- [`docs/architecture.md`](../../docs/architecture.md) — the whole crate graph and why
 - [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — house style

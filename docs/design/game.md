@@ -14,7 +14,7 @@ than merely compiles.
 > `hex_core` is already a crate and the collision would be permanent. A crystal
 > lattice is a structured arrangement of gems, which is what the thing is, and it
 > carries the connectedness that adjacency-based power depends on. See
-> [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md).
+> [systems/combat.md](../systems/combat.md).
 
 ---
 

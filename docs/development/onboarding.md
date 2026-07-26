@@ -5,7 +5,7 @@ is drawn. It assumes no Rust and no game-engine experience, and it should get yo
 from nothing to a running game you can change.
 
 If you only want to tweak numbers — how tall the hills are, what colour the tiles
-are — you may not need this at all. Try [CONTENT.md](CONTENT.md) first.
+are — you may not need this at all. Try [config.md](config.md) first.
 
 ## 1. Run it
 
@@ -199,11 +199,11 @@ created yet. Usually a system in the wrong stage; see the scheduling notes in
 
 | | |
 |---|---|
-| [MAP_MODEL.md](MAP_MODEL.md) | How the map works: voxels, substances, and the rules |
-| [`crates/hex_map/CLAUDE.md`](../crates/hex_map/CLAUDE.md) | The rules for your crate. Your AI agent reads this automatically |
-| [CONTENT.md](CONTENT.md) | Changing settings without code |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Why the project is shaped this way |
-| [../CONTRIBUTING.md](../CONTRIBUTING.md) | House style and the checks |
+| [systems/map.md](../systems/map.md) | How the map works: voxels, substances, and the rules |
+| [`crates/hex_map/CLAUDE.md`](../../crates/hex_map/CLAUDE.md) | The rules for your crate. Your AI agent reads this automatically |
+| [config.md](config.md) | Changing settings without code |
+| [architecture.md](../architecture.md) | Why the project is shaped this way |
+| [CONTRIBUTING.md](../../CONTRIBUTING.md) | House style and the checks |
 
 If something in here turns out to be wrong or missing, changing it is a perfectly
 good first pull request.

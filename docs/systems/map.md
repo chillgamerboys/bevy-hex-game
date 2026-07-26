@@ -4,7 +4,7 @@ The world is made of **voxels**: hex prisms stacked in columns, each one made of
 substance. This describes the model, the vocabulary that goes with it, and the rules
 that everything else depends on.
 
-If you only want to change how the terrain looks, [CONTENT.md](CONTENT.md) is shorter.
+If you only want to change how the terrain looks, [development/config.md](../development/config.md) is shorter.
 
 ## The pieces
 
@@ -202,7 +202,7 @@ and the map applies it. That is the whole write path.
   gets. **`hexx::a_star` cannot supply that model**, despite being compiled in: it
   keys on `Hex` alone, so it cannot tell a bridge from the ground beneath it.
 - **Whether terrain takes a turn to change.** A turn order exists now — see
-  [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md) — but `TerrainEdit` is applied the moment it
+  [systems/combat.md](combat.md) — but `TerrainEdit` is applied the moment it
   arrives and costs nobody anything. Whether digging is an action is a design question.
 - **Whether stacked surfaces ever connect.** Teleport and tunnel are named in the design
   but not implemented. When they are, they belong in `hex_units` as explicit

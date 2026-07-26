@@ -9,7 +9,7 @@
 
 **Question asked:** what has to change, architecturally and operationally,
 for this codebase to become the commercial game
-[DESIGN.md](../DESIGN.md) describes — a Steam release with BG3-style
+[the design](../design/game.md) describes — a Steam release with BG3-style
 co-op planned later?
 
 **Scope agreed with both constraints in force:** multiplayer is

@@ -74,7 +74,7 @@ confirm the operator really wants a plan for it before continuing.
 
 Decide where the change lands **before** surveying code. The crate
 graph is enforced by Cargo, so routing is a correctness question, not
-a style one — read `docs/ARCHITECTURE.md` for the reasoning and
+a style one — read `docs/architecture.md` for the reasoning and
 `CONTRIBUTING.md`'s "Where code goes" table for the short version:
 
 | Adding | Goes in |
@@ -105,13 +105,19 @@ Two constraints the plan must respect:
 Prime the plan with complete information. In rough order:
 
 1. **Docs first**: `CLAUDE.md` (the operational summary and the
-   Bevy-0.19 trap list), then `docs/ARCHITECTURE.md` for structure,
-   and the area's own doc — `docs/MAP_MODEL.md` for anything touching
-   voxels/tiles, `docs/GAMEPLAY_LOOP.md` for turns/modes/movement,
-   `docs/DESIGN.md` for what the mechanic is *for*, `docs/CONTENT.md`
-   for RON-configurable values. `crates/hex_map/CLAUDE.md` if the
-   change is in the map. These state intent; code states reality —
-   note any doc/code drift for the plan's risks.
+   Bevy-0.19 trap list), then `docs/architecture.md` for structure,
+   and the area's own doc — `docs/systems/map.md` for anything touching
+   voxels/tiles, `docs/systems/combat.md` for turns/modes/movement,
+   `docs/design/game.md` for what the mechanic is *for*,
+   `docs/development/config.md` for RON-configurable values.
+   `crates/hex_map/CLAUDE.md` if the change is in the map.
+   `docs/README.md` indexes every doc if the right one is unclear.
+
+   These state intent; code states reality — note any doc/code drift
+   for the plan's risks. **`docs/planning/status.md` is the one
+   exception**: it is allowed to lag, so read it for what is a
+   placeholder and what each placeholder is waiting on, but trust the
+   code over it and correct it in passing when it is wrong.
 2. **Targeted code exploration**: locate the modules, components,
    systems, and tests the ticket touches. For broad sweeps, fan out
    Explore agents rather than dumping whole files into context.
@@ -140,7 +146,7 @@ This is the load-bearing step. Walk this checklist against the ticket
 |---|---|
 | Scope | Which crates/systems/flows are in vs out |
 | Behavior | Expected in-game behavior; how the player sees it; what happens on the failure path |
-| Design intent | Is this settling a question `docs/DESIGN.md` left open? Whose call is it? |
+| Design intent | Is this settling a question `docs/design/game.md` left open? Whose call is it? |
 | Rules interaction | How it interacts with the stacking rule, headroom, one-level steps, turn order, the high-ground rule |
 | Data / components | New components or shared `hex_core` types; new RON config fields and when they're read |
 | Edge cases | Level 0, buried runs, no-route, empty span, a body that doesn't fit, mid-walk interruption |
@@ -297,8 +303,8 @@ ticket means to *settle the design question* instead.
   `/update-linear`'s constants table (the canonical copy).
 - **Branch naming convention changes** → update Step 6.3 and keep it
   consistent with what `/audit-linear` greps for.
-- **Doc paths change** (the docs restructure moves `MAP_MODEL.md`,
-  `GAMEPLAY_LOOP.md`, `CONTENT.md` under a kind-separated tree) →
-  update Step 3.1's pointers.
+- **Doc paths change** → update Step 3.1's pointers, and check them
+  against `docs/README.md`, which indexes every doc and is the first
+  place a move shows up.
 - **New ambiguity class bites in review** (a bug traced to an unasked
   question) → add a row to Step 4's table so the next plan asks it.

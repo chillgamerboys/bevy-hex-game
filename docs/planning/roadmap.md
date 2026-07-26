@@ -15,7 +15,7 @@ starts, using the per-epic sections below as raw material. Splitting a row
 later is safe: seeding is create-only and idempotent.
 
 The `Owner` column names the crate-ownership area
-([ARCHITECTURE.md](../ARCHITECTURE.md#ownership-cuts-both-ways)): `map` rows
+([architecture.md](../architecture.md#ownership-cuts-both-ways)): `map` rows
 belong to the map's owner and are deliberately left unclaimed here; everything
 else is the gameplay side. `docs` is whoever picks it up.
 
@@ -89,7 +89,7 @@ never key a sim decision on entity order or query iteration order.
 Move the provisional constants (`ENGAGE_RANGE`, `DISENGAGE_MARGIN`,
 `MOVEMENT_PER_TURN`, default initiative, `LEVELS_PER_BONUS_RANGE`) into
 `combat.ron` via the existing loader traits, and express the deliberately-open
-design questions from [DESIGN.md](../DESIGN.md#open-questions) as policy
+design questions from [the design](../design/game.md#open-questions) as policy
 enums whose variants are the doc's own options (initiative source, action
 economy, channeling trickle, rout). Unimplemented variants parse but fail the
 loading screen with a reason naming what they wait on — flipping a playtest

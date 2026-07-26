@@ -2,7 +2,7 @@
 
 A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
 
-Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
+Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
 summary.
 
@@ -90,7 +90,7 @@ malformed components can still break gameplay at runtime.
 and a review comment on a *design* question inside someone else's crate is an argument
 rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
 broken boundaries are the exception and should block. See
-`docs/ARCHITECTURE.md#ownership-cuts-both-ways`.
+`docs/architecture.md#ownership-cuts-both-ways`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
@@ -118,7 +118,7 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
   topmost material voxel. Its substance determines whether that position is solid
   footing. Interior voxels have no entity, which is why targeting is positional. See
-  `docs/MAP_MODEL.md`.
+  `docs/systems/map.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
   its traversal profile. The canonical walker is exactly 2 levels tall and may climb
