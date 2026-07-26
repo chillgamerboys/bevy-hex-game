@@ -10,7 +10,7 @@ Rust, and you do not need to recompile the game.
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
 | `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
-| `player.ron` | Player size, movement speed, colour, how many levels tall |
+| `player.ron` | Player piece size, movement speed and colour |
 | `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
 | `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
@@ -35,7 +35,7 @@ How quickly you *see* the change depends on which file:
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
-| `player.ron` | Speed on the next movement started; size, colour and `levels_tall` on the next rebuild |
+| `player.ron` | Speed on the next movement started; scale and colour on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
 | `menu.ron` | Straight away |
 
@@ -111,8 +111,34 @@ must clear the water, and the switchback must be contiguous and long enough to c
 one level at a time. An invalid save is reported in the terminal and the previous
 valid settings remain active.
 
-**Use procedural terrain instead.** Replace the `terrain: Showcase((...))` value
-with the retained Perlin preset:
+**Use procedural terrain instead.** The primary recipe separates the broad landform,
+its materials, and its tactical structure:
+
+```ron
+terrain: Procedural((
+    generator_version: 1,
+    landform: Hills((
+        valley_level: 15,
+        max_relief: 8,
+        hills_per_bank: 3,
+    )),
+    environment: TemperateGrassland,
+    tactical: Crossing((
+        barrier_half_width: 1,
+        bed_level: 12,
+        hazard_bottom: 13,
+        hazard_top: 14,
+        bridge_level: 16,
+    )),
+)),
+```
+
+This combination generates grassland hills around an edge-to-edge river, with a
+bridge, an alternate crossing, and scenario anchors. Its reproducible seed belongs
+to the scenario, as described in **Configuring a scenario** below.
+
+**Use the retained Perlin preset.** Perlin remains a separate, optional terrain
+preset; it is not one of the versioned procedural recipes:
 
 ```ron
 terrain: Perlin((
@@ -151,9 +177,11 @@ until the generation code selects it. `air` must always be present — it means 
 space.
 
 **A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
-and `40` gives 4921. The Showcase river endpoints must move to the new boundary when
-its radius changes, so changing only `grid_radius` is intentionally rejected. Perlin
-has no boundary features and can be resized directly.
+and `40` gives 4921. Procedural recipes accept radii from 12 through 40 and regenerate
+their boundary features and exact anchors to fit. The Showcase river endpoints must
+move to the new boundary when its radius changes, so changing only `grid_radius` is
+intentionally rejected. Perlin has no authored boundary features and can be resized
+directly.
 
 **Chunkier terrain.** `level_height` in `world.ron` is how tall one voxel is. The
 default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain that reads
@@ -257,22 +285,45 @@ and need something dim to sit on.
 Its own file rather than a corner of `lighting.ron`, so the next thing a menu needs
 has somewhere obvious to go.
 
-## Giving a scenario its own sky
+## Configuring a scenario
 
-`scenarios.ron` entries can name a lighting file:
+`scenarios.ron` entries can name a lighting file and choose how units are placed:
 
 ```ron
 (
     name: "Rolling Hills",
     world: "config/worlds/rolling-hills.ron",
     lighting: "config/lighting/overcast.ron",
-    units: ( ... ),
+    units: (
+        player: Fixed((x: 0, y: 0, z: 0)),
+        enemy: Fixed((x: 5, y: -5, z: 0)),
+    ),
 ),
 ```
 
 Leave `lighting` out and the scenario gets `config/lighting.ron`, which is what most
 should do. A lighting file is a complete copy of that file's contents — start by
 copying it and changing what you want.
+
+`Fixed(...)` is for authored terrain whose landmarks never move. Generated terrain
+instead uses anchors published by the generator and owns its reproducible seed here:
+
+```ron
+(
+    name: "Procedural Hills",
+    world: "config/worlds/procedural-hills.ron",
+    generation_seed: Some(1592598566),
+    units: (
+        player: Anchor("party_start"),
+        enemy: Anchor("hostile_start"),
+    ),
+),
+```
+
+The title screen shows the resolved seed beside every generated scenario. Its
+`reroll` button changes only the current session, and the exact replacement seed is
+shown and logged so a useful or broken map can be reproduced. It never edits
+`scenarios.ron`; restarting returns to the configured seed.
 
 It is called `lighting` rather than `sky` because it also sets **the sun's angle and
 colour**, so it decides which way the shadows fall. That is most of what makes a

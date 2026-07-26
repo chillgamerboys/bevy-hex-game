@@ -15,41 +15,92 @@ use crate::voxel::{Column, VoxelMap};
 
 const SHOWCASE_TOPSOIL_LEVELS: Level = 3;
 
-/// Substance ids needed by both terrain presets.
+/// Substance ids available to terrain construction.
+///
+/// Fields unused by the selected preset are left as air. This keeps authored and
+/// Perlin worlds independent of materials that exist only for procedural probes.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TerrainPalette {
-    bedrock: SubstanceId,
-    stone: SubstanceId,
-    dirt: SubstanceId,
-    grass: SubstanceId,
-    gravel: SubstanceId,
-    water: SubstanceId,
-    metal: SubstanceId,
+    pub(super) bedrock: SubstanceId,
+    pub(super) stone: SubstanceId,
+    pub(super) dirt: SubstanceId,
+    pub(super) grass: SubstanceId,
+    pub(super) gravel: SubstanceId,
+    pub(super) water: SubstanceId,
+    pub(super) metal: SubstanceId,
+    pub(super) snow: SubstanceId,
+    pub(super) ice: SubstanceId,
+    pub(super) basalt: SubstanceId,
+    pub(super) lava: SubstanceId,
 }
 
 impl TerrainPalette {
-    pub(crate) fn from_table(table: &SubstanceTable) -> Self {
-        let id = |name: &str| table.id(name).unwrap_or(SubstanceId::AIR);
-        Self {
-            bedrock: id("bedrock"),
-            stone: id("stone"),
-            dirt: id("dirt"),
-            grass: id("grass"),
-            gravel: id("gravel"),
-            water: id("water"),
-            metal: id("metal"),
+    pub(crate) fn for_terrain(
+        table: &SubstanceTable,
+        terrain: &TerrainSettings,
+    ) -> Result<Self, String> {
+        let id = |name: &str| {
+            table
+                .id(name)
+                .ok_or_else(|| format!("substances.ron is missing required material \"{name}\""))
+        };
+        let optional = |name: &str| table.id(name).unwrap_or(SubstanceId::AIR);
+        let mut palette = Self {
+            bedrock: id("bedrock")?,
+            stone: id("stone")?,
+            dirt: id("dirt")?,
+            grass: id("grass")?,
+            gravel: optional("gravel"),
+            water: optional("water"),
+            metal: optional("metal"),
+            snow: optional("snow"),
+            ice: optional("ice"),
+            basalt: optional("basalt"),
+            lava: optional("lava"),
+        };
+
+        match terrain {
+            TerrainSettings::Perlin(_) => {}
+            TerrainSettings::Showcase(_) => {
+                palette.gravel = id("gravel")?;
+                palette.water = id("water")?;
+                palette.metal = id("metal")?;
+            }
+            TerrainSettings::Procedural(_) => {
+                // Procedural candidates and their canonical fallback share one
+                // validator. Require the complete procedural vocabulary so a missing
+                // probe material cannot be mistaken for air during validation.
+                palette.gravel = id("gravel")?;
+                palette.water = id("water")?;
+                palette.metal = id("metal")?;
+                palette.snow = id("snow")?;
+                palette.ice = id("ice")?;
+                palette.basalt = id("basalt")?;
+                palette.lava = id("lava")?;
+            }
         }
+
+        Ok(palette)
     }
 }
 
-/// Builds the complete voxel map selected by `settings`.
+/// Builds an authored or Perlin map without procedural runtime inputs.
+///
+/// Procedural terrain requires a resolved seed, the published walker, and the live
+/// substance predicate, so it must go through `procedural::build`.
 #[must_use]
-pub(crate) fn build_map(settings: &MapSettings, palette: &TerrainPalette) -> VoxelMap {
+pub(crate) fn build_non_procedural_map(
+    settings: &MapSettings,
+    palette: &TerrainPalette,
+) -> Option<VoxelMap> {
     match &settings.terrain {
         TerrainSettings::Showcase(showcase) => {
-            build_showcase(settings.grid_radius, showcase, palette)
+            Some(build_showcase(settings.grid_radius, showcase, palette))
         }
-        TerrainSettings::Perlin(perlin) => build_perlin(settings.grid_radius, perlin, palette),
+        TerrainSettings::Perlin(perlin) => {
+            Some(build_perlin(settings.grid_radius, perlin, palette))
+        }
+        TerrainSettings::Procedural(_) => None,
     }
 }
 
@@ -272,6 +323,8 @@ const fn coord(raw: CubeCoord) -> HexCoord {
 mod tests {
     use std::collections::{HashMap as StdHashMap, HashSet as StdHashSet, VecDeque};
 
+    use hex_assets::SubstanceFile;
+
     use super::*;
 
     const BEDROCK: SubstanceId = SubstanceId(1);
@@ -292,6 +345,10 @@ mod tests {
             gravel: GRAVEL,
             water: WATER,
             metal: METAL,
+            snow: SubstanceId(8),
+            ice: SubstanceId(9),
+            basalt: SubstanceId(10),
+            lava: SubstanceId(11),
         }
     }
 
@@ -309,8 +366,52 @@ mod tests {
 
     fn showcase_map() -> (MapSettings, VoxelMap) {
         let settings = settings();
-        let map = build_map(&settings, &palette());
+        let map = build_non_procedural_map(&settings, &palette())
+            .expect("showcase settings should produce an authored map");
         (settings, map)
+    }
+
+    #[test]
+    fn authored_presets_do_not_require_procedural_probe_materials() {
+        let mut substances: SubstanceFile =
+            ron::from_str(include_str!("../../../assets/config/substances.ron"))
+                .expect("the shipped substances should parse");
+        for probe_material in ["snow", "ice", "basalt", "lava"] {
+            substances.substances.remove(probe_material);
+        }
+        let table = SubstanceTable::from_file(&substances);
+        let showcase = settings();
+
+        assert!(
+            TerrainPalette::for_terrain(&table, &showcase.terrain).is_ok(),
+            "Showcase should not depend on architecture-probe materials"
+        );
+
+        let perlin: MapSettings = ron::from_str(include_str!(
+            "../../../assets/config/worlds/rolling-hills.ron"
+        ))
+        .expect("the shipped Perlin settings should parse");
+        assert!(
+            TerrainPalette::for_terrain(&table, &perlin.terrain).is_ok(),
+            "Perlin should not depend on architecture-probe materials"
+        );
+    }
+
+    #[test]
+    fn procedural_presets_reject_an_incomplete_material_vocabulary() {
+        let mut substances: SubstanceFile =
+            ron::from_str(include_str!("../../../assets/config/substances.ron"))
+                .expect("the shipped substances should parse");
+        substances.substances.remove("lava");
+        let table = SubstanceTable::from_file(&substances);
+        let procedural: MapSettings = ron::from_str(include_str!(
+            "../../../assets/config/worlds/procedural-hills.ron"
+        ))
+        .expect("the shipped procedural settings should parse");
+
+        let error = TerrainPalette::for_terrain(&table, &procedural.terrain)
+            .expect_err("procedural validation must not alias a missing material to air");
+        assert!(error.contains("lava"));
     }
 
     fn at(x: i32, y: i32, z: i32) -> HexCoord {

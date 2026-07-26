@@ -8,8 +8,12 @@
 // Lets `bevy_lint`'s attributes be written in source without breaking a normal build.
 #![cfg_attr(bevy_lint, feature(register_tool), register_tool(bevy))]
 // Without this, launching the shipped game on Windows opens a console window
-// behind it. Kept off for dev builds, where stdout is the log.
-#![cfg_attr(not(feature = "dev"), windows_subsystem = "windows")]
+// behind it. Dev and map-review builds keep the console because their diagnostics
+// are part of the workflow.
+#![cfg_attr(
+    not(any(feature = "dev", feature = "map-review")),
+    windows_subsystem = "windows"
+)]
 
 use bevy::diagnostic::{
     EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin,
@@ -22,6 +26,8 @@ use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
 mod menus;
+#[cfg(feature = "map-review")]
+mod review;
 mod scenarios;
 mod screens;
 
@@ -94,6 +100,7 @@ impl Plugin for AppPlugin {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Finalize,
             )
                 .chain(),
         );
@@ -108,6 +115,9 @@ impl Plugin for AppPlugin {
             screens::plugin,
             menus::plugin,
         ));
+
+        #[cfg(feature = "map-review")]
+        app.add_plugins(review::plugin);
 
         app.add_systems(Update, apply_display_settings);
 

@@ -15,20 +15,30 @@
 //! plain `Res<T>` on a resource that does not exist yet is a panic, and this project
 //! has already shipped that crash once on this very screen.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_assets::{Scenario, ScenarioLibrary};
-use hex_core::Screen;
+use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
 
-use crate::menus::widgets::{blurb, button, label, LABEL, MUTED};
+use crate::menus::widgets::{blurb, button, compact_button, label, LABEL, MUTED};
 use crate::scenarios::ScenarioToLoad;
 
 use super::{despawn_screen, screen_root};
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<SessionSeeds>();
     app.add_systems(OnEnter(Screen::Title), spawn_title);
     app.add_systems(
         Update,
-        (rebuild_scenario_list, start_chosen_scenario, handle_input)
+        (
+            rebuild_scenario_list,
+            reroll_scenario_seed,
+            start_chosen_scenario,
+            handle_input,
+        )
+            .chain()
             .run_if(in_state(Screen::Title)),
     );
     app.add_systems(OnExit(Screen::Title), despawn_screen(Screen::Title));
@@ -38,9 +48,19 @@ pub(super) fn plugin(app: &mut App) {
 #[derive(Component)]
 struct ScenarioList;
 
+/// One row in the list, including its optional seed control.
+#[derive(Component)]
+struct ScenarioEntry;
+
 /// A button carrying the exact scenario it will start.
 #[derive(Component)]
 struct StartsScenario {
+    scenario: Scenario,
+}
+
+/// A secondary button that gives a generated scenario a new session seed.
+#[derive(Component)]
+struct RerollsScenario {
     scenario: Scenario,
 }
 
@@ -48,7 +68,74 @@ struct StartsScenario {
 #[derive(Component)]
 struct ListPlaceholder;
 
-fn spawn_title(mut commands: Commands) {
+/// Player-visible reason the previous scenario could not finish setup.
+#[derive(Component)]
+struct SetupFailureNotice;
+
+/// Seed overrides that live only for this process.
+///
+/// Keys include both display name and world path so a hot reload cannot accidentally
+/// transfer a reroll to a different scenario that reused one of them.
+#[derive(Resource)]
+struct SessionSeeds {
+    overrides: HashMap<String, u64>,
+    entropy: u64,
+}
+
+impl Default for SessionSeeds {
+    fn default() -> Self {
+        let entropy = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0xA076_1D64_78BD_642F, |elapsed| {
+                elapsed.as_secs() ^ u64::from(elapsed.subsec_nanos()).rotate_left(32)
+            });
+        Self {
+            overrides: HashMap::default(),
+            entropy,
+        }
+    }
+}
+
+impl SessionSeeds {
+    fn resolved(&self, scenario: &Scenario) -> Option<u64> {
+        scenario.generation_seed.map(|configured| {
+            self.overrides
+                .get(&scenario_seed_key(scenario))
+                .copied()
+                .unwrap_or(configured)
+        })
+    }
+
+    fn reroll(&mut self, scenario: &Scenario) -> Option<u64> {
+        let current = self.resolved(scenario)?;
+        self.entropy = mixed_seed(
+            self.entropy
+                .wrapping_add(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(current),
+        );
+        let candidate = if self.entropy == current {
+            current.wrapping_add(1)
+        } else {
+            self.entropy
+        };
+        self.overrides
+            .insert(scenario_seed_key(scenario), candidate);
+        Some(candidate)
+    }
+}
+
+fn scenario_seed_key(scenario: &Scenario) -> String {
+    format!("{}\0{}", scenario.name, scenario.world)
+}
+
+fn mixed_seed(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn spawn_title(mut commands: Commands, failure: Option<Res<GameplaySetupFailure>>) {
+    let failure_reason = failure.as_deref().map(|failure| failure.reason.clone());
     commands
         .spawn(screen_root(Screen::Title, "Title Screen"))
         .with_children(|parent| {
@@ -57,13 +144,26 @@ fn spawn_title(mut commands: Commands) {
                 TextFont::from_font_size(56.0),
                 TextColor(LABEL),
             ));
+            if let Some(reason) = failure_reason {
+                parent.spawn((
+                    Name::new("Gameplay Setup Failure"),
+                    SetupFailureNotice,
+                    Text::new(reason),
+                    TextFont::from_font_size(15.0),
+                    TextColor(Color::srgb(0.95, 0.45, 0.40)),
+                    Node {
+                        max_width: Val::Px(720.0),
+                        ..default()
+                    },
+                ));
+            }
             parent
                 .spawn((
                     Name::new("Scenario List"),
                     ScenarioList,
                     Node {
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(10.0),
+                        row_gap: Val::Px(6.0),
                         align_items: AlignItems::Center,
                         ..default()
                     },
@@ -90,10 +190,25 @@ fn rebuild_scenario_list(
     library: Option<Res<ScenarioLibrary>>,
     lists: Query<Entity, With<ScenarioList>>,
     placeholders: Query<Entity, With<ListPlaceholder>>,
-    existing: Query<Entity, With<StartsScenario>>,
+    existing: Query<Entity, With<ScenarioEntry>>,
+    clicked_starts: Query<&Interaction, (Changed<Interaction>, With<StartsScenario>)>,
+    clicked_rerolls: Query<&Interaction, (Changed<Interaction>, With<RerollsScenario>)>,
+    seeds: Res<SessionSeeds>,
 ) {
     let Some(library) = library else { return };
     let Ok(list) = lists.single() else { return };
+
+    // A hot reload and a pointer press can land in the same frame. The button carries
+    // the exact scenario snapshot, so let its click system consume it before rebuilding
+    // the row. Starting leaves this screen anyway; rerolling marks the seed resource
+    // changed and causes a rebuild on the next frame.
+    let click_in_flight = clicked_starts
+        .iter()
+        .chain(clicked_rerolls.iter())
+        .any(|interaction| *interaction == Interaction::Pressed);
+    if click_in_flight {
+        return;
+    }
 
     // **Reconciled from what is on screen, not from a change event.** The first version
     // rebuilt only when the library was added or changed, which is true exactly once
@@ -104,7 +219,7 @@ fn rebuild_scenario_list(
     //
     // The guard still matters: without it this would rebuild every frame and a button
     // would never hold a hover long enough to show one.
-    if !library.is_changed() && !existing.is_empty() {
+    if !library.is_changed() && !seeds.is_changed() && !existing.is_empty() {
         return;
     }
 
@@ -113,7 +228,21 @@ fn rebuild_scenario_list(
     }
 
     for scenario in &library.scenarios {
-        let entry = commands
+        let row = commands
+            .spawn((
+                Name::new("Scenario Entry"),
+                ScenarioEntry,
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(10.0),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ))
+            .id();
+
+        let seed = seeds.resolved(scenario);
+        let launch = commands
             .spawn((
                 button("Scenario"),
                 StartsScenario {
@@ -125,7 +254,52 @@ fn rebuild_scenario_list(
                 entry.spawn(blurb(scenario.blurb.clone()));
             })
             .id();
-        commands.entity(list).add_child(entry);
+        commands.entity(row).add_child(launch);
+
+        if let Some(seed) = seed {
+            let reroll = commands
+                .spawn((
+                    compact_button("Reroll Seed"),
+                    RerollsScenario {
+                        scenario: scenario.clone(),
+                    },
+                ))
+                .with_children(|control| {
+                    control.spawn((
+                        Text::new("reroll"),
+                        TextFont::from_font_size(14.0),
+                        TextColor(LABEL),
+                        Pickable::IGNORE,
+                    ));
+                    control.spawn((
+                        Text::new(format!("seed {seed}")),
+                        TextFont::from_font_size(11.0),
+                        TextColor(MUTED),
+                        Pickable::IGNORE,
+                    ));
+                })
+                .id();
+            commands.entity(row).add_child(reroll);
+        }
+
+        commands.entity(list).add_child(row);
+    }
+}
+
+/// Replaces only this session's seed; configuration remains untouched.
+fn reroll_scenario_seed(
+    mut seeds: ResMut<SessionSeeds>,
+    clicked: Query<(&Interaction, &RerollsScenario), Changed<Interaction>>,
+) {
+    for (interaction, rerolls) in &clicked {
+        if *interaction == Interaction::Pressed {
+            if let Some(seed) = seeds.reroll(&rerolls.scenario) {
+                info!(
+                    "rerolled scenario seed: {} -> {}",
+                    rerolls.scenario.name, seed
+                );
+            }
+        }
     }
 }
 
@@ -133,11 +307,15 @@ fn rebuild_scenario_list(
 fn start_chosen_scenario(
     mut commands: Commands,
     clicked: Query<(&Interaction, &StartsScenario), Changed<Interaction>>,
+    seeds: Res<SessionSeeds>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     for (interaction, starts) in &clicked {
         if *interaction == Interaction::Pressed {
-            commands.insert_resource(ScenarioToLoad(starts.scenario.clone()));
+            commands.insert_resource(ScenarioToLoad {
+                scenario: starts.scenario.clone(),
+                resolved_seed: seeds.resolved(&starts.scenario).map(ResolvedMapSeed),
+            });
             next.set(Screen::Loading);
         }
     }
@@ -153,7 +331,7 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::{CubeCoord, Scenario, ScenarioSettings};
+    use hex_assets::{CubeCoord, Scenario, ScenarioPlacement, ScenarioSettings};
 
     use super::*;
 
@@ -167,10 +345,18 @@ mod tests {
             blurb: "A map.".to_owned(),
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),
+            generation_seed: None,
             units: ScenarioSettings {
-                player: at(0, 0, 0),
-                enemy,
+                player: ScenarioPlacement::Fixed(at(0, 0, 0)),
+                enemy: ScenarioPlacement::Fixed(enemy),
             },
+        }
+    }
+
+    fn seeded_scenario(name: &str, seed: u64) -> Scenario {
+        Scenario {
+            generation_seed: Some(seed),
+            ..scenario(name, at(1, -1, 0))
         }
     }
 
@@ -227,6 +413,40 @@ mod tests {
             .iter(world)
             .find_map(|(entity, starts)| (starts.scenario.name == name).then_some(entity))
             .expect("the requested scenario button should exist")
+    }
+
+    fn reroll_button_named(app: &mut App, name: &str) -> Entity {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &RerollsScenario)>();
+        query
+            .iter(world)
+            .find_map(|(entity, rerolls)| (rerolls.scenario.name == name).then_some(entity))
+            .expect("the requested scenario should have a reroll button")
+    }
+
+    fn has_text(app: &mut App, wanted: &str) -> bool {
+        let world = app.world_mut();
+        let mut query = world.query::<&Text>();
+        query.iter(world).any(|text| text.0.contains(wanted))
+    }
+
+    #[test]
+    fn gameplay_setup_failure_is_visible_on_the_title_screen() {
+        let mut app = test_app();
+        app.insert_resource(GameplaySetupFailure::new(
+            "The selected map could not publish a party anchor.",
+        ));
+
+        go_to(&mut app, Screen::Title);
+
+        assert!(has_text(
+            &mut app,
+            "The selected map could not publish a party anchor."
+        ));
+        let mut notices = app
+            .world_mut()
+            .query_filtered::<Entity, With<SetupFailureNotice>>();
+        assert_eq!(notices.iter(app.world()).count(), 1);
     }
 
     /// The menu still has its scenarios when you come back to it.
@@ -303,7 +523,7 @@ mod tests {
 
         let pending = app.world().resource::<ScenarioToLoad>();
         assert_eq!(
-            pending.0.name, "First",
+            pending.scenario.name, "First",
             "the old First button was reinterpreted through the reordered library"
         );
     }
@@ -323,8 +543,97 @@ mod tests {
 
         let pending = app.world().resource::<ScenarioToLoad>();
         assert_eq!(
-            pending.0.name, "Second",
+            pending.scenario.name, "Second",
             "removing Second from the library discarded the click on its existing button"
         );
+    }
+
+    /// Authored scenarios have no meaningless seed control, while generated scenarios
+    /// show one and snapshot their configured seed when started.
+    #[test]
+    fn only_seeded_scenarios_offer_rerolls_and_capture_the_seed() {
+        let mut app = test_app_with(ScenarioLibrary {
+            scenarios: vec![
+                scenario("Authored", at(1, -1, 0)),
+                seeded_scenario("Generated", 42),
+            ],
+        });
+        go_to(&mut app, Screen::Title);
+
+        let world = app.world_mut();
+        let mut rerolls = world.query::<&RerollsScenario>();
+        let names: Vec<String> = rerolls
+            .iter(world)
+            .map(|entry| entry.scenario.name.clone())
+            .collect();
+        assert_eq!(names, vec!["Generated".to_owned()]);
+        assert!(
+            has_text(&mut app, "seed 42"),
+            "the configured seed is not visible beside the generated scenario"
+        );
+
+        let generated = button_named(&mut app, "Generated");
+        app.world_mut()
+            .entity_mut(generated)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let pending = app.world().resource::<ScenarioToLoad>();
+        assert_eq!(pending.resolved_seed, Some(ResolvedMapSeed(42)));
+    }
+
+    /// A reroll survives title-screen re-entry but never changes the scenario asset.
+    #[test]
+    fn rerolled_seed_is_session_only_and_used_by_the_next_click() {
+        let configured = 42;
+        let scenario = seeded_scenario("Generated", configured);
+        let mut app = test_app_with(ScenarioLibrary {
+            scenarios: vec![scenario.clone()],
+        });
+        // Stable entropy makes the assertion deterministic without changing production
+        // behaviour, where the resource is initialized from wall-clock time.
+        app.insert_resource(SessionSeeds {
+            overrides: HashMap::default(),
+            entropy: 7,
+        });
+        go_to(&mut app, Screen::Title);
+
+        let reroll = reroll_button_named(&mut app, "Generated");
+        app.world_mut()
+            .entity_mut(reroll)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let rerolled = app
+            .world()
+            .resource::<SessionSeeds>()
+            .resolved(&scenario)
+            .expect("the generated scenario should have a seed");
+        assert_ne!(rerolled, configured);
+        app.update();
+        assert!(
+            has_text(&mut app, &format!("seed {rerolled}")),
+            "the reroll control did not display the replacement seed"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ScenarioLibrary>()
+                .scenarios
+                .first()
+                .and_then(|entry| entry.generation_seed),
+            Some(configured),
+            "rerolling modified the loaded scenario configuration"
+        );
+
+        go_to(&mut app, Screen::Gameplay);
+        go_to(&mut app, Screen::Title);
+        let generated = button_named(&mut app, "Generated");
+        app.world_mut()
+            .entity_mut(generated)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let pending = app.world().resource::<ScenarioToLoad>();
+        assert_eq!(pending.resolved_seed, Some(ResolvedMapSeed(rerolled)));
     }
 }

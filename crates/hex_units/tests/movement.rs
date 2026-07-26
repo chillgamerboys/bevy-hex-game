@@ -21,15 +21,16 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
-use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
+use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen, SubstanceId, TilePos,
-    Turn, MAX_HEADROOM,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId,
+    MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn,
+    MAX_HEADROOM,
 };
 use hex_units::{
-    Enemy, Faction, HoveredSurface, MovementSystems, MovingTo, PathOverlay, Player, RangeOverlay,
-    StandsOn, UnitRing,
+    Body, Enemy, Faction, HoveredSurface, MovementSystems, MovingTo, PathOverlay, Player,
+    RangeOverlay, StandsOn, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -38,12 +39,14 @@ const GROUND: f32 = 2.0;
 /// The level of that ground's surface.
 const GROUND_LEVEL: hex_core::Level = 1;
 
-/// The one solid substance the fake terrain is made of. Id 1, since sorted names put
-/// `air` at 0 and `stone` next.
-const STONE: SubstanceId = SubstanceId(1);
+/// Non-solid lava sorts first after air in the fixture's substance table.
+const LAVA: SubstanceId = SubstanceId(1);
 
-/// Not solid, but a real voxel all the same — id 2, after `air` and `stone`.
-const WATER: SubstanceId = SubstanceId(2);
+/// The one solid substance the fake terrain is made of.
+const STONE: SubstanceId = SubstanceId(2);
+
+/// Non-solid water sorts after stone.
+const WATER: SubstanceId = SubstanceId(3);
 
 /// A coordinate whose surface run is water rather than stone.
 ///
@@ -53,6 +56,9 @@ const WATER: SubstanceId = SubstanceId(2);
 /// answer, and that test caught it. Fixtures stay out of each other's way here for the
 /// same reason `CRAWLSPACE` does.
 const POOL: HexCoord = HexCoord::new_cubic(0, 3, -3);
+
+/// A second non-solid hazard used to keep live volcanic movement in parity.
+const LAVA_POOL: HexCoord = HexCoord::new_cubic(3, 0, -3);
 
 /// How tall the test player is, matching what the game ships.
 const BODY_LEVELS: hex_core::Level = 2;
@@ -98,6 +104,7 @@ fn test_app() -> App {
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Finalize,
         )
             .chain(),
     );
@@ -120,15 +127,14 @@ fn test_app() -> App {
         scale: 0.25,
         speed: 5.0,
         color: (1.0, 0.2, 0.2),
-        levels_tall: BODY_LEVELS,
     });
     app.insert_resource(ScenarioSettings {
-        player: CubeCoord { x: 0, y: 0, z: 0 },
-        enemy: CubeCoord {
+        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
             x: ENEMY_START.x(),
             y: ENEMY_START.y(),
             z: ENEMY_START.z(),
-        },
+        }),
     });
 
     app.add_plugins(hex_units::plugin);
@@ -177,10 +183,17 @@ fn spawn_fake_terrain(mut commands: Commands) {
             coord,
             TilePos::new(coord, GROUND_LEVEL),
             HexSpan::new(GROUND - 1.0, GROUND),
-            if coord == POOL { WATER } else { STONE },
+            if coord == POOL {
+                WATER
+            } else if coord == LAVA_POOL {
+                LAVA
+            } else {
+                STONE
+            },
             Headroom(headroom),
         ));
     }
+    commands.insert_resource(TerrainReady);
 }
 
 /// A substance table with one solid substance, matching `STONE`.
@@ -192,6 +205,14 @@ fn substance_table() -> SubstanceTable {
             color: (0.0, 0.0, 0.0),
             solid: false,
             diggable: false,
+        },
+    );
+    substances.insert(
+        "lava".to_owned(),
+        Substance {
+            color: (0.9, 0.2, 0.05),
+            solid: false,
+            diggable: true,
         },
     );
     substances.insert(
@@ -268,6 +289,28 @@ fn the_player_spawns_on_the_surface() {
         (transform.translation.y - GROUND).abs() < 1e-4,
         "player is at y={} but the ground is at {GROUND}",
         transform.translation.y
+    );
+}
+
+/// Map validation and live movement both use the canonical walker.
+#[test]
+fn gameplay_units_use_the_canonical_walker() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    assert_eq!(TraversalProfile::WALKER.levels_tall, 2);
+    assert_eq!(TraversalProfile::WALKER.max_climb, 1);
+    assert_eq!(TraversalProfile::WALKER.max_drop, 1);
+
+    let mut bodies = app.world_mut().query_filtered::<&Body, With<Player>>();
+    let body = bodies
+        .iter(app.world())
+        .next()
+        .expect("the spawned player should carry a body");
+    assert_eq!(
+        body.traversal_profile(),
+        TraversalProfile::WALKER,
+        "live movement did not use the profile used by map validation"
     );
 }
 
@@ -650,9 +693,9 @@ fn the_enemy_spawns_where_the_scenario_says() {
 fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
     let mut app = test_app();
     app.insert_resource(ScenarioSettings {
-        player: CubeCoord { x: 0, y: 0, z: 0 },
+        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
         // 1 + 1 + 1 is not 0, so this is not a hex.
-        enemy: CubeCoord { x: 1, y: 1, z: 1 },
+        enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: 1, z: 1 }),
     });
     enter_gameplay(&mut app);
 
@@ -668,6 +711,104 @@ fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
         HexCoord::ORIGIN,
         "an impossible coordinate should fall back to the centre"
     );
+}
+
+/// Generated placement is a contract with the active map. A missing anchor must not
+/// quietly put the unit at the origin, where it could make an invalid map appear to
+/// have loaded correctly.
+#[test]
+fn a_missing_generated_anchor_fails_required_actor_setup() {
+    let mut app = test_app();
+    app.insert_resource(ScenarioSettings {
+        player: ScenarioPlacement::Anchor("missing_party_start".to_owned()),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
+            x: ENEMY_START.x(),
+            y: ENEMY_START.y(),
+            z: ENEMY_START.z(),
+        }),
+    });
+    enter_gameplay(&mut app);
+
+    assert!(
+        single::<With<Player>>(&mut app).is_none(),
+        "a missing anchor must not fall back to an arbitrary surface"
+    );
+    assert!(
+        single::<With<Enemy>>(&mut app).is_none(),
+        "actor setup should stop after a required placement fails"
+    );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("missing_party_start"));
+}
+
+const DECK_ANCHOR: &str = "test_deck";
+const DECK_COORD: HexCoord = HexCoord::new_cubic(3, -3, 0);
+const DECK_LEVEL: hex_core::Level = 6;
+
+fn spawn_anchored_deck(mut commands: Commands) {
+    commands.spawn((
+        HexTile,
+        DECK_COORD,
+        TilePos::new(DECK_COORD, DECK_LEVEL),
+        HexSpan::new(6.0, 7.0),
+        STONE,
+        Headroom(MAX_HEADROOM),
+    ));
+    let mut anchors = MapAnchors::new();
+    let _previous = anchors.insert(
+        MapAnchorId::from(DECK_ANCHOR),
+        TilePos::new(DECK_COORD, DECK_LEVEL),
+    );
+    commands.insert_resource(anchors);
+}
+
+/// An anchor names a `TilePos`, not merely a coordinate. On a stacked column the
+/// generated placement must stay on the published deck rather than choosing the
+/// ordinary ground underneath it.
+#[test]
+fn a_generated_anchor_uses_its_exact_surface() {
+    let mut app = test_app();
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        spawn_anchored_deck.in_set(GameplaySetup::Terrain),
+    );
+    app.insert_resource(ScenarioSettings {
+        player: ScenarioPlacement::Anchor(DECK_ANCHOR.to_owned()),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
+            x: ENEMY_START.x(),
+            y: ENEMY_START.y(),
+            z: ENEMY_START.z(),
+        }),
+    });
+    enter_gameplay(&mut app);
+
+    let standing = standing_of(&mut app).expect("the anchored player should spawn");
+    assert_eq!(standing.pos, TilePos::new(DECK_COORD, DECK_LEVEL));
+}
+
+fn remove_terrain_ready(mut commands: Commands) {
+    commands.remove_resource::<TerrainReady>();
+}
+
+/// Failed terrain setup leaves `TerrainReady` absent. Actors are gated on that marker
+/// rather than accepting the tile entities a failed or partial generator may have
+/// emitted before it stopped.
+#[test]
+fn units_do_not_spawn_until_terrain_is_ready() {
+    let mut app = test_app();
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        remove_terrain_ready
+            .after(spawn_fake_terrain)
+            .in_set(GameplaySetup::Terrain),
+    );
+    enter_gameplay(&mut app);
+
+    assert!(single::<With<Player>>(&mut app).is_none());
+    assert!(single::<With<Enemy>>(&mut app).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -963,6 +1104,23 @@ fn water_is_drawn_but_is_not_footing() {
     assert!(
         !reachable.iter().any(|pos| pos.coord == POOL),
         "the river was offered as somewhere to walk to"
+    );
+}
+
+#[test]
+fn lava_is_drawn_but_is_not_footing() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let mut tinted = app
+        .world_mut()
+        .query_filtered::<&TilePos, With<RangeOverlay>>();
+    let reachable: Vec<TilePos> = tinted.iter(app.world()).copied().collect();
+
+    assert!(
+        !reachable.iter().any(|pos| pos.coord == LAVA_POOL),
+        "lava was offered as somewhere to walk to"
     );
 }
 

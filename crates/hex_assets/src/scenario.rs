@@ -53,6 +53,12 @@ pub struct Scenario {
     /// which way the shadows fall.
     #[serde(default = "shipped_lighting")]
     pub lighting: String,
+    /// Reproducible terrain seed for a generated world.
+    ///
+    /// Authored scenarios omit this. The title screen can replace a configured seed
+    /// for the current process, but never writes that replacement back to this asset.
+    #[serde(default)]
+    pub generation_seed: Option<u64>,
     /// Where the units start.
     pub units: ScenarioSettings,
 }
@@ -64,6 +70,10 @@ fn shipped_lighting() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use crate::ScenarioPlacement;
+
     use super::*;
 
     /// The shipped file parses, and says enough to build a menu from.
@@ -99,5 +109,49 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two scenarios share a name");
+    }
+
+    /// Generated review scenarios own distinct reproducible seeds and use the stable
+    /// anchors promised by the procedural generator.
+    #[test]
+    fn procedural_scenarios_use_distinct_seeds_and_spawn_anchors() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenarios should parse");
+        let generated: Vec<&Scenario> = library
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.generation_seed.is_some())
+            .collect();
+
+        assert_eq!(
+            generated.len(),
+            4,
+            "the review library should include hills and three architecture probes"
+        );
+        let seeds: HashSet<u64> = generated
+            .iter()
+            .filter_map(|scenario| scenario.generation_seed)
+            .collect();
+        assert_eq!(
+            seeds.len(),
+            generated.len(),
+            "generated scenarios should not start on the same configured seed"
+        );
+
+        for scenario in generated {
+            assert_eq!(
+                scenario.units.player,
+                ScenarioPlacement::Anchor("party_start".to_owned()),
+                "scenario {:?} does not use the party anchor",
+                scenario.name
+            );
+            assert_eq!(
+                scenario.units.enemy,
+                ScenarioPlacement::Anchor("hostile_start".to_owned()),
+                "scenario {:?} does not use the hostile anchor",
+                scenario.name
+            );
+        }
     }
 }

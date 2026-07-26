@@ -15,13 +15,16 @@ use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
-    TerrainEdit, TilePos, MAX_HEADROOM,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
+    TerrainEdit, TerrainReady, TilePos, TraversalProfile,
 };
 
-use crate::settings::MapSettings;
-use crate::terrain::{build_map, TerrainPalette};
-use crate::voxel::{runs, Column, VoxelMap};
+use crate::procedural;
+use crate::settings::{MapSettings, TerrainSettings};
+use crate::terrain::{build_non_procedural_map, TerrainPalette};
+use crate::voxel::{runs, VoxelMap};
+use crate::GenerationReport;
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -32,6 +35,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
         .register_type::<Headroom>()
+        .register_type::<TerrainReady>()
+        .register_type::<GenerationReport>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -42,18 +47,98 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             OnEnter(Screen::Gameplay),
-            spawn_grid.in_set(GameplaySetup::Terrain),
+            spawn_grid
+                .in_set(GameplaySetup::Terrain)
+                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(
             Update,
-            apply_terrain_edits.run_if(in_state(Screen::Gameplay)),
+            apply_terrain_edits
+                .run_if(in_state(Screen::Gameplay))
+                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }
 
-fn generate_world(mut commands: Commands, settings: Res<MapSettings>, table: Res<SubstanceTable>) {
-    let palette = TerrainPalette::from_table(&table);
-    commands.insert_resource(build_map(&settings, &palette));
+fn generate_world(
+    mut commands: Commands,
+    settings: Res<MapSettings>,
+    table: Res<SubstanceTable>,
+    resolved_seed: Option<Res<ResolvedMapSeed>>,
+) {
+    commands.remove_resource::<GameplaySetupFailure>();
+    commands.remove_resource::<TerrainReady>();
+    commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<SpecialMovementRegions>();
+    let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
+        Ok(palette) => palette,
+        Err(error) => {
+            error!("cannot build terrain: {error}");
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The selected terrain cannot be built: {error}"
+            )));
+            return;
+        }
+    };
+
+    let TerrainSettings::Procedural(procedural_settings) = &settings.terrain else {
+        let Some(map) = build_non_procedural_map(&settings, &palette) else {
+            error!("non-procedural terrain did not produce an authored map");
+            commands.insert_resource(GameplaySetupFailure::new(
+                "The selected authored terrain did not produce a map.",
+            ));
+            return;
+        };
+        commands.insert_resource(map);
+        commands.insert_resource(MapAnchors::new());
+        commands.insert_resource(SpecialMovementRegions::new());
+        commands.insert_resource(TerrainReady);
+        return;
+    };
+
+    let Some(seed) = resolved_seed else {
+        error!("procedural terrain requires a resolved scenario seed");
+        commands.insert_resource(GameplaySetupFailure::new(
+            "The selected procedural terrain has no resolved generation seed.",
+        ));
+        return;
+    };
+    let generated = procedural::build(
+        settings.grid_radius,
+        procedural_settings,
+        seed.0,
+        &palette,
+        TraversalProfile::WALKER,
+        &|substance| table.is_solid(substance),
+    );
+    let anchors: MapAnchors = generated
+        .anchors
+        .iter()
+        .map(|(name, pos)| (MapAnchorId::from(name), pos))
+        .collect();
+    if generated.validated {
+        info!(
+            "generated procedural map seed={} candidate={:?} fingerprint={} in {}us",
+            generated.report.seed,
+            generated.report.selected_candidate,
+            generated.report.map_fingerprint,
+            generated.report.elapsed_micros
+        );
+        commands.insert_resource(generated.special_regions);
+        commands.insert_resource(TerrainReady);
+    } else {
+        error!(
+            "procedural map and canonical fallback failed validation: {:?}",
+            generated.report.notes
+        );
+        commands.insert_resource(GameplaySetupFailure::new(
+            "Procedural generation and its canonical fallback both failed validation.",
+        ));
+    }
+    commands.insert_resource(generated.map);
+    commands.insert_resource(anchors);
+    commands.insert_resource(generated.report);
 }
 
 fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
@@ -61,6 +146,10 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<VoxelMap>();
+    commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<TerrainReady>();
 }
 
 /// Spawns one entity per contiguous run of substance.
@@ -109,35 +198,30 @@ fn build_grid(
             // Only the map can measure this: a run knows its own extent but nothing
             // about what is stacked on it. Zero means buried, and nothing can stand
             // on a buried run however solid it is.
-            let headroom = headroom_above(column, run.top);
-
-            tiles.push(
-                commands
-                    .spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material),
-                        Transform {
-                            translation: coord.to_world(span.centre()),
-                            scale: Vec3::new(1., span.height(), 1.),
-                            ..default()
-                        },
-                        Name::new("HexTile"),
-                        HexTile,
-                        coord,
-                        span,
-                        run.substance,
-                        // The run's topmost material voxel. Gameplay combines this
-                        // position with the substance's `solid` flag before treating
-                        // it as footing. Tagging the base instead would force
-                        // gameplay to know the level height to work the surface out,
-                        // putting a dependency on the map straight back into
-                        // movement. Voxels inside the run are addressed by `TilePos`,
-                        // not by this entity.
-                        TilePos::new(coord, run.top - 1),
-                        Headroom(headroom),
-                    ))
-                    .id(),
-            );
+            let headroom = column.headroom_above(run.top);
+            // The run's topmost material voxel. Gameplay combines this position with
+            // the substance's `solid` flag before treating it as footing. Tagging the
+            // base instead would force gameplay to know the level height to work the
+            // surface out, putting a dependency on the map straight back into movement.
+            // Voxels inside the run are addressed by `TilePos`, not by this entity.
+            let position = TilePos::new(coord, run.top - 1);
+            let tile = commands.spawn((
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material),
+                Transform {
+                    translation: coord.to_world(span.centre()),
+                    scale: Vec3::new(1., span.height(), 1.),
+                    ..default()
+                },
+                Name::new("HexTile"),
+                HexTile,
+                coord,
+                span,
+                run.substance,
+                position,
+                headroom,
+            ));
+            tiles.push(tile.id());
         }
     }
 
@@ -149,23 +233,6 @@ fn build_grid(
             HexGrid,
         ))
         .add_children(&tiles);
-}
-
-/// Clear voxels starting at `from`, saturating at [`MAX_HEADROOM`].
-///
-/// `from` is a run's exclusive `top`, so it names the voxel directly above the run's
-/// topmost material voxel: the first place a body standing here would need air. A
-/// non-air voxel there means the run is buried and the answer is zero.
-///
-/// Saturating matters: above a column's top the air is unbounded, so counting to the
-/// first non-air voxel would never terminate. [`Column::get`] returns air for anything
-/// out of range, which is what makes this loop safe without bounds checks.
-fn headroom_above(column: &Column, from: Level) -> Level {
-    (0..MAX_HEADROOM)
-        .take_while(|offset| column.get(from + offset).is_air())
-        .count()
-        .try_into()
-        .unwrap_or(MAX_HEADROOM)
 }
 
 /// World-space extent of a run of levels.
@@ -220,6 +287,7 @@ fn apply_terrain_edits(
     mut materials: ResMut<Assets<StandardMaterial>>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    mut special_regions: ResMut<SpecialMovementRegions>,
 ) {
     let mut changed = false;
     for edit in edits.read() {
@@ -228,6 +296,16 @@ fn apply_terrain_edits(
     if !changed {
         return;
     }
+
+    special_regions.retain(|position, _| {
+        let Some(column) = map.column(position.coord) else {
+            return false;
+        };
+        TraversalProfile::WALKER.admits_surface(
+            table.is_solid(column.get(position.level)),
+            column.headroom_above(position.level.saturating_add(1)),
+        )
+    });
 
     for entity in &grids {
         commands.entity(entity).despawn();

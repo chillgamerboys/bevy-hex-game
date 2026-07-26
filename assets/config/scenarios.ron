@@ -11,7 +11,8 @@
 //   blurb     one line underneath, saying what is interesting about this one
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
-//   units     where the pieces start
+//   generation_seed  OPTIONAL Some(reproducible seed) for generated maps
+//   units     where the pieces start: Fixed(cube coordinate) or Anchor("name")
 //
 // `lighting` is what makes one scenario feel unlike another as much as its terrain
 // does -- it carries the sun's angle and colour, so it decides which way the shadows
@@ -22,14 +23,14 @@
 // changes. A typo is caught by a test that opens every world named here, so a wrong
 // path fails `cargo test` rather than at the loading screen.
 //
-// COORDINATES are CUBE coordinates and MUST SUM TO ZERO: x + y + z == 0. That is what
-// makes them a hex grid rather than three loose numbers.
+// Fixed COORDINATES are CUBE coordinates and MUST SUM TO ZERO: x + y + z == 0. That
+// is what makes them a hex grid rather than three loose numbers.
 // See https://www.redblobgames.com/grids/hexagons/
 //
-// A coordinate that does not sum to zero, or that has no ground a unit can stand on --
-// off the edge of the map, or a spot with too little headroom -- is reported in the log
-// and the unit falls back to the centre of the map. It does not stop the game, so a
-// piece standing somewhere surprising is worth checking the terminal for.
+// Generated maps use Anchor("stable_name") instead. The generator publishes the exact
+// TilePos for each anchor after validating the map, so rerolling does not require
+// rewriting unit coordinates. A missing or non-standable anchor is logged and that unit
+// is not spawned; it never silently moves to the centre.
 (
     scenarios: [
         (
@@ -40,9 +41,19 @@
             units: (
                 // Opposite ends of the bridge, so the first movement test is the
                 // crossing this scenario is built around.
-                player: (x: 0, y: 4, z: -4),
+                player: Fixed((x: 0, y: 4, z: -4)),
 
-                enemy: (x: 0, y: -4, z: 4),
+                enemy: Fixed((x: 0, y: -4, z: 4)),
+            ),
+        ),
+        (
+            name: "Procedural Hills",
+            blurb: "Seeded temperate hills split by a river, with a bridge and a longer alternate crossing.",
+            world: "config/worlds/procedural-hills.ron",
+            generation_seed: Some(1592598566),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
             ),
         ),
         (
@@ -51,11 +62,42 @@
             world: "config/worlds/rolling-hills.ron",
             lighting: "config/lighting/overcast.ron",
             units: (
-                player: (x: 0, y: 0, z: 0),
+                player: Fixed((x: 0, y: 0, z: 0)),
 
                 // Closer than on the Crossing, because there is no terrain in the way
                 // to make the walk interesting.
-                enemy: (x: 5, y: -5, z: 0),
+                enemy: Fixed((x: 5, y: -5, z: 0)),
+            ),
+        ),
+        (
+            name: "Frozen Hills",
+            blurb: "A cold-environment probe using the same crossing guarantees as the temperate hills.",
+            world: "config/worlds/procedural-frozen.ron",
+            lighting: "config/lighting/overcast.ron",
+            generation_seed: Some(484450342),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
+            name: "Volcanic Hills",
+            blurb: "A basalt and lava probe with a cooled alternate crossing.",
+            world: "config/worlds/procedural-volcanic.ron",
+            generation_seed: Some(444211238),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
+            name: "Sky Islands",
+            blurb: "A floating-island probe with a connected critical route and optional unreachable islands.",
+            world: "config/worlds/procedural-sky-islands.ron",
+            generation_seed: Some(94445606),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
             ),
         ),
     ],

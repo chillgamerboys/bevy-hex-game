@@ -2,11 +2,12 @@
 //!
 //! # The rules
 //!
-//! > A body may **stand** on a surface when its substance is solid and its
-//! > [`Headroom`](hex_core::Headroom) is at least the body's [`Body::levels_tall`].
+//! > A body may **stand** on a surface when its shared
+//! > [`TraversalProfile`](hex_core::TraversalProfile) admits the substance and
+//! > [`Headroom`](hex_core::Headroom).
 //!
 //! > A **step** is legal when the destination is an adjacent surface a body can stand
-//! > on, and its surface is within [`MAX_STEP`] levels.
+//! > on, and the same profile admits the climb or drop.
 //!
 //! Surfaces stacked in one column are never adjacent, so a piece on a bridge
 //! cannot drop to the ground beneath it. Getting down means a ramp of adjacent
@@ -41,7 +42,8 @@ use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, Headroom, HexCoord, HexSpan, Level, Mode, PausableSystems, SubstanceId, TilePos,
+    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
+    TraversalProfile,
 };
 
 /// Ordering for systems that consume a unit's logical position.
@@ -101,18 +103,11 @@ pub fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Mode::Combat), crate::units::halt_on_combat);
 }
 
-/// How many levels a piece may climb or drop in one step.
-///
-/// One, by design: a step is a step. Anything steeper is a cliff and has to be walked
-/// around, or bypassed with an ability.
-pub const MAX_STEP: Level = 1;
-
 /// How much room a thing takes up, and therefore where it fits.
 ///
-/// A struct rather than a bare [`Level`] on purpose. Bodies come in configurations —
-/// the obvious next one is a **footprint**, a set of coordinate offsets for something
-/// wider than a single hex — and adding that field here changes [`Body::admits`] and
-/// nothing else. No call site passes the parts separately, so none of them move.
+/// A struct rather than a bare [`hex_core::Level`] on purpose. Bodies can eventually gain a
+/// footprint or a non-walking movement profile without changing every system that
+/// carries one.
 ///
 /// A footprint is deliberately not built yet. It is pure gameplay, invisible to the
 /// map, and it first needs a decision this codebase has not taken: whether a wide body
@@ -120,18 +115,21 @@ pub const MAX_STEP: Level = 1;
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct Body {
-    /// How many levels tall, and so how much clear space it needs overhead.
-    pub levels_tall: Level,
+    /// Exact movement and occupancy rules used by this body.
+    pub profile: TraversalProfile,
 }
 
 impl Body {
-    /// Whether this body fits in the space above a surface.
-    ///
-    /// The single place the size rule lives, and where a footprint check would join
-    /// it. Everything else asks this rather than comparing levels itself.
+    /// Creates a body governed by one traversal profile.
     #[must_use]
-    pub const fn admits(self, headroom: Headroom) -> bool {
-        headroom.0 >= self.levels_tall
+    pub const fn new(profile: TraversalProfile) -> Self {
+        Self { profile }
+    }
+
+    /// The traversal rules this body uses.
+    #[must_use]
+    pub const fn traversal_profile(self) -> TraversalProfile {
+        self.profile
     }
 }
 
@@ -163,8 +161,9 @@ impl Standing {
 /// gameplay independent of how terrain is stored. `hex_map` can be rewritten
 /// wholesale as long as tiles carry a [`TilePos`], a [`HexSpan`], a [`SubstanceId`]
 /// and a [`Headroom`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Footing {
+    profile: TraversalProfile,
     by_pos: HashMap<TilePos, Standing>,
     /// Surfaces at each coordinate, so one can be found without knowing which
     /// level its top happens to be at.
@@ -195,10 +194,15 @@ impl Footing {
         table: &SubstanceTable,
         body: Body,
     ) -> Self {
-        let mut footing = Self::default();
+        let profile = body.traversal_profile();
+        let mut footing = Self {
+            profile,
+            by_pos: HashMap::default(),
+            surfaces: HashMap::default(),
+        };
 
         for (pos, span, substance, headroom) in tiles {
-            if !table.is_solid(*substance) || !body.admits(*headroom) {
+            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
                 continue;
             }
             // This run passed the solid-substance check, and its `TilePos` is already
@@ -224,6 +228,16 @@ impl Footing {
     #[must_use]
     pub fn at(&self, pos: TilePos) -> Option<Standing> {
         self.by_pos.get(&pos).copied()
+    }
+
+    /// Whether this footing's exact traversal profile admits one positional step.
+    ///
+    /// Combat uses this for adjacent melee reach as well as movement using it for
+    /// routes, so a profile cannot validate one elevation rule and attack with
+    /// another.
+    #[must_use]
+    pub fn admits_step(&self, from: TilePos, to: TilePos) -> bool {
+        self.profile.admits_step(from, to)
     }
 
     /// Every standable surface at a coordinate, lowest first.
@@ -261,7 +275,7 @@ impl Footing {
         let mut candidates: Vec<Standing> = self
             .at_coord(coord)
             .iter()
-            .filter(|candidate| from.pos.is_within_step_of(candidate.pos, MAX_STEP))
+            .filter(|candidate| self.admits_step(from.pos, candidate.pos))
             .copied()
             .collect();
         candidates.sort_by_key(|c| (from.pos.level_step_to(c.pos).abs(), c.pos.level));
@@ -420,7 +434,7 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
 mod tests {
     use super::*;
     use hex_assets::{Substance, SubstanceFile};
-    use hex_core::MAX_HEADROOM;
+    use hex_core::{Level, MAX_HEADROOM};
 
     const STONE: SubstanceId = SubstanceId(1);
 
@@ -447,7 +461,7 @@ mod tests {
 
     /// A body of the size the game actually ships, for tests about stepping rather
     /// than about size.
-    const NORMAL: Body = Body { levels_tall: 2 };
+    const NORMAL: Body = Body::new(TraversalProfile::WALKER);
 
     /// A one-level column under open sky.
     ///
@@ -528,12 +542,12 @@ mod tests {
         );
     }
 
-    /// A two-level step is a cliff. This is the whole point of `MAX_STEP`.
+    /// A two-level step exceeds the ordinary walker's climb limit.
     #[test]
     fn a_cliff_blocks_the_route() {
         let a = HexCoord::ORIGIN;
         let [b, ..] = a.neighbors();
-        let footing = footing_from(&[tile(a, 2), tile(b, 5)]);
+        let footing = footing_from(&[tile(a, 2), tile(b, 4)]);
 
         let Some(from) = footing.ground(a) else {
             unreachable!("a has ground")
@@ -544,8 +558,58 @@ mod tests {
 
         assert!(
             route(from, to, &footing).is_none(),
-            "a three-level climb should be refused"
+            "a two-level climb should be refused"
         );
+    }
+
+    /// Procedural validation calls the core predicate directly while live movement
+    /// reaches it through `Body` and `Footing`. The boundary answers must be identical
+    /// or a generated map can validate and still refuse the player.
+    #[test]
+    fn live_headroom_matches_the_shared_profile() {
+        let low = HexCoord::ORIGIN;
+        let [exact, ..] = low.neighbors();
+        let tiles = [roofed(low, 4, 1), roofed(exact, 4, 2)];
+        let footing = footing_from(&tiles);
+        let profile = NORMAL.traversal_profile();
+
+        assert_eq!(
+            footing.ground(low).is_some(),
+            profile.admits_surface(true, Headroom(1))
+        );
+        assert_eq!(
+            footing.ground(exact).is_some(),
+            profile.admits_surface(true, Headroom(2))
+        );
+        assert!(footing.ground(low).is_none());
+        assert!(footing.ground(exact).is_some());
+    }
+
+    /// The same parity check for step height: one level belongs to the live graph and
+    /// two levels does not, exactly as the validator-facing predicate reports.
+    #[test]
+    fn live_steps_match_the_shared_profile() {
+        let from_coord = HexCoord::ORIGIN;
+        let [one_coord, two_coord, ..] = from_coord.neighbors();
+        let tiles = [tile(from_coord, 4), tile(one_coord, 5), tile(two_coord, 6)];
+        let footing = footing_from(&tiles);
+        let from = footing
+            .ground(from_coord)
+            .expect("the start is ordinary ground");
+        let profile = NORMAL.traversal_profile();
+        let one = TilePos::new(one_coord, 5);
+        let two = TilePos::new(two_coord, 6);
+
+        assert_eq!(
+            footing.step_from(from, one_coord).is_some(),
+            profile.admits_step(from.pos, one)
+        );
+        assert_eq!(
+            footing.step_from(from, two_coord).is_some(),
+            profile.admits_step(from.pos, two)
+        );
+        assert!(footing.step_from(from, one_coord).is_some());
+        assert!(footing.step_from(from, two_coord).is_none());
     }
 
     /// A budget is a hard edge: everything within it is reachable, nothing beyond is.
@@ -814,13 +878,19 @@ mod tests {
         let tiles = [roofed(coord, 1, 1)];
 
         assert!(
-            footing_for(&tiles, Body { levels_tall: 1 })
-                .ground(coord)
-                .is_some(),
+            footing_for(
+                &tiles,
+                Body::new(TraversalProfile {
+                    levels_tall: 1,
+                    ..TraversalProfile::WALKER
+                }),
+            )
+            .ground(coord)
+            .is_some(),
             "one level of clearance is enough for a one-level body"
         );
         assert!(
-            footing_for(&tiles, Body { levels_tall: 2 })
+            footing_for(&tiles, Body::new(TraversalProfile::WALKER))
                 .ground(coord)
                 .is_none(),
             "a two-level body does not fit under a one-voxel ceiling"
@@ -845,7 +915,10 @@ mod tests {
             })
             .collect();
 
-        let short = Body { levels_tall: 1 };
+        let short = Body::new(TraversalProfile {
+            levels_tall: 1,
+            ..TraversalProfile::WALKER
+        });
         let short_footing = footing_for(&tiles, short);
         let (Some(from), Some(to)) = (
             short_footing.ground(HexCoord::ORIGIN),
@@ -858,7 +931,7 @@ mod tests {
             "a one-level body fits through the tunnel"
         );
 
-        let tall_footing = footing_for(&tiles, Body { levels_tall: 2 });
+        let tall_footing = footing_for(&tiles, Body::new(TraversalProfile::WALKER));
         let (Some(from), Some(to)) = (
             tall_footing.ground(HexCoord::ORIGIN),
             tall_footing.ground(HexCoord::new_cubic(3, -3, 0)),

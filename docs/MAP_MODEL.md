@@ -60,10 +60,10 @@ saturating at `MAX_HEADROOM`. Two things fall out of one number.
 under grass — and only the top of a contiguous stack is a surface. The rest are inside
 the column and nothing can stand on them however solid they are.
 
-**Small headroom means cramped.** A body declares how tall it is (`levels_tall`,
-2 by default), and it can only stand where headroom is at least that. So a one-voxel
-gap under a bridge is a crawlspace: passable to something small, a wall to a person.
-Terrain being walkable is a property of the walker, not of the terrain.
+**Small headroom means cramped.** A body's traversal profile declares how tall it is.
+The canonical walker is exactly two levels tall, so a one-voxel gap under a bridge is
+a crawlspace: passable to something smaller, a wall to an ordinary person. Terrain
+being walkable is a property of the traversal profile, not of the terrain.
 
 Only the map can measure this. A run knows its own extent but nothing about what is
 stacked on it, so `hex_map` counts it at spawn and publishes it; gameplay cannot
@@ -77,6 +77,24 @@ work it out from spans.
 
 There can be places you cannot walk to. `route` returns `Option`, and "no route exists"
 is a real answer that callers handle rather than an error.
+
+### Optional regions use exact surface metadata
+
+A generator can publish an optional area through `SpecialMovementRegions`, which maps
+each exact `TilePos` in the area to a `SpecialMovementRegion`. The resource is the sole
+source of truth; tile entities do not duplicate this membership. This is generic
+metadata: it does not name the recipe that created the area or decide whether flight,
+swimming, tunnelling, or some future ability can enter it.
+
+Membership is keyed by `TilePos`, not `HexCoord`, so a bridge and the ground beneath it
+can belong to different regions. Region numbers are deterministic only within one
+generated map; they are grouping labels, not persistent IDs to compare across maps or
+seeds.
+
+Ordinary traversal remains geometry-driven. Solidity, headroom, adjacency, climb, and
+drop decide whether a walker can move; adding or removing a region tag does not change
+those rules. Generation validates that tagged optional surfaces are outside the
+ordinary network and that critical anchors are not tagged.
 
 ### Bedrock is not diggable
 
@@ -132,21 +150,24 @@ dependency on the map back into movement.
 
 ```
 hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
-             TerrainEdit — the shared vocabulary
+             SpecialMovementRegion, SpecialMovementRegions, TerrainEdit
+             — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
 hex_units reads tiles; cannot see hex_map
 ```
 
-The map talks to the rest of the game **only through components on tile entities**:
+The map exposes rendered footing through components on tile entities:
 
 ```rust
 (HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom, Mesh3d, ...)
 ```
 
-`hex_units` queries those. It never reads `VoxelMap` or any generator, so terrain
-storage and generation can be replaced wholesale — chunked, streamed, generated
-differently — without anything else noticing.
+Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
+by `TilePos`; they are not duplicated on tile entities until a real query-based
+consumer needs that projection. `hex_units` queries the footing components. It never
+reads `VoxelMap` or any generator, so terrain storage and generation can be replaced
+wholesale — chunked, streamed, generated differently — without anything else noticing.
 
 **Writing** goes the other way, through a message:
 

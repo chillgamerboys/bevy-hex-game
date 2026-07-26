@@ -27,15 +27,20 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
-    TerrainEdit, TilePos, MAX_HEADROOM,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegion,
+    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
 };
-use hex_map::{MapSettings, PerlinSettings, PerlinStepSettings, TerrainSettings, VoxelMap};
+use hex_map::{
+    CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
+    LinkedIslandsSettings, MapSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
+    SkyIslandsSettings, TacticalSettings, TerrainSettings, VoxelMap,
+};
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
 /// tile-count formula is a meaningful check.
@@ -64,6 +69,7 @@ fn test_app() -> App {
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Finalize,
         )
             .chain(),
     );
@@ -109,6 +115,10 @@ fn test_app() -> App {
 /// The asset pipeline has its own tests; depending on it here would only add a way
 /// for these to fail for unrelated reasons.
 fn substance_table() -> SubstanceTable {
+    substance_table_without(None)
+}
+
+fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
         ("air", false, false),
@@ -116,7 +126,17 @@ fn substance_table() -> SubstanceTable {
         ("dirt", true, true),
         ("grass", true, true),
         ("stone", true, true),
+        ("gravel", true, true),
+        ("water", false, true),
+        ("metal", true, true),
+        ("snow", true, true),
+        ("ice", true, true),
+        ("basalt", true, true),
+        ("lava", false, true),
     ] {
+        if omitted == Some(name) {
+            continue;
+        }
         substances.insert(
             name.to_owned(),
             Substance {
@@ -140,11 +160,175 @@ fn enter_gameplay(app: &mut App) {
     app.update();
 }
 
+fn procedural_app() -> App {
+    let mut app = test_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings {
+            generator_version: 1,
+            landform: LandformSettings::Hills(HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+            environment: EnvironmentSettings::TemperateGrassland,
+            tactical: TacticalSettings::Crossing(CrossingSettings {
+                barrier_half_width: 1,
+                bed_level: 12,
+                hazard_bottom: 13,
+                hazard_top: 14,
+                bridge_level: 16,
+            }),
+        }),
+    });
+    app.insert_resource(ResolvedMapSeed(20_260_726));
+    app
+}
+
+fn sky_islands_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings {
+            generator_version: 1,
+            landform: LandformSettings::SkyIslands(SkyIslandsSettings {
+                surface_level: 15,
+                island_radius: 3,
+            }),
+            environment: EnvironmentSettings::TemperateGrassland,
+            tactical: TacticalSettings::LinkedIslands(LinkedIslandsSettings { bridge_width: 2 }),
+        }),
+    });
+    app
+}
+
+#[test]
+fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
+    let mut app = procedural_app();
+    enter_gameplay(&mut app);
+
+    assert!(app.world().contains_resource::<TerrainReady>());
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.seed, 20_260_726);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(!report.used_fallback, "{:?}", report.notes);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "bridge",
+        "alternate_crossing",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing generated anchor {name}"
+        );
+    }
+    assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
+    assert!(
+        app.world().resource::<SpecialMovementRegions>().is_empty(),
+        "the hills recipe does not introduce optional regions yet"
+    );
+}
+
+#[test]
+fn sky_region_registry_contains_exact_generated_surfaces() {
+    let mut app = sky_islands_app();
+    enter_gameplay(&mut app);
+
+    let expected: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    assert!(!expected.is_empty());
+    assert!(expected.keys().all(|position| !app
+        .world()
+        .resource::<VoxelMap>()
+        .get(*position)
+        .is_air()));
+}
+
+#[test]
+fn clearing_a_tagged_surface_prunes_its_exact_membership() {
+    let mut app = sky_islands_app();
+    enter_gameplay(&mut app);
+    let target = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .map(|(position, _)| position)
+        .next()
+        .expect("sky islands should publish optional surfaces");
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<SpecialMovementRegions>().get(target),
+        None
+    );
+}
+
+#[test]
+fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
+    let mut app = procedural_app();
+    app.world_mut().remove_resource::<ResolvedMapSeed>();
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(
+        !app.world().contains_resource::<SpecialMovementRegions>(),
+        "failed generation published special-region semantics"
+    );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("generation seed"));
+    assert_eq!(tile_count(&mut app), 0);
+}
+
+#[test]
+fn a_missing_required_substance_never_marks_terrain_ready() {
+    let mut app = procedural_app();
+    app.insert_resource(substance_table_without(Some("water")));
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(
+        !app.world().contains_resource::<SpecialMovementRegions>(),
+        "failed generation published special-region semantics"
+    );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("water"));
+    assert_eq!(tile_count(&mut app), 0);
+}
+
 fn tile_count(app: &mut App) -> usize {
     app.world_mut()
         .query_filtered::<Entity, With<HexTile>>()
         .iter(app.world())
         .count()
+}
+
+#[test]
+fn nonprocedural_maps_publish_an_empty_region_registry() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
 }
 
 /// Every column produces at least one entity, and typically several — one per
@@ -641,6 +825,20 @@ fn leaving_gameplay_removes_the_map() {
         app.world().get_resource::<VoxelMap>().is_none(),
         "voxel storage outlived the gameplay screen"
     );
+    assert!(
+        app.world().get_resource::<MapAnchors>().is_none(),
+        "map anchors outlived the gameplay screen"
+    );
+    assert!(
+        app.world()
+            .get_resource::<SpecialMovementRegions>()
+            .is_none(),
+        "special-movement regions outlived the gameplay screen"
+    );
+    assert!(
+        app.world().get_resource::<TerrainReady>().is_none(),
+        "terrain readiness outlived the gameplay screen"
+    );
 }
 
 /// Re-entering rebuilds a complete grid rather than doubling it or leaving gaps.
@@ -662,6 +860,34 @@ fn gameplay_can_be_re_entered() {
         first,
         "rebuild should match the first"
     );
+}
+
+#[test]
+fn sky_regions_reenter_with_the_same_exact_memberships() {
+    let mut app = sky_islands_app();
+    enter_gameplay(&mut app);
+    let first: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    assert!(!first.is_empty());
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+
+    enter_gameplay(&mut app);
+    let second: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+
+    assert_eq!(second, first);
 }
 
 /// The world has to exist before the tiles built from it.

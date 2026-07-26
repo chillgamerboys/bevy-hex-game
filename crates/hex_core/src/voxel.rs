@@ -138,18 +138,6 @@ impl TilePos {
     pub const fn level_step_to(self, other: Self) -> Level {
         other.level - self.level
     }
-
-    /// Whether `other` can be reached in one step, ignoring what either voxel is made
-    /// of.
-    ///
-    /// Purely geometric: adjacent column, and no more than `max_step` levels of
-    /// climb or drop. Whether the destination is solid enough to stand on, whether
-    /// the mover has the movement left, and which abilities ignore this entirely are
-    /// all questions for `hex_units`.
-    #[must_use]
-    pub fn is_within_step_of(self, other: Self, max_step: Level) -> bool {
-        self.coord.distance(other.coord) == 1 && self.level_step_to(other).abs() <= max_step
-    }
 }
 
 /// What a voxel is made of.
@@ -264,48 +252,6 @@ mod tests {
 
         assert_eq!(low.level_step_to(high), 3);
         assert_eq!(high.level_step_to(low), -3);
-    }
-
-    /// With a limit of one level, a gentle ramp is walkable and a cliff is not.
-    #[test]
-    fn one_level_steps_are_reachable_and_two_are_not() {
-        let [east, ..] = TilePos::new(HexCoord::ORIGIN, 4).neighbours();
-
-        let from = TilePos::new(HexCoord::ORIGIN, 4);
-        assert!(from.is_within_step_of(east, 1), "level ground is reachable");
-        assert!(
-            from.is_within_step_of(east.above(), 1),
-            "a one-level climb is reachable"
-        );
-        assert!(
-            from.is_within_step_of(east.below(), 1),
-            "a one-level drop is reachable"
-        );
-        assert!(
-            !from.is_within_step_of(east.above().above(), 1),
-            "a two-level climb is a cliff"
-        );
-    }
-
-    /// Reachability is horizontal adjacency *and* a small step. A voxel directly
-    /// overhead fails the first test even though it passes the second.
-    #[test]
-    fn a_voxel_directly_above_is_never_reachable() {
-        let pos = TilePos::new(HexCoord::ORIGIN, 4);
-        assert!(!pos.is_within_step_of(pos.above(), 1));
-        assert!(!pos.is_within_step_of(pos.below(), 1));
-        assert!(
-            !pos.is_within_step_of(pos, 1),
-            "nor is standing still a step"
-        );
-    }
-
-    /// Distant columns are not reachable however similar their heights.
-    #[test]
-    fn far_columns_are_not_reachable() {
-        let here = TilePos::new(HexCoord::ORIGIN, 0);
-        let far = TilePos::new(HexCoord::new_cubic(4, -4, 0), 0);
-        assert!(!here.is_within_step_of(far, 1));
     }
 
     #[test]

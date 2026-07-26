@@ -167,8 +167,9 @@ because being shot at without being able to shoot back is still a fight.
 
 **Melee is exempt.** A spell has *range* and gains from height; a fist has *reach* and
 does not, or an attacker five levels up would acquire a two-hex punch. Swinging stays
-`TilePos::is_within_step_of` — adjacent column, within one level, the same rule
-movement uses.
+an adjacent-surface step that the attacker's `TraversalProfile` admits in both
+directions. Requiring both directions keeps melee symmetric even if a future profile
+can drop farther than it climbs.
 
 **Two units at one coordinate are not far apart**, however tall the column between
 them. Horizontal separation is genuinely zero and someone directly overhead can act on
