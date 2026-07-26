@@ -20,7 +20,9 @@ use bevy::prelude::*;
 use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, SubstanceTable};
 use hex_core::{Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn};
-use hex_units::{route, Body, Enemy, Faction, Footing, HexPathingLine, Standing, StandsOn};
+use hex_units::{
+    route, Body, Enemy, Faction, Footing, HexPathingLine, Standing, StandsOn, MAX_STEP,
+};
 
 use crate::turns::TurnOrder;
 
@@ -94,8 +96,14 @@ fn take_enemy_turn(
         return;
     };
 
-    // Adjacent already: swing.
-    if standing.0.pos.coord.distance(target.pos.coord) == 1 {
+    // Close enough already: swing.
+    //
+    // **Reach, not range.** Melee gets no high-ground bonus — an attacker five levels
+    // up should not acquire a two-hex punch — so this is the same step rule movement
+    // uses: adjacent column, within one level. Comparing coordinates alone let an
+    // enemy on a bridge swing at somebody on the ground beneath it, which the flat
+    // test terrain could never have shown.
+    if standing.0.pos.is_within_step_of(target.pos, MAX_STEP) {
         lunge(&mut commands, entity, standing.0, target, settings.speed);
         recoil(
             &mut commands,
@@ -128,7 +136,13 @@ fn spend(turn: &mut Turn) {
     turn.movement_left = 0;
 }
 
-/// The closest unit hostile to `faction`.
+/// The unit hostile to `faction` that is most worth going after.
+///
+/// Anything already within reach wins outright, and only then does distance decide.
+/// Sorting on horizontal distance alone picked whoever was nearest *on the map* — which
+/// on stacked terrain can be somebody on a bridge overhead that no amount of walking
+/// will ever bring this unit next to, while a reachable target stands one hex further
+/// off. `min_by_key` is first-wins, so the tuple orders reachable before near.
 fn nearest_foe(
     others: &Query<(Entity, &Faction, &StandsOn)>,
     faction: Faction,
@@ -137,7 +151,10 @@ fn nearest_foe(
     others
         .iter()
         .filter(|(_, other, _)| faction.is_hostile_to(**other))
-        .min_by_key(|(_, _, standing)| from.pos.coord.distance(standing.0.pos.coord))
+        .min_by_key(|(_, _, standing)| {
+            let in_reach = !from.pos.is_within_step_of(standing.0.pos, MAX_STEP);
+            (in_reach, from.pos.coord.distance(standing.0.pos.coord))
+        })
         .map(|(entity, _, standing)| (entity, standing.0))
 }
 

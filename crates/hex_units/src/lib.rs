@@ -28,12 +28,15 @@ pub mod movement;
 pub mod pathing;
 /// Showing a piece where it can go before it goes there.
 pub mod selection;
+/// Who can be reached from where, and what height is worth.
+pub mod targeting;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 
 pub use movement::{route, Body, Footing, Reach, Standing, MAX_STEP};
 pub use pathing::HexPathingLine;
 pub use selection::{HoveredSurface, PathOverlay, RangeOverlay, Selected, UnitRing};
+pub use targeting::{either_in_reach, high_ground_bonus, in_reach, LEVELS_PER_BONUS_RANGE};
 pub use units::{Enemy, Faction, Player, StandsOn};
 
 /// Adds every unit system.

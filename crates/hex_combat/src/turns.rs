@@ -23,8 +23,8 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
-use hex_core::{AppSystems, HexCoord, Mode, PausableSystems, Screen, Turn};
-use hex_units::{Faction, StandsOn};
+use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn};
+use hex_units::{either_in_reach, Faction, StandsOn};
 
 /// How far apart two units can be and still start a fight, and related knobs.
 ///
@@ -161,56 +161,64 @@ fn reset(mut order: ResMut<TurnOrder>) {
     order.clear();
 }
 
-/// Starts and stops fights based on how close the nearest hostile is.
+/// Starts and stops fights based on whether anyone can reach anyone.
 ///
-/// Distance is measured on the hex grid rather than in world units, because that is
-/// the unit the rest of the game reasons in and it does not change when someone edits
+/// Measured on the hex grid rather than in world units, because that is the unit the
+/// rest of the game reasons in and it does not change when someone edits
 /// `level_height`.
+///
+/// **A threshold, not a distance.** There is no single number for how far apart two
+/// surfaces are — a unit on a clifftop reaches further down than the one below reaches
+/// back up, so the question only has an answer once you say which range you are asking
+/// about. [`either_in_reach`] takes that range; the hysteresis is the same two
+/// thresholds asked separately rather than one distance compared twice.
 fn engagement(
     mode: Res<State<Mode>>,
     mut next: ResMut<NextState<Mode>>,
     units: Query<(&Faction, &StandsOn)>,
 ) {
-    let Some(nearest) = nearest_hostile_distance(&units) else {
-        // Nobody left to fight, or nobody to fight with.
-        if *mode.get() == Mode::Combat {
-            next.set(Mode::Exploring);
-        }
-        return;
-    };
+    let engage = CombatSettings::ENGAGE_RANGE;
+    let disengage = engage + CombatSettings::DISENGAGE_MARGIN;
 
     match mode.get() {
-        Mode::Exploring if nearest <= CombatSettings::ENGAGE_RANGE => {
-            next.set(Mode::Combat);
+        Mode::Exploring => {
+            if any_hostile_in_reach(&units, engage) == Some(true) {
+                next.set(Mode::Combat);
+            }
         }
-        Mode::Combat
-            if nearest > CombatSettings::ENGAGE_RANGE + CombatSettings::DISENGAGE_MARGIN =>
-        {
-            next.set(Mode::Exploring);
+        // `!= Some(true)` rather than `== Some(false)`, so a fight also ends when one
+        // side is gone entirely. That is a different thing from "far apart", and
+        // collapsing them would leave combat running with nobody to fight.
+        Mode::Combat => {
+            if any_hostile_in_reach(&units, disengage) != Some(true) {
+                next.set(Mode::Exploring);
+            }
         }
-        _ => {}
     }
 }
 
-/// The distance between the closest pair of mutually hostile units.
+/// Whether any mutually hostile pair can reach each other at `range`.
 ///
 /// [`None`] when one side is absent entirely, which is a different thing from "far
 /// apart" and should not start or end a fight by accident.
-fn nearest_hostile_distance(units: &Query<(&Faction, &StandsOn)>) -> Option<u32> {
-    let mut by_faction: HashMap<Faction, Vec<HexCoord>> = HashMap::default();
+///
+/// Positions are compared as [`TilePos`], **not** as coordinates. Discarding the level
+/// put a unit on a bridge and one on the ground beneath it zero hexes apart — true
+/// horizontally, and exactly why the answer has to come from a reach rule that knows
+/// what height is worth rather than from raw separation.
+fn any_hostile_in_reach(units: &Query<(&Faction, &StandsOn)>, range: u32) -> Option<bool> {
+    let mut by_faction: HashMap<Faction, Vec<TilePos>> = HashMap::default();
     for (faction, standing) in units.iter() {
-        by_faction
-            .entry(*faction)
-            .or_default()
-            .push(standing.0.pos.coord);
+        by_faction.entry(*faction).or_default().push(standing.0.pos);
     }
 
     let mine = by_faction.get(&Faction::Player)?;
     let theirs = by_faction.get(&Faction::Hostile)?;
 
-    mine.iter()
-        .flat_map(|a| theirs.iter().map(move |b| a.distance(*b)))
-        .min()
+    Some(
+        mine.iter()
+            .any(|a| theirs.iter().any(|b| either_in_reach(*a, *b, range))),
+    )
 }
 
 /// Builds the order and hands the first unit its turn.

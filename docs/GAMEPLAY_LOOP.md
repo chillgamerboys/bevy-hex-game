@@ -81,6 +81,7 @@ they are meant to be replaced.
 | **Damage** | none at all | Lattices. Damage disables lattice hexes, and there are no lattices |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
 | **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
+| **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
 | **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
@@ -130,6 +131,26 @@ independent of each other still holds.
 part of a map is worth testing and press `BACKSPACE` then `ENTER` to rebuild. See
 [CONTENT.md](CONTENT.md).
 
+## The high ground
+
+Elevation is an **advantage, not a separation**. A unit gains one hex of range for
+every 5 levels it stands above its target, and the unit below gains nothing back.
+
+That asymmetry is the whole mechanic, and it is why there is no "distance between two
+surfaces" anywhere in the code. There cannot be one: the answer depends on who is
+asking. `hex_units::targeting` exposes `in_reach(from, to, range)` instead, and
+engagement is its first caller — a fight starts when *either* side can reach the other,
+because being shot at without being able to shoot back is still a fight.
+
+**Melee is exempt.** A spell has *range* and gains from height; a fist has *reach* and
+does not, or an attacker five levels up would acquire a two-hex punch. Swinging stays
+`TilePos::is_within_step_of` — adjacent column, within one level, the same rule
+movement uses.
+
+**Two units at one coordinate are not far apart**, however tall the column between
+them. Horizontal separation is genuinely zero and someone directly overhead can act on
+you. The stacking rule governs where you can *walk*; it does not make people invisible.
+
 ## Not built, and not next
 
 Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:
@@ -140,5 +161,12 @@ Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:
 - **Units obstructing each other.** Two units can occupy the same surface, and the
   pathfinder will happily route one straight through another. An occupancy map over
   unit positions would fix both and lives entirely in `hex_combat`.
+- **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
+  stays in the fight forever: `approach` finds no route, so it spends its turn doing
+  nothing, every round. Height makes this easier to fall into, since a fight now starts
+  from further away when one side is above the other. Nothing is stuck — the player can
+  still walk out past the disengage margin — but the enemy should give up rather than
+  wait to be left. That is the rout threshold `DESIGN.md` names and the enemy-behaviour
+  row above is waiting on.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.
