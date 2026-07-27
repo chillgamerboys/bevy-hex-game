@@ -199,7 +199,7 @@ const MAX_TIER: usize = 6;
 
 /// The raw file, before names are turned into ids.
 ///
-/// `Deserialize` is hand-written (via [`UnvalidatedSpellFile`]) so tier bounds, mana
+/// `Deserialize` is hand-written (via `UnvalidatedSpellFile`) so tier bounds, mana
 /// amounts and effect fields are checked at parse: an invalid `spells.ron` fails to
 /// load and the previous valid [`SpellBook`] stays active.
 #[derive(Asset, Resource, Reflect, Debug, Clone)]

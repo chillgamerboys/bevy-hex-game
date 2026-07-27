@@ -43,7 +43,7 @@ pub struct FusionInput {
 
 /// The raw file, before names are turned into ids.
 ///
-/// `Deserialize` is hand-written (via [`UnvalidatedElementFile`]) so every
+/// `Deserialize` is hand-written (via `UnvalidatedElementFile`) so every
 /// intra-file invariant is checked at parse time: an invalid `elements.ron` fails to
 /// load and the previous valid [`ElementCatalog`] stays active.
 #[derive(Asset, Resource, Reflect, Debug, Clone)]
