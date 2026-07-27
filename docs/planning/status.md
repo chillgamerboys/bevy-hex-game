@@ -114,6 +114,29 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.
 
+## Agreed but not built: the casting contract
+
+[casting.md](../systems/casting.md) is a contract for wave 3, not a description of the
+build. **Nothing casts a spell today** — `GameCommand::Cast` parses and is rejected
+with a reason. When it lands, these limitations are deliberate and documented rather
+than accidental:
+
+- **Blast volumes will be geometric, not obstruction-aware.** A sphere next to a cave
+  wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
+  same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
+  and `needs_los` on spell content is parsed but unenforced until then.
+- **Features are spell-proof.** Trees, and anything else the world spawns as a feature
+  rather than terrain, are untouched by fire until the world owner decides otherwise in
+  the terrain-response table. A fireball leaves a forest standing.
+- **A breached cave roof will not admit daylight.** Terrain edits already keep the
+  interior *roof* projection current, but interior **membership** is never re-derived,
+  so a chamber you blow open still counts as inside. Nothing is wrong today — light
+  domains have no producer yet — but the two facts disagree the moment perception
+  lands ([boundary.md](boundary.md) ask I).
+- **Casting is combat-only**, because out-of-combat mana regeneration has no answer
+  yet, and **channelling and rituals are deferred** — `co_castable` parses and labels
+  rituals in the demo, but has no mechanical effect.
+
 ## Not yet done, at the toolchain level
 
 - **`bevy_lint`** is wired (`cfg(bevy_lint)` is declared, the `register_tool`

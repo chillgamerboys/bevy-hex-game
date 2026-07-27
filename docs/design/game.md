@@ -163,6 +163,17 @@ There is no HP. Damage disables hexes.
   enchantments.
 - Damage type does not matter, except fire's burn.
 
+### Nothing is aimed away from you
+
+There is **no friendly-fire filter**. A spell may be aimed at anyone, and an area
+effect touches everything inside its volume — allies, enemies, and the caster alike.
+Healing an enemy is allowed and is your own fault; a fireball dropped on a melee is a
+decision, not a mis-click the game will protect you from.
+
+That is what makes area spells a real choice rather than free damage, and it is why
+positioning is a defensive tool. How the rule is enforced — and the volume an area
+effect actually covers — is [casting.md](../systems/casting.md).
+
 ### Defences subtract
 
 Defensive enchantments reduce incoming disable counts by a flat amount. A metal shield
@@ -192,11 +203,15 @@ thing that can go wrong is something they could in principle have known.
 ### Recovery and death
 
 - Hexes recover through healing spells or rest after combat.
-- Death is permanent unless reversed by a revival spell.
+- Death is permanent unless reversed by a restoring spell.
 - **Proposed:** functional death arrives before zero. A character whose spell hexes
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
   period rather than a slog, and gives enemies a legible rout condition.
+- **First implementation:** a unit whose hexes are all disabled leaves the turn order
+  and is **downed**, revivable by a restoring spell. Whether being downed can become
+  permanent is the [permadeath question](#permadeath), and is deliberately not settled
+  by the mechanic shipping first.
 
 ### Information and divination
 
@@ -278,6 +293,25 @@ properties and elevations:
 - whether an evocation or enchantment can be cast there — most tiles allow
   evocations unless they have special properties like an anti-magic field; fewer
   allow enchantments, since a fixed stone wall cannot be cast on water
+
+### Magic shapes the world; the world decides how
+
+**Evocations change terrain. Enchantments do not.** What an evocation builds is
+permanent — conjured stone is simply stone, destroyed the way any stone is — while an
+enchantment's manifestations are bound to it and vanish when it breaks. That division
+means no spell ever has to remember what it built or clean up after itself.
+
+**A cast announces; the world answers.** A spell says which voxels it reaches and what
+kind of energy arrives there; what the *material* does about it is the world's own
+rule. Fire on dirt, fire on granite, and fire on a tree are three different outcomes
+that a fireball does not need to know about — and the fireball is a legal, paid-for
+cast either way. **Casting is committing**: throwing fire at a mountain scorches
+nothing and costs the same mana as burning a field.
+
+The exception is conjuration, which has no material to consult: a spell that summons
+dirt names dirt, because that is the spell's identity rather than the world's opinion.
+
+The full contract is [casting.md](../systems/casting.md).
 
 Elevation helps sight downhill without revealing stacked surfaces by accident:
 Bright and Dim sight gain one horizontal hex for every four complete levels above

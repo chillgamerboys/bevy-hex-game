@@ -30,6 +30,14 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Elements and spells as content | `elements.ron` (wheel, opposition, fusion recipes) and `spells.ron` (closed-enum effects, targeting specs); a cross-file `ContentIndex` with load-time and test-time reference checks | assets | <!-- linear: HEX-7 owner: shravan-kumaran -->
 | Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat | <!-- linear: HEX-8 owner: shravan-kumaran -->
 | Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat | <!-- linear: HEX-12 owner: shravan-kumaran -->
+| Terrain magic | the declarative `TerrainImpact` announcement, conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and consumption of the world's edit acknowledgment | combat |
+| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat |
+| Casting UX | shape previews under the cursor, blocked-reason surfacing from `castable()`, target cycling, and cast presentation per element | units |
+| Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game |
+| Combat readability | initiative order display, a live/disabled lattice readout beyond a count, and a combat log | game |
+| Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat |
+| Magic outside combat | casting in real time, which first requires an answer to out-of-combat mana regeneration | combat |
+| Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat |
 | Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game | <!-- linear: HEX-14 owner: shravan-kumaran -->
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
 | Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
@@ -82,10 +90,38 @@ Knowledge and divination seam: the former answers which world entities a
 faction currently observes, while the latter answers what that faction knows
 about an observed enemy's lattice.
 
+### The gameplay lane, in waves
+
+The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collects a
+group of ticket PRs in dependency order, a human walks the integrated build once, and
+the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules). Waves 1 and
+2 are done — content, the lattice engine, sim seams, combat knobs, the command funnel,
+and ship hygiene are on `dev`.
+
+- **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
+  disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
+  Encounters. Damage exists at the end of it.
+- **Wave 4 — combat feel and casting UX.** Casting UX, Outcome flow, Combat
+  readability, Trajectories and lingering effects, Magic outside combat, Channelling
+  and co-casting — plus **Movement and combat perception adapters**, the gameplay half
+  of the perception lane, which is planned rather than scheduled: it starts when
+  `hex_perception` lands, on the world lane's clock.
+- **Wave 5 — productization.** Save and load, Settings/persistence/audio, Steam
+  packaging and crash reporting, Engine upkeep (pinned to the Bevy 0.20 window).
+
+Save and load sits in wave 5 rather than wave 3 deliberately. A production save may not
+depend on regenerating a legacy seed, which makes the terrain snapshot (boundary ask
+D2) and pre-spawn replay (D1) prerequisites — so saves wait for the world lane rather
+than blocking on it.
+
+The casting contract those waves implement — the announce model, the legality ladder,
+volumes, and persistent effects — is [casting.md](../systems/casting.md).
+
 The complete V3 map contract, fixed `Ring7` roster, fingerprint policy, recipe
 stages, and removal gate live in
-[world-generation-v3.md](../systems/world-generation-v3.md). Map publication
-asks and gameplay fallbacks remain in [map-asks.md](map-asks.md).
+[world-generation-v3.md](../systems/world-generation-v3.md). Publication asks and
+fallbacks in both directions are [boundary.md](boundary.md); what crosses the boundary
+today, and its status, is [contracts.md](../contracts.md).
 
 ## The epics, in detail
 
@@ -193,7 +229,7 @@ drift refusal, units (id, seat, faction, `TilePos`, body, lattice trio,
 initiative), optional combat state including any pending decision, knowledge,
 campaign flags. Restore rides the existing Loading flow. World restoration is
 seeded-regen + edit replay until the map-side terrain snapshot lands
-([map-asks.md](map-asks.md), ask D2) — which is the generator-change-proof
+([boundary.md](boundary.md), ask D2) — which is the generator-change-proof
 primary format. Floats never enter a save: positions are `TilePos`, spans are
 re-derived.
 
@@ -277,7 +313,7 @@ duplicating it.
 
 ### The map rows
 
-Specified in [map-asks.md](map-asks.md), each with exact signatures,
+Specified in [boundary.md](boundary.md), each with exact signatures,
 publisher/consumer, tests, and a fallback if deferred — nothing on the
 gameplay side blocks on them.
 

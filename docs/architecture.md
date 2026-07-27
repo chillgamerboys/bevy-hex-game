@@ -21,19 +21,19 @@ That matters more here than in most projects, because a good deal of the code wi
 be written by AI agents. An agent that *can* import across a boundary eventually
 will, and no amount of documentation prevents it. A compiler error does.
 
-| Crate | Holds | Depends on |
-|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer |
-| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` |
-| `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
-| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
-| `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
-| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` |
-| `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
-| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
-| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
+| Crate | Holds | Depends on | Owner |
+|---|---|---|---|
+| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` | infra: gameplay; map content: world |
+| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
+| `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
+| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
+| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` | gameplay |
+| `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
+| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
+| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 
 ### `hex_map` is a leaf, on purpose
 
@@ -70,8 +70,21 @@ it is one person's, and its contract is the types it exposes.
 
 ### Ownership cuts both ways
 
-The map is one person's; **`hex_units` and `hex_combat` are the other's**. The split is
-not only about compile times — it is about who gets to decide.
+Two roles, named so the arrangement survives a change of people:
+
+| Role | Owns |
+|---|---|
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, and map-domain content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
+| **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, the `hex_assets` loader infrastructure, and gameplay content: `combat.ron`, `spells.ron`, `elements.ron` |
+
+`hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
+whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
+shared middle, flagged to the other side when a change touches their domain.
+
+Where the two meet is [contracts.md](contracts.md); what each is still asking of the
+other is [planning/boundary.md](planning/boundary.md).
+
+The split is not only about compile times — it is about who gets to decide.
 
 Review across that line is welcome and has caught real bugs in both directions. But a
 comment on a *design* question inside somebody else's crate is an argument, not a veto:
@@ -101,7 +114,10 @@ extent but knows nothing about what is stacked on it, so gameplay cannot tell a 
 from the inside of a column — let alone whether a body fits in the space above one.
 
 Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
-into the map, so a spell that digs or builds requests it and the map applies it.
+into the map, so a spell that digs or builds requests it and the map applies it. The
+planned second write path, `TerrainImpact`, keeps the same direction and hands the map
+even more authority: gameplay announces which voxels an elemental effect reaches, and
+the map decides what each material does about it ([systems/casting.md](systems/casting.md)).
 
 See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
 semantic plan and its exact published projections are specified in

@@ -122,6 +122,14 @@ and map knowledge. It may depend on `hex_units` to observe unit positions.
 while `hex_combat` may consume the richer perception API. Neither gameplay crate may
 import map-generator internals.
 
+**Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
+`hex_perception`, and map-domain content (world files, `substances.ron`, lighting
+profiles). The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`,
+`hex_lattice`, `hex_anim`, the `hex_assets` loader, and gameplay content
+(`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared. Every fact that
+crosses between them, and whether it is live, reserved, or still an ask, is
+`docs/contracts.md`; the open asks are `docs/planning/boundary.md`.
+
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
 surface `TilePos`, `HexSpan`, `SubstanceId` and `Headroom` components on tile
