@@ -505,11 +505,13 @@ const fn element_levels(element: VolumeElement) -> LevelInterval {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use hex_assets::{SubstanceFile, SubstanceTable};
     use hex_core::{MapAnchorId, SpecialMovementRegion};
 
     use super::*;
     use crate::procedural::map_fingerprint;
     use crate::procedural_v2::volume::voxelize;
+    use crate::settings::{MapSettings, ProceduralSettings, TerrainSettings};
 
     const BEDROCK: SubstanceId = SubstanceId(1);
     const STONE: SubstanceId = SubstanceId(2);
@@ -748,6 +750,171 @@ mod tests {
                 assert_v1_v2_parity("scale boundary", radius, environment, seed);
             }
         }
+    }
+
+    /// Exports the provenance-documented review corpus without selecting new seeds.
+    ///
+    /// Run with `--ignored --exact --nocapture --test-threads=1` and redirect the
+    /// output to the review pack. Timing is diagnostic; every other field is stable.
+    #[test]
+    #[ignore = "manual deterministic V2 Hills report export"]
+    fn print_v2_hills_review_reports() {
+        let substances: SubstanceFile =
+            ron::from_str(include_str!("../../../../assets/config/substances.ron"))
+                .expect("the shipped substances should parse");
+        let table = SubstanceTable::from_file(&substances);
+
+        for (label, seed) in std::iter::once(("hero", HERO_SEED)).chain(FIXED_REGRESSION_SEEDS) {
+            print_review_report(
+                label,
+                V2EnvironmentSettings::TemperateGrassland,
+                seed,
+                &table,
+            );
+        }
+        print_review_report(
+            "frozen-probe",
+            V2EnvironmentSettings::Frozen,
+            SHIPPED_ENVIRONMENT_SEEDS[1].1,
+            &table,
+        );
+        print_review_report(
+            "volcanic-probe",
+            V2EnvironmentSettings::Volcanic,
+            SHIPPED_ENVIRONMENT_SEEDS[2].1,
+            &table,
+        );
+    }
+
+    fn print_review_report(
+        label: &str,
+        environment: V2EnvironmentSettings,
+        seed: u64,
+        table: &SubstanceTable,
+    ) {
+        let map_settings: MapSettings = ron::from_str(match environment {
+            V2EnvironmentSettings::TemperateGrassland => {
+                include_str!("../../../../assets/config/worlds/procedural-hills.ron")
+            }
+            V2EnvironmentSettings::Frozen => {
+                include_str!("../../../../assets/config/worlds/procedural-frozen.ron")
+            }
+            V2EnvironmentSettings::Volcanic => {
+                include_str!("../../../../assets/config/worlds/procedural-volcanic.ron")
+            }
+            V2EnvironmentSettings::Rocky => {
+                panic!("Rocky is not a shipped V2 Hills environment")
+            }
+        })
+        .expect("the shipped V2 Hills world should parse");
+        let TerrainSettings::Procedural(ProceduralSettings::V2(settings)) = &map_settings.terrain
+        else {
+            panic!("the shipped review world should select procedural V2")
+        };
+        assert_eq!(
+            settings.environment, environment,
+            "the report label must match the shipped environment"
+        );
+        let palette = TerrainPalette::for_terrain(table, &map_settings.terrain)
+            .expect("the shipped substances should cover V2 Hills");
+        let generated = crate::procedural_v2::build(
+            map_settings.grid_radius,
+            map_settings.level_height,
+            settings,
+            seed,
+            &palette,
+            &|substance| table.is_solid(substance),
+        )
+        .expect("the review corpus should generate");
+
+        let mut anchors: Vec<_> = generated
+            .anchors
+            .iter()
+            .map(|(name, position)| (name.as_str().to_owned(), position))
+            .collect();
+        anchors.sort_unstable();
+        let mut notes = generated.report.notes.clone();
+        notes.sort_unstable();
+        let metrics = generated.report.metrics;
+
+        println!("case: {label}");
+        println!("  environment: {environment:?}");
+        println!("  seed: {seed}");
+        println!(
+            "  generator_version: {}",
+            generated.report.generator_version
+        );
+        println!(
+            "  selected_candidate: {:?}",
+            generated.report.selected_candidate
+        );
+        println!(
+            "  valid_candidates: {}/{}",
+            generated.report.valid_candidates, generated.report.candidates_evaluated
+        );
+        println!("  repair_rounds: {}", generated.report.repair_rounds);
+        println!("  repair_actions: {:?}", generated.report.repair_actions);
+        println!("  used_fallback: {}", generated.report.used_fallback);
+        println!(
+            "  settings_fingerprint: {}",
+            generated.report.settings_fingerprint
+        );
+        println!("  map_fingerprint: {}", generated.report.map_fingerprint);
+        println!("  metrics:");
+        println!("    relief: {}", metrics.relief);
+        println!("    barrier_cells: {}", metrics.barrier_cells);
+        println!("    critical_route_steps: {}", metrics.critical_route_steps);
+        println!(
+            "    spawn_height_difference: {}",
+            metrics.spawn_height_difference
+        );
+        println!(
+            "    bank_high_ground_difference: {}",
+            metrics.bank_high_ground_difference
+        );
+        println!("    reachable_surfaces: {}", metrics.reachable_surfaces);
+        println!(
+            "    reachable_elevation_levels: {}",
+            metrics.reachable_elevation_levels
+        );
+        println!(
+            "    alternate_detour_percent: {}",
+            metrics.alternate_detour_percent
+        );
+        println!(
+            "    river_sinuosity_percent: {}",
+            metrics.river_sinuosity_percent
+        );
+        println!(
+            "    environment_signature_percent: {}",
+            metrics.environment_signature_percent
+        );
+        println!("  elapsed_micros: {}", generated.report.elapsed_micros);
+        println!("  anchors:");
+        for (name, position) in anchors {
+            println!(
+                "    {name}: ({}, {}, {}) @ {}",
+                position.coord.x(),
+                position.coord.y(),
+                position.coord.z(),
+                position.level
+            );
+        }
+        println!(
+            "  special_region_count: {}",
+            generated.special_regions.len()
+        );
+        println!(
+            "  interior_surface_count: {}",
+            generated.interiors.surfaces().count()
+        );
+        println!(
+            "  interior_roof_voxel_count: {}",
+            generated.interiors.roof_voxels().count()
+        );
+        println!("  view_eye: {:?}", generated.view_hint.eye);
+        println!("  view_focus: {:?}", generated.view_hint.focus);
+        println!("  notes: {notes:?}");
     }
 
     #[test]
