@@ -73,6 +73,7 @@ version:
 | Asset loading, shared settings | `hex_assets` |
 | Sky and camera | `hex_world` |
 | Rules: input, movement, interaction | `hex_units` |
+| Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` |
 | A debug tool | `hex_dev` |
 | A screen or menu | `hex_game` |
 
@@ -179,3 +180,24 @@ because someone lost an hour to the thing they describe.
 
 Merge with merge commits (`gh pr merge N --merge`), not squash, so per-PR history
 is preserved.
+
+### Long-running cross-owner work starts with contracts
+
+A program that will span map and gameplay ownership starts with a small PR containing
+documentation, shared `hex_core` vocabulary, ordering sets, and headless contract
+tests. It must not change runtime behavior. Merge that PR before branching the
+implementation lanes so both owners compile against one boundary.
+
+After the contract lands:
+
+- map PRs may change `hex_map` and its assets but do not edit `hex_units` or
+  `hex_combat`;
+- gameplay and perception PRs consume published shared facts and do not import
+  `hex_map` internals;
+- changes to movement, AI, targeting, engagement, or command validation land as
+  isolated adapter PRs reviewed by that crate's owner;
+- a necessary shared-type change lands in its own commit or PR before code on both
+  sides depends on it.
+
+Rebase each implementation branch onto updated `dev` after a contract change. Do not
+resolve ownership conflicts by folding both sides into one large feature PR.

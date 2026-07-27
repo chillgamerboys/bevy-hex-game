@@ -219,7 +219,8 @@ region, and cannot replace the finalized ground, its anchors, or its protected
 crossing approaches. The selected scenario uses 22 clear levels and 24% coverage for
 a distinct high city layer, varied walkable terraces, and tapered stone undersides.
 The original eight-level-clearance construction remains deterministic and loadable
-for seed compatibility. The recipe supports `TemperateGrassland` and `Frozen`.
+only as a V3 comparison oracle. The recipe supports `TemperateGrassland` and
+`Frozen`.
 
 `Mountains` builds a broad, sharp frozen massif with explicit ordinary-walker routes
 instead of projecting the whole map into gentle slopes:

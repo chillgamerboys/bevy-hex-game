@@ -16,7 +16,9 @@ doc or the code, not drift.
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
 | Deciding what a mechanic should do | [design/game.md](design/game.md) |
 | Writing code that touches terrain | [systems/map.md](systems/map.md) and [`crates/hex_map/CLAUDE.md`](../crates/hex_map/CLAUDE.md) |
+| Building V3 recipes or composing biome patches | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | Writing code that touches turns or movement | [systems/combat.md](systems/combat.md) |
+| Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
 | Picking up the next piece of work | [planning/roadmap.md](planning/roadmap.md) |
 
@@ -26,7 +28,9 @@ doc or the code, not drift.
 |---|---|---|---|
 | [architecture.md](architecture.md) | Contributors, agents | Crate graph, ownership, conventions, states, settings, testing philosophy — and the reasoning behind each | Whoever changes the structure it describes |
 | [systems/map.md](systems/map.md) | Anyone touching terrain | The voxel model: columns, runs, surfaces, headroom, and the rules everything else depends on | The map's owner |
+| [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | The map's owner |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | The combat crates' owner |
+| [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | Whoever changes perception contracts or behavior |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | Whoever changes the sky |
 | [design/game.md](design/game.md) | Everyone | The game this is heading toward: lattices, elements, spells, damage, and the questions deliberately left open | The designer; open questions close only on purpose |
 | [development/onboarding.md](development/onboarding.md) | New contributors | Vocabulary and first steps | Whoever notices it lying |

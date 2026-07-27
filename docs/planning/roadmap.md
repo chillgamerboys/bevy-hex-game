@@ -15,9 +15,10 @@ starts, using the per-epic sections below as raw material. Splitting a row
 later is safe: seeding is create-only and idempotent.
 
 The `Owner` column names the crate-ownership area
-([architecture.md](../architecture.md#ownership-cuts-both-ways)): `map` rows
-belong to the map's owner and are deliberately left unclaimed here; everything
-else is the gameplay side. `docs` is whoever picks it up.
+([architecture.md](../architecture.md#ownership-cuts-both-ways)). `map` rows
+belong to the map's owner; `units` and `combat` rows belong to the gameplay
+owner. `perception` is the new headless visibility boundary, but its adapters
+still belong to the crate they change. `docs` is whoever picks it up.
 
 ## Upcoming
 
@@ -36,71 +37,55 @@ else is the gameplay side. `docs` is whoever picks it up.
 | Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
 | Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
-| Named region tags | `regions:` in world files, published as `RegionTags` on tile entities — anti-magic fields, lit zones, any painted area | map |
-| Run bottoms on tiles | publish `RunBottom(Level)` beside each tile's `TilePos` so line-of-sight and cover can see under bridges | map |
+| V3 procedural foundation | `generator_version: 3`; private `GeneratedWorldPlan`; `Single` and radius-33 `Ring7` layouts; patch masks, edge contracts, named streams, validation, scoring, repair, fallback, and diagnostics | map |
+| Steady-state liquids and Waterfall | directed water topology; still/current/rapid/fall rendering; elevated inlet, rapids, fall, basin, outlet, and ordinary-walker bypass | map |
+| Authoritative spatial perception | new headless `hex_perception`: illumination domains, pooled faction sight, Unknown/Remembered/Observed knowledge, deterministic visibility, and cave-local lights | perception |
+| Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
+| Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
+| Surface features and Forest | deterministic low-poly trees and grass, exact root blockers, protected routes, clearings, prairie, and composable canopy cutaway | map |
+| Structures and Fort | worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation | map |
+| Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
+| V3 recipe migration and legacy removal | rebuild every active V1/V2 recipe and scenario in V3; approve replacement corpora; then remove both legacy parsers, generators, assets, and runtime tests | map |
+| Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
+| Run bottoms on tiles | when obstruction-aware sight or cover lands, publish `RunBottom(Level)` beside each tile's `TilePos` so occupancy under bridges is exact | map |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
 
-## Sequencing — the waves
+## Sequencing — independent lanes behind one contract
 
-Ordered by two forces: the critical path to damage existing
-(**sim seams → command funnel → lattices wired**, with content and the engine
-feeding in from the side), and what the map owner has in flight. PR #56
-front-loads all of his shared-contract changes (the `GameplaySetup::View`
-phase, `TraversalEndpoint`/`admits_transition`, `InteriorRegions`,
-`MapViewHint`); the recipe PRs after it churn only `hex_map` internals — so
-one merge, not his whole sequence, is the gate below.
+The V3 program begins with a small contract PR: documentation, shared
+`hex_core` vocabulary, headless tests, and a reserved `GameplaySetup::Perception`
+phase. It changes no behavior or existing `hex_units`/`hex_combat` systems; test
+harnesses only mirror the expanded shared setup chain. Both implementation lanes
+branch from updated `dev` only after that contract merges.
 
-- **Wave 1 — start now.** Lattice engine (started early — it is the long
-  pole), Elements and spells, Ship-hygiene basics, and **most of**
-  Deterministic sim seams (first: smallest, and it unblocks the funnel and
-  saves). These live in new modules and in files #56 does not hold; the
-  hex_core additions they make (`lattice_ids`, `ElementId`, `UnitId`) are
-  new lines that merge cleanly past #56's `lib.rs` edits. Two slivers of
-  the seams are the exception and wait for the gate: the serde derives on
-  `Turn` and `Body` each edit one line of a file #56 is holding
-  (`app.rs`, `movement.rs`).
-- **Wave 2 — after #56 merges.** Combat policy knobs — its height-bonus
-  parameterization rewrites the elevation tests, which #56 is extending
-  right now — and Command funnel, which is sequenced here by dependency
-  (it needs the seams' `UnitId`) and lands more cleanly once `app.rs` is
-  quiet. `targeting.rs` is contested too, but by our own knobs ticket, not
-  by #56 — the funnel and knobs should not run concurrently with each
-  other in that file.
-- **Wave 3 — the slice becomes a game.** Lattices wired (needs content +
-  engine + funnel), Knowledge seam (needs the engine only), Save and load
-  (needs the seams; opens the terrain-snapshot conversation below),
-  Encounters (after the first V2 recipe lands, since it consumes anchors
-  and `scenarios.rs`).
-- **Wave 4 — productization, latest before the first external build.**
-  Settings/persistence/audio, Steam packaging and crash reporting, Engine
-  upkeep (pinned to the 0.20 release window).
+**Map lane:** V3 foundation → liquid topology → opaque renderer → Waterfall →
+Forest → Fort → `Ring7` → remaining recipe migration → V1/V2 removal. The map
+owner keeps semantic plans private and publishes exact shared consequences.
+Recipe PRs do not edit gameplay-owned crates.
 
-Hard dependencies, for reference: sim seams → {funnel, saves}; elements →
-engine wiring; engine → {lattices wired, knowledge}; funnel → lattices
-wired.
+**Perception lane:** headless illumination and faction knowledge → fog
+presentation and cave lights → movement adapter → engagement/targeting/AI
+adapters. `hex_perception` may observe unit positions, while `hex_units` reads
+only `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned
+crate is isolated and reviewed by that owner.
 
-**Standing toe-stepping rules.** Never touch `crates/hex_map/**`. While
-#56 is open it holds, on the gameplay side: `hex_core/{app,lib,terrain,traversal}.rs`,
-`hex_units/movement.rs` (+ its integration tests), `hex_combat/tests/elevation.rs`,
-`hex_world/camera.rs`, `hex_game/{main,review,scenarios}.rs`. The working
-rule: **adding new lines** to those files (a fresh `pub mod`, a new enum, a
-new test fn) merges cleanly and is fine; **editing lines that exist** is
-what hands the other person a rebase conflict — defer those edits until it
-lands. System-ordering note that ages with the gate: `dev` today has the
-four-phase `GameplaySetup`; #56 adds `View` between `Actors` and
-`Finalize`, so anything written against the five-phase set compiles only
-after it merges.
+Waterfall and headless perception can run concurrently after the foundation
+contract. Forest and Fort do not depend on combat integration. `Ring7` waits
+for Waterfall, Forest, and Fort semantic plans; V3 migration waits for the
+composite contracts but not for final combat tuning.
 
-The `map` rows are specified precisely, with fallbacks if deferred, in
-[map-asks.md](map-asks.md) — two further asks (the seed contract and
-generator versioning) were answered outright by the procedural map pipeline
-and are recorded there as settled. **The map rows are seeded and claimed by
-the map's owner**, at his own pace around the V2 recipe sequence; the
-gameplay side never marks them. The one with a gameplay-side clock is the
-terrain snapshot: it decides the save format, so it wants a conversation
-when Save and load starts — the seeded-regen fallback keeps that ticket
-unblocked either way.
+The pre-existing gameplay critical path remains independent: sim seams →
+funnel → lattices wired, with element content and the lattice engine feeding
+it from the side. Spatial map knowledge does not replace the lattice-specific
+Knowledge and divination seam: the former answers which world entities a
+faction currently observes, while the latter answers what that faction knows
+about an observed enemy's lattice.
+
+The complete V3 map contract, fixed `Ring7` roster, fingerprint policy, recipe
+stages, and removal gate live in
+[world-generation-v3.md](../systems/world-generation-v3.md). Map publication
+asks and gameplay fallbacks remain in [map-asks.md](map-asks.md).
 
 ## The epics, in detail
 
@@ -255,8 +240,40 @@ The audit budgets exactly one Bevy upgrade before any release window: 0.20
 (~Q4 2026, BSN asset files and assets-as-entities are the churn to watch),
 landed together with the long-deferred feature trim (`default-features =
 false` plus the collections actually used) so both risky changes share one
-quiet window and one visual walk. Not before wave 3 lands — upgrading under
-an in-flight system rewrite doubles the blast radius.
+quiet window and one visual walk. Not while the command, perception, or V3
+foundation contracts are moving — upgrading under an in-flight system rewrite
+doubles the blast radius.
+
+### V3 world program
+
+V3 replaces the recipe-per-map assumption with a patch-capable semantic
+world plan. `Single` keeps focused recipe iteration fast; `Ring7` composes a
+central Hills region and six fixed outer recipes inside one radius-33
+footprint. Shared edges, routes, elevation datums, and hydrology are resolved
+before patch interiors, so the system never tries to disguise incompatible
+maps with a material blend.
+
+Waterfall establishes the liquid layer, Forest establishes surface features
+and exact blockers, and Fort establishes structures and circulation. They
+feed `Ring7`, then every existing recipe moves to the same V3 pipeline.
+V1/V2 remain frozen development oracles only until replacement review passes;
+they are removed rather than maintained as permanent compatibility paths.
+The decision-complete contract is
+[world-generation-v3.md](../systems/world-generation-v3.md).
+
+### Spatial perception
+
+Physical scene lighting remains presentation. A headless `hex_perception`
+crate deterministically combines exterior illumination, interior darkness,
+public local lights, unit positions, and per-faction knowledge. It owns
+Unknown/Remembered/Observed state and publishes the smaller
+`LocalMapKnowledge` view consumed by movement.
+
+Fog rendering, unknown exploration, engagement, targeting, AI, and
+last-known-position behavior arrive as separate adapters after the headless
+rules pass. The existing Knowledge and divination epic remains responsible
+for hidden lattice contents; it consumes spatial observation rather than
+duplicating it.
 
 ### The map rows
 

@@ -174,6 +174,7 @@ Systems that build the world run on `OnEnter(Screen::Gameplay)`, in one of:
 GameplaySetup::Resources   // generate and insert VoxelMap
 GameplaySetup::Terrain     // spawn tiles — needs Resources to have run
 GameplaySetup::Actors      // hex_units', not yours; needs tiles to exist
+GameplaySetup::Perception  // future perception projection; needs actors to exist
 GameplaySetup::View        // frame the completed geometry and actors
 GameplaySetup::Finalize    // hex_game verifies terrain and required actors
 ```

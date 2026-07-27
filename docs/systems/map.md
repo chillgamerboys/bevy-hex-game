@@ -145,7 +145,8 @@ V1 candidates unchanged, then losslessly lifts the selected map and its exact an
 optional regions, and tactical metadata into `TerrainVolumePlan` for final
 materialization. Equivalent V1 and V2 Hills settings therefore select the same
 candidate and retain the same map fingerprint. New recipes build the volume directly;
-V1 remains loadable for saved-seed compatibility.
+V1 remains loadable only as a frozen development oracle while V3 replacements are
+reviewed. It is not a production save contract.
 
 Layered Sky Islands consumes that finalized Hills selection before it samples any
 `sky.*` stream. Eight native upper-layer candidates append floating solid masses and
@@ -156,9 +157,9 @@ one exact flight-gated `SpecialMovementRegion`. Its combined `MapViewHint` frame
 ground play and the upper network. The selected scenario uses 22 clear levels and
 24% coverage, with independently varied island footprints, walkable terraces, and
 tapered stone underbodies. The original eight-level-clearance path remains frozen for
-seed compatibility.
+side-by-side V3 review.
 
-Mountains supports the original frozen ridge for compatibility and broader expanded
+Mountains keeps the original frozen ridge as a review oracle beside broader expanded
 massifs. The selected scenario raises 60% of the map above the base, uses a
 meandering edge-to-edge spine with four long branches, and distributes seven
 non-collinear peaks across varied summit levels. The ordinary network keeps a
@@ -174,8 +175,9 @@ open entrance descends one level per row to six through twelve chambers joined b
 two-wide critical corridors. The selected scenario has twelve chambers, selected
 loop connections, two walkable floor bands, varied ceiling levels, larger chambers,
 and five levels of surface relief. The original six-through-eight-room path remains
-frozen for compatibility. Every corridor retains at least three clear levels, every
-chamber at least four, and cutaway roofs remain at least three solid levels thick.
+frozen for side-by-side V3 review. Every corridor retains at least three clear levels,
+every chamber at least four, and cutaway roofs remain at least three solid levels
+thick.
 The party anchor names the surface entrance while the hostile anchor names the
 deepest main chamber. The hostile's exact floor maximizes its minimum horizontal
 distance from the ramp and entry connector; the shipped scenario checks that floor
@@ -199,7 +201,8 @@ locally while leaving adjacent untagged columns visible as walls.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
-hashing behavior for compatibility; only V2 uses this volume contract.
+hashing behavior only until V3 migration review finishes; only V2 uses this volume
+contract.
 
 ### Runtime storage remains voxel columns
 

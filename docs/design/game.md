@@ -203,12 +203,18 @@ thing that can go wrong is something they could in principle have known.
 Enemy lattices and intent are hidden by default. Light and higher-order divination
 reveal them.
 
+Spatial perception and lattice knowledge are separate. Seeing an enemy establishes
+where it is and permits targeting; it does not reveal the enemy's lattice or intent.
+The sun, moon, caves, local lights, faction memory, and loss of contact follow the
+[perception contract](../systems/perception.md). Divination changes the separate
+lattice-information channel.
+
 - What a divination reveals scales with tier: full lattice or partial, one enemy or
   all, everything in a radius.
 - Revealed information **decays or is one-time**, unless the divination is an
   enchantment. Seeing is a recurring action expense, which argues strongly for
   divination enchantments being worth their locked mana.
-- There is a base level of visibility for all parties.
+- Every faction has the same base sight profile, pooled across its active characters.
 - Simple divination is **two-way** — standing lit makes you readable. Cheap sight
   announces you.
 - Light gems feed both divination and fusions like lightning, so Light-heavy builds
@@ -267,18 +273,22 @@ properties and elevations:
 
 - traversable by all units (grass, floor, stone) or only some — a swamp only for
   specific units or after a spell, lava only for flying units or after a spell
-- illuminated or not, feeding the visibility mechanic
+- gameplay illumination, separate from rendered light, feeding the
+  [perception mechanic](../systems/perception.md)
 - whether an evocation or enchantment can be cast there — most tiles allow
   evocations unless they have special properties like an anti-magic field; fewer
   allow enchantments, since a fixed stone wall cannot be cast on water
 
-Elevation feeds visibility: more of the map is visible from higher tiles.
+Elevation helps sight downhill without revealing stacked surfaces by accident:
+Bright and Dim sight gain one horizontal hex for every four complete levels above
+the target, capped at six. Dark sight gains nothing.
 
 Characters travel in a formation. Once combat starts, controls switch to moving each
 character independently.
 
-What is on screen is the tiles within a fixed distance of the character, horizontally
-and vertically — which is what allows multiple floors.
+What a faction can observe uses separate horizontal and vertical sight bands, which
+is what lets the rule address multiple floors without collapsing them. What the
+camera happens to frame is presentation, not knowledge.
 
 Each tile type should be distinguishable by colour and design. A tile is a **3D prism
 with a hex base**, so it has five coordinates: cube coordinates horizontally (see

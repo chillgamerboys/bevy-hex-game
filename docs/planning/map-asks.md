@@ -14,6 +14,34 @@ inside the map crate is yours; these asks only extend the published
 component/message contract, and each one says exactly where the boundary
 sits.
 
+## V3 publication rule
+
+V3 replaces the assumption that gameplay may need generic access to generator
+semantics. `GeneratedWorldPlan`, patch masks, edge contracts, liquid graphs,
+feature plans, structure plans, recipe names, and repair metadata remain private
+to `hex_map`.
+
+The contracts-first PR reserves the exact projections V3 may publish:
+
+- `BiomeRegions` maps exact `TilePos` values to map-local `BiomeRegionId`s;
+- `TraversalBlockers` names exact otherwise-standable surfaces occupied by
+  generated features such as tree roots;
+- a generated light is an entity with an exact `TilePos` and `GameplayLight`;
+  its exterior or interior `LightDomain` is derived at use time;
+- `PresentationOcclusion` composes independent fog, interior-cutaway, and
+  canopy-cutaway reasons without making any one system the owner of Bevy
+  `Visibility`.
+
+These contracts carry consequences, not instructions. Gameplay can ask whether a
+known surface is blocked or which biome region it belongs to, but it cannot ask the
+map how that tree was sampled, which candidate produced the region, or how to repair
+the liquid graph.
+
+V3 implementation and delivery are specified in
+[world-generation-v3.md](../systems/world-generation-v3.md). The map publishes
+these resources only when the corresponding V3 layer lands; the contracts-first
+PR itself changes no runtime behavior.
+
 ## Delivered by the procedural map pipeline — nothing left to ask
 
 PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
@@ -31,6 +59,11 @@ PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
   `TerrainReady`, `GameplaySetupFailure`, the terminal
   `GameplaySetup::Finalize` phase, `ScenarioPlacement::Anchor`, and the
   snow/ice/basalt/lava substances.
+
+Those are historical V1/V2 contracts, not a promise to preserve either generator
+indefinitely. V3 uses its own versioned streams while V1/V2 remain frozen review
+oracles; both legacy implementations are removed after active scenarios migrate.
+No production save format may depend on regenerating a V1 or V2 seed.
 
 ## A′ — Movement classes (now via traversal profiles)
 
@@ -62,42 +95,35 @@ yours) and agreement on `SpecialMovementRegion` semantics when the first
 ability that enters one lands. **Fallback: not needed — ships without map
 work.**
 
-## B — Named regions (anti-magic fields, lit zones)
+## B — Named rule regions (anti-magic fields)
 
-**Need**: painted areas that are part of a terrain's identity — an
-anti-magic field where evocations fail, a lit courtyard feeding visibility.
-Distinct from `SpecialMovementRegion`, which is deliberately opaque and
-unstable across maps; these are **named**, content-addressable regions the
-two mechanisms should be coordinated with rather than duplicated.
+The old proposal combined biome identity, lighting, and future anti-magic rules
+in one `RegionTags` tile component. V3 deliberately does not implement that shape:
 
-**Ask**: `world.ron` grows an optional authored section (shape yours —
-coordinate lists or center+radius, validated in `MapSettings::validate` like
-everything else there), and at spawn the map tags member tiles with a
-component defined in `hex_core` (gameplay-side):
+- biome identity uses exact `BiomeRegions`;
+- illumination uses ambient domains and exact `GameplayLight` sources;
+- optional movement regions retain their existing exact contract.
 
-```rust
-/// Names of authored world regions this tile belongs to.
-#[derive(Component, Reflect, Debug, Clone, Default)]
-#[reflect(Component)]
-pub struct RegionTags(pub Vec<String>);
-```
+Anti-magic is still a valid future need, but its policy and overlap semantics are
+not designed. Revisit a content-addressable rule-region resource when the first
+region-sensitive spell is implemented. Do not overload `BiomeRegionId`, infer it
+from materials, or add a generic “lit” tag in the meantime.
 
-**Publisher**: map, at tile spawn. **Consumers**: casting rules in
-hex_combat (a `region_rules` table in `combat.ron` maps names to
-deny-evocation/deny-enchantment), visibility later. One mechanism, many
-painted uses.
+**Fallback if deferred**: the first encounter needing anti-magic may carry an
+encounter-owned exact `TilePos` overlay. No current system depends on it.
 
-**Fallback if deferred**: encounter files carry the same shape as a
-gameplay-owned overlay keyed by `HexCoord` — works, just makes anti-magic
-encounter data instead of world data.
-
-## C — Run bottoms (exact line-of-sight and cover)
+## C — Run bottoms (future exact line-of-sight and cover)
 
 **Need**: `needs_los` spells and cover want column occupancy. Tiles publish
 their run's top (`TilePos`) and world extent (`HexSpan`) but not the run's
 bottom **level**, and gameplay must not divide by `level_height` to recover
 it (that reintroduces the dependency the split exists to prevent);
 `Headroom` saturates, so occupancy can't be reconstructed exactly.
+
+Initial spatial perception is deliberately obstruction-agnostic and does not need
+this component. Gameplay lights are radial within one light domain; sight uses exact
+horizontal and vertical bands. Add `RunBottom` only with the later obstruction-aware
+line-of-sight or cover work, not as a prerequisite for V3 visibility.
 
 **Ask**: one more component on the existing spawn bundle (type in
 `hex_core`, gameplay-side):
@@ -174,17 +200,17 @@ correctness requirement.
 
 **Fallback until it lands**: saves record `(seed, generator_version)` and,
 on mismatch at load, offer "restart this area" instead of drifting silently.
-Gameplay-side tests refuse to mark a world savable unless its seed is
-explicit.
+This fallback is development-only while V1/V2 are still present. Gameplay-side
+tests refuse to mark a world savable unless its seed is explicit, and shipped
+procedural saves wait for the generator-independent snapshot rather than extending
+legacy generator lifetime.
 
 ## F — Deliberate non-asks
 
-- **Streaming / bigger maps**: nothing now. The map shape question (open
-  world vs hub vs chapters) is deliberately open, and chunking would settle
-  it by accident. Multiple world files per scenario already work; the
-  contract keeps `VoxelMap` private, so a streamed rewrite later changes no
-  consumer. The only request: keep it that way, and share the practical
-  `grid_radius` ceiling you observe so validation can state it.
+- **Streaming / chunks**: `Ring7` is one radius-33 map, not a streaming
+  decision. Keep `VoxelMap` private so a later chunked rewrite changes no
+  consumer. Record generation time, entity count, and perception recomputation
+  for the composite before choosing a streaming model.
 - **Unit obstruction / occupancy**: gameplay-side (hex_combat), not a map
   concern.
 - **Anchor constants**: raised in the PR #52 review rather than here — if
