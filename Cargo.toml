@@ -22,6 +22,7 @@ bevy_reflect = "0.19"
 bevy-inspector-egui = "0.37"
 rand = "0.8.5"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+serde = { version = "1.0.229", features = ["derive"] }
 
 [workspace.package]
 version = "0.1.0"

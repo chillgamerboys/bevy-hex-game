@@ -40,6 +40,7 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use hex_assets::SubstanceTable;
 use hex_core::{
@@ -113,7 +114,7 @@ pub fn plugin(app: &mut App) {
 /// A footprint is deliberately not built yet. It is pure gameplay, invisible to the
 /// map, and it first needs a decision this codebase has not taken: whether a wide body
 /// may straddle a one-level step, or must have every hex of its footprint level.
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[reflect(Component)]
 pub struct Body {
     /// Exact movement and occupancy rules used by this body.

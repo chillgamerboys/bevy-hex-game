@@ -17,8 +17,8 @@ use crate::TilePos;
 ///
 /// A string newtype keeps scenario files readable and lets generators introduce
 /// recipe-specific anchors without expanding a shared enum. Asset crates deserialize
-/// their own string-backed representation and convert through [`Self::new`], keeping
-/// serialization dependencies out of this bottom-level domain crate.
+/// their own string-backed representation and convert through [`Self::new`], so the id
+/// keeps a single construction path and is not itself pinned to an on-disk format.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct MapAnchorId(String);
 
