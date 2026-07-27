@@ -7,9 +7,10 @@
 //! `HEX_REVIEW_SEED` optionally replaces its configured procedural seed. Adding
 //! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
 //! then exits. `HEX_REVIEW_TIME` and `HEX_REVIEW_CAMERA` optionally select the cyclic
-//! lighting hour and map/character perspective for that launch. This keeps iteration
-//! tooling on the same loading and validation path as manual play while avoiding
-//! compositor-dependent screenshots.
+//! lighting hour and map/character perspective for that launch.
+//! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
+//! generated anchor before framing. This keeps iteration tooling on the same loading
+//! and validation path as manual play while avoiding compositor-dependent screenshots.
 
 use std::env;
 use std::ffi::OsString;
@@ -23,11 +24,12 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
-use hex_assets::{CameraSettings, Scenario, ScenarioLibrary};
+use hex_assets::{CameraSettings, Scenario, ScenarioLibrary, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetupFailure, HexTile, MapViewHint, ResolvedMapSeed, Screen,
-    TerrainReady,
+    CameraFocusTarget, GameplaySetupFailure, Headroom, HexSpan, HexTile, MapAnchorId, MapAnchors,
+    MapViewHint, ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos,
 };
+use hex_units::{Body, Footing, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, PanOrbitCamera};
 
 use crate::scenarios::ScenarioToLoad;
@@ -38,6 +40,7 @@ const CAPTURE_ENV: &str = "HEX_REVIEW_CAPTURE";
 const VIEW_ENV: &str = "HEX_REVIEW_VIEW";
 const TIME_ENV: &str = "HEX_REVIEW_TIME";
 const CAMERA_ENV: &str = "HEX_REVIEW_CAMERA";
+const FOCUS_ANCHOR_ENV: &str = "HEX_REVIEW_FOCUS_ANCHOR";
 const SETTLE_FRAMES: u32 = 90;
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
@@ -78,7 +81,11 @@ fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
         .add_systems(Update, capture_watchdog)
         .add_systems(
             PostUpdate,
-            (apply_review_view, capture_settled_frame)
+            (
+                relocate_review_focus,
+                apply_review_view,
+                capture_settled_frame,
+            )
                 .chain()
                 .before(TransformSystems::Propagate)
                 .run_if(in_state(Screen::Gameplay)),
@@ -114,6 +121,7 @@ impl ReviewRequest {
             environment_value(VIEW_ENV)?,
             environment_value(TIME_ENV)?,
             environment_value(CAMERA_ENV)?,
+            environment_value(FOCUS_ANCHOR_ENV)?,
         )
     }
 
@@ -124,13 +132,15 @@ impl ReviewRequest {
         view: Option<String>,
         time: Option<String>,
         camera: Option<String>,
+        focus_anchor: Option<String>,
     ) -> Result<Option<Self>, String> {
         let any_value = scenario.is_some()
             || seed.is_some()
             || capture.is_some()
             || view.is_some()
             || time.is_some()
-            || camera.is_some();
+            || camera.is_some()
+            || focus_anchor.is_some();
         if !any_value {
             return Ok(None);
         }
@@ -144,6 +154,12 @@ impl ReviewRequest {
             })
             .transpose()?;
         let time_hours = time.map(|value| parse_review_hour(&value)).transpose()?;
+        let focus_anchor = match focus_anchor {
+            Some(value) if value.trim().is_empty() => {
+                return Err(format!("{FOCUS_ANCHOR_ENV} must not be empty"));
+            }
+            value => value,
+        };
 
         let capture = match capture {
             Some(path) => {
@@ -162,10 +178,17 @@ impl ReviewRequest {
                     path,
                     view: ReviewView::parse(view.as_deref().unwrap_or("default"))?,
                     camera: ReviewCamera::parse(camera.as_deref().unwrap_or("map"))?,
+                    focus_anchor,
                 })
             }
-            None if view.is_some() || camera.is_some() => {
-                let dependent = if view.is_some() { VIEW_ENV } else { CAMERA_ENV };
+            None if view.is_some() || camera.is_some() || focus_anchor.is_some() => {
+                let dependent = if view.is_some() {
+                    VIEW_ENV
+                } else if camera.is_some() {
+                    CAMERA_ENV
+                } else {
+                    FOCUS_ANCHOR_ENV
+                };
                 return Err(format!("{dependent} requires {CAPTURE_ENV}"));
             }
             None => None,
@@ -314,6 +337,7 @@ struct ReviewCapture {
     path: PathBuf,
     view: ReviewView,
     camera: ReviewCamera,
+    focus_anchor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -358,6 +382,7 @@ impl ReviewView {
 struct ReviewCaptureState {
     capture: ReviewCapture,
     target: Option<Handle<Image>>,
+    focus_relocated: bool,
     view_applied: bool,
     settled_frames: u32,
     requested: bool,
@@ -371,9 +396,11 @@ struct ReviewCaptureState {
 
 impl ReviewCaptureState {
     fn new(capture: ReviewCapture) -> Self {
+        let focus_relocated = capture.focus_anchor.is_none();
         Self {
             capture,
             target: None,
+            focus_relocated,
             view_applied: false,
             settled_frames: 0,
             requested: false,
@@ -483,6 +510,91 @@ fn capture_timeout_diagnostic(
     ))
 }
 
+type ReviewTileQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TilePos,
+        &'static HexSpan,
+        &'static SubstanceId,
+        &'static Headroom,
+    ),
+    With<HexTile>,
+>;
+
+/// Relocates the selected actor before either map or character framing is applied.
+fn relocate_review_focus(
+    mut state: ResMut<ReviewCaptureState>,
+    ready: Option<Res<TerrainReady>>,
+    anchors: Option<Res<MapAnchors>>,
+    table: Option<Res<SubstanceTable>>,
+    tiles: ReviewTileQuery,
+    mut selected: Query<
+        (&Body, &mut StandsOn, &mut Transform, &mut CameraFocusTarget),
+        With<Selected>,
+    >,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if state.failed || state.focus_relocated {
+        return;
+    }
+    let Some(anchor_name) = state.capture.focus_anchor.as_deref() else {
+        state.focus_relocated = true;
+        return;
+    };
+    if ready.is_none() {
+        return;
+    }
+    let (Some(anchors), Some(table)) = (anchors, table) else {
+        return;
+    };
+    let Ok((body, mut standing, mut transform, mut focus)) = selected.single_mut() else {
+        return;
+    };
+
+    let destination = resolve_review_focus(anchor_name, &anchors, &table, *body, tiles.iter());
+    let destination = match destination {
+        Ok(destination) => destination,
+        Err(error) => {
+            error!("review focus override failed: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+
+    standing.0 = destination;
+    transform.translation = destination.world_position();
+    focus.surface = destination.pos;
+    info!(
+        "relocated review focus to generated anchor {:?} at {:?}",
+        anchor_name, destination.pos
+    );
+    state.focus_relocated = true;
+}
+
+fn resolve_review_focus<'a>(
+    anchor_name: &str,
+    anchors: &MapAnchors,
+    table: &SubstanceTable,
+    body: Body,
+    tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
+) -> Result<Standing, String> {
+    let anchor = MapAnchorId::from(anchor_name);
+    let Some(position) = anchors.get(&anchor) else {
+        return Err(format!(
+            "{FOCUS_ANCHOR_ENV} names {anchor_name:?}, which the generated map did not publish"
+        ));
+    };
+    let footing = Footing::from_tiles(tiles, table, body);
+    footing.at(position).ok_or_else(|| {
+        format!(
+            "{FOCUS_ANCHOR_ENV} anchor {anchor_name:?} resolves to {position:?}, \
+             which the selected actor cannot stand on"
+        )
+    })
+}
+
 fn apply_review_view(
     mut state: ResMut<ReviewCaptureState>,
     settings: Res<CameraSettings>,
@@ -496,7 +608,7 @@ fn apply_review_view(
     mut mode: ResMut<CameraMode>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if state.failed {
+    if state.failed || !state.focus_relocated {
         return;
     }
     let Ok((mut transform, mut orbit, mut target)) = camera.single_mut() else {
@@ -860,7 +972,8 @@ fn has_visual_coverage(bytes: &[u8], width: usize, height: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
-    use hex_assets::{CubeCoord, ScenarioPlacement, ScenarioSettings};
+    use hex_assets::{CubeCoord, ScenarioPlacement, ScenarioSettings, Substance, SubstanceFile};
+    use hex_core::{HexCoord, TraversalProfile};
 
     use super::*;
 
@@ -882,7 +995,7 @@ mod tests {
     #[test]
     fn review_automation_is_dormant_without_environment_values() {
         assert!(
-            ReviewRequest::from_values(None, None, None, None, None, None)
+            ReviewRequest::from_values(None, None, None, None, None, None, None)
                 .expect("empty review configuration should be valid")
                 .is_none()
         );
@@ -897,6 +1010,7 @@ mod tests {
             Some("top-down".to_owned()),
             Some("18.5".to_owned()),
             Some("character".to_owned()),
+            Some("deep_chamber".to_owned()),
         )
         .expect("valid review configuration should parse")
         .expect("review configuration should be enabled");
@@ -908,6 +1022,7 @@ mod tests {
         assert_eq!(capture.path, PathBuf::from(".context/review.png"));
         assert_eq!(capture.view, ReviewView::TopDown);
         assert_eq!(capture.camera, ReviewCamera::Character);
+        assert_eq!(capture.focus_anchor.as_deref(), Some("deep_chamber"));
     }
 
     #[test]
@@ -917,6 +1032,7 @@ mod tests {
             None,
             None,
             Some("rotated".to_owned()),
+            None,
             None,
             None,
         )
@@ -934,11 +1050,162 @@ mod tests {
             None,
             None,
             Some("character".to_owned()),
+            None,
         )
         .expect_err("a camera mode without an output should be invalid");
 
         assert!(error.contains(CAMERA_ENV));
         assert!(error.contains(CAPTURE_ENV));
+    }
+
+    #[test]
+    fn focus_anchor_requires_capture_and_a_nonempty_name() {
+        let without_capture = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("deep_chamber".to_owned()),
+        )
+        .expect_err("a focus override without an output should be invalid");
+        assert!(without_capture.contains(FOCUS_ANCHOR_ENV));
+        assert!(without_capture.contains(CAPTURE_ENV));
+
+        let empty = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            Some(".context/cave.png".to_owned()),
+            None,
+            None,
+            None,
+            Some("  ".to_owned()),
+        )
+        .expect_err("an empty focus anchor should be invalid");
+        assert!(empty.contains(FOCUS_ANCHOR_ENV));
+        assert!(empty.contains("must not be empty"));
+    }
+
+    #[test]
+    fn focus_anchor_relocates_the_selected_actor_to_the_exact_surface() {
+        let destination = TilePos::new(HexCoord::from_axial(3, -2), 7);
+        let span = HexSpan::new(2.4, 3.2);
+        let (table, stone) = review_substance_table();
+        let mut anchors = MapAnchors::new();
+        anchors.insert(MapAnchorId::from("deep_chamber"), destination);
+
+        let mut app = App::new();
+        app.add_systems(PostUpdate, relocate_review_focus);
+        app.insert_resource(ReviewCaptureState::new(review_capture_with_focus(
+            "deep_chamber",
+        )));
+        app.insert_resource(TerrainReady);
+        app.insert_resource(anchors);
+        app.insert_resource(table);
+        app.world_mut()
+            .spawn((HexTile, destination, span, stone, Headroom(2)));
+
+        let original = Standing {
+            pos: TilePos::ORIGIN,
+            span: HexSpan::new(0.0, 0.4),
+        };
+        let actor = app
+            .world_mut()
+            .spawn((
+                Selected,
+                Body::new(TraversalProfile::WALKER),
+                StandsOn(original),
+                Transform::from_translation(original.world_position()),
+                CameraFocusTarget::new(original.pos),
+            ))
+            .id();
+
+        app.update();
+
+        let state = app.world().resource::<ReviewCaptureState>();
+        assert!(state.focus_relocated);
+        assert!(!state.failed);
+        let actor = app.world().entity(actor);
+        assert_eq!(
+            actor.get::<StandsOn>().map(|standing| standing.0),
+            Some(Standing {
+                pos: destination,
+                span,
+            })
+        );
+        assert_eq!(
+            actor
+                .get::<Transform>()
+                .map(|transform| transform.translation),
+            Some(destination.coord.to_world(span.top))
+        );
+        assert_eq!(
+            actor.get::<CameraFocusTarget>().map(|focus| focus.surface),
+            Some(destination)
+        );
+    }
+
+    #[test]
+    fn unknown_and_unstandable_focus_anchors_are_rejected() {
+        let destination = TilePos::new(HexCoord::from_axial(2, -1), 7);
+        let (table, stone) = review_substance_table();
+        let body = Body::new(TraversalProfile::WALKER);
+        let anchors = MapAnchors::new();
+        let no_tiles = std::iter::empty();
+        let missing = resolve_review_focus("missing", &anchors, &table, body, no_tiles)
+            .expect_err("an unpublished anchor should fail");
+        assert!(missing.contains(FOCUS_ANCHOR_ENV));
+        assert!(missing.contains("did not publish"));
+
+        let mut anchors = MapAnchors::new();
+        anchors.insert(MapAnchorId::from("low"), destination);
+        let span = HexSpan::new(2.4, 3.2);
+        let headroom = Headroom(1);
+        let unstandable = resolve_review_focus(
+            "low",
+            &anchors,
+            &table,
+            body,
+            std::iter::once((&destination, &span, &stone, &headroom)),
+        )
+        .expect_err("one level of headroom should reject the normal actor");
+        assert!(unstandable.contains(FOCUS_ANCHOR_ENV));
+        assert!(unstandable.contains("cannot stand"));
+    }
+
+    #[test]
+    fn unresolved_runtime_focus_exits_the_capture_cleanly() {
+        let (table, _) = review_substance_table();
+        let mut app = App::new();
+        app.add_systems(PostUpdate, relocate_review_focus);
+        app.insert_resource(ReviewCaptureState::new(review_capture_with_focus(
+            "not_published",
+        )));
+        app.insert_resource(TerrainReady);
+        app.insert_resource(MapAnchors::new());
+        app.insert_resource(table);
+        let original = Standing {
+            pos: TilePos::ORIGIN,
+            span: HexSpan::new(0.0, 0.4),
+        };
+        app.world_mut().spawn((
+            Selected,
+            Body::new(TraversalProfile::WALKER),
+            StandsOn(original),
+            Transform::default(),
+            CameraFocusTarget::new(original.pos),
+        ));
+
+        app.update();
+
+        let state = app.world().resource::<ReviewCaptureState>();
+        assert!(state.failed);
+        assert!(!state.focus_relocated);
+        assert!(
+            !app.world().resource::<Messages<AppExit>>().is_empty(),
+            "runtime anchor failure should request a nonzero review exit"
+        );
     }
 
     #[test]
@@ -950,6 +1217,7 @@ mod tests {
             None,
             None,
             Some("first-person".to_owned()),
+            None,
         )
         .expect_err("an unknown review camera should be rejected");
 
@@ -966,6 +1234,7 @@ mod tests {
                 None,
                 None,
                 Some(invalid.to_owned()),
+                None,
                 None,
             )
             .expect_err("an invalid review time should be rejected");
@@ -1178,6 +1447,7 @@ mod tests {
                 path: PathBuf::from("capture.png"),
                 view: ReviewView::Default,
                 camera: ReviewCamera::Map,
+                focus_anchor: None,
             });
             state.view_applied = phase != CapturePhase::AwaitingCamera;
             state.requested = requested;
@@ -1209,6 +1479,7 @@ mod tests {
                 path: path.clone(),
                 view: ReviewView::Default,
                 camera: ReviewCamera::Map,
+                focus_anchor: None,
             },
         );
         let camera = app
@@ -1289,6 +1560,7 @@ mod tests {
                 path: PathBuf::from("unused.png"),
                 view: ReviewView::Rotated,
                 camera: ReviewCamera::Character,
+                focus_anchor: None,
             },
         );
         app.world_mut().spawn((
@@ -1361,6 +1633,40 @@ mod tests {
         assert!(!has_visible_tile_coverage(MIN_VISIBLE_TILES - 1, 1_000));
         assert!(!has_visible_tile_coverage(MIN_VISIBLE_TILES, 1_000));
         assert!(has_visible_tile_coverage(50, 1_000));
+    }
+
+    fn review_capture_with_focus(anchor: &str) -> ReviewCapture {
+        ReviewCapture {
+            path: PathBuf::from("unused.png"),
+            view: ReviewView::Default,
+            camera: ReviewCamera::Map,
+            focus_anchor: Some(anchor.to_owned()),
+        }
+    }
+
+    fn review_substance_table() -> (SubstanceTable, SubstanceId) {
+        let mut substances = bevy::platform::collections::HashMap::default();
+        substances.insert(
+            "air".to_owned(),
+            Substance {
+                color: (0.0, 0.0, 0.0),
+                solid: false,
+                diggable: false,
+            },
+        );
+        substances.insert(
+            "stone".to_owned(),
+            Substance {
+                color: (0.5, 0.5, 0.5),
+                solid: true,
+                diggable: true,
+            },
+        );
+        let table = SubstanceTable::from_file(&SubstanceFile { substances });
+        let stone = table
+            .id("stone")
+            .expect("the review test table should contain stone");
+        (table, stone)
     }
 
     fn review_test_directory(label: &str) -> PathBuf {

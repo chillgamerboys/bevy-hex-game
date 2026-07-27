@@ -49,6 +49,46 @@ way — the rebuild is quick.
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
 
+## Deterministic review captures
+
+Renderer captures are compiled only with the default-off `map-review` feature. Normal
+development and release binaries ignore every `HEX_REVIEW_*` variable. A complete
+capture names one scenario and one PNG:
+
+```sh
+HEX_REVIEW_SCENARIO="Caves" \
+HEX_REVIEW_CAPTURE=".context/caves/default.png" \
+cargo run -p hex_game --release --features map-review
+```
+
+The optional review overrides are:
+
+| Variable | Effect |
+|---|---|
+| `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
+| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
+| `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
+| `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
+| `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
+
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, and `HEX_REVIEW_FOCUS_ANCHOR` require
+`HEX_REVIEW_CAPTURE`. The focus override resolves the anchor's full `TilePos`, not
+just its horizontal coordinate, so it can target an underground floor beneath a
+surface. It also applies the selected actor's normal solidity and headroom rules.
+An unknown anchor or one the actor cannot stand on fails the review process instead
+of silently capturing the wrong place.
+
+For example, this opens the cave cutaway around its generated deep chamber before a
+close capture:
+
+```sh
+HEX_REVIEW_SCENARIO="Caves" \
+HEX_REVIEW_CAPTURE=".context/caves/deep-chamber.png" \
+HEX_REVIEW_FOCUS_ANCHOR="deep_chamber" \
+HEX_REVIEW_CAMERA="character" \
+cargo run -p hex_game --release --features map-review
+```
+
 ## The format
 
 These are RON files. Three rules cover almost everything:
