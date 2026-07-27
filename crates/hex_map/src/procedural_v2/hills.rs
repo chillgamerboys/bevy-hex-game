@@ -40,6 +40,13 @@ pub(crate) struct HillsMetrics {
 /// Hills-only semantic facts retained for later layered recipes and diagnostics.
 #[derive(Debug, Clone)]
 pub(crate) struct HillsMetadata {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the next Layered Sky Islands recipe consumes the finalized Hills topology"
+        )
+    )]
     pub(crate) topology: V1HillsTopology,
     repair_actions: Vec<String>,
     metrics: HillsMetrics,

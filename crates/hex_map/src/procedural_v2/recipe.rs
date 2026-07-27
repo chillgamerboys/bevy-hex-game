@@ -227,21 +227,7 @@ pub(crate) struct RecipeSelection<M, V> {
     pub(crate) candidates_evaluated: u8,
     pub(crate) valid_candidates: u8,
     pub(crate) repair_actions: Vec<String>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "consumed by runtime dispatch once the first V2 recipe is active"
-        )
-    )]
     pub(crate) used_fallback: bool,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "consumed by runtime dispatch once the first V2 recipe is active"
-        )
-    )]
     pub(crate) notes: Vec<String>,
 }
 
@@ -251,19 +237,19 @@ pub(crate) struct RecipeSelection<M, V> {
 /// the final validated plan so repairs cannot leave stale anchors, region memberships,
 /// interior metadata, or framing behind.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the runtime-dispatch follow-up consumes the complete materialized selection"
-    )
-)]
 pub(crate) struct MaterializedSelection<M, V> {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: MapAnchors,
     pub(crate) special_regions: SpecialMovementRegions,
     pub(crate) interiors: InteriorRegions,
     pub(crate) view_hint: MapViewHint,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "layered recipes consume typed metadata from their completed base recipe"
+        )
+    )]
     pub(crate) metadata: M,
     pub(crate) metrics: V,
     pub(crate) selected_candidate: Option<u8>,
