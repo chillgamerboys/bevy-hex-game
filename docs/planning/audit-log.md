@@ -7,6 +7,27 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 2 — docs(planning): sequence the roadmap into waves around the V2 work (2026-07-26)
+
+- **PR**: #57 — `docs/roadmap-waves`
+- **Outcome**: green
+- **Lenses triggered**: D3 (claims vs reality), plus the fresh-eyes pass
+- **Path**: doc-only (first run of the docs lenses D1–D4)
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D3 | `docs/planning/roadmap.md`:56 | SHIP-BLOCKER | fixed in `23c3103` — wave 1 claimed every file clear of #56 while its own sim-seams section names `Turn` (app.rs) and `Body` (movement.rs), both #56-held and both on the doc's own avoid-list; resolved by scoping wave 1 precisely (new lines merge cleanly; the two one-line derives trail the gate) |
+| D3 | `docs/planning/roadmap.md`:59 | NON-BLOCKER | fixed in `23c3103` — `targeting.rs` attributed to #56; it is contested by our own knobs ticket instead |
+| D3 | `docs/planning/roadmap.md`:76 | NON-BLOCKER | fixed in `23c3103` — the held-file list omitted `hex_core/lib.rs` and five other files #56 actually holds |
+| fresh-eyes | `docs/planning/roadmap.md`:78 | NON-BLOCKER | fixed in `23c3103` — instructed building against the five-phase `GameplaySetup` before #56 merges the `View` phase; rephrased to age with the gate |
+
+**Notes**: nothing deferred. D1 (seed-tickets parse contract), D2 (links and
+fragment anchors), D4 (single source), row↔section coverage, and the four
+#56 contract-type claims all verified clean. This audit motivated the
+doc-only path itself: five of the eight code lenses had nothing to say
+about a roadmap edit, and the four that remained are now the documented
+docs lenses — the skill change ships in this same PR.
+
 ## Wave 1 — docs: add planning docs and restructure the tree (2026-07-26)
 
 - **PR**: #55 — `docs/planning-seed`
