@@ -11,11 +11,13 @@
 //! has picked one. `world.ron` is still the world the first scenario uses and still the
 //! file to edit while trying terrain out.
 
+use std::collections::BTreeSet;
+
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use hex_assets::{RegisterSettings, CONFIG_EXTENSIONS};
 use hex_core::{HexCoord, Level};
-use serde::de::Error as _;
+use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
@@ -299,17 +301,13 @@ pub struct CavesSettings {
     pub chamber_count: u8,
 }
 
-#[derive(Deserialize)]
 struct ProceduralSettingsWire {
     generator_version: u32,
-    #[serde(default, deserialize_with = "deserialize_present")]
     landform: Option<LandformSettings>,
-    #[serde(default, deserialize_with = "deserialize_present")]
     environment: Option<ProceduralEnvironmentWire>,
-    #[serde(default, deserialize_with = "deserialize_present")]
     tactical: Option<TacticalSettings>,
-    #[serde(default, deserialize_with = "deserialize_present")]
     recipe: Option<V2RecipeSettings>,
+    unknown_fields: BTreeSet<String>,
 }
 
 #[derive(Deserialize)]
@@ -320,12 +318,133 @@ enum ProceduralEnvironmentWire {
     Rocky,
 }
 
-fn deserialize_present<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
+enum ProceduralSettingsField {
+    GeneratorVersion,
+    Landform,
+    Environment,
+    Tactical,
+    Recipe,
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for ProceduralSettingsField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FieldVisitor;
+
+        impl Visitor<'_> for FieldVisitor {
+            type Value = ProceduralSettingsField;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a procedural settings field")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(match value {
+                    "generator_version" => ProceduralSettingsField::GeneratorVersion,
+                    "landform" => ProceduralSettingsField::Landform,
+                    "environment" => ProceduralSettingsField::Environment,
+                    "tactical" => ProceduralSettingsField::Tactical,
+                    "recipe" => ProceduralSettingsField::Recipe,
+                    _ => ProceduralSettingsField::Unknown(value.to_owned()),
+                })
+            }
+        }
+
+        deserializer.deserialize_identifier(FieldVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProceduralSettingsWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct WireVisitor;
+
+        impl<'de> Visitor<'de> for WireVisitor {
+            type Value = ProceduralSettingsWire;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("procedural settings")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut generator_version = None;
+                let mut landform = None;
+                let mut environment = None;
+                let mut tactical = None;
+                let mut recipe = None;
+                let mut unknown_fields = BTreeSet::new();
+
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        ProceduralSettingsField::GeneratorVersion => {
+                            if generator_version.is_some() {
+                                return Err(A::Error::duplicate_field("generator_version"));
+                            }
+                            generator_version = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Landform => {
+                            if landform.is_some() {
+                                return Err(A::Error::duplicate_field("landform"));
+                            }
+                            landform = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Environment => {
+                            if environment.is_some() {
+                                return Err(A::Error::duplicate_field("environment"));
+                            }
+                            environment = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Tactical => {
+                            if tactical.is_some() {
+                                return Err(A::Error::duplicate_field("tactical"));
+                            }
+                            tactical = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Recipe => {
+                            if recipe.is_some() {
+                                return Err(A::Error::duplicate_field("recipe"));
+                            }
+                            recipe = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Unknown(field) => {
+                            map.next_value::<IgnoredAny>()?;
+                            unknown_fields.insert(field);
+                        }
+                    }
+                }
+
+                Ok(ProceduralSettingsWire {
+                    generator_version: generator_version
+                        .ok_or_else(|| A::Error::missing_field("generator_version"))?,
+                    landform,
+                    environment,
+                    tactical,
+                    recipe,
+                    unknown_fields,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &[
+            "generator_version",
+            "landform",
+            "environment",
+            "tactical",
+            "recipe",
+        ];
+        deserializer.deserialize_struct("ProceduralSettingsWire", FIELDS, WireVisitor)
+    }
 }
 
 impl<'de> Deserialize<'de> for ProceduralSettings {
@@ -368,6 +487,11 @@ impl<'de> Deserialize<'de> for ProceduralSettings {
                 }))
             }
             2 => {
+                if let Some(field) = wire.unknown_fields.iter().next() {
+                    return Err(D::Error::custom(format!(
+                        "procedural V2 contains unknown field {field:?}"
+                    )));
+                }
                 if wire.landform.is_some() || wire.tactical.is_some() {
                     return Err(D::Error::custom(
                         "procedural V2 uses recipe instead of landform and tactical fields",
@@ -1103,6 +1227,33 @@ mod tests {
         );
         ron::from_str::<MapSettings>(&source)
             .expect("manual version dispatch must not tighten the frozen V1 wire contract");
+    }
+
+    #[test]
+    fn v2_rejects_unknown_top_level_fields() {
+        let source = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 2,
+                    environment: TemperateGrassland,
+                    recipe: Hills((
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                    )),
+                    typoed_setting: 42,
+                )),
+            )
+        "#;
+        let error =
+            ron::from_str::<MapSettings>(source).expect_err("V2 top-level fields must be rejected");
+        assert!(
+            error.to_string().contains("unknown field")
+                && error.to_string().contains("typoed_setting"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
