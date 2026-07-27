@@ -1221,6 +1221,10 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
                 2,
             ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-caves.ron"),
+                2,
+            ),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
@@ -1358,7 +1362,7 @@ mod tests {
     }
 
     #[test]
-    fn expanded_visual_iteration_ranges_validate_without_loosening_their_bounds() {
+    fn expanded_recipe_settings_validate_without_loosening_their_bounds() {
         for (min_clearance, upper_coverage_percent) in [(14, 18), (18, 21), (22, 24)] {
             let settings = MapSettings {
                 grid_radius: 12,
@@ -1380,7 +1384,7 @@ mod tests {
             };
             assert!(
                 settings.validate().is_ok(),
-                "sky option {min_clearance}/{upper_coverage_percent} should validate"
+                "expanded sky settings {min_clearance}/{upper_coverage_percent} should validate"
             );
         }
 
@@ -1401,7 +1405,7 @@ mod tests {
             };
             assert!(
                 settings.validate().is_ok(),
-                "mountain option {relief}/{peak_count} should validate"
+                "expanded mountain settings {relief}/{peak_count} should validate"
             );
         }
 
@@ -1424,7 +1428,7 @@ mod tests {
             };
             assert!(
                 settings.validate().is_ok(),
-                "cave option {surface_level}/{cave_floor_level}/{chamber_count} should validate"
+                "expanded cave settings {surface_level}/{cave_floor_level}/{chamber_count} should validate"
             );
         }
 

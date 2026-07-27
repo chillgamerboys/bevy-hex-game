@@ -2392,10 +2392,10 @@ mod tests {
     }
 
     #[test]
-    fn shipped_caves_are_deterministic_connected_and_exactly_tagged() {
+    fn legacy_caves_compatibility_map_is_pinned_connected_and_exactly_tagged() {
         let settings = settings(15, 7, 7);
         let first = build(12, 0.4, &settings, CAVE_SEED, &palette(), &is_solid)
-            .expect("the shipped Caves seed should generate");
+            .expect("the legacy Caves compatibility seed should generate");
         let second = build(12, 0.4, &settings, CAVE_SEED, &palette(), &is_solid)
             .expect("the repeated Caves seed should generate");
 
@@ -2421,8 +2421,27 @@ mod tests {
     }
 
     #[test]
-    fn expanded_cave_options_add_exact_vertical_and_topological_variety() {
-        let options = [
+    fn shipped_cave_selection_is_pinned() {
+        let generated = build(
+            12,
+            0.4,
+            &settings(17, 6, 12),
+            CAVE_SEED,
+            &palette(),
+            &is_solid,
+        )
+        .expect("the shipped Caves selection should generate");
+
+        assert_eq!(generated.selected_candidate, Some(2));
+        assert_eq!(generated.map_fingerprint, 832_683_971_217_171_917);
+        assert_eq!(generated.metrics.chamber_count, 12);
+        assert_eq!(generated.metrics.extra_links, 2);
+        assert!(!generated.used_fallback);
+    }
+
+    #[test]
+    fn expanded_cave_settings_add_exact_vertical_and_topological_variety() {
+        let settings_cases = [
             (16, 7, 9, 1, 2, 3, 0),
             (16, 6, 10, 2, 3, 4, 1),
             (17, 6, 12, 2, 4, 5, 2),
@@ -2435,7 +2454,7 @@ mod tests {
             clearance_relief,
             surface_relief,
             extra_links,
-        ) in options
+        ) in settings_cases
         {
             let generated = build(
                 12,
@@ -2446,7 +2465,7 @@ mod tests {
                 &is_solid,
             )
             .unwrap_or_else(|error| {
-                panic!("the {chamber_count}-chamber visual option should generate: {error}")
+                panic!("the {chamber_count}-chamber expanded settings should generate: {error}")
             });
 
             assert!(!generated.used_fallback);

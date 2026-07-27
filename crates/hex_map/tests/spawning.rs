@@ -236,8 +236,8 @@ fn v2_layered_sky_app() -> App {
                     max_relief: 8,
                     hills_per_bank: 3,
                 },
-                min_clearance: 8,
-                upper_coverage_percent: 20,
+                min_clearance: 22,
+                upper_coverage_percent: 24,
             }),
         })),
     });
@@ -253,8 +253,8 @@ fn v2_mountains_app() -> App {
             environment: V2EnvironmentSettings::Frozen,
             recipe: V2RecipeSettings::Mountains(MountainsSettings {
                 base_level: 15,
-                relief: 15,
-                peak_count: 4,
+                relief: 24,
+                peak_count: 7,
             }),
         })),
     });
@@ -269,9 +269,9 @@ fn v2_caves_app() -> App {
         terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
             environment: V2EnvironmentSettings::Rocky,
             recipe: V2RecipeSettings::Caves(CavesSettings {
-                surface_level: 15,
-                cave_floor_level: 7,
-                chamber_count: 7,
+                surface_level: 17,
+                cave_floor_level: 6,
+                chamber_count: 12,
             }),
         })),
     });

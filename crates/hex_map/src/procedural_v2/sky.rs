@@ -1546,7 +1546,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_layered_sky_map_preserves_finalized_hills_ground() {
+    fn legacy_layered_sky_compatibility_map_preserves_finalized_hills_ground() {
         let palette = palette();
         let sky = build(
             12,
@@ -1556,7 +1556,7 @@ mod tests {
             &palette,
             &is_solid,
         )
-        .expect("the shipped layered sky map should generate");
+        .expect("the legacy layered sky compatibility map should generate");
         let ground = hills::build(
             12,
             0.4,
@@ -1658,9 +1658,27 @@ mod tests {
     }
 
     #[test]
-    fn elevated_review_options_are_deterministic_varied_and_clear_of_ground() {
-        let options = [(14, 18, 4, 3), (18, 21, 6, 4), (22, 24, 8, 5)];
-        for (min_clearance, coverage, expected_underbody, expected_relief) in options {
+    fn shipped_layered_sky_selection_is_pinned() {
+        let generated = build(
+            12,
+            0.4,
+            &settings_with_geometry(V2EnvironmentSettings::TemperateGrassland, 22, 24),
+            SKY_SEED,
+            &palette(),
+            &is_solid,
+        )
+        .expect("the shipped layered sky selection should generate");
+
+        assert_eq!(generated.selected_candidate, Some(2));
+        assert_eq!(generated.map_fingerprint, 13_919_513_730_444_748_723);
+        assert_eq!(generated.metrics.coverage_percent, 24);
+        assert!(!generated.used_fallback);
+    }
+
+    #[test]
+    fn elevated_settings_are_deterministic_varied_and_clear_of_ground() {
+        let settings_cases = [(14, 18, 4, 3), (18, 21, 6, 4), (22, 24, 8, 5)];
+        for (min_clearance, coverage, expected_underbody, expected_relief) in settings_cases {
             assert_eq!(
                 vertical_budget(min_clearance),
                 SkyVerticalBudget {
@@ -1676,7 +1694,7 @@ mod tests {
             let first = build(12, 0.4, &settings, SKY_SEED, &palette(), &is_solid).unwrap_or_else(
                 |error| {
                     panic!(
-                        "elevated option clearance={min_clearance}, coverage={coverage} \
+                        "elevated settings clearance={min_clearance}, coverage={coverage} \
                      should generate: {error}"
                     )
                 },

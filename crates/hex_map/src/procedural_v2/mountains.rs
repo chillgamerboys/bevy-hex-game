@@ -2280,9 +2280,9 @@ mod tests {
     }
 
     #[test]
-    fn shipped_mountains_are_deterministic_and_keep_two_independent_routes() {
+    fn legacy_mountains_compatibility_map_is_pinned_and_keeps_two_independent_routes() {
         let first = build(12, 0.4, &settings(4), 129_704_046, &palette(), &is_solid)
-            .expect("the shipped Mountains seed should generate");
+            .expect("the legacy Mountains compatibility seed should generate");
         let second = build(12, 0.4, &settings(4), 129_704_046, &palette(), &is_solid)
             .expect("the repeated Mountains seed should generate");
 
@@ -2316,7 +2316,26 @@ mod tests {
     }
 
     #[test]
-    fn expanded_mountain_options_are_broad_complex_and_deterministic() {
+    fn shipped_mountain_selection_is_pinned() {
+        let generated = build(
+            12,
+            0.4,
+            &expanded_settings(24, 7),
+            129_704_046,
+            &palette(),
+            &is_solid,
+        )
+        .expect("the shipped Mountains selection should generate");
+
+        assert_eq!(generated.selected_candidate, Some(0));
+        assert_eq!(generated.map_fingerprint, 8_059_820_049_498_199_862);
+        assert_eq!(generated.metrics.mountain_coverage_percent, 60);
+        assert_eq!(generated.metadata.peak_centres.len(), 7);
+        assert!(!generated.used_fallback);
+    }
+
+    #[test]
+    fn expanded_mountain_settings_are_broad_complex_and_deterministic() {
         for (relief, peak_count, expected_coverage, expected_branches) in
             [(18, 5, 53, 2), (21, 6, 56, 3), (24, 7, 60, 4)]
         {
@@ -2333,16 +2352,6 @@ mod tests {
             assert_eq!(first.map_fingerprint, second.map_fingerprint);
             assert_eq!(first.selected_candidate, second.selected_candidate);
             assert!(!first.used_fallback);
-            eprintln!(
-                "Expanded Mountains relief={relief} peaks={peak_count}: \
-                 candidate={:?} fingerprint={} coverage={} cliffs={} turns={} branches={}",
-                first.selected_candidate,
-                first.map_fingerprint,
-                first.metrics.mountain_coverage_percent,
-                first.metrics.cliff_edges,
-                first.metrics.spine_turns,
-                first.metrics.branch_count
-            );
             assert_eq!(first.metrics.tactical.relief, relief);
             assert_eq!(first.metrics.mountain_coverage_percent, expected_coverage);
             assert_eq!(first.metrics.branch_count, expected_branches);
