@@ -90,8 +90,9 @@ impl SeedStream<'_> {
 
         let span = u64::from(min.abs_diff(max)).saturating_add(1);
         let sampled = self.sample(index) % span;
-        let offset = u32::try_from(sampled)
-            .map_err(|_| format!("deterministic range {min}..={max} exceeds i32 capacity"))?;
+        let offset = u32::try_from(sampled).map_err(|error| {
+            format!("deterministic range {min}..={max} exceeds i32 capacity: {error}")
+        })?;
         Ok(min.saturating_add_unsigned(offset))
     }
 
