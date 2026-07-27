@@ -18,7 +18,8 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn, MAX_HEADROOM,
+    Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn, UnitId,
+    MAX_HEADROOM,
 };
 use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn};
 
@@ -30,6 +31,8 @@ fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
     app.init_state::<Screen>();
+    // The shipped combat.ron values; production loads the file instead.
+    app.insert_resource(hex_assets::CombatSettings::default());
     app.add_sub_state::<Mode>();
     app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
@@ -88,6 +91,18 @@ fn substance_table() -> SubstanceTable {
         },
     );
     SubstanceTable::from_file(&SubstanceFile { substances })
+}
+
+/// The stable id combat dealt this entity when the fight began.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; a missing id IS the failure"
+)]
+fn unit_id(app: &App, entity: Entity) -> UnitId {
+    *app.world()
+        .entity(entity)
+        .get::<UnitId>()
+        .expect("combat should have dealt this unit a stable id")
 }
 
 fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, initiative: u32) -> Entity {
@@ -232,7 +247,9 @@ fn an_enemy_cannot_outrun_its_movement_budget() {
     assert!(travelled > 0, "the enemy should have moved at all");
 }
 
-/// Equal tactical choices resolve by entity id rather than query iteration order.
+/// Equal tactical choices resolve by the stable unit id rather than query
+/// iteration order or entity bits — neither of which survives a save or a
+/// second run.
 #[test]
 fn equally_routable_foes_have_a_deterministic_tie_break() {
     let mut app = test_app();
@@ -241,11 +258,11 @@ fn equally_routable_foes_have_a_deterministic_tie_break() {
     let second = HexCoord::new_cubic(0, 3, -3);
     let first_entity = spawn_unit(&mut app, Faction::Player, first, 20);
     let second_entity = spawn_unit(&mut app, Faction::Player, second, 10);
-    let (expected, other) = if first_entity.to_bits() < second_entity.to_bits() {
-        (first, second)
-    } else {
-        (second, first)
-    };
+    // Explicit ids, with the LOWER one on the later spawn: the winner must
+    // follow the stable id, not spawn order and not entity allocation.
+    app.world_mut().entity_mut(first_entity).insert(UnitId(2));
+    app.world_mut().entity_mut(second_entity).insert(UnitId(1));
+    let (expected, other) = (second, first);
     enter_gameplay(&mut app);
 
     let destination = app
@@ -258,7 +275,7 @@ fn equally_routable_foes_have_a_deterministic_tie_break() {
     assert_eq!(
         destination.distance(expected),
         1,
-        "an exact tie did not choose the lower entity id"
+        "an exact tie did not choose the lower unit id"
     );
     assert!(
         destination.distance(other) > 1,
@@ -293,7 +310,7 @@ fn a_turn_does_not_pass_while_a_unit_is_still_moving() {
     );
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(enemy),
+        Some(unit_id(&app, enemy)),
         "the turn must stay with a unit that is still animating"
     );
 }
@@ -322,7 +339,7 @@ fn an_enemy_turn_ends_once_its_animation_finishes() {
 
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(player),
+        Some(unit_id(&app, player)),
         "the turn should have come back to the player"
     );
     assert!(
@@ -352,14 +369,15 @@ fn an_adjacent_enemy_attacks_without_moving() {
     );
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(enemy),
+        Some(unit_id(&app, enemy)),
         "the attacker should keep its turn while the lunge is running"
     );
 
     for _ in 0..10 {
         app.update();
         let attack_finished = app.world().get::<Transformation>(enemy).is_none();
-        let turn_advanced = app.world().resource::<TurnOrder>().current() == Some(player);
+        let turn_advanced =
+            app.world().resource::<TurnOrder>().current() == Some(unit_id(&app, player));
         if attack_finished && turn_advanced {
             break;
         }
@@ -375,7 +393,7 @@ fn an_adjacent_enemy_attacks_without_moving() {
     );
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(player),
+        Some(unit_id(&app, player)),
         "the turn should advance after the attack animation completes"
     );
     assert!(
@@ -451,7 +469,7 @@ fn the_turn_does_not_pass_while_its_unit_is_still_walking() {
     );
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(enemy),
+        Some(unit_id(&app, enemy)),
         "the turn was handed on while the enemy was still mid-walk"
     );
 }

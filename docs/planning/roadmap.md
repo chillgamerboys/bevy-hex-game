@@ -119,11 +119,10 @@ no RNG, by signature). Also `PlayerSeat`/`ControlOwner` (seat 0 everywhere
 today) and a `Party` roster resource — one field each, and they are the
 entire future co-op ownership model.
 
-Two derives deliberately trail the rest: `Turn` and `Body` live on lines
-inside files the open #56 is editing (`app.rs`, `movement.rs`), so their
-serde attributes land as a follow-up commit once it merges — see the
-toe-stepping rules above. Nothing downstream needs them before the save
-work starts.
+The `Turn` and `Body` serde derives were once slated to trail (their lines
+sat in files #56 held), but they landed with the first serde PR after it
+merged — nothing trails. The remainder of this epic (`UnitId`, tie-breaks,
+`SimSeeds`, the seat/party fields) ships as wave 2's opening PR.
 
 ### Command funnel
 

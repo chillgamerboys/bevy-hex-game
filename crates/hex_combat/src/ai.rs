@@ -14,27 +14,25 @@
 //! An enemy either moves or attacks, then ends its turn. Not "move and attack", even
 //! though a player gets both, because a placeholder that spends a full turn's economy
 //! invites being tuned rather than replaced.
+//!
+//! # An emitter, not an actor
+//!
+//! The AI decides; it does not do. Its whole output is commands pushed into the
+//! [`CommandQueue`] — a move or a strike, then the end of its turn — and the one
+//! applier validates and executes them exactly as it would a player's. That is
+//! not ceremony: it is what makes an enemy turn replayable from the same log as
+//! everything else, and what stops "the AI cheats" from ever being a bug class.
 
 use bevy::prelude::*;
 
-use hex_anim::Transformation;
-use hex_assets::{PlayerSettings, SubstanceTable};
-use hex_core::{Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn};
-use hex_units::{
-    route, Body, Enemy, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn,
+use hex_assets::SubstanceTable;
+use hex_core::{
+    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand, Mode,
+    PausableSystems, SubstanceId, TilePos, Turn, UnitId,
 };
+use hex_units::{route, Body, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
 
 use crate::turns::TurnOrder;
-
-/// How far the attacker leans toward its target, as a fraction of the distance.
-///
-/// Small on purpose: it must read as a swing rather than as a move, or the player
-/// cannot tell an attack from a step.
-const LUNGE_FRACTION: f32 = 0.35;
-
-/// Seconds for the lunge out and the return. Slow enough to notice, short enough not
-/// to make a turn feel like waiting.
-const LUNGE_SECONDS: f32 = 0.18;
 
 /// Tiles, as the AI needs them to work out where it can walk.
 type TileQuery<'w, 's> = Query<
@@ -59,94 +57,108 @@ pub(crate) fn plugin(app: &mut App) {
     );
 }
 
-/// Moves toward the nearest enemy, or swings if already next to one.
+/// Emits a move toward the nearest enemy, or a strike if already next to one.
 ///
-/// Runs only for the unit whose turn it is, and only once that unit has stopped
-/// moving — a second decision taken mid-animation would queue a new path on top of
-/// the one still playing.
+/// Runs only for the unit whose turn it is, and only while that unit is not
+/// [`Busy`] — a second decision taken mid-presentation would queue commands on
+/// top of the ones still playing out. The `acted` flag the applier sets is
+/// what stops it deciding twice.
 fn take_enemy_turn(
-    mut commands: Commands,
     turn_order: Res<TurnOrder>,
-    mut acting: Query<
-        (Entity, &mut Turn, &StandsOn, &Body, &Faction),
-        (With<Enemy>, Without<Transformation>),
+    registry: Res<UnitRegistry>,
+    mut queue: ResMut<CommandQueue>,
+    acting: Query<
+        (
+            &Turn,
+            &StandsOn,
+            &Body,
+            &Faction,
+            Option<&UnitId>,
+            Option<&ControlOwner>,
+        ),
+        (With<Enemy>, Without<Busy>),
     >,
-    others: Query<(Entity, &Faction, &StandsOn)>,
+    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
-    settings: Option<Res<PlayerSettings>>,
 ) {
-    let (Some(table), Some(settings)) = (table, settings) else {
+    let Some(table) = table else {
         return;
     };
-    let Some(current) = turn_order.current() else {
+    let Some(current) = turn_order
+        .current()
+        .and_then(|unit| registry.entity_of(unit))
+    else {
         return;
     };
-    let Ok((entity, mut turn, standing, body, faction)) = acting.get_mut(current) else {
-        // Not an enemy's turn, or it is still mid-stride.
+    let Ok((turn, standing, body, faction, unit, owner)) = acting.get(current) else {
+        // Not an enemy's turn, or it is still mid-presentation.
         return;
     };
     if turn.acted {
         return;
     }
-
-    let footing = Footing::from_tiles(tiles.iter(), &table, *body);
-    let Some(plan) = best_foe(&others, *faction, standing.0, &footing, turn.movement_left) else {
-        // Nothing to fight. Spend the turn so the order keeps moving rather than
-        // stalling on a unit with nothing to do.
-        spend(&mut turn);
+    let Some(my_id) = unit.copied() else {
+        // `begin_combat` deals ids before any turn is taken, so this is a
+        // wiring bug — and it must be loud, or the fight stalls silently on a
+        // unit that can never issue its own end-turn.
+        warn!("enemy {current:?} holds the turn but carries no UnitId; its turn cannot be taken");
         return;
     };
+    let seat = owner.copied().unwrap_or_default().0;
 
-    match plan.action {
-        FoeAction::Attack => {
-            lunge(
-                &mut commands,
-                entity,
-                standing.0,
-                plan.target,
-                settings.speed,
-            );
-            recoil(
-                &mut commands,
-                plan.entity,
-                plan.target,
-                standing.0,
-                settings.speed,
-            );
-            info!("enemy attacks");
+    let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+    let plan = best_foe(&others, *faction, standing.0, &footing, turn.movement_left);
+
+    match plan.map(|plan| plan.action) {
+        Some(FoeAction::Attack(target)) => {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::Strike {
+                    unit: my_id,
+                    target,
+                },
+            });
         }
-        FoeAction::Move(approach) => {
-            let animation: Transformation =
-                HexPathingLine::new(&approach.steps, settings.speed).into();
-            commands
-                .entity(entity)
-                .insert((animation, MovingTo::new(approach.steps, settings.speed)));
+        Some(FoeAction::Move(approach)) => {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::MoveAlong {
+                    unit: my_id,
+                    path: approach.steps.iter().map(|step| step.pos).collect(),
+                },
+            });
         }
-        FoeAction::Wait => {}
+        // Nothing to fight, no way to reach it, or a target no spawn path
+        // identified. Ending the turn regardless keeps the order moving
+        // rather than stalling on a unit with nothing it can do.
+        Some(FoeAction::Wait) | None => {}
     }
-    spend(&mut turn);
-}
-
-/// Marks a turn as finished. `advance_turn` picks it up from here.
-fn spend(turn: &mut Turn) {
-    turn.acted = true;
-    turn.movement_left = 0;
+    queue.push(IssuedCommand {
+        seat,
+        command: GameCommand::EndTurn { unit: my_id },
+    });
 }
 
 /// What the enemy can do about one foe this turn.
 enum FoeAction {
-    /// Already within melee reach.
-    Attack,
+    /// Already within melee reach of this identified target.
+    ///
+    /// Carries the target's stable id because a strike is issued as a command,
+    /// and commands name units, never entities.
+    Attack(UnitId),
     /// A terrain route exists and this is the affordable prefix of it.
     Move(Approach),
-    /// No terrain route reaches this foe.
+    /// No terrain route reaches this foe — or it is in reach but no spawn
+    /// path identified it, so no command can name it.
     Wait,
 }
 
 /// One candidate target and the action available against it.
 struct FoePlan {
-    entity: Entity,
+    /// `None` for a unit no spawn path identified; such a target sorts last
+    /// rather than becoming invisible (symmetric with `MovementCrossings`).
+    unit: Option<UnitId>,
     target: Standing,
     action: FoeAction,
 }
@@ -154,12 +166,13 @@ struct FoePlan {
 impl FoePlan {
     /// Deterministic target priority: attack, routable approach, unreachable.
     ///
-    /// Route cost decides between two approachable foes, horizontal distance is a
-    /// stable secondary signal, and entity id resolves exact ties. Query iteration
-    /// order is deliberately absent from the decision.
-    fn priority(&self, from: Standing) -> (u8, usize, u32, u64) {
+    /// Route cost decides between two approachable foes, horizontal distance is
+    /// a stable secondary signal, and the stable [`UnitId`] resolves exact
+    /// ties. Query iteration order is deliberately absent from the decision —
+    /// and so are entity bits, which are not stable across runs or saves.
+    fn priority(&self, from: Standing) -> (u8, usize, u32, bool, Option<UnitId>) {
         let (kind, route_cost) = match &self.action {
-            FoeAction::Attack => (0, 0),
+            FoeAction::Attack(_) => (0, 0),
             FoeAction::Move(approach) => (1, approach.route_cost),
             FoeAction::Wait => (2, usize::MAX),
         };
@@ -167,7 +180,9 @@ impl FoePlan {
             kind,
             route_cost,
             from.pos.coord.distance(self.target.pos.coord),
-            self.entity.to_bits(),
+            // `is_none` first so an unidentified unit genuinely sorts last.
+            self.unit.is_none(),
+            self.unit,
         )
     }
 }
@@ -180,7 +195,7 @@ impl FoePlan {
 /// ranked so the unreachable one cannot consume the turn merely by looking nearer on
 /// the map.
 fn best_foe(
-    others: &Query<(Entity, &Faction, &StandsOn)>,
+    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     faction: Faction,
     from: Standing,
     footing: &Footing,
@@ -188,20 +203,23 @@ fn best_foe(
 ) -> Option<FoePlan> {
     others
         .iter()
-        .filter(|(_, other, _)| faction.is_hostile_to(**other))
-        .map(|(entity, _, standing)| {
+        .filter(|(_, _, other, _)| faction.is_hostile_to(**other))
+        .map(|(_, unit, _, standing)| {
+            let unit = unit.copied();
             let target = standing.0;
-            let action = if footing.admits_step(from.pos, target.pos)
-                && footing.admits_step(target.pos, from.pos)
-            {
-                // **Reach, not range.** Melee gets no high-ground bonus: an attacker
-                // five levels up must not acquire a two-hex punch.
-                FoeAction::Attack
-            } else {
-                approach(from, target, footing, budget).map_or(FoeAction::Wait, FoeAction::Move)
+            let in_melee = footing.admits_step(from.pos, target.pos)
+                && footing.admits_step(target.pos, from.pos);
+            // **Reach, not range.** Melee gets no high-ground bonus: an attacker
+            // five levels up must not acquire a two-hex punch.
+            let action = match (in_melee, unit) {
+                (true, Some(target_id)) => FoeAction::Attack(target_id),
+                (true, None) => FoeAction::Wait,
+                (false, _) => {
+                    approach(from, target, footing, budget).map_or(FoeAction::Wait, FoeAction::Move)
+                }
             };
             FoePlan {
-                entity,
+                unit,
                 target,
                 action,
             }
@@ -239,60 +257,4 @@ fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) ->
         steps: steps.to_vec(),
         route_cost: adjacent_index,
     })
-}
-
-/// A short lean toward the target and back, as the visible half of an attack.
-///
-/// Built from the same primitives as walking, which is a useful check that the
-/// `hex_anim` split holds: the animation engine needed nothing added to express a
-/// swing it was never designed for.
-fn lunge(commands: &mut Commands, entity: Entity, from: Standing, toward: Standing, speed: f32) {
-    let start = from.world_position();
-    let tip = start + (toward.world_position() - start) * LUNGE_FRACTION;
-    commands
-        .entity(entity)
-        .insert(there_and_back(start, tip, speed));
-}
-
-/// The target's half: a smaller flinch directly away from the attacker.
-fn recoil(
-    commands: &mut Commands,
-    entity: Entity,
-    target: Standing,
-    attacker: Standing,
-    speed: f32,
-) {
-    let start = target.world_position();
-    let away = start + (start - attacker.world_position()) * (LUNGE_FRACTION * 0.5);
-    commands
-        .entity(entity)
-        .insert(there_and_back(start, away, speed));
-}
-
-/// An out-and-back movement that finishes exactly where it started.
-///
-/// Returning to `start` matters: the animation ends and the component is removed, and
-/// anything that ended somewhere else would leave the piece off its tile with nothing
-/// to correct it.
-fn there_and_back(start: Vec3, tip: Vec3, speed: f32) -> Transformation {
-    // Speed is derived from the distance so both legs take `LUNGE_SECONDS`, whatever
-    // the lunge length works out to. Guard the degenerate case: a zero-length leg
-    // makes `LinearMovement` produce NaN.
-    let distance = start.distance(tip);
-    if distance <= f32::EPSILON {
-        // Nothing to animate. A stationary "swing" is better than a NaN transform,
-        // which would put the piece somewhere unrenderable and never come back.
-        return HexPathingLine::new(&[], speed).into();
-    }
-    let leg_speed = distance / LUNGE_SECONDS;
-
-    let mut series = hex_anim::TransformerSeries::new();
-    series.push(hex_anim::LinearMovement::new(start, tip, leg_speed, 0.0));
-    series.push(hex_anim::LinearMovement::new(
-        tip,
-        start,
-        leg_speed,
-        f64::from(LUNGE_SECONDS),
-    ));
-    Transformation::new(series)
 }
