@@ -1137,6 +1137,28 @@ mod tests {
     use super::*;
 
     const WORLD_RON: &str = include_str!("../../../assets/config/world.ron");
+    const V1_HILLS_RON: &str = r#"
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 1,
+        landform: Hills((
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        )),
+        environment: TemperateGrassland,
+        tactical: Crossing((
+            barrier_half_width: 1,
+            bed_level: 12,
+            hazard_bottom: 13,
+            hazard_top: 14,
+            bridge_level: 16,
+        )),
+    )),
+)
+"#;
 
     fn showcase_settings() -> MapSettings {
         ron::from_str(WORLD_RON).expect("the shipped world settings should parse")
@@ -1177,26 +1199,41 @@ mod tests {
     }
 
     #[test]
-    fn procedural_variants_remain_deserializable() {
-        for ron in [
-            include_str!("../../../assets/config/worlds/procedural-hills.ron"),
-            include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
-            include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
-            include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
+    fn shipped_procedural_variants_use_the_intended_generator_versions() {
+        for (ron, expected_version) in [
+            (
+                include_str!("../../../assets/config/worlds/procedural-hills.ron"),
+                2,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
+                2,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
+                2,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
+                1,
+            ),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
             let TerrainSettings::Procedural(procedural) = settings.terrain else {
                 panic!("the shipped preset should be Procedural")
             };
-            assert_eq!(procedural.generator_version(), 1);
-            assert!(matches!(procedural, ProceduralSettings::V1(_)));
+            assert_eq!(procedural.generator_version(), expected_version);
+            assert_eq!(
+                matches!(procedural, ProceduralSettings::V2(_)),
+                expected_version == 2
+            );
         }
     }
 
     #[test]
     fn v1_keeps_its_flat_external_ron_shape() {
-        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        let source = V1_HILLS_RON;
         let settings: MapSettings =
             ron::from_str(source).expect("the original flat V1 RON should remain valid");
         let TerrainSettings::Procedural(ProceduralSettings::V1(v1)) = settings.terrain else {
@@ -1220,7 +1257,7 @@ mod tests {
 
     #[test]
     fn v1_keeps_legacy_unknown_field_tolerance() {
-        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron").replacen(
+        let source = V1_HILLS_RON.replacen(
             "generator_version: 1,",
             "generator_version: 1,\n        legacy_extension: 42,",
             1,
@@ -1340,8 +1377,7 @@ mod tests {
 
     #[test]
     fn version_specific_fields_cannot_be_mixed() {
-        let v1_with_recipe = include_str!("../../../assets/config/worlds/procedural-hills.ron")
-            .replacen(
+        let v1_with_recipe = V1_HILLS_RON.replacen(
                 "environment: TemperateGrassland,",
                 "environment: TemperateGrassland,\n        recipe: Hills((valley_level: 15, max_relief: 8, hills_per_bank: 3)),",
                 1,
@@ -1480,7 +1516,7 @@ mod tests {
 
     #[test]
     fn procedural_radius_is_bounded_for_v1() {
-        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        let source = V1_HILLS_RON;
         for invalid_radius in [11, 41] {
             let invalid = source.replacen(
                 "grid_radius: 12",
@@ -1498,7 +1534,7 @@ mod tests {
 
     #[test]
     fn unsupported_landform_tactical_combinations_are_rejected() {
-        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        let source = V1_HILLS_RON;
         let invalid = source.replacen(
             "tactical: Crossing((\n            barrier_half_width: 1,\n            bed_level: 12,\n            hazard_bottom: 13,\n            hazard_top: 14,\n            bridge_level: 16,\n        ))",
             "tactical: LinkedIslands((bridge_width: 2))",
@@ -1514,17 +1550,29 @@ mod tests {
 
     #[test]
     fn procedural_levels_are_bounded_before_voxel_allocation() {
-        let hills = include_str!("../../../assets/config/worlds/procedural-hills.ron")
+        let v1_hills = V1_HILLS_RON
             .replacen("valley_level: 15", "valley_level: 125", 1)
             .replacen("bed_level: 12", "bed_level: 122", 1)
             .replacen("hazard_bottom: 13", "hazard_bottom: 123", 1)
             .replacen("hazard_top: 14", "hazard_top: 124", 1)
             .replacen("bridge_level: 16", "bridge_level: 126", 1);
-        let hills_error = ron::from_str::<MapSettings>(&hills)
-            .expect_err("terrain above the v1 allocation ceiling should fail");
+        let v1_error = ron::from_str::<MapSettings>(&v1_hills)
+            .expect_err("V1 terrain above the allocation ceiling should fail");
         assert!(
-            hills_error.to_string().contains("cannot exceed level 128"),
-            "unexpected error: {hills_error}"
+            v1_error.to_string().contains("cannot exceed level 128"),
+            "unexpected error: {v1_error}"
+        );
+
+        let v2_hills = include_str!("../../../assets/config/worlds/procedural-hills.ron").replacen(
+            "valley_level: 15",
+            "valley_level: 125",
+            1,
+        );
+        let v2_error = ron::from_str::<MapSettings>(&v2_hills)
+            .expect_err("V2 Hills above the allocation ceiling should fail");
+        assert!(
+            v2_error.to_string().contains("cannot exceed level 128"),
+            "unexpected error: {v2_error}"
         );
 
         let sky = include_str!("../../../assets/config/worlds/procedural-sky-islands.ron")

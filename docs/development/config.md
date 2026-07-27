@@ -97,8 +97,8 @@ must clear the water, and the switchback must be contiguous and long enough to c
 one level at a time. An invalid save is reported in the terminal and the previous
 valid settings remain active.
 
-**Use procedural terrain instead.** Generator version 1 separates the broad landform,
-its materials, and its tactical structure:
+**Reproduce a frozen procedural map.** Generator version 1 separates the broad
+landform, its materials, and its tactical structure:
 
 ```ron
 terrain: Procedural((
@@ -125,10 +125,8 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-Generator version 2 uses one geometry recipe plus a separate material environment.
-The shape below documents the V2 schema while its recipes land in sequential PRs;
-until the V2 Hills recipe is shipped, selecting it reports a setup failure instead of
-publishing partial terrain:
+**Use current procedural terrain.** Generator version 2 uses one geometry recipe plus
+a separate material environment. Hills is the first shipped V2 recipe:
 
 ```ron
 terrain: Procedural((
@@ -142,12 +140,18 @@ terrain: Procedural((
 )),
 ```
 
-V2 Hills derives its three-wide hazard, two-wide crossings, bed and hazard bounds,
-and bridge level from `valley_level`; those invariants are intentionally not editable.
-Other V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`. Recipe and
-environment combinations are validated together: Mountains uses `Frozen`, Caves
-uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded settings
-active.
+V2 Hills preserves the approved V1 maps for equivalent Hills settings and seeds while
+publishing them through the V2 volume pipeline. It derives its three-wide hazard,
+two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`; those
+invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
+this recipe in the shipped scenario library.
+
+The remaining V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`.
+Their settings schemas are reserved while those generators land sequentially; selecting
+an unavailable recipe reports a setup failure rather than publishing partial terrain.
+Recipe and environment combinations are validated together: Mountains uses `Frozen`,
+Caves uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded
+settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
