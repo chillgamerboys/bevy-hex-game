@@ -45,15 +45,20 @@ impl CandidateContext {
 }
 
 /// Stable inputs available while constructing a separately authored fallback.
+///
+/// Native V2 fallbacks should derive geometry without sampling the seed. The seed is
+/// retained for compatibility recipes whose frozen material classification included
+/// it even on an otherwise canonical fallback.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FallbackContext {
     pub(crate) grid_radius: u32,
+    pub(crate) seed: u64,
 }
 
 impl FallbackContext {
     #[must_use]
-    const fn new(grid_radius: u32) -> Self {
-        Self { grid_radius }
+    const fn new(grid_radius: u32, seed: u64) -> Self {
+        Self { grid_radius, seed }
     }
 }
 
@@ -440,9 +445,9 @@ where
         });
     }
 
-    let fallback_context = FallbackContext::new(grid_radius);
+    let fallback_context = FallbackContext::new(grid_radius, seed);
     let fallback = recipe.canonical_fallback(fallback_context, settings)?;
-    let fallback_repair_actions = recipe.preexisting_repair_actions(&fallback);
+    let fallback_repair_actions = bounded_preexisting_repairs(recipe, &fallback)?;
     let validation = validate_plan(
         recipe,
         settings,
@@ -478,10 +483,11 @@ fn validate_and_repair<R>(
 where
     R: V2Recipe,
 {
-    let mut repair_actions = recipe.preexisting_repair_actions(plan);
+    let mut repair_actions = bounded_preexisting_repairs(recipe, plan)?;
+    let first_available_round = u8::try_from(repair_actions.len()).unwrap_or(MAX_REPAIR_ROUNDS);
     let validation_context = ValidationContext::candidate(context.grid_radius, context.candidate);
     let mut validation = validate_plan(recipe, settings, validation_context, plan)?;
-    for round in 0..MAX_REPAIR_ROUNDS {
+    for round in first_available_round..MAX_REPAIR_ROUNDS {
         let RecipeValidation::Invalid(issues) = &validation else {
             break;
         };
@@ -507,6 +513,23 @@ where
         validation = validate_plan(recipe, settings, validation_context, plan)?;
     }
     Ok((validation, repair_actions))
+}
+
+fn bounded_preexisting_repairs<R>(
+    recipe: &R,
+    plan: &RecipePlan<R::Metadata>,
+) -> Result<Vec<String>, V2GenerationError>
+where
+    R: V2Recipe,
+{
+    let actions = recipe.preexisting_repair_actions(plan);
+    if actions.len() > usize::from(MAX_REPAIR_ROUNDS) {
+        return Err(V2GenerationError::RecipeContract(format!(
+            "candidate imported {} repair rounds; the V2 limit is {MAX_REPAIR_ROUNDS}",
+            actions.len()
+        )));
+    }
+    Ok(actions)
 }
 
 fn validate_plan<R>(
@@ -558,6 +581,7 @@ mod tests {
         fatal_repair: Option<(u8, u8)>,
         no_change: Option<u8>,
         equal_scores: bool,
+        imported_repairs: u8,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -565,6 +589,7 @@ mod tests {
         candidate: u8,
         repairs: u8,
         fallback: bool,
+        imported_repairs: u8,
     }
 
     #[derive(Default)]
@@ -601,8 +626,9 @@ mod tests {
                 context.grid_radius,
                 MockMetadata {
                     candidate: context.candidate,
-                    repairs: 0,
+                    repairs: settings.imported_repairs,
                     fallback: false,
+                    imported_repairs: settings.imported_repairs,
                 },
             ))
         }
@@ -675,10 +701,13 @@ mod tests {
         }
 
         fn preexisting_repair_actions(&self, plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
-            plan.metadata
-                .fallback
-                .then(|| "imported fallback repair".to_owned())
-                .into_iter()
+            let count = if plan.metadata.fallback {
+                plan.metadata.imported_repairs.max(1)
+            } else {
+                plan.metadata.imported_repairs
+            };
+            (0..count)
+                .map(|round| format!("imported repair {round}"))
                 .collect()
         }
 
@@ -693,6 +722,7 @@ mod tests {
                     candidate: 0,
                     repairs: 0,
                     fallback: true,
+                    imported_repairs: settings.imported_repairs,
                 },
             );
             if settings.invalid_fallback_volume {
@@ -776,6 +806,51 @@ mod tests {
         assert!(
             recipe.repairs.get() <= CANDIDATE_COUNT.saturating_mul(MAX_REPAIR_ROUNDS),
             "no candidate may exceed the repair bound"
+        );
+    }
+
+    #[test]
+    fn imported_repairs_consume_the_shared_four_round_budget() {
+        let recipe = MockRecipe::default();
+        let selection = run_recipe(
+            &recipe,
+            &MockSettings {
+                imported_repairs: MAX_REPAIR_ROUNDS,
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect("a candidate finalized within the imported repair budget should pass");
+
+        assert_eq!(selection.selected_candidate, Some(1));
+        assert_eq!(
+            selection.repair_actions.len(),
+            usize::from(MAX_REPAIR_ROUNDS)
+        );
+        assert_eq!(
+            recipe.repairs.get(),
+            0,
+            "the common runner must not add rounds after the imported budget is exhausted"
+        );
+    }
+
+    #[test]
+    fn excessive_imported_repairs_are_a_recipe_contract_error() {
+        let error = run_recipe(
+            &MockRecipe::default(),
+            &MockSettings {
+                imported_repairs: MAX_REPAIR_ROUNDS.saturating_add(1),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect_err("more than four imported repair rounds must be rejected");
+
+        assert!(
+            matches!(error, V2GenerationError::RecipeContract(_)),
+            "unexpected error: {error}"
         );
     }
 
@@ -933,7 +1008,7 @@ mod tests {
         assert!(selection.plan.metadata.fallback);
         assert_eq!(
             selection.repair_actions,
-            ["imported fallback repair"],
+            ["imported repair 0"],
             "compatibility fallback repairs must survive common selection"
         );
         assert_eq!(

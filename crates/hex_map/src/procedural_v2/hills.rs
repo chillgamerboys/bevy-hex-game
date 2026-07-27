@@ -12,7 +12,7 @@ use hex_core::{
 
 use super::recipe::{
     materialize_selection, run_recipe, CandidateAttemptError, CandidateContext, FallbackContext,
-    MaterializedSelection, RecipePlan, RecipeValidation, RepairOutcome, V2Recipe,
+    MaterializedSelection, RecipePlan, RecipeSelection, RecipeValidation, RepairOutcome, V2Recipe,
     ValidationContext,
 };
 use super::volume::{
@@ -27,8 +27,6 @@ use crate::settings::{
 };
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
-
-const FALLBACK_SEED: u64 = 0;
 
 /// V1 measurements and ordering key cached with one converted candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +66,22 @@ pub(crate) fn build(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedSelection<HillsMetadata, HillsMetrics>, V2GenerationError> {
+    let selection = select(grid_radius, level_height, settings, seed, palette, is_solid)?;
+    materialize_selection(selection, palette, is_solid)
+}
+
+/// Selects finalized Hills ground before materialization.
+///
+/// Layered recipes use this boundary to add independent upper masses without
+/// regenerating or reverse-converting the approved ground plan.
+pub(crate) fn select(
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV2Settings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<RecipeSelection<HillsMetadata, HillsMetrics>, V2GenerationError> {
     let view_hint = hills_view_hint(grid_radius, level_height, settings)?;
     let recipe = HillsRecipe {
         settings: canonical_v1_settings(settings)?,
@@ -75,8 +89,7 @@ pub(crate) fn build(
         palette,
         is_solid,
     };
-    let selection = run_recipe(&recipe, &(), grid_radius, seed)?;
-    materialize_selection(selection, palette, is_solid)
+    run_recipe(&recipe, &(), grid_radius, seed)
 }
 
 impl V2Recipe for HillsRecipe<'_> {
@@ -100,7 +113,7 @@ impl V2Recipe for HillsRecipe<'_> {
             self.is_solid,
         )
         .map_err(|reason| {
-            CandidateAttemptError::fatal(V2GenerationError::MaterialContract(format!(
+            CandidateAttemptError::fatal(V2GenerationError::RecipeContract(format!(
                 "V1 Hills parity adapter failed: {reason}"
             )))
         })?;
@@ -152,7 +165,7 @@ impl V2Recipe for HillsRecipe<'_> {
         let candidate = procedural::build_hills_candidate_for_v2_parity(
             context.grid_radius,
             &self.settings,
-            FALLBACK_SEED,
+            context.seed,
             0,
             true,
             self.palette,
@@ -180,18 +193,30 @@ fn hills_view_hint(
     let V2RecipeSettings::Hills(hills) = &settings.recipe else {
         return Err(V2GenerationError::RecipeUnavailable("Hills"));
     };
+    if !level_height.is_finite() || level_height <= 0.0 {
+        return Err(V2GenerationError::RecipeContract(
+            "Hills level height must be positive and finite".to_owned(),
+        ));
+    }
     let valley_level = i16::try_from(hills.valley_level).map_err(|_out_of_range| {
-        V2GenerationError::InvalidVolume(vec![
+        V2GenerationError::RecipeContract(
             "Hills valley level cannot be represented by the camera frame".to_owned(),
-        ])
+        )
+    })?;
+    let max_relief = i16::try_from(hills.max_relief).map_err(|_out_of_range| {
+        V2GenerationError::RecipeContract(
+            "Hills relief cannot be represented by the camera frame".to_owned(),
+        )
     })?;
     let radius = u16::try_from(grid_radius).map_err(|_out_of_range| {
-        V2GenerationError::InvalidVolume(vec![
+        V2GenerationError::RecipeContract(
             "Hills radius cannot be represented by the camera frame".to_owned(),
-        ])
+        )
     })?;
     let focus_height = f32::from(valley_level) * level_height;
-    let frame_distance = f32::from(radius) * 3.5;
+    let horizontal_frame = f32::from(radius) * 3.5;
+    let relief_frame = f32::from(max_relief) * level_height * 2.0;
+    let frame_distance = horizontal_frame.max(relief_frame);
     Ok(MapViewHint::new(
         (0.0, focus_height + frame_distance, frame_distance),
         (0.0, focus_height, 0.0),
@@ -216,7 +241,7 @@ fn canonical_v1_settings(
     };
     let crossing = hills
         .derived_crossing()
-        .map_err(|reason| V2GenerationError::InvalidVolume(vec![reason]))?;
+        .map_err(V2GenerationError::RecipeContract)?;
 
     Ok(ProceduralV1Settings {
         landform: LandformSettings::Hills(HillsSettings {
@@ -495,6 +520,23 @@ mod tests {
     const ICE: SubstanceId = SubstanceId(9);
     const BASALT: SubstanceId = SubstanceId(10);
     const LAVA: SubstanceId = SubstanceId(11);
+    const HERO_SEED: u64 = 1_592_598_566;
+    // Frozen after selecting the iteration-one V1 review pack from seeds 0..1_024.
+    // The labels record why each seed entered the corpus; V2 must reproduce these
+    // exact maps rather than rerunning the retired selector.
+    const FIXED_REGRESSION_SEEDS: [(&str, u64); 6] = [
+        ("median", 4),
+        ("relief-min", 1),
+        ("relief-max", 275),
+        ("sinuosity-min", 9),
+        ("sinuosity-max", 850),
+        ("fallback-pressure", 677),
+    ];
+    const SHIPPED_ENVIRONMENT_SEEDS: [(V2EnvironmentSettings, u64); 3] = [
+        (V2EnvironmentSettings::TemperateGrassland, HERO_SEED),
+        (V2EnvironmentSettings::Frozen, 484_450_342),
+        (V2EnvironmentSettings::Volcanic, 444_211_238),
+    ];
 
     fn palette() -> TerrainPalette {
         TerrainPalette {
@@ -533,35 +575,100 @@ mod tests {
         memberships
     }
 
-    #[test]
-    fn v2_hills_selection_round_trips_the_v1_map_and_diagnostics() {
-        for (environment, seed) in [
-            (V2EnvironmentSettings::TemperateGrassland, 1_592_598_566),
-            (V2EnvironmentSettings::Frozen, 484_450_342),
-            (V2EnvironmentSettings::Volcanic, 444_211_238),
-        ] {
-            let v2_settings = settings(environment);
-            let v1_settings =
-                canonical_v1_settings(&v2_settings).expect("the Hills mapping should be valid");
-            let legacy = procedural::build(
-                12,
-                &v1_settings,
-                seed,
-                &palette(),
-                TraversalProfile::WALKER,
-                &is_solid,
-            );
-            let converted = build(12, 0.4, &v2_settings, seed, &palette(), &is_solid)
-                .expect("V2 should losslessly select and materialize V1 Hills");
-
+    fn assert_voxel_columns_equal(case: &str, expected: &VoxelMap, actual: &VoxelMap) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "{case}: generated a different number of columns"
+        );
+        for (coord, expected_column) in expected.columns() {
             assert_eq!(
-                converted.selected_candidate,
-                legacy.report.selected_candidate
+                actual.column(coord),
+                Some(expected_column),
+                "{case}: voxel column {coord:?} differs"
             );
-            assert_eq!(converted.valid_candidates, legacy.report.valid_candidates);
-            assert_eq!(converted.repair_actions, legacy.report.repair_actions);
-            assert_eq!(converted.metrics.tactical, legacy.report.metrics);
-            assert_eq!(converted.map_fingerprint, legacy.report.map_fingerprint);
+        }
+    }
+
+    fn assert_v1_v2_parity(
+        label: &str,
+        radius: u32,
+        environment: V2EnvironmentSettings,
+        seed: u64,
+    ) -> MaterializedSelection<HillsMetadata, HillsMetrics> {
+        let case = format!("{label}, radius {radius}, {environment:?}, seed {seed}");
+        let v2_settings = settings(environment);
+        let v1_settings =
+            canonical_v1_settings(&v2_settings).expect("the Hills mapping should be valid");
+        let legacy = procedural::build(
+            radius,
+            &v1_settings,
+            seed,
+            &palette(),
+            TraversalProfile::WALKER,
+            &is_solid,
+        );
+        let converted = build(radius, 0.4, &v2_settings, seed, &palette(), &is_solid)
+            .expect("V2 should losslessly select and materialize V1 Hills");
+
+        assert!(legacy.validated, "{case}: {:?}", legacy.report.notes);
+        assert_eq!(
+            converted.selected_candidate, legacy.report.selected_candidate,
+            "{case}: selected candidate differs"
+        );
+        assert_eq!(
+            converted.candidates_evaluated, legacy.report.candidates_evaluated,
+            "{case}: candidate count differs"
+        );
+        assert_eq!(
+            converted.valid_candidates, legacy.report.valid_candidates,
+            "{case}: valid candidate count differs"
+        );
+        assert_eq!(
+            converted.repair_actions, legacy.report.repair_actions,
+            "{case}: imported V1 repairs differ"
+        );
+        assert_eq!(
+            converted.used_fallback, legacy.report.used_fallback,
+            "{case}: fallback selection differs"
+        );
+        assert_eq!(
+            converted.metrics.tactical, legacy.report.metrics,
+            "{case}: tactical metrics differ"
+        );
+        assert_eq!(
+            converted.map_fingerprint, legacy.report.map_fingerprint,
+            "{case}: map fingerprint differs"
+        );
+        assert_voxel_columns_equal(&case, &legacy.map, &converted.map);
+
+        let expected_anchors: BTreeMap<String, TilePos> = legacy
+            .anchors
+            .iter()
+            .map(|(name, position)| (name.to_owned(), position))
+            .collect();
+        let actual_anchors: BTreeMap<String, TilePos> = converted
+            .anchors
+            .iter()
+            .map(|(name, position)| (name.as_str().to_owned(), position))
+            .collect();
+        assert_eq!(
+            actual_anchors, expected_anchors,
+            "{case}: exact anchors differ"
+        );
+        assert_eq!(
+            sorted_regions(&converted.special_regions),
+            sorted_regions(&legacy.special_regions),
+            "{case}: exact special-movement memberships differ"
+        );
+
+        converted
+    }
+
+    #[test]
+    fn shipped_radius_twelve_hills_match_v1_exactly() {
+        for (environment, seed) in SHIPPED_ENVIRONMENT_SEEDS {
+            let converted = assert_v1_v2_parity("shipped preset", 12, environment, seed);
             assert!(!converted.used_fallback);
             let _candidate_diagnostics = &converted.notes;
             assert!(converted.interiors.is_empty());
@@ -583,23 +690,237 @@ mod tests {
                     .topology
                     .protected_approaches
                     .contains(&position.coord)));
+        }
+    }
 
-            let expected_anchors: BTreeMap<String, TilePos> = legacy
-                .anchors
-                .iter()
-                .map(|(name, position)| (name.to_owned(), position))
-                .collect();
-            let actual_anchors: BTreeMap<String, TilePos> = converted
-                .anchors
-                .iter()
-                .map(|(name, position)| (name.as_str().to_owned(), position))
-                .collect();
-            assert_eq!(actual_anchors, expected_anchors);
-            assert_eq!(
-                sorted_regions(&converted.special_regions),
-                sorted_regions(&legacy.special_regions)
+    #[test]
+    fn semantic_selection_is_available_before_materialization() {
+        let palette = palette();
+        let settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let selection = select(12, 0.4, &settings, HERO_SEED, &palette, &is_solid)
+            .expect("Hills ground should select as a semantic volume");
+
+        selection
+            .plan
+            .volume
+            .validate()
+            .expect("the selected ground volume should satisfy common V2 invariants");
+        assert!(!selection.plan.metadata.topology.barrier.is_empty());
+        assert!(!selection
+            .plan
+            .metadata
+            .topology
+            .protected_approaches
+            .is_empty());
+
+        let selected_candidate = selection.selected_candidate;
+        let materialized = materialize_selection(selection, &palette, &is_solid)
+            .expect("the semantic selection should materialize without reconstruction");
+        let direct = build(12, 0.4, &settings, HERO_SEED, &palette, &is_solid)
+            .expect("the direct Hills path should materialize");
+        assert_eq!(materialized.selected_candidate, selected_candidate);
+        assert_eq!(materialized.map_fingerprint, direct.map_fingerprint);
+        assert_voxel_columns_equal(
+            "semantic selection boundary",
+            &direct.map,
+            &materialized.map,
+        );
+    }
+
+    #[test]
+    fn frozen_v1_review_corpus_matches_v2_exactly() {
+        for (label, seed) in std::iter::once(("hero", HERO_SEED)).chain(FIXED_REGRESSION_SEEDS) {
+            let converted =
+                assert_v1_v2_parity(label, 12, V2EnvironmentSettings::TemperateGrassland, seed);
+            assert!(
+                !converted.used_fallback,
+                "{label} seed {seed} unexpectedly used fallback"
             );
         }
+    }
+
+    #[test]
+    fn supported_radii_and_shipped_environments_match_v1_exactly() {
+        for radius in [20, 40] {
+            for (environment, seed) in SHIPPED_ENVIRONMENT_SEEDS {
+                assert_v1_v2_parity("scale boundary", radius, environment, seed);
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_fallback_matches_nonzero_seed_v1_and_imports_bounded_repairs() {
+        const REQUESTED_SEED: u64 = 505;
+
+        let palette = palette();
+        let v2_settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let v1_settings =
+            canonical_v1_settings(&v2_settings).expect("the Hills mapping should be valid");
+        let expected = procedural::build_hills_candidate_for_v2_parity(
+            12,
+            &v1_settings,
+            REQUESTED_SEED,
+            0,
+            true,
+            &palette,
+            &is_solid,
+        )
+        .expect("the V1 canonical fallback should construct");
+        assert!(expected.valid, "{:?}", expected.validation_notes);
+
+        let recipe = HillsRecipe {
+            settings: v1_settings,
+            view_hint: hills_view_hint(12, 0.4, &v2_settings)
+                .expect("the fallback view should derive"),
+            palette: &palette,
+            is_solid: &is_solid,
+        };
+        let fallback = recipe
+            .canonical_fallback(
+                FallbackContext {
+                    grid_radius: 12,
+                    seed: REQUESTED_SEED,
+                },
+                &(),
+            )
+            .expect("the V2 canonical fallback should construct");
+        let imported_repairs = recipe.preexisting_repair_actions(&fallback);
+        assert_eq!(imported_repairs, expected.repair_actions);
+        assert!(
+            imported_repairs.len() <= 4,
+            "V1 imported {} repairs, exceeding the V2 bound",
+            imported_repairs.len()
+        );
+        assert_eq!(fallback.metadata.metrics.tactical, expected.metrics);
+
+        let materialized =
+            voxelize(&fallback.volume, &palette, &is_solid).expect("the fallback should voxelize");
+        assert_voxel_columns_equal("canonical fallback", &expected.map, &materialized.map);
+        let expected_anchors: BTreeMap<String, TilePos> = expected
+            .anchors
+            .iter()
+            .map(|(name, position)| (name.to_owned(), position))
+            .collect();
+        assert_eq!(fallback.volume.anchors, expected_anchors);
+
+        let mut actual_regions: Vec<_> = fallback
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(position, surface)| match surface.access {
+                SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
+                SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
+            })
+            .collect();
+        actual_regions.sort_unstable();
+        assert_eq!(actual_regions, sorted_regions(&expected.special_regions));
+    }
+
+    #[test]
+    fn bridge_conversion_preserves_air_gap_and_rejects_submerged_bed() {
+        let palette = palette();
+        let v2_settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let v1_settings =
+            canonical_v1_settings(&v2_settings).expect("the Hills mapping should be valid");
+        let complete = procedural::build(
+            12,
+            &v1_settings,
+            HERO_SEED,
+            &palette,
+            TraversalProfile::WALKER,
+            &is_solid,
+        );
+        let selected = complete
+            .report
+            .selected_candidate
+            .expect("the hero map should not need fallback");
+        let candidate = procedural::build_hills_candidate_for_v2_parity(
+            12,
+            &v1_settings,
+            HERO_SEED,
+            selected,
+            false,
+            &palette,
+            &is_solid,
+        )
+        .expect("the selected V1 candidate should construct");
+        let bridge = candidate.topology.bridge.clone();
+        let plan = candidate_to_plan(
+            12,
+            candidate,
+            &palette,
+            hills_view_hint(12, 0.4, &v2_settings).expect("the view should derive"),
+        )
+        .expect("the selected candidate should convert");
+        let V2RecipeSettings::Hills(hills) = &v2_settings.recipe else {
+            unreachable!("the test helper always constructs Hills");
+        };
+        let crossing = hills
+            .derived_crossing()
+            .expect("the Hills crossing should derive");
+        let gap_level = crossing.hazard_top.saturating_add(1);
+
+        assert!(!bridge.is_empty());
+        let mut channel_decks = 0_usize;
+        for deck in bridge {
+            assert_eq!(deck.level, crossing.bridge_level);
+            assert_eq!(
+                plan.volume
+                    .surfaces
+                    .get(&deck)
+                    .map(|surface| surface.access),
+                Some(SurfaceAccess::Ordinary),
+                "bridge deck {deck:?} must remain ordinary footing"
+            );
+            let column = plan
+                .volume
+                .columns
+                .get(&deck.coord)
+                .expect("every bridge coordinate should retain a volume column");
+            let spans_hazard = column.elements.iter().any(|element| {
+                matches!(
+                    element,
+                    VolumeElement::Fill(NonSolidFill {
+                        levels,
+                        material: FillMaterialRole::Water,
+                    }) if levels.bottom == crossing.hazard_bottom
+                        && levels.top == crossing.hazard_top.saturating_add(1)
+                )
+            });
+            if !spans_hazard {
+                continue;
+            }
+            channel_decks = channel_decks.saturating_add(1);
+            let bed = TilePos::new(deck.coord, crossing.bed_level);
+            assert_eq!(
+                plan.volume.surfaces.get(&bed).map(|surface| surface.access),
+                Some(SurfaceAccess::NonStandable),
+                "submerged bed {bed:?} must not become ordinary footing"
+            );
+            assert!(
+                column.elements.iter().all(|element| {
+                    let levels = element_levels(*element);
+                    gap_level < levels.bottom || gap_level >= levels.top
+                }),
+                "bridge column {:?} filled the required air level {gap_level}",
+                deck.coord
+            );
+            assert!(column.elements.iter().any(|element| {
+                matches!(
+                    element,
+                    VolumeElement::Solid(SolidMass {
+                        levels,
+                        material: SolidMaterialRole::Metal,
+                        ..
+                    }) if levels.bottom == crossing.bridge_level
+                        && levels.top == crossing.bridge_level.saturating_add(1)
+                )
+            }));
+        }
+        assert!(
+            channel_decks >= 2,
+            "the two-wide bridge should cross at least one full hazard row"
+        );
     }
 
     #[test]
@@ -609,6 +930,15 @@ mod tests {
             hills_view_hint(20, 0.5, &settings).expect("the Hills hint should derive"),
             MapViewHint::new((0.0, 77.5, 70.0), (0.0, 7.5, 0.0))
         );
+        assert_eq!(
+            hills_view_hint(12, 100.0, &settings)
+                .expect("large vertical relief should expand the frame"),
+            MapViewHint::new((0.0, 3_100.0, 1_600.0), (0.0, 1_500.0, 0.0))
+        );
+        assert!(matches!(
+            hills_view_hint(12, f32::NAN, &settings),
+            Err(V2GenerationError::RecipeContract(_))
+        ));
     }
 
     #[test]

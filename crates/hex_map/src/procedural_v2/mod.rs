@@ -37,6 +37,8 @@ pub(crate) enum V2GenerationError {
     InvalidVolume(Vec<String>),
     /// A semantic solid/fill role resolved to the wrong substance behavior.
     MaterialContract(String),
+    /// Recipe inputs or imported compatibility metadata violated the V2 contract.
+    RecipeContract(String),
     /// Candidate construction encountered an error that cannot be treated as rejection.
     FatalCandidateConstruction { candidate: u8, source: Box<Self> },
     /// A bounded repair encountered an error that must stop the complete generation run.
@@ -63,6 +65,9 @@ impl fmt::Display for V2GenerationError {
                 )
             }
             Self::MaterialContract(reason) => formatter.write_str(reason),
+            Self::RecipeContract(reason) => {
+                write!(formatter, "procedural V2 recipe contract failed: {reason}")
+            }
             Self::FatalCandidateConstruction { candidate, source } => {
                 write!(
                     formatter,
@@ -99,6 +104,7 @@ impl std::error::Error for V2GenerationError {
             Self::RecipeUnavailable(_)
             | Self::InvalidVolume(_)
             | Self::MaterialContract(_)
+            | Self::RecipeContract(_)
             | Self::InvalidFallback(_) => None,
         }
     }
