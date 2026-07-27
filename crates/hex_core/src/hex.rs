@@ -92,7 +92,12 @@ use crate::config::HEX_CIRCUMRADIUS;
 )]
 #[reflect(Component)]
 pub struct HexCoord {
+    // The serialized names are a save-format contract: axial `q`/`r`, the
+    // standard notation, deliberately decoupled from these private field
+    // identifiers so an internal rename cannot silently change save files.
+    #[serde(rename = "q")]
     x: i32,
+    #[serde(rename = "r")]
     y: i32,
 }
 

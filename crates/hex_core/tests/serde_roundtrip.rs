@@ -34,6 +34,23 @@ fn hex_coord_round_trips_as_its_axial_pair() {
     assert_eq!(back, HexCoord::from_axial(2, -1));
 }
 
+/// The wire format is a contract, pinned by string rather than by round-trip.
+///
+/// A round-trip assertion is invariant under a symmetric field rename — both
+/// sides move together and the test keeps passing while every existing save
+/// silently breaks. Asserting the concrete text is the only guard that fails
+/// when the serialized names drift.
+#[test]
+fn wire_formats_are_pinned() {
+    let coord = HexCoord::from_axial(2, -1);
+    let json = serde_json::to_string(&coord).expect("serialize");
+    assert_eq!(json, r#"{"q":2,"r":-1}"#);
+
+    let pos = TilePos::new(coord, 3);
+    let json = serde_json::to_string(&pos).expect("serialize");
+    assert_eq!(json, r#"{"coord":{"q":2,"r":-1},"level":3}"#);
+}
+
 #[test]
 fn substance_id_round_trips() {
     assert_round_trips!(SubstanceId(7));
