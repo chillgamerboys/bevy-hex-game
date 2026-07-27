@@ -118,9 +118,11 @@ impl Plugin for AppPlugin {
         app.add_plugins(MeshPickingPlugin);
 
         // Frame-time + entity-count collectors are cheap and stay on in every
-        // build: dev tooling reads them. The once-per-second printout is only
-        // for builds with a console to print to — in the shipped windowed
-        // release it would do nothing but churn the session log file.
+        // build: dev tooling reads them. The once-per-second printout belongs
+        // to dev-shaped builds, where someone is watching a console — in the
+        // shipped profile (windowed on Windows, and with the session log file
+        // everywhere) it would mostly churn `hex_game.log` at a megabyte an
+        // hour for nobody.
         app.add_plugins((
             FrameTimeDiagnosticsPlugin::default(),
             EntityCountDiagnosticsPlugin::default(),
