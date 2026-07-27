@@ -18,10 +18,12 @@
 //! readers may care, and one lost to a frame boundary is a designer
 //! inconvenience. Commands are none of those things. They must be consumed
 //! exactly once, by exactly one applier, in exactly the order issued — and a
-//! message written while the applier is paused ages out of the double-buffered
-//! message queue silently. A resource with an explicit drain holds commands
-//! until the applier actually runs, which is the difference between "pausing
-//! delays your order" and "pausing eats it".
+//! `Message` guarantees none of that: delivery is per-reader cursors over a
+//! double-buffered queue that ages entries out after two frames whether or
+//! not anything read them. The moment an emitter and the applier disagree
+//! about a frame — a schedule change, a run condition, a headless test
+//! driving frames by hand — messages quietly vanish. A resource with an
+//! explicit drain cannot lose one.
 
 use std::collections::VecDeque;
 
@@ -140,6 +142,18 @@ impl CommandQueue {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.queue.is_empty()
+    }
+
+    /// Whether a command naming `unit` is already waiting.
+    ///
+    /// Emitters use this to fold same-frame repeats: two clicks in one frame
+    /// are one intent, and without the check the second would survive to the
+    /// applier only to die in its busy gate as a warned drop.
+    #[must_use]
+    pub fn holds_command_for(&self, unit: UnitId) -> bool {
+        self.queue
+            .iter()
+            .any(|issued| issued.command.unit() == unit)
     }
 
     /// How many commands are waiting.

@@ -26,7 +26,9 @@ use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
     PausableSystems, PendingDecision, Screen, TilePos, Turn,
 };
-use hex_units::{Body, Footing, HexPathingLine, MovingTo, Standing, StandsOn, UnitRegistry};
+use hex_units::{
+    Body, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn, UnitRegistry,
+};
 
 use crate::turns::TurnOrder;
 
@@ -67,6 +69,7 @@ type ActorQuery<'w, 's> = Query<
         Option<&'static mut Turn>,
         Has<Busy>,
         Option<&'static ControlOwner>,
+        Option<&'static Faction>,
     ),
 >;
 
@@ -129,8 +132,10 @@ fn sync_busy(
 /// Drains the queue: validate, apply, project.
 ///
 /// Commands apply in issue order, whole-queue-per-run. A dropped command is a
-/// `warn!` with its reason — every drop is either an emitter bug or a verb
-/// that is not built yet, and both deserve to be seen.
+/// `warn!` with its reason — a drop is an emitter bug, a verb that is not
+/// built yet, or input that lost a race with the frame it landed on (a key or
+/// click arriving exactly as the mode flipped or a turn passed). All of them
+/// deserve a line: the first two are defects, and the third explains itself.
 fn apply_commands(
     mut commands: Commands,
     mut queue: ResMut<CommandQueue>,
@@ -161,7 +166,7 @@ fn apply_commands(
         let owner = actors
             .get(entity)
             .ok()
-            .and_then(|(_, _, _, _, owner)| owner.copied())
+            .and_then(|(_, _, _, _, owner, _)| owner.copied())
             .unwrap_or_default();
         if owner.0 != issued.seat {
             drop_command(&issued, "issued by a seat that does not own the unit");
@@ -170,11 +175,17 @@ fn apply_commands(
 
         match issued.command {
             GameCommand::MoveAlong { ref path, .. } => {
+                // `in_combat` is the mode at application. A click emitted in
+                // the last exploring frame can therefore apply as the first
+                // combat move, billed like any other — accepted: it is
+                // validated against the same rules as a move ordered a frame
+                // later, and the one-frame window cannot be closed without
+                // stamping commands with the mode they were issued under.
                 if in_combat && turn_order.current() != Some(unit) {
                     drop_command(&issued, "not this unit's turn");
                     continue;
                 }
-                let Ok((standing, body, turn, busy, _)) = actors.get_mut(entity) else {
+                let Ok((standing, body, turn, busy, _, _)) = actors.get_mut(entity) else {
                     drop_command(&issued, "unit no longer exists");
                     continue;
                 };
@@ -235,25 +246,38 @@ fn apply_commands(
                     drop_command(&issued, "no such target");
                     continue;
                 };
-                let Some(target_standing) = actors
+                let Some((target_standing, target_faction)) = actors
                     .get(target_entity)
                     .ok()
-                    .and_then(|(standing, _, _, _, _)| standing.copied())
+                    .and_then(|(standing, _, _, _, _, faction)| {
+                        Some((standing.copied()?, faction.copied()?))
+                    })
                 else {
-                    drop_command(&issued, "target has no standing to be struck at");
+                    drop_command(&issued, "target has no standing or faction to be struck at");
                     continue;
                 };
                 let target_standing = target_standing.0;
-                let Ok((standing, body, turn, busy, _)) = actors.get_mut(entity) else {
+                let Ok((standing, body, turn, busy, _, faction)) = actors.get_mut(entity) else {
                     drop_command(&issued, "unit no longer exists");
                     continue;
                 };
-                let (Some(standing), Some(body)) = (standing, body) else {
-                    drop_command(&issued, "unit has no standing or body to strike with");
+                let (Some(standing), Some(body), Some(faction)) = (standing, body, faction) else {
+                    drop_command(
+                        &issued,
+                        "unit has no standing, body, or faction to strike with",
+                    );
                     continue;
                 };
                 if busy || committed.contains(&entity) {
                     drop_command(&issued, "unit is still finishing its last action");
+                    continue;
+                }
+                // The rules live here, not in the emitters: today's only
+                // strike emitter already filters hostiles, but a replayed or
+                // forged log must not be able to make allies swing at each
+                // other.
+                if !faction.is_hostile_to(target_faction) {
+                    drop_command(&issued, "target is not hostile to this unit");
                     continue;
                 }
                 let Some(table) = table.as_deref() else {
@@ -312,7 +336,7 @@ fn apply_commands(
                     drop_command(&issued, "not this unit's turn");
                     continue;
                 }
-                let Ok((_, _, turn, _, _)) = actors.get_mut(entity) else {
+                let Ok((_, _, turn, _, _, _)) = actors.get_mut(entity) else {
                     drop_command(&issued, "unit no longer exists");
                     continue;
                 };

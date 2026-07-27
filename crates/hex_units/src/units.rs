@@ -360,6 +360,14 @@ fn on_tile_clicked(
             continue;
         }
 
+        // Two clicks in one frame are one intent. The mid-walk filters above
+        // cannot catch the second one — the first command's animation lands
+        // only at the applier's sync point — so fold it here rather than let
+        // it reach the applier and die as a warned drop.
+        if queue.holds_command_for(*unit) {
+            continue;
+        }
+
         // Footing and the destination are resolved per body, because whether a surface
         // can be stood on depends on who is asking — a crawlspace is footing for a
         // small creature and a wall for a large one. With one player this is the same

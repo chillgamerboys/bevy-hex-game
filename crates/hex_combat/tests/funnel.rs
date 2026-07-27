@@ -19,10 +19,10 @@ use bevy::state::app::StatesPlugin;
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    Busy, CommandQueue, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, Mode,
-    PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
+    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
+    IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
 };
-use hex_units::{Body, Faction, Standing, StandsOn, UnitRegistry};
+use hex_units::{route, Body, Faction, Footing, Standing, StandsOn, UnitRegistry};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -141,12 +141,13 @@ fn mode(app: &App) -> Mode {
 }
 
 fn push(app: &mut App, command: GameCommand) {
+    push_as(app, PlayerSeat(0), command);
+}
+
+fn push_as(app: &mut App, seat: PlayerSeat, command: GameCommand) {
     app.world_mut()
         .resource_mut::<CommandQueue>()
-        .push(IssuedCommand {
-            seat: PlayerSeat(0),
-            command,
-        });
+        .push(IssuedCommand { seat, command });
 }
 
 /// Runs frames until the queue is drained and nothing is mid-presentation.
@@ -463,5 +464,176 @@ fn a_busy_unit_cannot_start_a_second_move() {
         budget_of(&app, player),
         Some(3),
         "exactly one step should have been billed"
+    );
+}
+
+/// The ownership check is real: a seat cannot command another seat's unit.
+///
+/// Every shipped unit is seat 0 today, so this is the one place the co-op
+/// seam is exercised at all — the branch must hold before it ever matters.
+#[test]
+fn a_command_from_the_wrong_seat_is_dropped() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    // The acting unit belongs to seat 1 in this session.
+    app.world_mut()
+        .entity_mut(player)
+        .insert(ControlOwner(PlayerSeat(1)));
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+
+    push_as(
+        &mut app,
+        PlayerSeat(0),
+        GameCommand::EndTurn { unit: UnitId(1) },
+    );
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(1)),
+        "a seat that does not own the unit must not end its turn"
+    );
+
+    push_as(
+        &mut app,
+        PlayerSeat(1),
+        GameCommand::EndTurn { unit: UnitId(1) },
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(2)),
+        "the owning seat's identical command should pass the turn"
+    );
+}
+
+/// The rules live in the applier: allies cannot be made to swing at each
+/// other, whatever a forged or replayed log claims.
+#[test]
+fn a_strike_on_a_friendly_unit_is_dropped() {
+    let mut app = test_app();
+    let striker = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let ally = spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+        2,
+    );
+    // A hostile close enough to start the fight, far enough to stay out of
+    // the strike under test.
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+        5,
+        3,
+    );
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(1)),
+        "precondition: the striker acts first"
+    );
+
+    push(
+        &mut app,
+        GameCommand::Strike {
+            unit: UnitId(1),
+            target: UnitId(2),
+        },
+    );
+    app.update();
+    app.update();
+
+    let turn = app
+        .world()
+        .get::<Turn>(striker)
+        .expect("the striker should still hold its turn");
+    assert!(!turn.acted, "a refused strike must not consume the action");
+    assert!(
+        app.world().get::<hex_anim::Transformation>(ally).is_none(),
+        "the ally must not have been made to recoil"
+    );
+}
+
+/// The emitter's route vocabulary and the applier's grounding agree.
+///
+/// The click observer commits nothing itself, so a disagreement between
+/// `route`'s output and `ground_path`'s acceptance would surface only as a
+/// warned drop and a dead click in game. Feeding a real routed path through
+/// the applier pins the seam headlessly.
+#[test]
+fn a_routed_path_grounds_and_applies() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+
+    // Exactly what the click observer does: resolve footing, route to the
+    // clicked surface, and emit the step positions.
+    let destination = HexCoord::new_cubic(0, 2, -2);
+    let path: Vec<TilePos> = {
+        let body = *app
+            .world()
+            .get::<Body>(player)
+            .expect("the player has a body");
+        let from = app
+            .world()
+            .get::<StandsOn>(player)
+            .expect("the player stands somewhere")
+            .0;
+        let mut tiles = app
+            .world_mut()
+            .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+        let world = app.world();
+        let footing =
+            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body);
+        let to = footing
+            .at(TilePos::new(destination, GROUND_LEVEL))
+            .expect("the destination is standable");
+        route(from, to, &footing)
+            .expect("open ground routes")
+            .iter()
+            .map(|step| step.pos)
+            .collect()
+    };
+
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path,
+        },
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        standing_of(&mut app, player),
+        Some(TilePos::new(destination, GROUND_LEVEL)),
+        "the routed path should ground and land"
+    );
+    assert_eq!(
+        budget_of(&app, player),
+        Some(2),
+        "two routed steps should bill two"
     );
 }
