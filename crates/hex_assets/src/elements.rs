@@ -63,6 +63,10 @@ struct UnvalidatedElementFile {
     fusions: HashMap<String, Vec<FusionInput>>,
 }
 
+/// A fusion cell has six neighbours, so a recipe can never draw from more —
+/// the same ring geometry that caps a spell's tier at six.
+const MAX_FUSION_INPUTS: usize = 6;
+
 impl<'de> Deserialize<'de> for ElementFile {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -123,6 +127,14 @@ impl ElementFile {
         for (output, inputs) in &self.fusions {
             if inputs.is_empty() {
                 return Err(format!("fusion '{output}' has no inputs"));
+            }
+            // A fusion is a cell drawing from adjacent gems, so its recipe is
+            // ring-bounded exactly like a spell's tier: six neighbours, no more.
+            if inputs.len() > MAX_FUSION_INPUTS {
+                return Err(format!(
+                    "fusion '{output}' has {} inputs; the maximum is {MAX_FUSION_INPUTS} (a full ring)",
+                    inputs.len()
+                ));
             }
             for input in inputs {
                 if !producible.contains(input.element.as_str()) {
@@ -482,6 +494,21 @@ mod tests {
         assert!(
             file.validate().is_err(),
             "a fusion cannot feed on a non-element"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_fusion_with_more_inputs_than_a_ring() {
+        let mut file = test_file();
+        file.fusions.insert(
+            "Overload".to_owned(),
+            std::iter::repeat_with(|| fusion("Fire", 1))
+                .take(7)
+                .collect(),
+        );
+        assert!(
+            file.validate().is_err(),
+            "seven inputs cannot fit a six-neighbour ring"
         );
     }
 

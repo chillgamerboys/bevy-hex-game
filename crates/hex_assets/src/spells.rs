@@ -252,6 +252,16 @@ impl SpellFile {
                     ));
                 }
             }
+            // SelfCast means "the caster's own hex"; a nonzero range on it would
+            // parse cleanly and then mean nothing to whichever system resolves
+            // targeting later — reject the contradiction while it is still text.
+            if matches!(spell.targeting.shape, TargetShape::SelfCast) && spell.targeting.range != 0
+            {
+                return Err(format!(
+                    "spell '{name}' is SelfCast but has range {}; self-casts have range 0",
+                    spell.targeting.range
+                ));
+            }
             validate_effects(name, spell)?;
         }
         Ok(())
@@ -545,6 +555,19 @@ mod tests {
         over.requirements = std::iter::repeat_with(|| gem("Fire", 1)).take(7).collect();
         file.spells.insert("Inferno".to_owned(), over);
         assert!(file.validate().is_err(), "tier 7 exceeds the six-gem ring");
+    }
+
+    #[test]
+    fn validate_rejects_a_ranged_self_cast() {
+        let mut file = test_file();
+        let mut confused = ember();
+        confused.targeting.shape = TargetShape::SelfCast;
+        confused.targeting.range = 2;
+        file.spells.insert("Navel Gaze".to_owned(), confused);
+        assert!(
+            file.validate().is_err(),
+            "a self-cast with range 2 is a contradiction in the file"
+        );
     }
 
     #[test]
