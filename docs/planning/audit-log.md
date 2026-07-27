@@ -7,6 +7,22 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 4 — feat: elements and spells as content (2026-07-27)
+
+- **PR**: #63 (successor of the auto-closed #62) — `feat/hex-7-elements-and-spells`
+- **Outcome**: green
+- **Lenses triggered**: 1, 3, 8, doc build, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| doc build | `crates/hex_assets/{elements,spells}.rs` | SHIP-BLOCKER | fixed in `b22db57` — public docs intra-doc-linked the private `Unvalidated*` mirrors; the workspace doc gate runs `-D warnings` |
+| 3 | `crates/hex_assets/src/elements.rs`:128 | NON-BLOCKER | fixed in follow-up — fusion recipes had no upper input bound while spells cap at six; same six-neighbour ring, now enforced with a rejection test |
+| 8 | `crates/hex_assets/src/spells.rs`:255 | NON-BLOCKER | fixed in follow-up — `SelfCast` with a nonzero range parsed cleanly and meant nothing; rejected at parse with a rejection test |
+| 1 (fresh-eyes) | `crates/hex_assets/src/content_index.rs`:9 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — the kept last-valid index can desync from independently rebuilt tables' reassigned ids; needs coupling when a real consumer exists |
+| 1 | `crates/hex_assets/src/content_index.rs`:154 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — initial-load dangling cross-references log-and-continue instead of stalling the gate; the gate must wait on the index once something consumes it |
+
+**Notes**: reviewed on the wave-integration model — diffs against `wave/1-foundations`, gate run on the merged state (411 tests green, clippy/deny/ship clean). Schema fidelity to the frozen audit §8 verified: no code matches on an element name, opposition is index arithmetic, ids from byte-order sorted names, both new tables and the index keep the rebuild-deferred-during-Gameplay guard. The deliberate divergence from the audit sketch — flat defense on the `Enchantment` casting axis rather than an effect — is an improvement and is recorded here as accepted.
+
 ## Wave 3 — feat(core): serde derives across the domain vocabulary (2026-07-26)
 
 - **PR**: #59 — `feat/hex-6-serde-vocabulary`

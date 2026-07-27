@@ -22,6 +22,18 @@ preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range.
 
+The element wheel and spells now load as **validated content**: `elements.ron` (the
+six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
+`spells.ron` (requirements as an element multiset with tier ≤ 6, casting and mana axes,
+targeting, and a closed effect enum). A `ContentIndex` resolves every element and
+substance name a spell references; a dangling reference is logged and the last valid
+content kept, and a test opens everything shipped so a broken reference cannot ship.
+`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
+`SubstanceId`. Nothing casts this yet: the pure rules engine that reads it (`hex_lattice`,
+HEX-8) and the wiring that applies effects (HEX-12) are separate, so the effects parse
+and validate but are not applied — a dev-feature stub logs the resolved spell list to
+prove the pipeline end to end.
+
 There are still **no abilities and no lattices**. Bodies are one hex wide; there is
 no footprint for anything larger, and units do not obstruct each other — so a route
 may be drawn straight through another piece.
