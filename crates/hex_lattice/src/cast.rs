@@ -83,12 +83,24 @@ pub fn castable(
 }
 
 /// Applies a cast's plan to the lattice: drains the leaf gems, and for an
-/// enchantment ties the drawn mana up and locks its funding gems.
+/// enchantment ties the drawn mana up and locks its funding gems. Returns whether
+/// the plan was applied.
 ///
-/// The plan must have come from [`castable`] on this same state; it is not
-/// re-validated. Evocations simply consume; enchantments record their locked mana
+/// A plan should come from [`castable`] on the *current* state — the command funnel
+/// validates each command immediately before applying it. As a mutation-site guard
+/// against a stale plan (a funding gem drained, locked, or disabled since the plan
+/// was produced), this rejects such a plan **atomically** — returning `false`
+/// without mutating — rather than half-applying it or overwriting an existing lock
+/// (which would orphan the earlier enchantment, stranding its mana and leaving it
+/// unbreakable). Evocations simply consume; enchantments record their locked mana
 /// and mark each funding gem so that disabling one later breaks the enchantment.
-pub fn apply_cast(state: &mut LatticeState, plan: &CastPlan, tables: &impl Tables) {
+pub fn apply_cast(state: &mut LatticeState, plan: &CastPlan, tables: &impl Tables) -> bool {
+    let applicable = plan.drains.iter().all(|(&coord, &amount)| {
+        state.mana(coord) >= amount && !state.is_locked(coord) && !state.is_disabled(coord)
+    });
+    if !applicable {
+        return false;
+    }
     for (&coord, &amount) in &plan.drains {
         state.drain(coord, amount);
     }
@@ -112,6 +124,7 @@ pub fn apply_cast(state: &mut LatticeState, plan: &CastPlan, tables: &impl Table
             state.lock(coord, id);
         }
     }
+    true
 }
 
 /// Tries to satisfy `reqs` from the neighbours of `around`, extending the `used`

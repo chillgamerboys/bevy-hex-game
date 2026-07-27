@@ -403,6 +403,43 @@ fn a_locked_gem_cannot_fund_a_second_enchantment() {
 }
 
 #[test]
+fn apply_cast_rejects_a_stale_plan_rather_than_orphaning() {
+    // Two enchantment plans computed against the SAME fresh state, then both
+    // applied. Once the first is applied its gem is locked, so the second plan is
+    // stale; `apply_cast` must reject it atomically rather than overwrite the
+    // first's lock and orphan it. This is the mutation-site guard for the
+    // shared-gem invariant (the plan-time filter alone misses the concurrent order).
+    let gem_coord = LatticeCoord::new(0, 0);
+    let [s1, s2, ..] = gem_coord.neighbors();
+    let spec = LatticeSpec::default()
+        .with(gem_coord, gem(FIRE))
+        .with(s1, CellKind::Spell { spell: SHIELD }) // FIRE 2, defence 1
+        .with(s2, CellKind::Spell { spell: WARD }); // FIRE 1, defence 0
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    // Both plans see the fresh, unlocked state, so both look castable.
+    let plan1 = castable(&spec, &state, s1, &Content).expect("shield");
+    let plan2 = castable(&spec, &state, s2, &Content).expect("ward, on the fresh state");
+
+    assert!(
+        apply_cast(&mut state, &plan1, &Content),
+        "the first cast applies"
+    );
+    assert!(
+        !apply_cast(&mut state, &plan2, &Content),
+        "the stale second plan is rejected, not applied over the first's lock"
+    );
+
+    // The first enchantment is intact and still the only one — not orphaned.
+    assert_eq!(state.enchantment_count(), 1);
+    assert_eq!(resolve_incoming(&state, 1), 0, "the shield still defends");
+    let broken = apply_disables(&mut state, &[gem_coord]);
+    assert_eq!(broken.len(), 1, "disabling the gem breaks the shield");
+    assert_eq!(broken.into_iter().next().expect("one break").burned_mana, 2);
+    assert_eq!(state.enchantment_count(), 0);
+}
+
+#[test]
 fn an_enchantment_funded_by_two_gems_clears_both_locks_when_it_breaks() {
     let spell = LatticeCoord::new(0, 0);
     let [g1, g2, ..] = spell.neighbors();
