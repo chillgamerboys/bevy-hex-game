@@ -28,8 +28,32 @@ use crate::terrain::TerrainPalette;
 const PRIMARY_ISLAND_COUNT: usize = 3;
 const UPPER_REGION_OFFSET: u32 = 1;
 const LEGACY_MIN_CLEARANCE: Level = 8;
-const ELEVATED_UNDERBODY_BUDGET: Level = 4;
-const ELEVATED_RELIEF_CAP: u32 = 3;
+const MAX_ELEVATED_UNDERBODY_BUDGET: Level = 12;
+const MAX_ELEVATED_RELIEF_CAP: u32 = 7;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SkyVerticalBudget {
+    underbody: Level,
+    relief: u32,
+}
+
+fn vertical_budget(min_clearance: Level) -> SkyVerticalBudget {
+    if min_clearance <= LEGACY_MIN_CLEARANCE {
+        return SkyVerticalBudget {
+            underbody: 1,
+            relief: 2,
+        };
+    }
+    let extra = min_clearance.saturating_sub(LEGACY_MIN_CLEARANCE);
+    SkyVerticalBudget {
+        underbody: 1_i32
+            .saturating_add(extra / 2)
+            .min(MAX_ELEVATED_UNDERBODY_BUDGET),
+        relief: 2_u32
+            .saturating_add(u32::try_from(extra / 4).unwrap_or(u32::MAX))
+            .min(MAX_ELEVATED_RELIEF_CAP),
+    }
+}
 
 /// Measurements used to validate and rank one upper-layer candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,17 +241,13 @@ fn layered_plan(
         .and_then(|level| level.checked_add(settings.min_clearance))
         .ok_or_else(|| CandidateAttemptError::rejected("upper clearance level overflowed"))?;
     let elevated = settings.min_clearance > LEGACY_MIN_CLEARANCE;
-    let underbody_budget = if elevated {
-        ELEVATED_UNDERBODY_BUDGET
-    } else {
-        1
-    };
+    let vertical_budget = vertical_budget(settings.min_clearance);
     let bridge_level = lowest_upper
-        .checked_add(underbody_budget)
+        .checked_add(vertical_budget.underbody)
         .ok_or_else(|| CandidateAttemptError::rejected("upper island level overflowed"))?;
     let upper_region = next_special_region(&volume);
     let reliefs = if elevated {
-        landing_distance_reliefs(&layout, ELEVATED_RELIEF_CAP)?
+        landing_distance_reliefs(&layout, vertical_budget.relief)?
     } else {
         island_depths(&layout.island_cells)
             .into_iter()
@@ -250,6 +270,7 @@ fn layered_plan(
                     .streams
                     .stage("sky.shape.underside")
                     .sample_coord(*coord, 0),
+                vertical_budget.underbody,
             )
         } else {
             1
@@ -596,6 +617,7 @@ fn build_layout_with_radii(
         );
     let mut island_bodies = Vec::new();
     let mut island_cells = BTreeSet::new();
+    let elevated = edge_stream.is_some();
     for (index, (centre, requested_radius, label)) in bodies.enumerate() {
         let mut radius = requested_radius;
         let footprint = loop {
@@ -621,10 +643,10 @@ fn build_layout_with_radii(
                         .into_iter()
                         .any(|neighbor| island_cells.contains(&neighbor))
             });
-            if !overlaps_protected && !touches_another {
+            if !overlaps_protected && (!elevated || !touches_another) {
                 break footprint;
             }
-            if edge_stream.is_some() && radius > 1 {
+            if elevated && radius > 1 {
                 radius = radius.saturating_sub(1);
                 continue;
             }
@@ -995,8 +1017,25 @@ fn landing_distance_reliefs(
     relief_cap: u32,
 ) -> Result<BTreeMap<HexCoord, u32>, CandidateAttemptError> {
     let mut reliefs = BTreeMap::new();
+    let bridge_only: BTreeSet<_> = layout
+        .bridge_cells
+        .difference(&layout.island_cells)
+        .copied()
+        .collect();
     for body in &layout.island_bodies {
-        let landings: Vec<_> = body.intersection(&layout.bridge_cells).copied().collect();
+        let mut landings: Vec<_> = body
+            .intersection(&layout.bridge_cells)
+            .copied()
+            .filter(|coord| {
+                coord
+                    .neighbors()
+                    .into_iter()
+                    .any(|neighbor| bridge_only.contains(&neighbor))
+            })
+            .collect();
+        if landings.is_empty() {
+            landings.extend(body.intersection(&layout.bridge_cells).copied());
+        }
         if landings.is_empty() {
             return Err(CandidateAttemptError::rejected(
                 "an elevated island has no bridge landing",
@@ -1035,12 +1074,14 @@ fn landing_distance_reliefs(
     Ok(reliefs)
 }
 
-fn tapered_underbody_depth(relief: u32, sample: u64) -> Level {
+fn tapered_underbody_depth(relief: u32, sample: u64, budget: Level) -> Level {
     let relief = Level::try_from(relief).unwrap_or(Level::MAX);
-    2_i32
+    budget
+        .saturating_div(2)
+        .max(1)
         .saturating_add(relief)
         .saturating_add(i32::from(!sample.is_multiple_of(2)))
-        .min(ELEVATED_UNDERBODY_BUDGET)
+        .min(budget)
 }
 
 fn island_depths(islands: &BTreeSet<HexCoord>) -> BTreeMap<HexCoord, u32> {
@@ -1188,11 +1229,8 @@ fn validate_layered_plan(
     {
         issues.push("upper mass bottoms do not match the upper footprint".to_owned());
     }
-    let relief_cap = if settings.min_clearance > LEGACY_MIN_CLEARANCE {
-        ELEVATED_RELIEF_CAP
-    } else {
-        2
-    };
+    let vertical_budget = vertical_budget(settings.min_clearance);
+    let relief_cap = vertical_budget.relief;
     if metadata.upper_surfaces.values().any(|surface| {
         !(metadata.bridge_level..=metadata.bridge_level.saturating_add_unsigned(relief_cap))
             .contains(surface)
@@ -1252,11 +1290,7 @@ fn validate_layered_plan(
                 "upper bridge column {coord:?} is not a flat one-voxel deck"
             ));
         } else if !bridge_only {
-            let maximum_depth = if settings.min_clearance > LEGACY_MIN_CLEARANCE {
-                ELEVATED_UNDERBODY_BUDGET
-            } else {
-                1
-            };
+            let maximum_depth = vertical_budget.underbody;
             if !(1..=maximum_depth).contains(&underside_depth) {
                 issues.push(format!(
                     "upper island column {coord:?} has unsupported underbody depth \
@@ -1475,6 +1509,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_layout_defers_touching_island_rejection_to_validation() {
+        let centres = [
+            HexCoord::from_axial(-2, 0),
+            HexCoord::from_axial(2, 0),
+            HexCoord::from_axial(0, 6),
+        ];
+        let layout = build_layout(12, centres, &[], 2, 1, &BTreeSet::new(), &[])
+            .expect("legacy construction should union touching bodies before validation");
+        let expected: BTreeSet<_> = centres
+            .into_iter()
+            .flat_map(|centre| centre.within_radius(2))
+            .collect();
+
+        assert_eq!(layout.island_cells, expected);
+        assert_eq!(layout.island_bodies.len(), PRIMARY_ISLAND_COUNT);
+        assert!(
+            connected_component_count(&layout.island_cells) < PRIMARY_ISLAND_COUNT,
+            "the fixture must reach the legacy validation-time rejection"
+        );
+    }
+
+    #[test]
+    fn elevated_vertical_budget_is_monotonic_and_bounded() {
+        let mut previous = vertical_budget(LEGACY_MIN_CLEARANCE);
+        for min_clearance in LEGACY_MIN_CLEARANCE.saturating_add(1)..=128 {
+            let budget = vertical_budget(min_clearance);
+            assert!(budget.underbody >= previous.underbody);
+            assert!(budget.relief >= previous.relief);
+            assert!(
+                budget.underbody.saturating_add_unsigned(budget.relief) <= 19,
+                "one level remains for the ground-to-gap boundary inside the 20-level reservation"
+            );
+            previous = budget;
+        }
+    }
+
+    #[test]
     fn shipped_layered_sky_map_preserves_finalized_hills_ground() {
         let palette = palette();
         let sky = build(
@@ -1588,8 +1659,15 @@ mod tests {
 
     #[test]
     fn elevated_review_options_are_deterministic_varied_and_clear_of_ground() {
-        let options = [(14, 18), (18, 21), (22, 24)];
-        for (min_clearance, coverage) in options {
+        let options = [(14, 18, 4, 3), (18, 21, 6, 4), (22, 24, 8, 5)];
+        for (min_clearance, coverage, expected_underbody, expected_relief) in options {
+            assert_eq!(
+                vertical_budget(min_clearance),
+                SkyVerticalBudget {
+                    underbody: expected_underbody,
+                    relief: expected_relief,
+                }
+            );
             let settings = settings_with_geometry(
                 V2EnvironmentSettings::TemperateGrassland,
                 min_clearance,
@@ -1645,10 +1723,26 @@ mod tests {
                 body_peaks.len() >= 2,
                 "clearance={min_clearance} produced uniform island elevations"
             );
-            assert!(first.metadata.upper_bottoms.iter().any(|(coord, bottom)| {
-                first.metadata.island_cells.contains(coord)
-                    && first.metadata.bridge_level.saturating_sub(*bottom) > 1
-            }));
+            let actual_relief = first
+                .metadata
+                .upper_surfaces
+                .values()
+                .map(|surface| surface.saturating_sub(first.metadata.bridge_level))
+                .max()
+                .unwrap_or_default();
+            assert_eq!(
+                actual_relief,
+                Level::try_from(expected_relief).unwrap_or(Level::MAX)
+            );
+            let actual_underbody = first
+                .metadata
+                .upper_bottoms
+                .iter()
+                .filter(|(coord, _bottom)| first.metadata.island_cells.contains(coord))
+                .map(|(_coord, bottom)| first.metadata.bridge_level.saturating_sub(*bottom))
+                .max()
+                .unwrap_or_default();
+            assert_eq!(actual_underbody, expected_underbody);
 
             for coord in &first.metadata.upper_cells {
                 let ground_top = ground
@@ -1742,28 +1836,112 @@ mod tests {
 
     #[test]
     fn fixed_seed_corpus_is_valid_without_fallback() {
-        for environment in [
-            V2EnvironmentSettings::TemperateGrassland,
-            V2EnvironmentSettings::Frozen,
-        ] {
-            for seed in [0, 1, 505, 808, 20_260_726, SKY_SEED, u64::MAX] {
-                let generated = build(12, 0.4, &settings(environment), seed, &palette(), &is_solid)
-                    .unwrap_or_else(|error| {
-                        panic!("{environment:?} seed {seed} should generate: {error}")
-                    });
+        let corpus = [
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                0,
+                4,
+                2_434_454_051_459_768_621,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                1,
+                0,
+                4_348_857_088_705_690_465,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                505,
+                6,
+                8_377_939_174_444_709_004,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                808,
+                3,
+                14_507_719_794_286_862_272,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                20_260_726,
+                3,
+                10_768_175_029_688_531_214,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                SKY_SEED,
+                3,
+                4_313_975_567_675_515_163,
+            ),
+            (
+                V2EnvironmentSettings::TemperateGrassland,
+                u64::MAX,
+                3,
+                17_675_506_124_942_439_081,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                0,
+                4,
+                4_504_858_493_484_372_362,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                1,
+                1,
+                16_880_656_360_868_672_559,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                505,
+                2,
+                9_009_212_082_947_791_225,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                808,
+                3,
+                14_474_164_956_362_771_915,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                20_260_726,
+                3,
+                1_242_084_161_769_491_627,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                SKY_SEED,
+                3,
+                1_391_565_746_594_453_391,
+            ),
+            (
+                V2EnvironmentSettings::Frozen,
+                u64::MAX,
+                3,
+                4_287_661_209_375_967_734,
+            ),
+        ];
 
-                assert!(
-                    !generated.used_fallback,
-                    "{environment:?} seed {seed} unexpectedly used the canonical fallback"
-                );
-                assert!(generated.valid_candidates > 0);
-                assert!(generated.repair_actions.len() <= 4);
-                assert_eq!(
-                    connected_component_count(&generated.metadata.island_cells),
-                    PRIMARY_ISLAND_COUNT + generated.metadata.satellite_centres.len()
-                );
-                assert!((15..=25).contains(&generated.metrics.coverage_percent));
-            }
+        for (environment, seed, expected_candidate, expected_fingerprint) in corpus {
+            let generated = build(12, 0.4, &settings(environment), seed, &palette(), &is_solid)
+                .unwrap_or_else(|error| {
+                    panic!("{environment:?} seed {seed} should generate: {error}")
+                });
+
+            assert_eq!(generated.selected_candidate, Some(expected_candidate));
+            assert_eq!(generated.map_fingerprint, expected_fingerprint);
+            assert!(
+                !generated.used_fallback,
+                "{environment:?} seed {seed} unexpectedly used the canonical fallback"
+            );
+            assert!(generated.valid_candidates > 0);
+            assert!(generated.repair_actions.len() <= 4);
+            assert_eq!(
+                connected_component_count(&generated.metadata.island_cells),
+                PRIMARY_ISLAND_COUNT + generated.metadata.satellite_centres.len()
+            );
+            assert!((15..=25).contains(&generated.metrics.coverage_percent));
         }
     }
 
