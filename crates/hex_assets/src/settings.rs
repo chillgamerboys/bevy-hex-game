@@ -40,15 +40,19 @@ pub struct CameraSettings {
     pub character_radius: f32,
     /// Initial close-view pitch as a fraction from the horizon toward straight down.
     pub character_pitch: f32,
+    /// Closest the close view may tilt toward the horizon, 0.0–1.0.
+    pub character_min_pitch: f32,
+    /// Furthest the close view may tilt toward straight down, 0.0–1.0.
+    pub character_max_pitch: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
     /// Added to the zoom radius before scaling pan speed, so panning still works
     /// when fully zoomed in.
     pub pan_speed_offset: f32,
-    /// Lowest the camera may tilt toward the horizon, 0.0–1.0.
+    /// Lowest the map camera may tilt toward the horizon, 0.0–1.0.
     pub min_pitch: f32,
-    /// Highest the camera may tilt toward straight down, 0.0–1.0.
+    /// Highest the map camera may tilt toward straight down, 0.0–1.0.
     pub max_pitch: f32,
     /// Closest the camera may zoom in, in world units.
     pub min_zoom: f32,
@@ -82,6 +86,17 @@ impl CameraSettings {
             return Err("character_radius must be positive and finite".to_owned());
         }
         validate_unit_interval("character_pitch", self.character_pitch)?;
+        validate_unit_interval("character_min_pitch", self.character_min_pitch)?;
+        validate_unit_interval("character_max_pitch", self.character_max_pitch)?;
+        if self.character_min_pitch > self.character_max_pitch {
+            return Err("character_min_pitch must not exceed character_max_pitch".to_owned());
+        }
+        if !(self.character_min_pitch..=self.character_max_pitch).contains(&self.character_pitch) {
+            return Err(
+                "character_pitch must be within character_min_pitch..=character_max_pitch"
+                    .to_owned(),
+            );
+        }
 
         validate_nonnegative("pan_speed", self.pan_speed)?;
         validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
@@ -90,10 +105,6 @@ impl CameraSettings {
         if self.min_pitch > self.max_pitch {
             return Err("min_pitch must not exceed max_pitch".to_owned());
         }
-        if !(self.min_pitch..=self.max_pitch).contains(&self.character_pitch) {
-            return Err("character_pitch must be within min_pitch..=max_pitch".to_owned());
-        }
-
         if !self.min_zoom.is_finite() || self.min_zoom <= 0.0 {
             return Err("min_zoom must be positive and finite".to_owned());
         }
@@ -120,6 +131,8 @@ struct UnvalidatedCameraSettings {
     character_focus_height: f32,
     character_radius: f32,
     character_pitch: f32,
+    character_min_pitch: f32,
+    character_max_pitch: f32,
     pan_speed: f32,
     pan_speed_offset: f32,
     min_pitch: f32,
@@ -141,6 +154,8 @@ impl<'de> Deserialize<'de> for CameraSettings {
             character_focus_height: raw.character_focus_height,
             character_radius: raw.character_radius,
             character_pitch: raw.character_pitch,
+            character_min_pitch: raw.character_min_pitch,
+            character_max_pitch: raw.character_max_pitch,
             pan_speed: raw.pan_speed,
             pan_speed_offset: raw.pan_speed_offset,
             min_pitch: raw.min_pitch,
@@ -1174,6 +1189,8 @@ mod tests {
         assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
+        assert!((camera.character_min_pitch - 0.05).abs() < f32::EPSILON);
+        assert!((camera.character_max_pitch - 0.95).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1213,6 +1230,21 @@ mod tests {
                 "character_pitch: 0.3",
                 "character_pitch: 1.0",
                 "character_pitch",
+            ),
+            (
+                "character_min_pitch: 0.05",
+                "character_min_pitch: -0.1",
+                "character_min_pitch",
+            ),
+            (
+                "character_max_pitch: 0.95",
+                "character_max_pitch: 1.1",
+                "character_max_pitch",
+            ),
+            (
+                "character_min_pitch: 0.05",
+                "character_min_pitch: 0.96",
+                "character_min_pitch",
             ),
             ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
             (

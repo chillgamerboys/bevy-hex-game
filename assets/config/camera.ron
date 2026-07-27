@@ -9,6 +9,9 @@
     character_radius: 7.0,
     // Fraction from level with the horizon (0.0) to straight down (1.0).
     character_pitch: 0.3,
+    // The close view can approach the horizon to inspect terrain above the unit.
+    character_min_pitch: 0.05,
+    character_max_pitch: 0.95,
 
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.
@@ -17,7 +20,7 @@
     // when fully zoomed in.
     pan_speed_offset: 10.0,
 
-    // Tilt limits, 0.0 (level with the horizon) to 1.0 (straight down).
+    // Map-view tilt limits, 0.0 (level with the horizon) to 1.0 (straight down).
     min_pitch: 0.25,
     max_pitch: 0.95,
 

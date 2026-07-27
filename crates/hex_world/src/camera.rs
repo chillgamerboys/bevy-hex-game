@@ -258,6 +258,13 @@ fn map_camera_active(mode: Res<CameraMode>) -> bool {
     *mode == CameraMode::Map
 }
 
+fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
+    match mode {
+        CameraMode::Map => (settings.min_pitch, settings.max_pitch),
+        CameraMode::Character => (settings.character_min_pitch, settings.character_max_pitch),
+    }
+}
+
 /// Snaps between the current free-map pose and a close orbit around the selected unit.
 fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
@@ -287,8 +294,8 @@ fn toggle_camera_mode(
             transform.rotation = apply_pitch_delta(
                 transform.rotation,
                 pitch_delta,
-                settings.min_pitch,
-                settings.max_pitch,
+                settings.character_min_pitch,
+                settings.character_max_pitch,
             );
 
             camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
@@ -550,6 +557,7 @@ fn orbit_camera(
     mut ev_scroll: MessageReader<MouseWheel>,
     input_mouse: Res<ButtonInput<MouseButton>>,
     settings: Res<CameraSettings>,
+    mode: Res<CameraMode>,
     mut last_cursor: Local<Option<Vec2>>,
     mut query: Query<(&mut PanOrbitCamera, &mut Transform)>,
 ) {
@@ -590,12 +598,9 @@ fn orbit_camera(
             let delta_y = rotation_move.y / window.y * std::f32::consts::PI;
             let yaw = Quat::from_rotation_y(-delta_x);
             transform.rotation = yaw * transform.rotation; // rotate around global y axis
-            transform.rotation = apply_pitch_delta(
-                transform.rotation,
-                delta_y,
-                settings.min_pitch,
-                settings.max_pitch,
-            );
+            let (min_pitch, max_pitch) = pitch_limits(*mode, &settings);
+            transform.rotation =
+                apply_pitch_delta(transform.rotation, delta_y, min_pitch, max_pitch);
         } else if scroll.abs() > 0.0 {
             any = true;
             pan_orbit.radius -= scroll * pan_orbit.radius * settings.zoom_sensitivity;
@@ -640,6 +645,8 @@ mod tests {
             character_focus_height: 0.4,
             character_radius: 7.0,
             character_pitch: 0.3,
+            character_min_pitch: 0.05,
+            character_max_pitch: 0.95,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -720,6 +727,32 @@ mod tests {
         assert_pitch(
             apply_pitch_delta(rotation_at_pitch(middle), 0.1, min_pitch, max_pitch),
             middle + 0.1,
+        );
+    }
+
+    #[test]
+    fn character_pitch_can_orbit_near_the_horizon() {
+        let min_pitch = 0.05;
+        let max_pitch = 0.95;
+        let rotation = apply_pitch_delta(
+            rotation_at_pitch(0.3 * std::f32::consts::FRAC_PI_2),
+            -10.0,
+            min_pitch,
+            max_pitch,
+        );
+
+        assert_pitch(rotation, min_pitch * std::f32::consts::FRAC_PI_2);
+        assert!(
+            min_pitch < camera_settings().min_pitch,
+            "the close camera should tilt closer to the horizon than the map camera"
+        );
+        assert_eq!(
+            pitch_limits(CameraMode::Map, &camera_settings()),
+            (0.25, 0.95)
+        );
+        assert_eq!(
+            pitch_limits(CameraMode::Character, &camera_settings()),
+            (min_pitch, max_pitch)
         );
     }
 

@@ -1375,6 +1375,8 @@ mod tests {
             character_focus_height: 0.4,
             character_radius: 7.0,
             character_pitch: 0.3,
+            character_min_pitch: 0.05,
+            character_max_pitch: 0.95,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
