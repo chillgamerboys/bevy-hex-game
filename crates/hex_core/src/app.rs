@@ -24,6 +24,12 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Interactive sandbox for the lattice ruleset, reached from the title menu.
+    ///
+    /// Exists so the magic rules — casting, fusions, mana, disables,
+    /// enchantments — have a manual-verification surface before they are wired
+    /// into real combat (HEX-12). Slated for gating or removal before release.
+    LatticeDemo,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.

@@ -459,7 +459,7 @@ fn capture_timeout_diagnostic(
         CapturePhase::Readback
     } else {
         match screen {
-            Screen::Splash | Screen::Title => CapturePhase::AwaitingScenario,
+            Screen::Splash | Screen::Title | Screen::LatticeDemo => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,

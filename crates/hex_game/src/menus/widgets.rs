@@ -121,9 +121,21 @@ pub fn blurb(text: impl Into<String>) -> impl Bundle {
     )
 }
 
+/// Opts a node out of [`paint_interactions`]'s shared palette.
+///
+/// The lattice demo paints its cells by *game state* — disabled, locked,
+/// element — and the shared hover repaint would overwrite that on every
+/// pointer move. A node carrying this marker owns its `BackgroundColor`
+/// entirely and gives up hover feedback in exchange.
+#[derive(Component)]
+pub struct OwnColors;
+
 /// Keeps every button's background in step with what the pointer is doing.
 fn paint_interactions(
-    mut buttons: Query<(&Interaction, &mut BackgroundColor), Changed<Interaction>>,
+    mut buttons: Query<
+        (&Interaction, &mut BackgroundColor),
+        (Changed<Interaction>, Without<OwnColors>),
+    >,
 ) {
     for (interaction, mut background) in &mut buttons {
         background.0 = match interaction {
