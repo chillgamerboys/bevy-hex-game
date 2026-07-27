@@ -1415,7 +1415,7 @@ mod tests {
     }
 
     #[test]
-    fn every_procedural_probe_loads_terrain_anchors_and_actors() {
+    fn every_additional_procedural_scenario_loads_terrain_anchors_and_actors() {
         for scenario_name in [
             "Frozen Hills",
             "Volcanic Hills",
@@ -1427,10 +1427,10 @@ mod tests {
                 .scenarios
                 .into_iter()
                 .find(|scenario| scenario.name == scenario_name)
-                .expect("the procedural probe should be shipped");
+                .expect("the procedural scenario should be shipped");
             let configured_seed = scenario
                 .generation_seed
-                .expect("the probe should have a configured seed");
+                .expect("the procedural scenario should have a configured seed");
             let mut app = procedural_gameplay_app(scenario_name);
             enter_screen(&mut app, Screen::Gameplay);
 

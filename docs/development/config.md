@@ -90,12 +90,16 @@ For example, this exposes the complete generated cave network for a top-down ove
 
 ```sh
 HEX_REVIEW_SCENARIO="Caves" \
-HEX_REVIEW_CAPTURE=".context/caves/deep-chamber.png" \
-HEX_REVIEW_FOCUS_ANCHOR="deep_chamber" \
+HEX_REVIEW_CAPTURE=".context/caves/full-overview.png" \
+HEX_REVIEW_FOCUS_ANCHOR="conflict_center" \
 HEX_REVIEW_VIEW="top-down" \
 HEX_REVIEW_CUTAWAY="full" \
 cargo run -p hex_game --release --features map-review
 ```
+
+Use the unoccupied `conflict_center` anchor for a neutral cave overview.
+`deep_chamber` is also the configured enemy position, so relocating the player there
+can start combat before capture.
 
 ## The format
 
@@ -205,20 +209,20 @@ recipe: LayeredSkyIslands((
         max_relief: 8,
         hills_per_bank: 3,
     ),
-    min_clearance: 8,
-    upper_coverage_percent: 20,
+    min_clearance: 22,
+    upper_coverage_percent: 24,
 )),
 ```
 
 The upper layer covers 15–25% of map columns, remains an exact special-movement
 region, and cannot replace the finalized ground, its anchors, or its protected
-crossing approaches. The shipped `min_clearance: 8` construction remains unchanged.
-Larger values raise the full island mass, vary its walkable terraces, and taper its
-stone underside without consuming the configured empty gap. It supports
-`TemperateGrassland` and `Frozen`.
+crossing approaches. The selected scenario uses 22 clear levels and 24% coverage for
+a distinct high city layer, varied walkable terraces, and tapered stone undersides.
+The original eight-level-clearance construction remains deterministic and loadable
+for seed compatibility. The recipe supports `TemperateGrassland` and `Frozen`.
 
-`Mountains` builds a sharp frozen ridge with explicit ordinary-walker routes instead
-of projecting the whole map into gentle slopes:
+`Mountains` builds a broad, sharp frozen massif with explicit ordinary-walker routes
+instead of projecting the whole map into gentle slopes:
 
 ```ron
 terrain: Procedural((
@@ -226,8 +230,8 @@ terrain: Procedural((
     environment: Frozen,
     recipe: Mountains((
         base_level: 15,
-        relief: 15,
-        peak_count: 4,
+        relief: 24,
+        peak_count: 7,
     )),
 )),
 ```
@@ -235,12 +239,12 @@ terrain: Procedural((
 It publishes a two-wide elevated saddle and a separated low-valley bypass, with no
 river or crossing structures. Inaccessible summit components are exact
 special-movement regions; naturally walkable peaks remain ordinary terrain. Valid
-settings use relief `14..=24` and three through seven peaks. The shipped low-relief
-path remains unchanged; higher settings expand the ridge into a branched massif
-covering slightly more than half the map and distribute the peaks across multiple
+settings use relief `14..=24` and three through seven peaks. The low-relief
+compatibility path remains deterministic. The selected scenario uses the upper bounds
+to form a branched massif across most of the map and distribute peaks across multiple
 heights.
 
-`Caves` carves one ordinary-walkable underground network beneath a modest rocky
+`Caves` carves one ordinary-walkable underground network beneath a varied rocky
 surface:
 
 ```ron
@@ -248,18 +252,19 @@ terrain: Procedural((
     generator_version: 2,
     environment: Rocky,
     recipe: Caves((
-        surface_level: 15,
-        cave_floor_level: 7,
-        chamber_count: 7,
+        surface_level: 17,
+        cave_floor_level: 6,
+        chamber_count: 12,
     )),
 )),
 ```
 
 It publishes a two-wide descending entrance, a rooted network of six to twelve
 chambers, at least three clear levels in critical corridors, at least four in
-chambers, and at least three solid roof levels. Six-through-eight-room settings keep
-the shipped geometry unchanged. Larger networks add walkable floor variation,
-selected loop corridors, varied chamber heights, and a more developed rocky surface.
+chambers, and at least three solid roof levels. The selected scenario uses twelve
+chambers, two floor bands, loop corridors, varied chamber heights, and the most
+developed rocky surface. Six-through-eight-room settings retain their deterministic
+compatibility geometry.
 Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
 underground floor cannot be confused with the surface above it. Recipe and
 environment combinations are validated together: Mountains requires `Frozen`, Caves

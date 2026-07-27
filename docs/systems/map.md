@@ -153,14 +153,14 @@ two-wide metal lanes without changing a ground column prefix, ground surface, an
 interior, river crossing, or protected approach. The selected upper footprint is
 15–25% of map columns, has at least eight empty levels below it, and is published as
 one exact flight-gated `SpecialMovementRegion`. Its combined `MapViewHint` frames both
-ground play and the upper network. The shipped eight-level-clearance path remains
-frozen. Higher-clearance settings add independently varied island footprints,
-walkable terraces, and tapered stone underbodies while preserving the configured
-empty gap beneath the deepest point.
+ground play and the upper network. The selected scenario uses 22 clear levels and
+24% coverage, with independently varied island footprints, walkable terraces, and
+tapered stone underbodies. The original eight-level-clearance path remains frozen for
+seed compatibility.
 
-Mountains supports the frozen shipped ridge as well as expanded massifs. Expanded
-candidates raise slightly more than half of the map above the base, use a meandering
-edge-to-edge spine with multiple long branches, and distribute five through seven
+Mountains supports the original frozen ridge for compatibility and broader expanded
+massifs. The selected scenario raises 60% of the map above the base, uses a
+meandering edge-to-edge spine with four long branches, and distributes seven
 non-collinear peaks across varied summit levels. The ordinary network keeps a
 two-wide high pass and a separated two-wide low bypass; the rest of the range
 deliberately retains cliff edges. It has no hazard fill or crossing material. Only
@@ -170,13 +170,14 @@ range so both routes remain legible.
 
 Caves keeps a playable rocky surface above one rooted underground network. A two-wide
 open entrance descends one level per row to six through twelve chambers joined by
-two-wide critical corridors. The shipped six-through-eight-room path remains frozen.
-Larger networks add walkable sloped corridors, selected loop connections, varied
-floor and ceiling levels, larger chambers, and additional surface relief. Every
-corridor retains at least three clear levels, every chamber at least four, and
-cutaway roofs remain at least three solid levels thick. The party anchor names the
-surface entrance while the hostile anchor names the deepest main chamber; both are
-validated on the same exact walker graph as live movement.
+two-wide critical corridors. The selected scenario has twelve chambers, selected
+loop connections, two walkable floor bands, varied ceiling levels, larger chambers,
+and five levels of surface relief. The original six-through-eight-room path remains
+frozen for compatibility. Every corridor retains at least three clear levels, every
+chamber at least four, and cutaway roofs remain at least three solid levels thick.
+The party anchor names the surface entrance while the hostile anchor names the
+deepest main chamber; both are validated on the same exact walker graph as live
+movement.
 
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or

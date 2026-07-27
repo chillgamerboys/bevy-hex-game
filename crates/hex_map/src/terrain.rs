@@ -18,7 +18,7 @@ const SHOWCASE_TOPSOIL_LEVELS: Level = 3;
 /// Substance ids available to terrain construction.
 ///
 /// Fields unused by the selected preset are left as air. This keeps authored and
-/// Perlin worlds independent of materials that exist only for procedural probes.
+/// Perlin worlds independent of materials used only by procedural environments.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TerrainPalette {
     pub(super) bedrock: SubstanceId,
@@ -69,7 +69,7 @@ impl TerrainPalette {
             TerrainSettings::Procedural(_) => {
                 // Procedural candidates and their canonical fallback share one
                 // validator. Require the complete procedural vocabulary so a missing
-                // probe material cannot be mistaken for air during validation.
+                // environment material cannot be mistaken for air during validation.
                 palette.gravel = id("gravel")?;
                 palette.water = id("water")?;
                 palette.metal = id("metal")?;
@@ -372,19 +372,19 @@ mod tests {
     }
 
     #[test]
-    fn authored_presets_do_not_require_procedural_probe_materials() {
+    fn authored_presets_do_not_require_procedural_environment_materials() {
         let mut substances: SubstanceFile =
             ron::from_str(include_str!("../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
-        for probe_material in ["snow", "ice", "basalt", "lava"] {
-            substances.substances.remove(probe_material);
+        for environment_material in ["snow", "ice", "basalt", "lava"] {
+            substances.substances.remove(environment_material);
         }
         let table = SubstanceTable::from_file(&substances);
         let showcase = settings();
 
         assert!(
             TerrainPalette::for_terrain(&table, &showcase.terrain).is_ok(),
-            "Showcase should not depend on architecture-probe materials"
+            "Showcase should not depend on procedural-environment materials"
         );
 
         let perlin: MapSettings = ron::from_str(include_str!(
@@ -393,7 +393,7 @@ mod tests {
         .expect("the shipped Perlin settings should parse");
         assert!(
             TerrainPalette::for_terrain(&table, &perlin.terrain).is_ok(),
-            "Perlin should not depend on architecture-probe materials"
+            "Perlin should not depend on procedural-environment materials"
         );
     }
 

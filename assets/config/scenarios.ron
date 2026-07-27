@@ -93,7 +93,7 @@
         ),
         (
             name: "Sky Islands",
-            blurb: "A playable hills map beneath a separate flight-gated network of floating islands.",
+            blurb: "A playable hills map beneath a high, flight-gated city of floating islands.",
             world: "config/worlds/procedural-sky-islands.ron",
             generation_seed: Some(94445606),
             units: (
@@ -103,7 +103,7 @@
         ),
         (
             name: "Mountains",
-            blurb: "Sharp frozen peaks split by a high saddle and a longer low-valley bypass.",
+            blurb: "A broad frozen massif split by a high saddle and a longer low-valley bypass.",
             world: "config/worlds/procedural-mountains.ron",
             generation_seed: Some(129704046),
             units: (
@@ -113,7 +113,7 @@
         ),
         (
             name: "Caves",
-            blurb: "A rocky surface opening into a branching network of full-height underground passages.",
+            blurb: "A varied rocky surface opening into a dense network of full-height underground passages.",
             world: "config/worlds/procedural-caves.ron",
             generation_seed: Some(736283041),
             units: (

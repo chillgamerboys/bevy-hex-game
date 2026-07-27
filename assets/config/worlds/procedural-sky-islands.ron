@@ -1,5 +1,5 @@
-// Layered geometry probe. A finalized Hills map remains playable on the ground while
-// a separately generated, flight-gated island network occupies the upper volume.
+// A finalized Hills map remains playable on the ground while a high, separately
+// generated, flight-gated island network occupies the upper volume.
 (
     grid_radius: 12,
     level_height: 0.4,
@@ -12,8 +12,8 @@
                 max_relief: 8,
                 hills_per_bank: 3,
             ),
-            min_clearance: 8,
-            upper_coverage_percent: 20,
+            min_clearance: 22,
+            upper_coverage_percent: 24,
         )),
     )),
 )

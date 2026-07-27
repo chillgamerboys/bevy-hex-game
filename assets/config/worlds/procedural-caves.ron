@@ -1,4 +1,4 @@
-// A rocky surface above one ordinary-walkable underground chamber network.
+// A varied rocky surface above one dense, ordinary-walkable chamber network.
 (
     grid_radius: 12,
     level_height: 0.4,
@@ -6,9 +6,9 @@
         generator_version: 2,
         environment: Rocky,
         recipe: Caves((
-            surface_level: 15,
-            cave_floor_level: 7,
-            chamber_count: 7,
+            surface_level: 17,
+            cave_floor_level: 6,
+            chamber_count: 12,
         )),
     )),
 )

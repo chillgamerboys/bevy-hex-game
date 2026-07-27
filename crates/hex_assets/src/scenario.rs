@@ -164,8 +164,8 @@ mod tests {
         }
     }
 
-    /// Generated review scenarios own distinct reproducible seeds and use the stable
-    /// anchors promised by the procedural generator.
+    /// Generated scenarios own distinct reproducible seeds and use the stable anchors
+    /// promised by the procedural generator.
     #[test]
     fn procedural_scenarios_use_distinct_seeds_and_spawn_anchors() {
         let library: ScenarioLibrary =
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(
             generated.len(),
             6,
-            "the review library should include hills and five architecture probes"
+            "the scenario library should include all six generated maps"
         );
         let seeds: HashSet<u64> = generated
             .iter()

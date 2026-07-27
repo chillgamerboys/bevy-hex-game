@@ -142,7 +142,7 @@ pub struct HillsSettings {
     pub hills_per_bank: u8,
 }
 
-/// Parameters for the structural sky-island probe.
+/// Parameters for the retained V1 sky-island landform.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkyIslandsSettings {
     /// Surface level of the critical island chain.
@@ -186,7 +186,7 @@ pub struct CrossingSettings {
     pub bridge_level: Level,
 }
 
-/// Parameters for the linked-island structural probe.
+/// Parameters for the retained V1 linked-island topology.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LinkedIslandsSettings {
     /// Width of every required bridge in cells.

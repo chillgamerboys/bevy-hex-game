@@ -1,4 +1,4 @@
-// Sharp frozen ridges with an elevated saddle and a separated low bypass.
+// A broad, sharp frozen massif with an elevated saddle and a separated low bypass.
 (
     grid_radius: 12,
     level_height: 0.4,
@@ -7,8 +7,8 @@
         environment: Frozen,
         recipe: Mountains((
             base_level: 15,
-            relief: 15,
-            peak_count: 4,
+            relief: 24,
+            peak_count: 7,
         )),
     )),
 )
