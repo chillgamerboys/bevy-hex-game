@@ -1438,16 +1438,16 @@ mod tests {
                 );
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();
-            if matches!(scenario_name, "Sky Islands" | "Mountains") {
-                assert!(
+            match scenario_name {
+                "Sky Islands" => assert!(
                     !special_regions.is_empty(),
-                    "{scenario_name} dropped its optional high-ground semantics"
-                );
-            } else {
-                assert!(
+                    "Sky Islands dropped its flight-gated upper layer"
+                ),
+                "Mountains" => {}
+                _ => assert!(
                     special_regions.is_empty(),
                     "{scenario_name} introduced an unexpected optional region"
-                );
+                ),
             }
             assert!(standing_pos::<Player>(&mut app).is_some());
             assert!(standing_pos::<Enemy>(&mut app).is_some());

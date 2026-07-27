@@ -5,6 +5,7 @@
 //! unfinished recipes return an error rather than publishing an empty world.
 
 mod hills;
+mod mountains;
 mod recipe;
 mod seed;
 mod sky;
@@ -140,9 +141,14 @@ pub(crate) fn build(
             seed,
             started,
         ),
-        V2RecipeSettings::Mountains(_) | V2RecipeSettings::Caves(_) => {
-            Err(unavailable_recipe(settings))
-        }
+        V2RecipeSettings::Mountains(_) => finish_build(
+            mountains::build(grid_radius, level_height, settings, seed, palette, is_solid)?,
+            grid_radius,
+            settings,
+            seed,
+            started,
+        ),
+        V2RecipeSettings::Caves(_) => Err(unavailable_recipe(settings)),
     }
 }
 
