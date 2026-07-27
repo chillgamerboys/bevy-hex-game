@@ -1,6 +1,6 @@
 ---
 name: audit-pr
-description: THE merge gate. Chains `audit-linear` (soft Linear-tie check) → `audit-diff` (pre-test 8-lens walk) → `test-full` (fmt/clippy/tests/deny/doc/links + ship build) → `audit-silent-failures` (explicit log) → `update-docs` (mechanical doc fix). Stop on first failure. Writes a schema-v3 receipt at `/tmp/audit-pr-receipt-{PR}.json` on green AND failed runs. Requires a PR. The canonical "I'm ready to merge" command.
+description: THE merge gate. Chains `audit-linear` (soft Linear-tie check) → `audit-diff` (pre-test lens walk; 8 code lenses, or the 4 docs lenses on no-Rust diffs) → `test-full` (fmt/clippy/tests/deny/doc/links + ship build) → `audit-silent-failures` (explicit log) → `update-docs` (mechanical doc fix). Stop on first failure. Writes a schema-v3 receipt at `/tmp/audit-pr-receipt-{PR}.json` on green AND failed runs. Requires a PR. The canonical "I'm ready to merge" command.
 ---
 
 When invoked, follow these steps. Stop on first failure within any
@@ -58,8 +58,9 @@ constants, missing edge cases, compiles-but-wrong API use,
 Commands/ordering contract breaks, test-altitude gaps, dead config
 wiring) that a green test suite passes cleanly through.
 
-**What it does:** walks 8 lenses against the diff. See
-`/audit-diff` SKILL.md for the lens catalog.
+**What it does:** walks the diff through audit-diff's lenses — the 8
+code lenses, or the doc-only path (4 docs lenses, one subagent) when
+the diff has no Rust. See `/audit-diff` SKILL.md for both catalogs.
 
 **Decision:**
 - ✓ `audit-diff` returns "clean across N files" → proceed to Step 2.
@@ -237,9 +238,10 @@ A ⚠ on Step 0 never blocks — it is reported and the chain continues.
 ## When NOT to invoke
 
 - **Single-line typo fixes** — over-engineered for the size.
-- **Doc-only PRs** — Step 2 short-circuits to `/test-quick` anyway, so
-  this is cheap; run it if you want the receipt, or just
-  `/update-docs` for a baseline check.
+- **Doc-only PRs are NOT a skip** — `/merge-pr` hard-gates on the
+  receipt, so run the chain; it is cheap by construction: Step 1 takes
+  audit-diff's doc-only path (4 docs lenses, one subagent), Step 2
+  short-circuits to `/test-quick`'s doc-only skip.
 - **Test-only diffs** — audit-diff's API and round-trip lenses don't
   apply; Lens 1 (silent failures) might still be worth running
   directly.
