@@ -32,26 +32,62 @@ else is the gameplay side. `docs` is whoever picks it up.
 | Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game |
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game |
 | Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat |
-| Production hygiene | panic hook, log-to-file, version display, release diagnostics off, settings menu with persistence, audio facade, input map, app icon, signing and Steam depot lane, crash reporting | game |
+| Ship-hygiene basics | panic hook, log-to-file, version display in the title, diagnostics logging off in release | game |
+| Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game |
+| Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game |
+| Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game |
 | Named region tags | `regions:` in world files, published as `RegionTags` on tile entities — anti-magic fields, lit zones, any painted area | map |
 | Run bottoms on tiles | publish `RunBottom(Level)` beside each tile's `TilePos` so line-of-sight and cover can see under bridges | map |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
 
-## Sequencing
+## Sequencing — the waves
 
-Genuine blockers only — everything else parallelizes:
+Ordered by two forces: the critical path to damage existing
+(**sim seams → command funnel → lattices wired**, with content and the engine
+feeding in from the side), and what the map owner has in flight. PR #56
+front-loads all of his shared-contract changes (the `GameplaySetup::View`
+phase, `TraversalEndpoint`/`admits_transition`, `InteriorRegions`,
+`MapViewHint`); the recipe PRs after it churn only `hex_map` internals — so
+one merge, not his whole sequence, is the gate below.
 
-- **Deterministic sim seams** → Command funnel → {Lattices wired, mid-combat saves}
-- **Deterministic sim seams** → Save and load
-- **Elements and spells** → Lattice engine wiring; **Lattice engine** → {archetypes in Lattices wired, Knowledge seam}
-- Independent picks needing no funnel knowledge: Combat policy knobs, Elements
-  and spells, Production hygiene items, and every `map` row.
+- **Wave 1 — start now.** Deterministic sim seams (first: smallest, and it
+  unblocks the funnel and saves), Lattice engine (started early — it is the
+  long pole), Elements and spells, Ship-hygiene basics. Every file these
+  touch is clear of the open #56.
+- **Wave 2 — after #56 merges.** Combat policy knobs and Command funnel:
+  both edit files #56 is holding (`targeting.rs`, the elevation tests,
+  `app.rs`), and touching those while it is open hands the other person
+  rebase conflicts.
+- **Wave 3 — the slice becomes a game.** Lattices wired (needs content +
+  engine + funnel), Knowledge seam (needs the engine only), Save and load
+  (needs the seams; opens the terrain-snapshot conversation below),
+  Encounters (after the first V2 recipe lands, since it consumes anchors
+  and `scenarios.rs`).
+- **Wave 4 — productization, latest before the first external build.**
+  Settings/persistence/audio, Steam packaging and crash reporting, Engine
+  upkeep (pinned to the 0.20 release window).
+
+Hard dependencies, for reference: sim seams → {funnel, saves}; elements →
+engine wiring; engine → {lattices wired, knowledge}; funnel → lattices
+wired.
+
+**Standing toe-stepping rules.** Never touch `crates/hex_map/**`. While
+#56 is open, also leave `hex_core/app.rs`, `hex_units/movement.rs`,
+`hex_units/targeting.rs`, `hex_combat/tests/elevation.rs` and
+`hex_game/scenarios.rs` alone. New system ordering builds against the
+five-phase `GameplaySetup` (`Resources → Terrain → Actors → View →
+Finalize`).
 
 The `map` rows are specified precisely, with fallbacks if deferred, in
 [map-asks.md](map-asks.md) — two further asks (the seed contract and
 generator versioning) were answered outright by the procedural map pipeline
-and are recorded there as settled.
+and are recorded there as settled. **The map rows are seeded and claimed by
+the map's owner**, at his own pace around the V2 recipe sequence; the
+gameplay side never marks them. The one with a gameplay-side clock is the
+terrain snapshot: it decides the save format, so it wants a conversation
+when Save and load starts — the seeded-regen fallback keeps that ticket
+unblocked either way.
 
 ## The epics, in detail
 
@@ -167,18 +203,42 @@ read hostile lattices only through `view()`; a decay system ticks reveals at
 round ends. Ships with a dev reveal-all toggle and a v1 "unknown lattice,
 N hexes" readout from base visibility.
 
-### Production hygiene
+### Ship-hygiene basics
 
-The commercial checklist, all independently landable: panic hook +
-log-to-file (Windows release currently logs nowhere) + version display;
-diagnostics logging off in release; settings menu backed by bevy_persistent
-with window modes and volume placeholders; audio behind a small facade over
-bevy_kira_audio (trim the unused bevy_audio feature then); input map
-centralization (rebinding-ready); app icon; macOS codesign/notarize lane and
-a Steam depot upload job on the existing release workflow; opt-in crash
-reporting via sentry-rust-minidump with split debug symbols. Versions and
-sources for every crate choice are in
-[production-audit.md](production-audit.md).
+The smallest production ticket and a good pipeline warm-up: a panic hook,
+log-to-file (the Windows release currently logs nowhere — its console is
+disabled and stdout goes with it), the workspace version displayed on the
+title screen, and the always-on diagnostics logging turned off in release.
+Nothing here depends on anything.
+
+### Settings menu, persistence, and audio
+
+The player-facing options surface: an in-game settings menu whose values
+persist across sessions via bevy_persistent; window modes (fullscreen
+toggle, resolution) beside the existing `present_mode`; input-map
+centralization so keys stop being hardcoded in systems (rebinding-ready,
+not yet rebindable); and audio behind a small facade over bevy_kira_audio
+with music/SFX/UI volume buses wired to the menu — trim the unused
+`bevy_audio` feature in the same change. Versions and sources for every
+crate choice are in [production-audit.md](production-audit.md).
+
+### Steam packaging and crash reporting
+
+The ship lane: an app icon; a macOS codesign/notarize lane (arm64 — Rosetta
+retires before any plausible release window); a Steam depot upload job
+stacked on the existing tag-triggered release workflow; split debug symbols
+retained from release builds; and opt-in crash reporting via
+sentry-rust-minidump. Independently landable pieces — the audit's research
+section carries the reasoning per pick.
+
+### Engine upkeep
+
+The audit budgets exactly one Bevy upgrade before any release window: 0.20
+(~Q4 2026, BSN asset files and assets-as-entities are the churn to watch),
+landed together with the long-deferred feature trim (`default-features =
+false` plus the collections actually used) so both risky changes share one
+quiet window and one visual walk. Not before wave 3 lands — upgrading under
+an in-flight system rewrite doubles the blast radius.
 
 ### The map rows
 
