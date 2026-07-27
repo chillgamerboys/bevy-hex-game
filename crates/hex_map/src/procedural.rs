@@ -2925,7 +2925,7 @@ const fn top_surface(cell: PlannedCell) -> Level {
     }
 }
 
-fn named_hash(seed: u64, candidate: u8, stage: &str, index: u64) -> u64 {
+pub(crate) fn named_hash(seed: u64, candidate: u8, stage: &str, index: u64) -> u64 {
     let mut bytes = Vec::with_capacity(stage.len().saturating_add(17));
     bytes.extend_from_slice(&seed.to_le_bytes());
     bytes.push(candidate);

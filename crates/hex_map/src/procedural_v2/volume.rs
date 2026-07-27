@@ -351,6 +351,43 @@ fn validate_traversal_components(
             ));
         }
     }
+
+    let special_by_surface: BTreeMap<TilePos, SpecialMovementRegion> = special
+        .iter()
+        .flat_map(|(region, surfaces)| surfaces.iter().copied().map(|surface| (surface, *region)))
+        .collect();
+    let special_surfaces: BTreeSet<TilePos> = special_by_surface.keys().copied().collect();
+    let special_by_coord = positions_by_coord(&special_surfaces);
+    let mut joined_regions = BTreeSet::new();
+    for (surface, region) in &special_by_surface {
+        for neighbor in surface.neighbours() {
+            let Some(candidates) = special_by_coord.get(&neighbor.coord) else {
+                continue;
+            };
+            for candidate in candidates {
+                let Some(other_region) = special_by_surface.get(candidate) else {
+                    continue;
+                };
+                if region == other_region
+                    || !(transition(*surface, *candidate, endpoints)
+                        || transition(*candidate, *surface, endpoints))
+                {
+                    continue;
+                }
+                joined_regions.insert(if region < other_region {
+                    (*region, *other_region)
+                } else {
+                    (*other_region, *region)
+                });
+            }
+        }
+    }
+    for (first, second) in joined_regions {
+        issues.push(format!(
+            "walker-connected surfaces use different special-movement regions \
+             {first:?} and {second:?}"
+        ));
+    }
 }
 
 fn reachable(
@@ -814,6 +851,51 @@ mod tests {
             .validate()
             .expect_err("the low lintel disconnects the ramp");
         assert!(error.to_string().contains("not one walker-connected"));
+    }
+
+    #[test]
+    fn walker_connected_special_surfaces_cannot_use_different_region_ids() {
+        let mut plan = empty_plan(TEST_RADIUS);
+        let ordinary_coord = HexCoord::from_axial(-5, 0);
+        let first_coord = HexCoord::ORIGIN;
+        let second_coord = first_coord.neighbors()[0];
+        for coord in [ordinary_coord, first_coord, second_coord] {
+            plan.columns.insert(
+                coord,
+                VolumeColumn {
+                    elements: vec![mass(0, 5, SolidMaterialRole::Stone)],
+                },
+            );
+        }
+
+        let ordinary = TilePos::new(ordinary_coord, 4);
+        plan.surfaces.insert(
+            ordinary,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
+            },
+        );
+        plan.anchors.insert("party_start".to_owned(), ordinary);
+        for (coord, region) in [
+            (first_coord, SpecialMovementRegion(2)),
+            (second_coord, SpecialMovementRegion(9)),
+        ] {
+            plan.surfaces.insert(
+                TilePos::new(coord, 4),
+                SurfaceMetadata {
+                    access: SurfaceAccess::SpecialMovement(region),
+                    interior: None,
+                },
+            );
+        }
+
+        let error = plan
+            .validate()
+            .expect_err("one walker component cannot claim two special-region ids");
+        assert!(error
+            .to_string()
+            .contains("different special-movement regions"));
     }
 
     #[test]

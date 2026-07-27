@@ -25,31 +25,32 @@ impl SeedStreams {
 
     /// Derives an independently indexed stage.
     #[must_use]
-    pub(crate) fn stage(self, name: &str) -> SeedStream {
-        let mut bytes = Vec::with_capacity(STREAM_DOMAIN.len() + name.len() + 11);
-        bytes.extend_from_slice(STREAM_DOMAIN);
-        bytes.push(0);
-        bytes.extend_from_slice(&self.seed.to_le_bytes());
-        bytes.push(self.candidate);
-        bytes.push(0);
-        bytes.extend_from_slice(name.as_bytes());
+    pub(crate) const fn stage(self, name: &str) -> SeedStream<'_> {
         SeedStream {
-            key: xxh3_64(&bytes),
+            seed: self.seed,
+            candidate: self.candidate,
+            name,
         }
     }
 }
 
 /// One named, call-order-independent source of deterministic values.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct SeedStream {
-    key: u64,
+pub(crate) struct SeedStream<'a> {
+    seed: u64,
+    candidate: u8,
+    name: &'a str,
 }
 
-impl SeedStream {
+impl SeedStream<'_> {
     /// Samples one stable index.
+    ///
+    /// This is deliberately the frozen V1 named-hash contract. V2 Hills can therefore
+    /// reproduce an approved V1 candidate exactly while every new recipe remains
+    /// independent by using its own stage names.
     #[must_use]
     pub(crate) fn sample(self, index: u64) -> u64 {
-        xxh3_64_with_seed(&index.to_le_bytes(), self.key)
+        crate::procedural::named_hash(self.seed, self.candidate, self.name, index)
     }
 
     /// Samples one exact horizontal coordinate and an optional local salt.
@@ -59,7 +60,7 @@ impl SeedStream {
         bytes[..4].copy_from_slice(&coord.x().to_le_bytes());
         bytes[4..8].copy_from_slice(&coord.y().to_le_bytes());
         bytes[8..].copy_from_slice(&salt.to_le_bytes());
-        xxh3_64_with_seed(&bytes, self.key)
+        self.sample(xxh3_64(&bytes))
     }
 
     /// Maps a sample into an inclusive integer range.
@@ -136,13 +137,21 @@ mod tests {
     }
 
     #[test]
-    fn stream_algorithm_has_a_numeric_golden() {
+    fn indexed_stage_samples_match_the_frozen_v1_contract() {
+        let seed = 1_592_598_566;
+        let candidate = 7;
+        let stage = "hills.lobe.axis";
+        let index = 11;
+        let sample = SeedStreams::new(seed, candidate).stage(stage).sample(index);
+
         assert_eq!(
-            SeedStreams::new(1_592_598_566, 7)
-                .stage("sky.islands")
-                .sample(11),
-            3_739_720_589_518_973_734,
-            "update only with an explicit V2 generator-version decision"
+            sample,
+            crate::procedural::named_hash(seed, candidate, stage, index),
+            "V2 Hills must be able to reproduce V1 stage samples exactly"
+        );
+        assert_eq!(
+            sample, 6_609_271_780_027_420_460,
+            "update only with an explicit V1 compatibility-version decision"
         );
     }
 }
