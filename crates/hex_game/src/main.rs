@@ -25,6 +25,8 @@ use bevy::render::RenderPlugin;
 use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
+#[cfg(feature = "dev")]
+mod content_debug;
 mod menus;
 #[cfg(feature = "map-review")]
 mod review;
@@ -123,7 +125,7 @@ impl Plugin for AppPlugin {
         app.add_systems(Update, apply_display_settings);
 
         #[cfg(feature = "dev")]
-        app.add_plugins(hex_dev::plugin);
+        app.add_plugins((hex_dev::plugin, content_debug::plugin));
     }
 }
 
