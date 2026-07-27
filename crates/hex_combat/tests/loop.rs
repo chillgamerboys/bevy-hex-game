@@ -321,3 +321,40 @@ fn end_turn(app: &mut App) {
     });
     app.update();
 }
+
+/// A unit that already carries an explicit id (a test's, or a future load
+/// path's) must still resolve through the registry — deleting the upsert in
+/// `begin_combat` makes the wrap back to it silently stall.
+#[test]
+fn a_carried_id_still_receives_its_turn_on_the_wrap() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+    );
+    app.world_mut().entity_mut(player).insert(UnitId(5));
+    enter_gameplay(&mut app);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(5)),
+        "the carried id should appear in the order untouched"
+    );
+
+    end_turn(&mut app);
+    end_turn(&mut app);
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(5)),
+        "the wrap should return to the carried id"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_some(),
+        "the registry must resolve a carried id back to its entity"
+    );
+}

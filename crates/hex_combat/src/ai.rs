@@ -75,7 +75,7 @@ fn take_enemy_turn(
         (Entity, &mut Turn, &StandsOn, &Body, &Faction),
         (With<Enemy>, Without<Transformation>),
     >,
-    others: Query<(Entity, &UnitId, &Faction, &StandsOn)>,
+    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
     settings: Option<Res<PlayerSettings>>,
@@ -154,7 +154,9 @@ enum FoeAction {
 /// One candidate target and the action available against it.
 struct FoePlan {
     entity: Entity,
-    unit: UnitId,
+    /// `None` for a unit no spawn path identified; such a target sorts last
+    /// rather than becoming invisible (symmetric with `MovementCrossings`).
+    unit: Option<UnitId>,
     target: Standing,
     action: FoeAction,
 }
@@ -166,7 +168,7 @@ impl FoePlan {
     /// a stable secondary signal, and the stable [`UnitId`] resolves exact
     /// ties. Query iteration order is deliberately absent from the decision —
     /// and so are entity bits, which are not stable across runs or saves.
-    fn priority(&self, from: Standing) -> (u8, usize, u32, UnitId) {
+    fn priority(&self, from: Standing) -> (u8, usize, u32, bool, Option<UnitId>) {
         let (kind, route_cost) = match &self.action {
             FoeAction::Attack => (0, 0),
             FoeAction::Move(approach) => (1, approach.route_cost),
@@ -176,6 +178,8 @@ impl FoePlan {
             kind,
             route_cost,
             from.pos.coord.distance(self.target.pos.coord),
+            // `is_none` first so an unidentified unit genuinely sorts last.
+            self.unit.is_none(),
             self.unit,
         )
     }
@@ -189,7 +193,7 @@ impl FoePlan {
 /// ranked so the unreachable one cannot consume the turn merely by looking nearer on
 /// the map.
 fn best_foe(
-    others: &Query<(Entity, &UnitId, &Faction, &StandsOn)>,
+    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     faction: Faction,
     from: Standing,
     footing: &Footing,
@@ -211,7 +215,7 @@ fn best_foe(
             };
             FoePlan {
                 entity,
-                unit: *unit,
+                unit: unit.copied(),
                 target,
                 action,
             }

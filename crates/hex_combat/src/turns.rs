@@ -74,7 +74,7 @@ impl Default for Initiative {
 /// and differ across runs and saves, so an order stored as entities silently
 /// reshuffles — exactly the randomness-by-another-name the design rules out.
 /// Systems that need the actual entity resolve through
-/// [`UnitRegistry`](hex_units::UnitRegistry).
+/// [`UnitRegistry`].
 #[derive(Resource, Debug, Default)]
 pub struct TurnOrder {
     /// Units in the order they act.
@@ -290,6 +290,10 @@ fn begin_combat(
         .iter()
         .map(|(entity, unit, initiative)| {
             let unit = unit.copied().unwrap_or_else(|| {
+                // Dealing here re-admits query iteration order into id order —
+                // the exact nondeterminism this system exists to remove — so
+                // the breach must be observable, never silent.
+                warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
                 let id = allocator.allocate();
                 commands.entity(entity).insert(id);
                 id

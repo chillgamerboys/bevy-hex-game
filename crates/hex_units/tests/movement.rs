@@ -1457,6 +1457,13 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
     assert_eq!(registry.entity_of(player_id), Some(player_entity));
     assert_eq!(registry.id_of(player_entity), Some(player_id));
     assert_eq!(
+        app.world()
+            .entity(player_entity)
+            .get::<hex_core::ControlOwner>(),
+        Some(&hex_core::ControlOwner::default()),
+        "spawned units carry the seat-0 ownership marker"
+    );
+    assert_eq!(
         app.world().resource::<Party>().members,
         vec![player_id],
         "only player-faction units enrol in the party"

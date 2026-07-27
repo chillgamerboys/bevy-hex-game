@@ -5,7 +5,8 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    HexCoord, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    ControlOwner, HexCoord, PlayerSeat, SimSeeds, SubstanceId, TerrainEdit, TilePos,
+    TraversalProfile, Turn, UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -63,6 +64,11 @@ fn wire_formats_are_pinned() {
     };
     let json = serde_json::to_string(&seeds).expect("serialize");
     assert_eq!(json, r#"{"world":1,"ai_flavor":2,"cosmetic":3}"#);
+
+    // Save-visible ownership pair: both collapse to the bare seat number.
+    let owner = ControlOwner(PlayerSeat(0));
+    let json = serde_json::to_string(&owner).expect("serialize");
+    assert_eq!(json, "0", "ControlOwner must serialize as its bare seat");
 }
 
 #[test]
@@ -107,4 +113,10 @@ fn sim_seeds_round_trip() {
         ai_flavor: 22,
         cosmetic: 33,
     });
+}
+
+#[test]
+fn control_owner_round_trips() {
+    assert_round_trips!(ControlOwner(PlayerSeat(3)));
+    assert_round_trips!(PlayerSeat(u8::MAX));
 }

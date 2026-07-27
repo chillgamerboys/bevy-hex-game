@@ -164,6 +164,9 @@ pub struct Enemy;
 /// Never reuses an id within a session; reset when gameplay exits so the same
 /// scenario launch always deals the same ids — which is what lets a replay or
 /// a save name units without caring which `Entity` they landed on this run.
+///
+/// A future load path must restore this counter alongside the restored ids,
+/// or fresh deals can collide with loaded ones.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct UnitAllocator {
     next: u64,
@@ -196,7 +199,11 @@ impl UnitRegistry {
         self.ids.insert(entity, id);
     }
 
-    /// The entity currently carrying `id`, if it is alive.
+    /// The entity registered for `id`, if any.
+    ///
+    /// The registry has no liveness knowledge: nothing despawns units
+    /// mid-session today, and when death lands it must unregister here or
+    /// this will serve a dead entity.
     #[must_use]
     pub fn entity_of(&self, id: UnitId) -> Option<Entity> {
         self.by_id.get(&id).copied()
