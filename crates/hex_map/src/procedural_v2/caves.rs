@@ -1538,6 +1538,26 @@ fn validate_plan(
                 .to_owned(),
         );
     }
+    if !routes_match_declared_edges(metadata) {
+        issues.push("cave corridor routes do not match their declared graph edges".to_owned());
+    }
+    let exact_entrance_floors: BTreeMap<_, _> = metadata
+        .entrance_ramp
+        .rows
+        .iter()
+        .flatten()
+        .map(|position| (position.coord, position.level))
+        .collect();
+    if metadata.corridor_routes.iter().any(|route| {
+        !route_uses_exact_authored_floors(
+            route,
+            &metadata.floor_levels,
+            &exact_entrance_floors,
+            &plan.volume,
+        )
+    }) {
+        issues.push("a cave corridor route does not use exact authored ordinary floors".to_owned());
+    }
     if metadata
         .corridor_routes
         .iter()
@@ -1781,6 +1801,22 @@ fn validate_plan(
         issues.push("cave actor anchors are missing".to_owned());
         (HashMap::new(), None)
     };
+    if interior
+        .floors
+        .iter()
+        .any(|floor| !distances.contains_key(floor))
+    {
+        issues.push("the cave contains an interior floor unreachable from its entrance".to_owned());
+    }
+    if metadata
+        .chamber_centres
+        .iter()
+        .zip(&metadata.chamber_floor_levels)
+        .map(|(coord, level)| TilePos::new(*coord, *level))
+        .any(|centre| !distances.contains_key(&centre))
+    {
+        issues.push("the cave contains a chamber centre unreachable from its entrance".to_owned());
+    }
 
     let ramp_end = metadata
         .entrance_ramp
@@ -1813,7 +1849,6 @@ fn validate_plan(
         return RecipeValidation::invalid(issues);
     }
 
-    let ordinary_count = plan.volume.surfaces.len();
     let reachable_elevation_levels = u32::try_from(
         distances
             .keys()
@@ -1866,7 +1901,7 @@ fn validate_plan(
             critical_route_steps: route_steps.unwrap_or(u32::MAX),
             spawn_height_difference,
             bank_high_ground_difference: 0,
-            reachable_surfaces: u32::try_from(ordinary_count).unwrap_or(u32::MAX),
+            reachable_surfaces: u32::try_from(distances.len()).unwrap_or(u32::MAX),
             reachable_elevation_levels,
             alternate_detour_percent: 0,
             river_sinuosity_percent: 0,
@@ -1957,6 +1992,90 @@ fn validate_extra_edges(
     }
 }
 
+fn routes_match_declared_edges(metadata: &CavesMetadata) -> bool {
+    let mut routes = metadata.corridor_routes.iter();
+    let (Some(connector), Some(entrance_landing)) =
+        (routes.next(), metadata.entrance_ramp.rows.last().copied())
+    else {
+        return false;
+    };
+    if connector.rows.first().copied() != Some(entrance_landing)
+        || !connector.rows.last().is_some_and(|row| {
+            row_lands_in_chamber(
+                row,
+                metadata.chamber_centres.first().copied(),
+                metadata.chamber_floor_levels.first().copied(),
+                metadata.chamber_footprints.first(),
+            )
+        })
+    {
+        return false;
+    }
+
+    for (route, (parent, child)) in
+        routes.zip(metadata.tree_edges.iter().chain(&metadata.extra_edges))
+    {
+        let Some(first) = route.rows.first() else {
+            return false;
+        };
+        let Some(last) = route.rows.last() else {
+            return false;
+        };
+        if !row_lands_in_chamber(
+            first,
+            metadata.chamber_centres.get(*parent).copied(),
+            metadata.chamber_floor_levels.get(*parent).copied(),
+            metadata.chamber_footprints.get(*parent),
+        ) || !row_lands_in_chamber(
+            last,
+            metadata.chamber_centres.get(*child).copied(),
+            metadata.chamber_floor_levels.get(*child).copied(),
+            metadata.chamber_footprints.get(*child),
+        ) {
+            return false;
+        }
+    }
+
+    metadata.corridor_routes.len()
+        == 1_usize
+            .saturating_add(metadata.tree_edges.len())
+            .saturating_add(metadata.extra_edges.len())
+}
+
+fn row_lands_in_chamber(
+    row: &[TilePos; 2],
+    centre: Option<HexCoord>,
+    level: Option<Level>,
+    footprint: Option<&BTreeSet<HexCoord>>,
+) -> bool {
+    let (Some(centre), Some(level), Some(footprint)) = (centre, level, footprint) else {
+        return false;
+    };
+    row[0] == TilePos::new(centre, level)
+        && row
+            .iter()
+            .all(|position| position.level == level && footprint.contains(&position.coord))
+}
+
+fn route_uses_exact_authored_floors(
+    route: &CaveRoute,
+    floors: &BTreeMap<HexCoord, Level>,
+    entrance_floors: &BTreeMap<HexCoord, Level>,
+    volume: &TerrainVolumePlan,
+) -> bool {
+    route.rows.iter().flatten().all(|position| {
+        floors
+            .get(&position.coord)
+            .or_else(|| entrance_floors.get(&position.coord))
+            .is_some_and(|level| *level == position.level)
+            && volume.surfaces.get(position).is_some_and(|surface| {
+                surface.access == SurfaceAccess::Ordinary && surface.interior == Some(INTERIOR)
+            })
+            && semantic_traversal_endpoint(volume, *position)
+                .is_some_and(|endpoint| endpoint.is_solid)
+    })
+}
+
 fn valid_ramp(route: &CaveRoute, top: Level, bottom: Level) -> bool {
     let first = route.rows.first().and_then(|row| row.first());
     let last = route.rows.last().and_then(|row| row.first());
@@ -2000,20 +2119,41 @@ fn valid_sloped_route(route: &CaveRoute) -> bool {
 }
 
 fn route_admits_walker(route: &CaveRoute, volume: &TerrainVolumePlan) -> bool {
-    let endpoint = |position: TilePos| {
-        volume.columns.get(&position.coord).map(|column| {
-            TraversalEndpoint::new(position, true, semantic_headroom(column, position))
-        })
-    };
     route.rows.windows(2).all(|pair| {
         matches!(pair, [before, after]
-            if endpoint(before[0]).zip(endpoint(after[0])).is_some_and(|(from, to)|
+            if semantic_traversal_endpoint(volume, before[0])
+                .zip(semantic_traversal_endpoint(volume, after[0])).is_some_and(|(from, to)|
                 TraversalProfile::WALKER.admits_transition(from, to)
                     && TraversalProfile::WALKER.admits_transition(to, from))
-                && endpoint(before[1]).zip(endpoint(after[1])).is_some_and(|(from, to)|
+                && semantic_traversal_endpoint(volume, before[1])
+                    .zip(semantic_traversal_endpoint(volume, after[1])).is_some_and(|(from, to)|
                     TraversalProfile::WALKER.admits_transition(from, to)
                         && TraversalProfile::WALKER.admits_transition(to, from)))
     })
+}
+
+fn semantic_traversal_endpoint(
+    volume: &TerrainVolumePlan,
+    position: TilePos,
+) -> Option<TraversalEndpoint> {
+    let surface = volume.surfaces.get(&position)?;
+    if surface.access != SurfaceAccess::Ordinary {
+        return None;
+    }
+    let column = volume.columns.get(&position.coord)?;
+    let surface_top = position.level.checked_add(1)?;
+    let is_solid = column.elements.iter().any(|element| {
+        matches!(
+            element,
+            VolumeElement::Solid(mass)
+                if mass.levels.bottom <= position.level && mass.levels.top == surface_top
+        )
+    });
+    Some(TraversalEndpoint::new(
+        position,
+        is_solid,
+        semantic_headroom(column, position),
+    ))
 }
 
 fn valid_covered_column(
@@ -2374,12 +2514,20 @@ mod tests {
 
     #[test]
     fn supported_radii_counts_and_vertical_extremes_generate_valid_caves() {
+        let profiles = [
+            (15, 8, 6),
+            (15, 8, 7),
+            (15, 8, 8),
+            (16, 7, 9),
+            (16, 6, 10),
+            (17, 6, 12),
+        ];
         for radius in [12, 20, 40] {
-            for chamber_count in 6..=8 {
+            for (surface, floor, chamber_count) in profiles {
                 let generated = build(
                     radius,
                     0.4,
-                    &settings(15, 8, chamber_count),
+                    &settings(surface, floor, chamber_count),
                     u64::from(radius).saturating_mul(100) + u64::from(chamber_count),
                     &palette(),
                     &is_solid,
@@ -2413,21 +2561,30 @@ mod tests {
 
     #[test]
     fn fixed_seed_corpus_is_valid_deterministic_and_repair_free() {
-        let settings = settings(15, 8, 7);
-        for seed in [0, 1, 505, 808, CAVE_SEED, u64::MAX] {
-            let first = build(12, 0.4, &settings, seed, &palette(), &is_solid)
-                .unwrap_or_else(|error| panic!("seed {seed} should generate: {error}"));
-            let second = build(12, 0.4, &settings, seed, &palette(), &is_solid)
-                .unwrap_or_else(|error| panic!("repeated seed {seed} should generate: {error}"));
+        let profiles = [(15, 8, 7), (16, 7, 9), (16, 6, 10), (17, 6, 12)];
+        for (surface, floor, chamber_count) in profiles {
+            let settings = settings(surface, floor, chamber_count);
+            for seed in [0, 1, 505, 808, CAVE_SEED, u64::MAX] {
+                let first = build(12, 0.4, &settings, seed, &palette(), &is_solid).unwrap_or_else(
+                    |error| panic!("{chamber_count}-chamber seed {seed} should generate: {error}"),
+                );
+                let second = build(12, 0.4, &settings, seed, &palette(), &is_solid).unwrap_or_else(
+                    |error| {
+                        panic!(
+                            "repeated {chamber_count}-chamber seed {seed} should generate: {error}"
+                        )
+                    },
+                );
 
-            assert!(
-                !first.used_fallback,
-                "seed {seed} unexpectedly used fallback"
-            );
-            assert!(first.valid_candidates > 0);
-            assert!(first.repair_actions.is_empty());
-            assert_eq!(first.map_fingerprint, second.map_fingerprint);
-            assert_eq!(first.selected_candidate, second.selected_candidate);
+                assert!(
+                    !first.used_fallback,
+                    "{chamber_count}-chamber seed {seed} unexpectedly used fallback"
+                );
+                assert!(first.valid_candidates > 0);
+                assert!(first.repair_actions.is_empty());
+                assert_eq!(first.map_fingerprint, second.map_fingerprint);
+                assert_eq!(first.selected_candidate, second.selected_candidate);
+            }
         }
     }
 
@@ -2584,6 +2741,67 @@ mod tests {
             .any(|issue| issue.contains("accidental or missing footing")));
     }
 
+    #[test]
+    fn expanded_validation_binds_routes_and_reachability_to_exact_floors() {
+        let recipe = CavesRecipe { level_height: 0.4 };
+        let settings = cave_settings(17, 6, 12);
+        let valid = recipe
+            .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
+            .expect("the expanded cave fallback should construct");
+        assert!(validation_issues(&settings, &valid).is_empty());
+
+        let mut reordered_routes = valid.clone();
+        reordered_routes.metadata.corridor_routes.swap(1, 2);
+        assert!(validation_issues(&settings, &reordered_routes)
+            .iter()
+            .any(|issue| issue.contains("declared graph edges")));
+
+        let mut imaginary_route = valid.clone();
+        for position in imaginary_route
+            .metadata
+            .corridor_routes
+            .get_mut(1)
+            .expect("the expanded cave should have a tree route")
+            .rows
+            .iter_mut()
+            .flatten()
+        {
+            position.level = position.level.saturating_add(1);
+        }
+        assert!(validation_issues(&settings, &imaginary_route)
+            .iter()
+            .any(|issue| issue.contains("exact authored ordinary floors")));
+
+        let mut unreachable_floor = valid.clone();
+        let floor = unreachable_floor
+            .volume
+            .interiors
+            .get(&INTERIOR)
+            .and_then(|interior| interior.floors.first())
+            .copied()
+            .expect("the expanded cave should have an interior floor");
+        unreachable_floor
+            .volume
+            .interiors
+            .get_mut(&INTERIOR)
+            .expect("the expanded cave should retain its interior")
+            .floors
+            .insert(TilePos::new(floor.coord, floor.level.saturating_add(10)));
+        assert!(validation_issues(&settings, &unreachable_floor)
+            .iter()
+            .any(|issue| issue.contains("interior floor unreachable")));
+
+        let mut unreachable_chamber = valid;
+        *unreachable_chamber
+            .metadata
+            .chamber_floor_levels
+            .get_mut(1)
+            .expect("the expanded cave should have a second chamber") = 30;
+        assert!(validation_issues(&settings, &unreachable_chamber)
+            .iter()
+            .any(|issue| issue.contains("chamber centre unreachable")));
+    }
+
     fn validation_issues(
         settings: &CavesSettings,
         plan: &RecipePlan<CavesMetadata>,
@@ -2624,39 +2842,65 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "10,000 expanded seeds are a manual stress corpus"]
+    fn expanded_ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks() {
+        let settings = settings(17, 6, 12);
+        let mut fallback_count = 0_u32;
+        for seed in 0..10_000 {
+            let generated = build(12, 0.4, &settings, seed, &palette(), &is_solid)
+                .unwrap_or_else(|error| panic!("expanded seed {seed} should generate: {error}"));
+            fallback_count += u32::from(generated.used_fallback);
+        }
+        assert!(
+            fallback_count < 100,
+            "{fallback_count} of 10,000 expanded maps used fallback"
+        );
+    }
+
+    #[test]
     #[ignore = "manual release/debug generator benchmark"]
     fn cave_radius_benchmark_tracks_the_radius_40_target() {
-        let settings = settings(15, 8, 7);
         let palette = palette();
-        let mut radius_40_median = 0_u128;
-        for radius in [12, 20, 40] {
-            let mut samples = Vec::new();
-            for seed in 0..8 {
-                let started = Instant::now();
-                let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
-                    .expect("the benchmark map should generate");
-                samples.push(started.elapsed().as_micros());
-                std::hint::black_box(generated);
-            }
-            samples.sort_unstable();
-            let median = samples
-                .get(samples.len() / 2)
-                .copied()
-                .expect("the benchmark always records eight samples");
-            eprintln!("Caves radius {radius}: median={median}us");
-            if radius == 40 {
-                radius_40_median = median;
-            }
-        }
-
         let target_micros = if cfg!(debug_assertions) {
             250_000
         } else {
             50_000
         };
+        let mut target_misses = Vec::new();
+        for (label, settings) in [
+            ("legacy", settings(15, 8, 7)),
+            ("expanded", settings(17, 6, 12)),
+        ] {
+            let mut radius_40_median = 0_u128;
+            for radius in [12, 20, 40] {
+                let mut samples = Vec::new();
+                for seed in 0..8 {
+                    let started = Instant::now();
+                    let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
+                        .expect("the benchmark map should generate");
+                    samples.push(started.elapsed().as_micros());
+                    std::hint::black_box(generated);
+                }
+                samples.sort_unstable();
+                let median = samples
+                    .get(samples.len() / 2)
+                    .copied()
+                    .expect("the benchmark always records eight samples");
+                eprintln!("{label} Caves radius {radius}: median={median}us");
+                if radius == 40 {
+                    radius_40_median = median;
+                }
+            }
+            if radius_40_median >= target_micros {
+                target_misses.push(format!(
+                    "{label} Caves radius 40 median was {radius_40_median}us"
+                ));
+            }
+        }
         assert!(
-            radius_40_median < target_micros,
-            "Caves radius 40 median was {radius_40_median}us; target is {target_micros}us"
+            target_misses.is_empty(),
+            "{}; target is {target_micros}us",
+            target_misses.join("; ")
         );
     }
 }
