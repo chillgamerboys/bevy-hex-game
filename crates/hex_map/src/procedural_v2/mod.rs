@@ -8,6 +8,11 @@
     dead_code,
     reason = "the foundation is consumed by the sequential V2 recipe PRs"
 )]
+mod recipe;
+#[expect(
+    dead_code,
+    reason = "the foundation is consumed by the sequential V2 recipe PRs"
+)]
 mod seed;
 #[expect(
     dead_code,
@@ -42,6 +47,8 @@ pub(crate) enum V2GenerationError {
         )
     )]
     MaterialContract(String),
+    /// A canonical fallback failed the same hard contracts as ordinary candidates.
+    InvalidFallback(Vec<String>),
 }
 
 impl fmt::Display for V2GenerationError {
@@ -58,6 +65,13 @@ impl fmt::Display for V2GenerationError {
                 )
             }
             Self::MaterialContract(reason) => formatter.write_str(reason),
+            Self::InvalidFallback(issues) => {
+                write!(
+                    formatter,
+                    "invalid procedural V2 canonical fallback: {}",
+                    issues.join("; ")
+                )
+            }
         }
     }
 }
