@@ -147,11 +147,13 @@ non-standable and may associate it with an interior. Anchors also name exact
 
 Each interior records its exact floor and entrance surfaces plus the air intervals
 that must remain clear. Roof masses identify their `InteriorRegionId`; voxelization
-publishes their exact rendered run positions through `InteriorRegions`. The grid
-projects `CutawayOccluder(region)` only onto those roof-run entities so presentation
-can query them efficiently. A cutaway tag does not remove or make terrain transparent,
-change voxel storage, or change traversal. Cave presentation may hide tagged opaque
-roof runs locally while leaving adjacent untagged columns visible as walls.
+publishes every exact authored roof voxel through `InteriorRegions`. The grid splits
+its disposable material runs wherever cutaway membership changes and projects
+`CutawayOccluder(region)` onto the resulting roof segments. Digging through a roof
+therefore preserves both surviving fragments without transferring the tag to replacement
+material. A cutaway tag does not remove or make terrain transparent, change voxel
+storage, or change traversal. Cave presentation may hide tagged opaque roof segments
+locally while leaving adjacent untagged columns visible as walls.
 
 The plan also publishes a `MapViewHint` so camera setup can frame the generated
 geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
@@ -221,11 +223,11 @@ The map exposes rendered footing through components on tile entities:
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
 by `TilePos`; they are not duplicated on tile entities. Exact interior floors and
-cutaway roof runs likewise live in `InteriorRegions`; only roof runs receive the
-`CutawayOccluder` component needed by live presentation queries. `hex_units` queries
-the footing components. It never reads `VoxelMap` or any generator, so terrain storage
-and generation can be replaced wholesale — chunked, streamed, generated differently —
-without anything else noticing.
+cutaway roof voxels likewise live in `InteriorRegions`; only rendered segments projected
+from those roof voxels receive the `CutawayOccluder` component needed by live
+presentation queries. `hex_units` queries the footing components. It never reads
+`VoxelMap` or any generator, so terrain storage and generation can be replaced wholesale
+— chunked, streamed, generated differently — without anything else noticing.
 
 **Writing** goes the other way, through a message:
 
@@ -246,7 +248,7 @@ and the map applies it. That is the whole write path.
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
 | Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |
-| Cutaway metadata names opaque roof runs | it does not alter voxel storage or traversal |
+| Cutaway metadata names exact opaque roof voxels | rendering projects them onto disposable run segments |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
 | A tile's transform must agree with its span | otherwise pieces float or sink, and **nothing errors** |
 | Clearing a one-voxel run **removes** an entity | only clearing the middle of a taller run adds one |
