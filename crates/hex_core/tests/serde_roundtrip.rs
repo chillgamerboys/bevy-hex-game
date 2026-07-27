@@ -5,7 +5,7 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, GameCommand, HexCoord, IssuedCommand, PlayerSeat, SimSeeds, SubstanceId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, PlayerSeat, Sextant, SimSeeds, SubstanceId,
     TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 
@@ -151,7 +151,22 @@ fn issued_commands_round_trip() {
             target: UnitId(9),
         },
         GameCommand::EndTurn { unit },
-        GameCommand::Cast { unit },
+        // Both shapes a cast can take: a directed variable-mana ritual, and
+        // the plain anchored form where the optional fields are absent.
+        GameCommand::Cast {
+            unit,
+            spell: "Flamethrower".to_owned(),
+            target: TilePos::new(HexCoord::from_axial(2, -1), 3),
+            facing: Some(Sextant::C),
+            mana: Some(4),
+        },
+        GameCommand::Cast {
+            unit,
+            spell: "Ember".to_owned(),
+            target: TilePos::new(HexCoord::ORIGIN, 1),
+            facing: None,
+            mana: None,
+        },
         GameCommand::Channel { unit },
         GameCommand::ChooseDisables { unit },
     ];

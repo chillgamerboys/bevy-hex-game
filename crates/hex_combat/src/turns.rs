@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use hex_assets::CombatSettings;
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, Screen, TilePos, Turn, UnitId,
+    PausableSystems, RoundElapsed, Screen, TilePos, Turn, UnitId,
 };
 use hex_units::{
     either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
@@ -104,15 +104,55 @@ impl TurnOrder {
     }
 
     /// Moves to the next unit, wrapping and counting a round.
-    fn advance(&mut self) {
+    ///
+    /// Returns whether the wrap happened — that is, whether a **round
+    /// elapsed**. Several systems need to know: effects that tick per round,
+    /// knowledge that decays per round, and anything counting fight length.
+    /// Returning it here rather than having each of them re-derive it from
+    /// `round` is what keeps them from disagreeing about when a round ended.
+    fn advance(&mut self) -> bool {
         if self.order.is_empty() {
-            return;
+            return false;
         }
         self.current += 1;
         if self.current >= self.order.len() {
             self.current = 0;
             self.round += 1;
+            return true;
         }
+        false
+    }
+
+    /// Takes a unit out of the fight, keeping whose turn it is intact.
+    ///
+    /// Returns whether the unit was in the order at all.
+    ///
+    /// **`current` is an index, not an id**, so removing somebody earlier in
+    /// the order silently hands the turn to the wrong unit unless the index
+    /// moves with them. That is the entire reason this is a method rather than
+    /// a `Vec::retain` at each call site — death, rout and despawn all need it,
+    /// and each would get the off-by-one wrong separately.
+    ///
+    /// Removing the acting unit leaves `current` pointing at whoever now
+    /// occupies that slot — the next unit — which is what a turn order should
+    /// do when somebody dies mid-turn. Removing the last unit wraps to the
+    /// front **without** counting a round, because no round elapsed: units
+    /// simply stopped existing.
+    pub fn remove(&mut self, unit: UnitId) -> bool {
+        let Some(index) = self.position_of(unit) else {
+            return false;
+        };
+        self.order.remove(index);
+        if self.order.is_empty() {
+            self.current = 0;
+            return true;
+        }
+        if index < self.current {
+            self.current -= 1;
+        } else if self.current >= self.order.len() {
+            self.current = 0;
+        }
+        true
     }
 
     fn clear(&mut self) {
@@ -124,7 +164,8 @@ impl TurnOrder {
 
 /// Registers the loop.
 pub fn plugin(app: &mut App) {
-    app.register_type::<Initiative>()
+    app.add_message::<RoundElapsed>()
+        .register_type::<Initiative>()
         .register_type::<Turn>()
         .init_resource::<TurnOrder>()
         // Idempotent alongside hex_units' own init: combat resolves the order
@@ -389,6 +430,7 @@ fn advance_turn(
     mut turn_order: ResMut<TurnOrder>,
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
+    mut rounds: MessageWriter<RoundElapsed>,
     acting: Query<(Entity, &Turn, Has<Busy>)>,
 ) {
     let Some(current) = turn_order.current() else {
@@ -410,7 +452,9 @@ fn advance_turn(
     }
 
     commands.entity(entity).remove::<Turn>();
-    turn_order.advance();
+    if turn_order.advance() {
+        rounds.write(RoundElapsed);
+    }
     if let Some(next) = turn_order
         .current()
         .and_then(|unit| registry.entity_of(unit))
@@ -487,6 +531,77 @@ mod tests {
         order.clear();
         assert!(order.is_empty());
         assert_eq!(order.round, 0, "a new fight starts at round zero");
+    }
+
+    /// Removing somebody who already acted must not hand the turn to the
+    /// wrong unit. `current` is an index, so a naive `Vec::remove` shifts
+    /// everyone left and silently skips whoever was next.
+    #[test]
+    fn removing_an_earlier_unit_keeps_the_same_unit_acting() {
+        let mut order = order_of(&[UnitId(1), UnitId(2), UnitId(3)]);
+        order.advance();
+        assert_eq!(order.current(), Some(UnitId(2)), "precondition");
+
+        assert!(order.remove(UnitId(1)));
+
+        assert_eq!(
+            order.current(),
+            Some(UnitId(2)),
+            "removing an earlier unit must not change whose turn it is"
+        );
+    }
+
+    /// Removing whoever is acting passes the turn to the next unit rather than
+    /// skipping one, because the survivor slides into the vacated slot.
+    #[test]
+    fn removing_the_acting_unit_gives_the_turn_to_the_next() {
+        let mut order = order_of(&[UnitId(1), UnitId(2), UnitId(3)]);
+
+        assert!(order.remove(UnitId(1)));
+
+        assert_eq!(order.current(), Some(UnitId(2)));
+    }
+
+    /// Removing the last unit in the order wraps to the front — and must not
+    /// count a round, because none elapsed.
+    #[test]
+    fn removing_the_last_unit_wraps_without_counting_a_round() {
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
+        order.advance();
+        assert_eq!(order.current(), Some(UnitId(2)), "precondition");
+        assert_eq!(order.round, 0, "precondition");
+
+        assert!(order.remove(UnitId(2)));
+
+        assert_eq!(order.current(), Some(UnitId(1)), "the order should wrap");
+        assert_eq!(order.round, 0, "removal is not a round");
+    }
+
+    /// The last removal empties the fight without panicking on the index.
+    #[test]
+    fn removing_everyone_empties_the_order() {
+        let mut order = order_of(&[UnitId(1)]);
+        assert!(order.remove(UnitId(1)));
+        assert!(order.is_empty());
+        assert_eq!(order.current(), None);
+    }
+
+    #[test]
+    fn removing_a_unit_that_is_not_in_the_order_reports_it() {
+        let mut order = order_of(&[UnitId(1)]);
+        assert!(!order.remove(UnitId(9)));
+        assert_eq!(order.order().len(), 1);
+    }
+
+    /// The wrap is what a round *is*, and consumers are told about it exactly
+    /// once — anything re-deriving it from the counter could double-count.
+    #[test]
+    fn advance_reports_the_wrap_exactly_once() {
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
+
+        assert!(!order.advance(), "mid-order is not a round boundary");
+        assert!(order.advance(), "the wrap is the round boundary");
+        assert!(!order.advance(), "and the next step is not");
     }
 
     #[test]
