@@ -7,6 +7,7 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
@@ -20,18 +21,19 @@ That matters more here than in most projects, because a good deal of the code wi
 be written by AI agents. An agent that *can* import across a boundary eventually
 will, and no amount of documentation prevents it. A compiler error does.
 
-| Crate | Holds | Depends on |
-|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer |
-| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` |
-| `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
-| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
-| `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
-| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
-| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
-| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
+| Crate | Holds | Depends on | Owner |
+|---|---|---|---|
+| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
+| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
+| `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
+| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
+| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` | gameplay |
+| `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
+| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
+| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 
 ### `hex_map` is a leaf, on purpose
 
@@ -68,8 +70,31 @@ it is one person's, and its contract is the types it exposes.
 
 ### Ownership cuts both ways
 
-The map is one person's; **`hex_units` and `hex_combat` are the other's**. The split is
-not only about compile times — it is about who gets to decide.
+Two roles, named so the arrangement survives a change of people:
+
+| Role | Owns |
+|---|---|
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
+| **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
+
+`hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
+whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
+shared middle, flagged to the other side when a change touches their domain.
+
+`hex_assets` is split by concern rather than guarded as one person's directory.
+Generic mechanisms — loader traits, load tracking, common registration patterns, and
+cross-domain reference infrastructure — remain gameplay-owned. A domain's schema
+types, validation, settings resources, and matching RON content belong to that
+domain's owner. The world owner may therefore add or change world/perception schemas
+and perform their routine exports and registration without waiting on a permanent
+loader gate. A change to the generic loading mechanism or to a cross-domain contract
+still requires the owning review; placing domain code in `hex_assets` does not waive
+the crate graph or the contract-first process.
+
+Where the two meet is [contracts.md](contracts.md); what each is still asking of the
+other is [planning/boundary.md](planning/boundary.md).
+
+The split is not only about compile times — it is about who gets to decide.
 
 Review across that line is welcome and has caught real bugs in both directions. But a
 comment on a *design* question inside somebody else's crate is an argument, not a veto:
@@ -99,9 +124,14 @@ extent but knows nothing about what is stacked on it, so gameplay cannot tell a 
 from the inside of a column — let alone whether a body fits in the space above one.
 
 Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
-into the map, so a spell that digs or builds requests it and the map applies it.
+into the map, so a spell that digs or builds requests it and the map applies it. The
+planned second write path, `TerrainImpact`, keeps the same direction and hands the map
+even more authority: gameplay announces which voxels an elemental effect reaches, and
+the map decides what each material does about it ([systems/casting.md](systems/casting.md)).
 
-See [systems/map.md](systems/map.md) for the voxel model itself.
+See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
+semantic plan and its exact published projections are specified in
+[systems/world-generation-v3.md](systems/world-generation-v3.md).
 
 `hex_units`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
@@ -117,6 +147,15 @@ the split, `player.rs` imported from three foreign modules to do its one job.
 Anything they share goes in `hex_core`. That is why `HexTile`, `HexGrid` and
 `HexSpan` — which look like presentation concerns — live there: gameplay has to
 query tiles without depending on how they are generated or drawn.
+
+The planned `hex_perception` crate follows the same rule. It may depend on
+`hex_units` to observe unit positions, but it cannot expose map internals back to
+units. `hex_units` reads only the `LocalMapKnowledge` projection in `hex_core`;
+`hex_combat` may depend on the richer perception API for detection, targeting, and
+last-known-position behavior. A lighting-profile adapter publishes the core
+`ExteriorIllumination` projection before perception runs; it does not expose
+`hex_world` renderer state to perception. Physical lights and rendered fog are
+presentation. Neither is the authoritative gameplay visibility calculation.
 
 ## Positions are voxels, not coordinates
 
@@ -185,9 +224,14 @@ sets make the ordering that crosses crate boundaries explicit:
   state transitions and self-contained UI/presentation systems may run outside them.
 - **`PausableSystems`** — gates gameplay work such as movement animation behind
   `Pause(false)`.
-- **`GameplaySetup`** — `Resources → Terrain → Actors → View → Finalize`, for
-  `OnEnter(Screen::Gameplay)`. `View` applies generated framing only after terrain and
-  actors are queryable.
+- **`GameplaySetup`** — `Resources → Terrain → Actors → Perception → View →
+  Finalize`, for `OnEnter(Screen::Gameplay)`. `Perception` derives initial knowledge
+  only after terrain and actors are queryable; `View` applies generated framing and
+  presentation only after that projection exists.
+- **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
+  ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
+  `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
+  phase is the cross-owner hand-off from authored lighting, not a renderer query.
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 

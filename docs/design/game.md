@@ -163,6 +163,17 @@ There is no HP. Damage disables hexes.
   enchantments.
 - Damage type does not matter, except fire's burn.
 
+### Nothing is aimed away from you
+
+There is **no friendly-fire filter**. A spell may be aimed at anyone, and an area
+effect touches everything inside its volume — allies, enemies, and the caster alike.
+Healing an enemy is allowed and is your own fault; a fireball dropped on a melee is a
+decision, not a mis-click the game will protect you from.
+
+That is what makes area spells a real choice rather than free damage, and it is why
+positioning is a defensive tool. How the rule is enforced — and the volume an area
+effect actually covers — is [casting.md](../systems/casting.md).
+
 ### Defences subtract
 
 Defensive enchantments reduce incoming disable counts by a flat amount. A metal shield
@@ -192,23 +203,37 @@ thing that can go wrong is something they could in principle have known.
 ### Recovery and death
 
 - Hexes recover through healing spells or rest after combat.
-- Death is permanent unless reversed by a revival spell.
+- Death is permanent unless reversed by a restoring spell.
 - **Proposed:** functional death arrives before zero. A character whose spell hexes
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
   period rather than a slog, and gives enemies a legible rout condition.
+- **Provisional first implementation:** a unit whose hexes are all disabled leaves the
+  turn order and is **downed**, revivable by a restoring spell. This is a testable
+  starting behavior, not the answer to functional death or the
+  [permadeath question](#permadeath).
 
 ### Information and divination
 
 Enemy lattices and intent are hidden by default. Light and higher-order divination
 reveal them.
 
+Spatial perception and lattice knowledge are separate. Seeing an enemy establishes
+where it is and permits targeting; it does not reveal the enemy's lattice or intent.
+The sun, moon, caves, local lights, faction memory, and loss of contact follow the
+[perception contract](../systems/perception.md). Divination changes the separate
+lattice-information channel.
+
+Observation gates combat without replacing distance: an observed hostile pair must
+also satisfy `engage_range` to start combat. The existing `disengage_margin` handles
+an observed retreat, while losing sight starts a separate one-round search.
+
 - What a divination reveals scales with tier: full lattice or partial, one enemy or
   all, everything in a radius.
 - Revealed information **decays or is one-time**, unless the divination is an
   enchantment. Seeing is a recurring action expense, which argues strongly for
   divination enchantments being worth their locked mana.
-- There is a base level of visibility for all parties.
+- Every faction has the same base sight profile, pooled across its active characters.
 - Simple divination is **two-way** — standing lit makes you readable. Cheap sight
   announces you.
 - Light gems feed both divination and fusions like lightning, so Light-heavy builds
@@ -267,18 +292,48 @@ properties and elevations:
 
 - traversable by all units (grass, floor, stone) or only some — a swamp only for
   specific units or after a spell, lava only for flying units or after a spell
-- illuminated or not, feeding the visibility mechanic
+- gameplay illumination, separate from rendered light, feeding the
+  [perception mechanic](../systems/perception.md)
 - whether an evocation or enchantment can be cast there — most tiles allow
   evocations unless they have special properties like an anti-magic field; fewer
   allow enchantments, since a fixed stone wall cannot be cast on water
 
-Elevation feeds visibility: more of the map is visible from higher tiles.
+### Magic shapes the world; the world decides how
+
+**Evocations make persistent terrain changes.** They last at least across multiple
+turns rather than vanishing with the casting animation. The initial implementation
+makes applied terrain edits permanent: conjured stone is simply stone until something
+changes it again. It initially represents enchantment manifestations as bound
+entities that vanish when the enchantment breaks, but that implementation split is
+provisional.
+
+**A cast announces; the world answers.** A spell says which voxels it reaches and what
+kind of energy arrives there; what the *material* does about it is the world's own
+rule. Fire on dirt and fire on granite may produce different outcomes that a fireball
+does not need to predict. How the first wave charges a fully resisted cast is
+provisional rather than a permanent design rule. Generated feature effects, including
+burning trees and tall grass, are deferred.
+
+Conjuration still names its material because that is part of the spell's identity, but
+the world explicitly marks which substances are admissible for spell content. Merely
+defining bedrock, water, or lava does not make it conjurable.
+
+Every cast anchors on a currently Observed exact position. An area resolved from that
+anchor may extend into hidden terrain and affect hidden units, including allies, but
+its acknowledgments, presentation, and logs cannot reveal those hidden outcomes.
+
+The full contract is [casting.md](../systems/casting.md).
+
+Elevation helps sight downhill without revealing stacked surfaces by accident:
+Bright and Dim sight gain one horizontal hex for every four complete levels above
+the target, capped at six. Dark sight gains nothing.
 
 Characters travel in a formation. Once combat starts, controls switch to moving each
 character independently.
 
-What is on screen is the tiles within a fixed distance of the character, horizontally
-and vertically — which is what allows multiple floors.
+What a faction can observe uses separate horizontal and vertical sight bands, which
+is what lets the rule address multiple floors without collapsing them. What the
+camera happens to frame is presentation, not knowledge.
 
 Each tile type should be distinguishable by colour and design. A tile is a **3D prism
 with a hex base**, so it has five coordinates: cube coordinates horizontally (see

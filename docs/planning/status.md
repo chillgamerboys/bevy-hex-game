@@ -75,7 +75,7 @@ place** — they are meant to be replaced.
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
 | **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
-| **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
+| **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
 | **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
 | **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
 
@@ -113,6 +113,48 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
   row above is waiting on.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.
+
+## Casting: binding contracts and provisional first wave
+
+[casting.md](../systems/casting.md) is a contract for wave 3, not a description of the
+build. **Nothing casts a spell today** — `GameCommand::Cast` parses and is rejected
+with a reason.
+
+The binding parts are:
+
+- **Friendly fire remains enabled.** Unit effects include allies, enemies, and the
+  caster whenever the resolved volume includes them.
+- **Every positional anchor must be Observed.** An area may extend into Remembered or
+  Unknown positions, but presentation and logs do not reveal hidden impact outcomes.
+- **Evocation terrain persists for multiple turns.** The initial implementation makes
+  applied terrain edits permanent rather than keeping an expiry ledger.
+- **Generated feature effects are deferred.** Trees, tall grass, and other feature
+  entities ignore impacts until a feature-response and outcome contract lands.
+- **Conjuration is map-approved content.** A spell may name only a substance marked
+  `conjurable`; the generic `TerrainEdit::Set` path remains available for authored
+  restoration and other non-spell uses.
+
+The first implementation also ships with explicit limitations:
+
+- **Blast volumes will be geometric, not obstruction-aware.** A sphere next to a cave
+  wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
+  same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
+  and `needs_los` on spell content is parsed but unenforced until then.
+- **A breached cave roof will not admit daylight.** Terrain edits already keep the
+  interior *roof* projection current, but interior **membership** is never re-derived,
+  so a chamber you blow open still counts as inside. Nothing is wrong today — light
+  domains have no producer yet — but the two facts disagree the moment perception
+  lands ([boundary.md](boundary.md) ask I).
+- **Casting is provisionally combat-only**, because out-of-combat mana regeneration
+  has no answer yet, and **channelling and rituals are deferred** — `co_castable`
+  parses and labels rituals in the demo, but has no mechanical effect.
+- **Paid-on-resistance is provisional.** The first wave charges mana and the action
+  after a legal announcement even if every material resists.
+- **No-undermining is provisional.** The first wave rejects terrain creation through
+  a unit and edits to its supporting surface until falling and footing reconciliation
+  exist.
+- **Downed-first death is provisional.** A fully disabled unit initially leaves the
+  turn order and remains revivable; functional death and permadeath remain open.
 
 ## Not yet done, at the toolchain level
 

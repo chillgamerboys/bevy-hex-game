@@ -100,6 +100,7 @@ every UI root pointed at the redirected camera.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
@@ -114,6 +115,29 @@ See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
+
+The planned **`hex_perception`** crate owns authoritative illumination, faction sight,
+and map knowledge. It may depend on `hex_units` to observe unit positions.
+`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`,
+while `hex_combat` may consume the richer perception API. Neither gameplay crate may
+import map-generator internals.
+
+**Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
+`hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
+content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
+`hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is
+shared. Every fact that crosses between them, and whether it is live, agreed, reserved,
+or still an ask, is `docs/contracts.md`; the open asks are
+`docs/planning/boundary.md`.
+
+`hex_assets` ownership follows the concern, not the directory. Generic loader traits,
+load tracking, registration patterns, and cross-domain reference machinery stay with
+the gameplay owner. A domain owner may change its own schema types, validation,
+settings resources, content, and routine registration without a permanent loader
+bottleneck. Generic loader behavior and cross-domain contracts still require their
+owner's review; crate boundaries do not change.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
@@ -139,12 +163,17 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors → View → Finalize`) orders
-  `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
-  set — `.chain()` cannot express it, and a local chain that looks correct will race.
-  The set boundary also supplies a sync point: `Commands`-spawned entities are not
-  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made,
-  `View` sees the completed world, and `Finalize` sees the required actors.
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Perception → View → Finalize`)
+  orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a
+  shared set — `.chain()` cannot express it, and a local chain that looks correct
+  will race. The set boundary also supplies a sync point: `Commands`-spawned entities
+  are not queryable until the queue is applied, so `Actors` sees the tiles `Terrain`
+  made, `Perception` sees the actors, `View` sees the completed projection, and
+  `Finalize` sees the required actors.
+- **`PerceptionSystems`** (`PublishAmbient → ResolveIllumination →
+  ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
+  perception and later updates. Authored lighting publishes
+  `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.

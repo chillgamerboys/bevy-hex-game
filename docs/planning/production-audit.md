@@ -3,9 +3,9 @@
 > **A dated snapshot, deliberately frozen.** Everything below was true of
 > `dev` at `afe9b79` (plus the then-open PR #52) on **2026-07-26**, and is
 > not updated as the code moves — that is what makes it citable. The living
-> plan derived from it is [roadmap.md](roadmap.md); the map-owner asks are
-> [map-asks.md](map-asks.md). Mechanical doc tooling must never edit this
-> file.
+> plan derived from it is [roadmap.md](roadmap.md); the cross-owner asks are
+> [boundary.md](boundary.md) (called `map-asks.md` when this was written).
+> Mechanical doc tooling must never edit this file.
 
 **Question asked:** what has to change, architecturally and operationally,
 for this codebase to become the commercial game
@@ -261,7 +261,7 @@ combat state (order by id, round, turn, `PendingDecision`), knowledge,
 campaign flags. Loading rides the existing Loading-screen flow
 (`SaveToRestore` beside `ScenarioToLoad`) so every settings gate holds.
 World restoration: seeded regen + edit replay now; the map-owned
-`TerrainSnapshot` ([map-asks.md](map-asks.md) D2) as the generator-proof
+`TerrainSnapshot` ([boundary.md](boundary.md) D2) as the generator-proof
 primary format when it lands.
 
 ### 6. The knowledge seam
