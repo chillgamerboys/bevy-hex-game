@@ -32,17 +32,20 @@ use std::collections::{BTreeMap, HashMap};
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-    HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
-    ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
+    BiomeRegionId, BiomeRegions, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom,
+    HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
+    MapAnchors, MapViewHint, ResolvedMapSeed, Screen, SpecialMovementRegion,
+    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, TraversalBlockers,
+    MAX_HEADROOM,
 };
 use hex_map::{
     CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
-    MountainsSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings,
-    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
+    MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
+    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
+    ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings, SubstanceRun, TacticalMetrics,
+    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+    V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -201,6 +204,35 @@ fn v2_hills_app() -> App {
                 valley_level: 15,
                 max_relief: 8,
                 hills_per_bank: 3,
+            }),
+        })),
+    });
+    app
+}
+
+fn v3_hills_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Hills(V3HillsSettings {
+                    valley_level: 15,
+                    max_relief: 8,
+                    hills_per_bank: 3,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
             }),
         })),
     });
@@ -731,6 +763,97 @@ fn replacing_roof_material_does_not_transfer_its_cutaway_tag() {
         Some(region),
         "the remaining roof run lost its cutaway tag"
     );
+}
+
+fn insert_stale_generated_resources(app: &mut App) {
+    let position = TilePos::new(HexCoord::ORIGIN, 7);
+
+    let mut map = VoxelMap::new();
+    map.set(position, SubstanceId(1));
+    app.insert_resource(map);
+
+    let mut anchors = MapAnchors::new();
+    assert_eq!(
+        anchors.insert(MapAnchorId::from("stale_anchor"), position),
+        None
+    );
+    app.insert_resource(anchors);
+
+    let mut special_regions = SpecialMovementRegions::new();
+    assert_eq!(
+        special_regions.insert(position, SpecialMovementRegion(91)),
+        None
+    );
+    app.insert_resource(special_regions);
+
+    let mut interiors = InteriorRegions::new();
+    assert_eq!(
+        interiors.insert_surface(position, InteriorRegionId(92)),
+        None
+    );
+    assert_eq!(
+        interiors.insert_roof_voxel(position.above(), InteriorRegionId(92)),
+        None
+    );
+    app.insert_resource(interiors);
+
+    let mut blockers = TraversalBlockers::new();
+    assert!(blockers.insert(position));
+    app.insert_resource(blockers);
+
+    let mut biomes = BiomeRegions::new();
+    assert_eq!(biomes.insert(position, BiomeRegionId(93)), None);
+    app.insert_resource(biomes);
+
+    app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
+    app.insert_resource(GenerationReport {
+        generator_version: 99,
+        seed: 99,
+        selected_candidate: Some(7),
+        candidates_evaluated: 8,
+        valid_candidates: 1,
+        repair_rounds: 0,
+        repair_actions: vec!["stale".to_owned()],
+        used_fallback: false,
+        settings_fingerprint: 1,
+        semantic_plan_fingerprint: Some(2),
+        map_fingerprint: 3,
+        metrics: TacticalMetrics::default(),
+        elapsed_micros: 4,
+        notes: vec!["stale".to_owned()],
+    });
+    app.insert_resource(TerrainReady);
+}
+
+#[test]
+fn unavailable_v3_recipe_fails_closed_and_clears_stale_generated_state() {
+    let mut app = v3_hills_app();
+    insert_stale_generated_resources(&mut app);
+
+    enter_gameplay(&mut app);
+
+    let failure = app.world().resource::<GameplaySetupFailure>();
+    assert!(
+        failure.reason.contains("V3 recipe Hills is not available"),
+        "unexpected setup failure: {}",
+        failure.reason
+    );
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<TraversalBlockers>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+
+    let grids = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(grids, 0, "failed V3 setup spawned a grid");
 }
 
 #[test]
@@ -1303,8 +1426,11 @@ fn leaving_gameplay_removes_the_map() {
 fn leaving_v2_hills_removes_all_generated_resources() {
     let mut app = v2_hills_app();
     enter_gameplay(&mut app);
+    assert!(app.world().contains_resource::<TerrainReady>());
     assert!(app.world().contains_resource::<MapViewHint>());
     assert!(app.world().contains_resource::<GenerationReport>());
+    assert!(app.world().contains_resource::<TraversalBlockers>());
+    assert!(app.world().contains_resource::<BiomeRegions>());
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -1317,6 +1443,8 @@ fn leaving_v2_hills_removes_all_generated_resources() {
     assert!(!app.world().contains_resource::<MapAnchors>());
     assert!(!app.world().contains_resource::<SpecialMovementRegions>());
     assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<TraversalBlockers>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
     assert!(!app.world().contains_resource::<MapViewHint>());
     assert!(!app.world().contains_resource::<GenerationReport>());
     assert!(!app.world().contains_resource::<TerrainReady>());
