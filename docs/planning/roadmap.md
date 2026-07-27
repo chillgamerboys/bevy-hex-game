@@ -31,14 +31,14 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat | <!-- linear: HEX-8 owner: shravan-kumaran -->
 | Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat | <!-- linear: HEX-12 owner: shravan-kumaran -->
 | Run bottoms on tiles | publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to wave 3 terrain casting | map |
-| Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat |
-| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat |
-| Casting UX | shape previews under the cursor, blocked-reason surfacing from `castable()`, target cycling, and cast presentation per element | units |
-| Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game |
-| Combat readability | initiative order display, a live/disabled lattice readout beyond a count, and a combat log | game |
-| Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat |
-| Magic outside combat | casting in real time, which first requires an answer to out-of-combat mana regeneration | combat |
-| Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat |
+| Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
+| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
+| Casting UX | shape previews under the cursor, blocked-reason surfacing from `castable()`, target cycling, and cast presentation per element | units | <!-- linear: HEX-21 owner: shravan-kumaran -->
+| Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game | <!-- linear: HEX-22 owner: shravan-kumaran -->
+| Combat readability | initiative order display, a live/disabled lattice readout beyond a count, and a combat log | game | <!-- linear: HEX-23 owner: shravan-kumaran -->
+| Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Magic outside combat | casting in real time, which first requires an answer to out-of-combat mana regeneration | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
+| Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game | <!-- linear: HEX-14 owner: shravan-kumaran -->
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
 | Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
