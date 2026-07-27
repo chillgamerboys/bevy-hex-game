@@ -1,14 +1,16 @@
 // Sun, ambient light, sky, and the optional extras.
 //
 // These use real physical units. Illuminance is in lux: around 100000 is direct
-// noon sun, 10000 is overcast. Everything here takes effect the moment you save.
+// noon sun, 10000 is overcast. For Static profiles every flat field below is live.
+// For Cycle, the flat fields are the compatibility and noon baseline by convention:
+// edit the keyframes for time-varying light, colour, sky, fog, and exposure. Only the
+// cloud shape fields are inherited unchanged by every cycle keyframe.
 //
-// The values below are the game's shipped look. The sky light and the haze are both
-// switched off — they are here so the lighting can be explored without touching Rust,
-// not because the game needs them. See docs/CONTENT.md before turning them up.
+// The values below are the game's shipped noon look. Sky fill and haze are off at
+// this baseline, although non-noon cycle keyframes can enable them.
 (
-    // The sun, and the key light for the whole scene. Its colour and angle decide the
-    // shape of everything: shadows are what model flat-shaded terrain.
+    // The static/noon key light baseline. Its colour and angle decide the shape of
+    // everything: shadows are what model flat-shaded terrain.
     sun_illuminance: 10000.0,
     sun_color: (1.0, 1.0, 1.0),
 
@@ -20,19 +22,19 @@
     ambient_brightness: 80.0,
     ambient_color: (1.0, 1.0, 1.0),
 
-    // Optional sky light: a soft fill that varies with which way a surface faces —
-    // blue from overhead, warm bounce from the ground — so it colours shadows instead
-    // of flattening the scene. 0.0 is off. Try ~100–200 before going higher; a few
-    // hundred already starts washing the shading out.
+    // Optional static/noon sky fill: a soft fill that varies with surface direction.
+    // 0.0 is off at the baseline. Cycle keyframes author their own fill intensity and
+    // ground colour; a few hundred already starts washing the shading out.
     sky_light_intensity: 0.0,
     ground_color: (0.32, 0.27, 0.21),
 
-    // Sky gradient: paler at the horizon, deeper blue overhead. The sky light reuses
-    // these two, so the lighting can never drift away from the sky.
+    // Static/noon sky gradient: paler at the horizon, deeper blue overhead. Cycle
+    // keyframes author these colours independently.
     sky_color: (0.55, 0.80, 0.95),
     zenith_color: (0.25, 0.50, 0.85),
 
-    // Hexagonal clouds.
+    // Hexagonal clouds. Cycle keyframes author cloud colour, while coverage, scale,
+    // softness, roundness, and noise remain shared for the whole cycle.
     cloud_color: (0.97, 0.98, 1.0),
     cloud_coverage: 0.18,
     hex_cloud_scale: 16.0,
@@ -42,9 +44,222 @@
     // Fbm edge break-up: 0.0 clean, ~0.5 wispy.
     cloud_noise: 0.3,
 
-    // Optional distance haze, off by default. It veils the whole map in pale grey-blue,
-    // which costs more colour than it buys atmosphere at this camera distance.
+    // Optional static/noon distance haze, off at the baseline. Cycle keyframes can
+    // enable restrained haze around dawn and dusk.
     fog_color: (0.62, 0.72, 0.82),
     fog_sun_color: (1.0, 0.78, 0.50),
     fog_density: 0.0,
+
+    // A deterministic development clock. Scenarios may select a starting hour and the
+    // inspector can scrub it, but ordinary play does not advance it automatically.
+    profile: Cycle((
+        default_time_hours: 12.0,
+        sun_disc_color: (1.0, 0.94, 0.78),
+        sun_angular_diameter_degrees: 1.2,
+        // Halo widths are radial thicknesses measured outwards from each disc edge.
+        sun_halo_width_degrees: 7.0,
+        moon_disc_color: (0.84, 0.90, 1.0),
+        moon_angular_diameter_degrees: 1.4,
+        moon_halo_width_degrees: 8.0,
+        // Angular radius of the localized lower-dome reflection.
+        lower_glow_angular_radius_degrees: 34.0,
+        lower_glow_strength: 0.18,
+        keyframes: [
+            // Midnight: stylized moonlight, bright enough to keep voxel silhouettes.
+            (
+                time_hours: 0.0,
+                sun_azimuth_degrees: 218.17207,
+                sun_elevation_degrees: -61.434143,
+                active_body: Moon,
+                direct_illuminance: 850.0,
+                direct_color: (0.58, 0.69, 1.0),
+                ambient_brightness: 70.0,
+                ambient_color: (0.48, 0.57, 0.82),
+                sky_light_intensity: 55.0,
+                ground_color: (0.08, 0.09, 0.14),
+                sky_color: (0.10, 0.17, 0.31),
+                zenith_color: (0.025, 0.05, 0.14),
+                cloud_color: (0.28, 0.34, 0.50),
+                fog_color: (0.11, 0.16, 0.27),
+                fog_sun_color: (0.36, 0.43, 0.66),
+                fog_density: 0.0,
+                exposure_ev100: 6.8,
+                sun_halo_strength: 0.0,
+                moon_halo_strength: 0.32,
+            ),
+            // Pre-dawn remains moonlit until both bodies meet at the true horizon.
+            (
+                time_hours: 5.0,
+                sun_azimuth_degrees: 320.0,
+                sun_elevation_degrees: -12.0,
+                active_body: Moon,
+                direct_illuminance: 500.0,
+                direct_color: (0.56, 0.65, 0.92),
+                ambient_brightness: 62.0,
+                ambient_color: (0.52, 0.58, 0.78),
+                sky_light_intensity: 45.0,
+                ground_color: (0.11, 0.10, 0.15),
+                sky_color: (0.22, 0.30, 0.47),
+                zenith_color: (0.08, 0.12, 0.27),
+                cloud_color: (0.43, 0.47, 0.59),
+                fog_color: (0.27, 0.30, 0.42),
+                fog_sun_color: (0.72, 0.47, 0.38),
+                fog_density: 0.0002,
+                exposure_ev100: 7.2,
+                sun_halo_strength: 0.08,
+                moon_halo_strength: 0.12,
+            ),
+            // Internal dark handoff: the low intensity masks the 180-degree key flip.
+            (
+                time_hours: 6.2,
+                sun_azimuth_degrees: 328.0,
+                sun_elevation_degrees: 0.0,
+                active_body: Sun,
+                direct_illuminance: 200.0,
+                direct_color: (0.82, 0.58, 0.58),
+                ambient_brightness: 76.0,
+                ambient_color: (0.62, 0.68, 0.88),
+                sky_light_intensity: 42.0,
+                ground_color: (0.18, 0.13, 0.15),
+                sky_color: (0.37, 0.47, 0.64),
+                zenith_color: (0.13, 0.22, 0.43),
+                cloud_color: (0.68, 0.61, 0.67),
+                fog_color: (0.40, 0.43, 0.54),
+                fog_sun_color: (0.91, 0.49, 0.32),
+                fog_density: 0.0005,
+                exposure_ev100: 7.5,
+                sun_halo_strength: 0.36,
+                moon_halo_strength: 0.06,
+            ),
+            (
+                time_hours: 6.5,
+                sun_azimuth_degrees: 330.0,
+                sun_elevation_degrees: 3.0,
+                active_body: Sun,
+                direct_illuminance: 2400.0,
+                direct_color: (1.0, 0.67, 0.40),
+                ambient_brightness: 95.0,
+                ambient_color: (0.72, 0.78, 0.96),
+                sky_light_intensity: 35.0,
+                ground_color: (0.27, 0.18, 0.16),
+                sky_color: (0.46, 0.62, 0.79),
+                zenith_color: (0.18, 0.31, 0.60),
+                cloud_color: (0.94, 0.77, 0.66),
+                fog_color: (0.51, 0.57, 0.68),
+                fog_sun_color: (1.0, 0.54, 0.29),
+                fog_density: 0.0008,
+                exposure_ev100: 8.0,
+                sun_halo_strength: 0.65,
+                moon_halo_strength: 0.0,
+            ),
+            // This keyframe deliberately reproduces every shipped noon lighting value.
+            (
+                time_hours: 12.0,
+                sun_azimuth_degrees: 38.172066,
+                sun_elevation_degrees: 61.434143,
+                active_body: Sun,
+                direct_illuminance: 10000.0,
+                direct_color: (1.0, 1.0, 1.0),
+                ambient_brightness: 80.0,
+                ambient_color: (1.0, 1.0, 1.0),
+                sky_light_intensity: 0.0,
+                ground_color: (0.32, 0.27, 0.21),
+                sky_color: (0.55, 0.80, 0.95),
+                zenith_color: (0.25, 0.50, 0.85),
+                cloud_color: (0.97, 0.98, 1.0),
+                fog_color: (0.62, 0.72, 0.82),
+                fog_sun_color: (1.0, 0.78, 0.50),
+                fog_density: 0.0,
+                exposure_ev100: 9.7,
+                sun_halo_strength: 0.12,
+                moon_halo_strength: 0.0,
+            ),
+            (
+                time_hours: 16.5,
+                sun_azimuth_degrees: 95.0,
+                sun_elevation_degrees: 25.0,
+                active_body: Sun,
+                direct_illuminance: 6000.0,
+                direct_color: (1.0, 0.80, 0.55),
+                ambient_brightness: 110.0,
+                ambient_color: (0.85, 0.88, 1.0),
+                sky_light_intensity: 15.0,
+                ground_color: (0.36, 0.25, 0.19),
+                sky_color: (0.53, 0.72, 0.88),
+                zenith_color: (0.24, 0.43, 0.74),
+                cloud_color: (1.0, 0.88, 0.80),
+                fog_color: (0.60, 0.67, 0.76),
+                fog_sun_color: (1.0, 0.65, 0.35),
+                fog_density: 0.0002,
+                exposure_ev100: 9.2,
+                sun_halo_strength: 0.38,
+                moon_halo_strength: 0.0,
+            ),
+            (
+                time_hours: 18.5,
+                sun_azimuth_degrees: 110.0,
+                sun_elevation_degrees: 3.0,
+                active_body: Sun,
+                direct_illuminance: 3500.0,
+                direct_color: (1.0, 0.64, 0.38),
+                ambient_brightness: 180.0,
+                ambient_color: (0.72, 0.78, 0.96),
+                sky_light_intensity: 150.0,
+                ground_color: (0.28, 0.22, 0.21),
+                sky_color: (0.46, 0.59, 0.76),
+                zenith_color: (0.17, 0.28, 0.55),
+                cloud_color: (0.72, 0.70, 0.75),
+                fog_color: (0.51, 0.54, 0.65),
+                fog_sun_color: (1.0, 0.42, 0.20),
+                fog_density: 0.0003,
+                exposure_ev100: 7.0,
+                sun_halo_strength: 0.80,
+                moon_halo_strength: 0.0,
+            ),
+            // Internal dark handoff at the true horizon.
+            (
+                time_hours: 18.75,
+                sun_azimuth_degrees: 113.333336,
+                sun_elevation_degrees: 0.0,
+                active_body: Moon,
+                direct_illuminance: 220.0,
+                direct_color: (0.72, 0.57, 0.70),
+                ambient_brightness: 82.0,
+                ambient_color: (0.58, 0.64, 0.86),
+                sky_light_intensity: 78.0,
+                ground_color: (0.18, 0.15, 0.17),
+                sky_color: (0.34, 0.43, 0.61),
+                zenith_color: (0.11, 0.18, 0.38),
+                cloud_color: (0.57, 0.54, 0.64),
+                fog_color: (0.36, 0.39, 0.51),
+                fog_sun_color: (0.80, 0.42, 0.32),
+                fog_density: 0.0003,
+                exposure_ev100: 6.8,
+                sun_halo_strength: 0.42,
+                moon_halo_strength: 0.10,
+            ),
+            // Night settles into the authored moonlit look.
+            (
+                time_hours: 20.0,
+                sun_azimuth_degrees: 130.0,
+                sun_elevation_degrees: -15.0,
+                active_body: Moon,
+                direct_illuminance: 600.0,
+                direct_color: (0.55, 0.64, 0.92),
+                ambient_brightness: 66.0,
+                ambient_color: (0.46, 0.54, 0.80),
+                sky_light_intensity: 50.0,
+                ground_color: (0.09, 0.09, 0.14),
+                sky_color: (0.16, 0.23, 0.39),
+                zenith_color: (0.04, 0.075, 0.19),
+                cloud_color: (0.32, 0.37, 0.52),
+                fog_color: (0.16, 0.21, 0.33),
+                fog_sun_color: (0.45, 0.39, 0.55),
+                fog_density: 0.0002,
+                exposure_ev100: 6.9,
+                sun_halo_strength: 0.0,
+                moon_halo_strength: 0.28,
+            ),
+        ],
+    )),
 )

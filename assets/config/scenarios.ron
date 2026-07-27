@@ -12,6 +12,7 @@
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
 //   generation_seed  OPTIONAL Some(reproducible seed) for generated maps
+//   starting_time_hours  OPTIONAL Some(hour in [0, 24)) for cyclic lighting
 //   units     where the pieces start: Fixed(cube coordinate) or Anchor("name")
 //
 // `lighting` is what makes one scenario feel unlike another as much as its terrain

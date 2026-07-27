@@ -6,8 +6,10 @@
 //! `HEX_REVIEW_SCENARIO` selects a scenario without automating the title-screen UI;
 //! `HEX_REVIEW_SEED` optionally replaces its configured procedural seed. Adding
 //! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
-//! then exits. This keeps iteration tooling on the same loading and validation path as
-//! manual play while avoiding compositor-dependent screenshots.
+//! then exits. `HEX_REVIEW_TIME` and `HEX_REVIEW_CAMERA` optionally select the cyclic
+//! lighting hour and map/character perspective for that launch. This keeps iteration
+//! tooling on the same loading and validation path as manual play while avoiding
+//! compositor-dependent screenshots.
 
 use std::env;
 use std::ffi::OsString;
@@ -22,8 +24,11 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
 use hex_assets::{CameraSettings, Scenario, ScenarioLibrary};
-use hex_core::{GameplaySetupFailure, HexTile, MapViewHint, ResolvedMapSeed, Screen, TerrainReady};
-use hex_world::PanOrbitCamera;
+use hex_core::{
+    CameraFocusTarget, GameplaySetupFailure, HexTile, MapViewHint, ResolvedMapSeed, Screen,
+    TerrainReady,
+};
+use hex_world::{CameraMode, PanOrbitCamera};
 
 use crate::scenarios::ScenarioToLoad;
 
@@ -31,6 +36,8 @@ const SCENARIO_ENV: &str = "HEX_REVIEW_SCENARIO";
 const SEED_ENV: &str = "HEX_REVIEW_SEED";
 const CAPTURE_ENV: &str = "HEX_REVIEW_CAPTURE";
 const VIEW_ENV: &str = "HEX_REVIEW_VIEW";
+const TIME_ENV: &str = "HEX_REVIEW_TIME";
+const CAMERA_ENV: &str = "HEX_REVIEW_CAMERA";
 const SETTLE_FRAMES: u32 = 90;
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
@@ -93,6 +100,7 @@ fn reject_invalid_configuration(
 struct ReviewRequest {
     scenario: String,
     seed: Option<u64>,
+    time_hours: Option<f32>,
     capture: Option<ReviewCapture>,
     launched: bool,
 }
@@ -104,6 +112,8 @@ impl ReviewRequest {
             environment_value(SEED_ENV)?,
             environment_value(CAPTURE_ENV)?,
             environment_value(VIEW_ENV)?,
+            environment_value(TIME_ENV)?,
+            environment_value(CAMERA_ENV)?,
         )
     }
 
@@ -112,8 +122,15 @@ impl ReviewRequest {
         seed: Option<String>,
         capture: Option<String>,
         view: Option<String>,
+        time: Option<String>,
+        camera: Option<String>,
     ) -> Result<Option<Self>, String> {
-        let any_value = scenario.is_some() || seed.is_some() || capture.is_some() || view.is_some();
+        let any_value = scenario.is_some()
+            || seed.is_some()
+            || capture.is_some()
+            || view.is_some()
+            || time.is_some()
+            || camera.is_some();
         if !any_value {
             return Ok(None);
         }
@@ -126,6 +143,7 @@ impl ReviewRequest {
                     .map_err(|error| format!("{SEED_ENV} must be an unsigned integer: {error}"))
             })
             .transpose()?;
+        let time_hours = time.map(|value| parse_review_hour(&value)).transpose()?;
 
         let capture = match capture {
             Some(path) => {
@@ -143,10 +161,12 @@ impl ReviewRequest {
                 Some(ReviewCapture {
                     path,
                     view: ReviewView::parse(view.as_deref().unwrap_or("default"))?,
+                    camera: ReviewCamera::parse(camera.as_deref().unwrap_or("map"))?,
                 })
             }
-            None if view.is_some() => {
-                return Err(format!("{VIEW_ENV} requires {CAPTURE_ENV}"));
+            None if view.is_some() || camera.is_some() => {
+                let dependent = if view.is_some() { VIEW_ENV } else { CAMERA_ENV };
+                return Err(format!("{dependent} requires {CAPTURE_ENV}"));
             }
             None => None,
         };
@@ -154,10 +174,23 @@ impl ReviewRequest {
         Ok(Some(Self {
             scenario,
             seed,
+            time_hours,
             capture,
             launched: false,
         }))
     }
+}
+
+fn parse_review_hour(value: &str) -> Result<f32, String> {
+    let hours = value
+        .parse::<f32>()
+        .map_err(|error| format!("{TIME_ENV} must be a number in [0, 24): {error}"))?;
+    if !hours.is_finite() || !(0.0..24.0).contains(&hours) {
+        return Err(format!(
+            "{TIME_ENV} must be finite and in [0, 24); got {value:?}"
+        ));
+    }
+    Ok(hours)
 }
 
 fn environment_value(name: &str) -> Result<Option<String>, String> {
@@ -203,7 +236,7 @@ fn launch_review_scenario(
     let Some(library) = library else {
         return;
     };
-    let scenario = match uniquely_named_scenario(&library, &request.scenario) {
+    let mut scenario = match uniquely_named_scenario(&library, &request.scenario) {
         Ok(scenario) => scenario,
         Err(error) => {
             error!("{error}");
@@ -212,6 +245,7 @@ fn launch_review_scenario(
             return;
         }
     };
+    apply_review_time_override(&mut scenario, request.time_hours);
 
     let resolved_seed = match resolved_review_seed(&scenario, request.seed) {
         Ok(seed) => seed,
@@ -234,6 +268,12 @@ fn launch_review_scenario(
     });
     request.launched = true;
     next.set(Screen::Loading);
+}
+
+fn apply_review_time_override(scenario: &mut Scenario, requested: Option<f32>) {
+    if let Some(hours) = requested {
+        scenario.starting_time_hours = Some(hours);
+    }
 }
 
 fn uniquely_named_scenario(library: &ScenarioLibrary, name: &str) -> Result<Scenario, String> {
@@ -273,6 +313,7 @@ fn resolved_review_seed(
 struct ReviewCapture {
     path: PathBuf,
     view: ReviewView,
+    camera: ReviewCamera,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +321,24 @@ enum ReviewView {
     Default,
     Rotated,
     TopDown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReviewCamera {
+    Map,
+    Character,
+}
+
+impl ReviewCamera {
+    fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "map" => Ok(Self::Map),
+            "character" => Ok(Self::Character),
+            _ => Err(format!(
+                "{CAMERA_ENV} must be map or character; got {value:?}"
+            )),
+        }
+    }
 }
 
 impl ReviewView {
@@ -429,7 +488,12 @@ fn apply_review_view(
     settings: Res<CameraSettings>,
     hint: Option<Res<MapViewHint>>,
     mut images: ResMut<Assets<Image>>,
-    mut camera: Query<(&mut Transform, &mut PanOrbitCamera, &mut RenderTarget)>,
+    targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
+    mut camera: Query<
+        (&mut Transform, &mut PanOrbitCamera, &mut RenderTarget),
+        Without<CameraFocusTarget>,
+    >,
+    mut mode: ResMut<CameraMode>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed {
@@ -478,7 +542,50 @@ fn apply_review_view(
         exit.write(AppExit::error());
         return;
     }
+    match state.capture.camera {
+        ReviewCamera::Map => *mode = CameraMode::Map,
+        ReviewCamera::Character => {
+            let Ok(target) = targets.single() else {
+                return;
+            };
+            apply_character_camera_view(
+                eye,
+                focus,
+                target.translation,
+                &settings,
+                &mut transform,
+                &mut orbit,
+            );
+            *mode = CameraMode::Character;
+        }
+    }
     state.view_applied = true;
+}
+
+/// Converts the deterministic map pose into a close pose without changing its azimuth.
+fn apply_character_camera_view(
+    map_eye: Vec3,
+    map_focus: Vec3,
+    target: Vec3,
+    settings: &CameraSettings,
+    transform: &mut Transform,
+    orbit: &mut PanOrbitCamera,
+) {
+    let map_offset = transform.translation - orbit.focus;
+    let original_offset = map_eye - map_focus;
+    let horizontal = Vec3::new(map_offset.x, 0.0, map_offset.z)
+        .try_normalize()
+        .or_else(|| Vec3::new(original_offset.x, 0.0, original_offset.z).try_normalize())
+        .unwrap_or(Vec3::Z);
+    let pitch = settings.character_pitch * std::f32::consts::FRAC_PI_2;
+    let focus = target + Vec3::Y * settings.character_focus_height;
+    let offset = horizontal * (settings.character_radius * pitch.cos())
+        + Vec3::Y * (settings.character_radius * pitch.sin());
+
+    transform.translation = focus + offset;
+    transform.look_at(focus, Vec3::Y);
+    orbit.focus = focus;
+    orbit.radius = settings.character_radius;
 }
 
 fn apply_camera_view(
@@ -764,6 +871,7 @@ mod tests {
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),
             generation_seed: seed,
+            starting_time_hours: None,
             units: ScenarioSettings {
                 player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
                 enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
@@ -773,27 +881,33 @@ mod tests {
 
     #[test]
     fn review_automation_is_dormant_without_environment_values() {
-        assert!(ReviewRequest::from_values(None, None, None, None)
-            .expect("empty review configuration should be valid")
-            .is_none());
+        assert!(
+            ReviewRequest::from_values(None, None, None, None, None, None)
+                .expect("empty review configuration should be valid")
+                .is_none()
+        );
     }
 
     #[test]
-    fn capture_configuration_parses_an_exact_seed_and_view() {
+    fn capture_configuration_parses_seed_time_view_and_camera() {
         let request = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
             Some("42".to_owned()),
             Some(".context/review.png".to_owned()),
             Some("top-down".to_owned()),
+            Some("18.5".to_owned()),
+            Some("character".to_owned()),
         )
         .expect("valid review configuration should parse")
         .expect("review configuration should be enabled");
 
         assert_eq!(request.scenario, "Procedural Hills");
         assert_eq!(request.seed, Some(42));
+        assert_eq!(request.time_hours, Some(18.5));
         let capture = request.capture.expect("capture should be configured");
         assert_eq!(capture.path, PathBuf::from(".context/review.png"));
         assert_eq!(capture.view, ReviewView::TopDown);
+        assert_eq!(capture.camera, ReviewCamera::Character);
     }
 
     #[test]
@@ -803,10 +917,72 @@ mod tests {
             None,
             None,
             Some("rotated".to_owned()),
+            None,
+            None,
         )
         .expect_err("a camera view without an output should be invalid");
 
         assert!(error.contains(CAPTURE_ENV));
+    }
+
+    #[test]
+    fn camera_without_capture_is_rejected() {
+        let error = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            Some("character".to_owned()),
+        )
+        .expect_err("a camera mode without an output should be invalid");
+
+        assert!(error.contains(CAMERA_ENV));
+        assert!(error.contains(CAPTURE_ENV));
+    }
+
+    #[test]
+    fn review_camera_accepts_only_map_or_character() {
+        let error = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            Some(".context/review.png".to_owned()),
+            None,
+            None,
+            Some("first-person".to_owned()),
+        )
+        .expect_err("an unknown review camera should be rejected");
+
+        assert!(error.contains(CAMERA_ENV));
+        assert!(error.contains("map or character"));
+    }
+
+    #[test]
+    fn review_time_requires_a_finite_hour_in_the_day() {
+        for invalid in ["-0.1", "24", "NaN", "inf", "not-a-time"] {
+            let error = ReviewRequest::from_values(
+                Some("Procedural Hills".to_owned()),
+                None,
+                None,
+                None,
+                Some(invalid.to_owned()),
+                None,
+            )
+            .expect_err("an invalid review time should be rejected");
+            assert!(error.contains(TIME_ENV), "{error}");
+        }
+    }
+
+    #[test]
+    fn review_time_wins_only_on_the_cloned_launch_scenario() {
+        let mut configured = scenario(Some(7));
+        configured.starting_time_hours = Some(9.0);
+        let mut launched = configured.clone();
+
+        apply_review_time_override(&mut launched, Some(18.5));
+
+        assert_eq!(launched.starting_time_hours, Some(18.5));
+        assert_eq!(configured.starting_time_hours, Some(9.0));
     }
 
     #[test]
@@ -876,6 +1052,51 @@ mod tests {
                 (transform.rotation * Vec3::Y).dot(expected_rotation.rotation * Vec3::Y) > 0.9999,
                 "{view:?} changed its exact screen-up orientation"
             );
+        }
+    }
+
+    #[test]
+    fn character_capture_keeps_map_azimuth_and_uses_close_settings() {
+        let settings = test_camera_settings();
+        let map_focus = Vec3::new(1.0, 2.0, 3.0);
+        let map_eye = map_focus + Vec3::new(8.0, 10.0, 6.0);
+        let target = Vec3::new(-2.0, 4.0, 5.0);
+
+        for view in [
+            ReviewView::Default,
+            ReviewView::Rotated,
+            ReviewView::TopDown,
+        ] {
+            let mut transform = Transform::default();
+            let mut orbit = PanOrbitCamera::default();
+            apply_camera_view(view, map_eye, map_focus, &mut transform, &mut orbit)
+                .expect("the map pose should be valid");
+            let map_horizontal = Vec3::new(
+                transform.translation.x - orbit.focus.x,
+                0.0,
+                transform.translation.z - orbit.focus.z,
+            )
+            .try_normalize()
+            .unwrap_or_else(|| {
+                Vec3::new(map_eye.x - map_focus.x, 0.0, map_eye.z - map_focus.z).normalize()
+            });
+
+            apply_character_camera_view(
+                map_eye,
+                map_focus,
+                target,
+                &settings,
+                &mut transform,
+                &mut orbit,
+            );
+
+            let expected_focus = target + Vec3::Y * settings.character_focus_height;
+            let close_offset = transform.translation - expected_focus;
+            let close_horizontal = Vec3::new(close_offset.x, 0.0, close_offset.z).normalize();
+            assert!(orbit.focus.distance(expected_focus) < 0.0001);
+            assert!((close_offset.length() - settings.character_radius).abs() < 0.0001);
+            assert!(close_horizontal.dot(map_horizontal) > 0.9999);
+            assert!((orbit.radius - settings.character_radius).abs() < 0.0001);
         }
     }
 
@@ -956,6 +1177,7 @@ mod tests {
             let mut state = ReviewCaptureState::new(ReviewCapture {
                 path: PathBuf::from("capture.png"),
                 view: ReviewView::Default,
+                camera: ReviewCamera::Map,
             });
             state.view_applied = phase != CapturePhase::AwaitingCamera;
             state.requested = requested;
@@ -979,12 +1201,14 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_state::<Screen>();
         app.insert_resource(test_camera_settings());
+        app.insert_resource(CameraMode::Map);
         app.insert_resource(Assets::<Image>::default());
         install_capture_systems(
             &mut app,
             ReviewCapture {
                 path: path.clone(),
                 view: ReviewView::Default,
+                camera: ReviewCamera::Map,
             },
         );
         let camera = app
@@ -1052,6 +1276,53 @@ mod tests {
     }
 
     #[test]
+    fn character_capture_waits_until_a_focus_target_exists() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(test_camera_settings());
+        app.insert_resource(CameraMode::Map);
+        app.insert_resource(Assets::<Image>::default());
+        install_capture_systems(
+            &mut app,
+            ReviewCapture {
+                path: PathBuf::from("unused.png"),
+                view: ReviewView::Rotated,
+                camera: ReviewCamera::Character,
+            },
+        );
+        app.world_mut().spawn((
+            Transform::default(),
+            PanOrbitCamera::default(),
+            RenderTarget::default(),
+        ));
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+
+        assert!(
+            !app.world().resource::<ReviewCaptureState>().view_applied,
+            "the character pose should wait for actor selection"
+        );
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+
+        let target = Vec3::new(2.0, 3.0, 4.0);
+        app.world_mut()
+            .spawn((Transform::from_translation(target), CameraFocusTarget));
+        app.update();
+
+        assert!(app.world().resource::<ReviewCaptureState>().view_applied);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+        let mut cameras = app.world_mut().query::<&PanOrbitCamera>();
+        let orbit = cameras
+            .single(app.world())
+            .expect("the test should have exactly one camera");
+        let expected_focus = target + Vec3::Y * test_camera_settings().character_focus_height;
+        assert!(orbit.focus.distance(expected_focus) < 0.0001);
+    }
+
+    #[test]
     fn failed_visual_validation_still_persists_the_rejected_png() {
         let directory = review_test_directory("atomic-failure");
         let path = directory.join("capture.png");
@@ -1101,6 +1372,11 @@ mod tests {
         CameraSettings {
             gameplay_eye: (0.0, 48.0, 42.0),
             gameplay_focus: (0.0, 6.0, 0.0),
+            character_focus_height: 0.4,
+            character_radius: 7.0,
+            character_pitch: 0.3,
+            character_min_pitch: 0.05,
+            character_max_pitch: 0.95,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,

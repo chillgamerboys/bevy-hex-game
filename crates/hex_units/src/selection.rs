@@ -31,7 +31,9 @@ use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
-use hex_core::{GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn};
+use hex_core::{
+    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn,
+};
 
 use crate::movement::{Body, Footing, Reach, Standing};
 use crate::units::{Faction, Player, StandsOn, TileQuery};
@@ -152,6 +154,7 @@ struct MovementPreview {
 /// Registers selection, the ring, and the movement overlays.
 pub fn plugin(app: &mut App) {
     app.register_type::<Selected>()
+        .register_type::<CameraFocusTarget>()
         .register_type::<RangeOverlay>()
         .register_type::<PathOverlay>()
         .init_resource::<HoveredSurface>()
@@ -169,7 +172,12 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, track_terrain_changes)
         .add_systems(
             Update,
-            (select_a_player, reconcile_rings, redraw_overlays)
+            (
+                select_a_player,
+                reconcile_camera_focus_target,
+                reconcile_rings,
+                redraw_overlays,
+            )
                 .chain()
                 .in_set(PausableSystems)
                 .after(track_terrain_changes)
@@ -281,6 +289,29 @@ fn select_a_player(
         return;
     };
     commands.entity(player).insert(Selected);
+}
+
+/// Projects the authoritative unit selection into the shared camera vocabulary.
+///
+/// Reconciliation handles selection changes regardless of which future interaction
+/// caused them and removes stale targets rather than leaving the camera attached to a
+/// unit the interface is no longer controlling.
+fn reconcile_camera_focus_target(
+    mut commands: Commands,
+    selected: Query<Entity, With<Selected>>,
+    focused: Query<Entity, With<CameraFocusTarget>>,
+) {
+    for entity in &focused {
+        if selected.get(entity).is_err() {
+            commands.entity(entity).remove::<CameraFocusTarget>();
+        }
+    }
+
+    for entity in &selected {
+        if focused.get(entity).is_err() {
+            commands.entity(entity).insert(CameraFocusTarget);
+        }
+    }
 }
 
 /// Puts a ring at the feet of the unit the interface is currently about.
@@ -525,4 +556,60 @@ fn clear_overlays(
     }
     *preview = MovementPreview::default();
     hovered.0 = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_focus_target_tracks_selection_changes() {
+        let mut app = App::new();
+        app.add_systems(Update, reconcile_camera_focus_target);
+
+        let first = app.world_mut().spawn(Selected).id();
+        let second = app.world_mut().spawn(CameraFocusTarget).id();
+
+        app.update();
+
+        assert!(
+            app.world().entity(first).contains::<CameraFocusTarget>(),
+            "the selected unit should become the camera target"
+        );
+        assert!(
+            !app.world().entity(second).contains::<CameraFocusTarget>(),
+            "a target without selection should be removed"
+        );
+
+        app.world_mut().entity_mut(first).remove::<Selected>();
+        app.world_mut().entity_mut(second).insert(Selected);
+        app.update();
+
+        assert!(
+            !app.world().entity(first).contains::<CameraFocusTarget>(),
+            "the old selection should stop being the camera target"
+        );
+        assert!(
+            app.world().entity(second).contains::<CameraFocusTarget>(),
+            "the new selection should become the camera target"
+        );
+    }
+
+    #[test]
+    fn automatic_selection_publishes_focus_in_the_same_update() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (select_a_player, reconcile_camera_focus_target).chain(),
+        );
+        let player = app.world_mut().spawn(Player).id();
+
+        app.update();
+
+        assert!(app.world().entity(player).contains::<Selected>());
+        assert!(
+            app.world().entity(player).contains::<CameraFocusTarget>(),
+            "the chained reconciliation should observe deferred selection commands"
+        );
+    }
 }
