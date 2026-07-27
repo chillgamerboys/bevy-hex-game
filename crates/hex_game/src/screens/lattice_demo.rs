@@ -1,12 +1,15 @@
 //! Interactive sandbox for the lattice ruleset, reachable from the title menu.
 //!
 //! Builds a small demonstration lattice out of the *real* content in
-//! `elements.ron` / `spells.ron` and lets a human exercise every rule the pure
-//! engine ships: binary casting, fusion resolution, mana capacity versus
-//! channelling throughput, damage disables, and enchantment mana locking.
-//! Nothing persists — the lattice is rebuilt from content on every entry, and
-//! `Reset` rebuilds the battle state. Reset is deliberately the only way back
-//! from a strike: the engine has no un-disable, so neither does the demo.
+//! `elements.ron` / `spells.ron` and lets a human exercise every rule the
+//! content can currently reach: binary casting with live blocked-reasons, mana
+//! capacity versus channelling throughput, damage disables, and enchantment
+//! mana locking. Fusion resolution and burn ticks are wired but dormant until
+//! content demands them — no shipped spell requires a higher-order element
+//! yet, and burn *effects* are applied above the engine, which is HEX-12's
+//! job. Nothing persists — the lattice is rebuilt from content on every entry,
+//! and `Reset` rebuilds the battle state. Reset is deliberately the only way
+//! back from a strike: the engine has no un-disable, so neither does the demo.
 //!
 //! # The tables adapter is demo-local by design
 //!
@@ -36,8 +39,10 @@ use super::{despawn_screen, screen_root};
 /// reported in the demo log rather than failing the screen.
 const DEMO_SPELLS: [&str; 4] = ["Ember", "Metal Shield", "Flamethrower", "Fireball"];
 
-/// Where each placed spell sits. Spacing of four keeps one spell's gems (and a
-/// fusion's recipe gems, two steps out) from colliding with the next spell's.
+/// Where each placed spell sits. Spacing of four keeps one spell's ring of
+/// gems from ever touching another's. A fusion's recipe gems reach two steps
+/// out and *can* meet a neighbouring ring — `free_neighbor` relocates them
+/// rather than overwriting, at worst leaving a spell honestly unsatisfiable.
 const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 
 /// Pixel size of one lattice cell button.
@@ -117,7 +122,8 @@ struct ResetsDemo;
 /// Demo-local on purpose — see the module docs. The `None` arms matter: an
 /// unknown spell id must stay *uncastable*, and an empty requirement list would
 /// instead read as a tier-0 spell that costs nothing, so the fallback is a
-/// single requirement no lattice can satisfy.
+/// single `u16::MAX`-mana requirement — beyond any capacity the demo's stats
+/// fabricate, since those top out at the largest single cost in content.
 struct DemoTables<'a> {
     index: &'a ContentIndex,
     elements: &'a ElementCatalog,
@@ -205,11 +211,16 @@ fn remove_demo_state(mut commands: Commands) {
     commands.remove_resource::<DemoLattice>();
 }
 
-/// Builds the demo lattice once the content tables exist.
+/// Builds the demo lattice once the content tables exist, and rebuilds it if
+/// they change underneath it.
 ///
 /// The title screen is reachable before the RON files finish parsing, so this
 /// runs in `Update` behind `Option` guards rather than assuming the resources
-/// at `OnEnter` — the same lesson the scenario list learned.
+/// at `OnEnter` — the same lesson the scenario list learned. The rebuild arm
+/// matters for a different reason: the content builders keep running outside
+/// `Screen::Gameplay` and assign ids from *sorted names*, so a hot reload can
+/// reassign every id under a baked lattice and silently reinterpret it. The
+/// demo is a live lattice outside the Gameplay freeze, so it re-bakes instead.
 fn init_demo(
     mut commands: Commands,
     demo: Option<Res<DemoLattice>>,
@@ -217,17 +228,23 @@ fn init_demo(
     spells: Option<Res<SpellBook>>,
     index: Option<Res<ContentIndex>>,
 ) {
-    if demo.is_some() {
-        return;
-    }
     let (Some(elements), Some(spells), Some(index)) = (elements, spells, index) else {
         return;
     };
+    let content_moved = elements.is_changed() || spells.is_changed() || index.is_changed();
+    if demo.is_some() && !content_moved {
+        return;
+    }
 
     let (spec, notes) = build_demo_spec(&elements, &spells, &index);
     let stats = build_demo_stats(&spec, &spells, &index, &elements);
     let state = LatticeState::new(&spec, &stats);
-    let mut log = vec!["fresh lattice - every gem at full mana".to_owned()];
+    let first_line = if demo.is_some() {
+        "content changed - rebuilt the lattice from the new tables".to_owned()
+    } else {
+        "fresh lattice - every gem at full mana".to_owned()
+    };
+    let mut log = vec![first_line];
     log.extend(notes);
     commands.insert_resource(DemoLattice {
         spec,
@@ -256,7 +273,8 @@ fn build_demo_spec(
             continue;
         };
         let Some(&(q, r)) = anchors.next() else {
-            break;
+            notes.push(format!("{name}: no anchor left, skipped"));
+            continue;
         };
         let anchor = LatticeCoord::new(q, r);
         cells.insert(anchor, CellKind::Spell { spell });
@@ -799,7 +817,7 @@ fn spawn_control_panel(
                                 Pickable::IGNORE,
                             ));
                             action.spawn((
-                                Text::new("channel + burns"),
+                                Text::new("channel mana"),
                                 TextFont::from_font_size(11.0),
                                 TextColor(MUTED),
                                 Pickable::IGNORE,
