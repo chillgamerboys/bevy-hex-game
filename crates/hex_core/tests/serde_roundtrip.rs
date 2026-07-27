@@ -4,7 +4,9 @@
 //! `HexSpan` is deliberately absent: saves store [`TilePos`] only and re-derive
 //! spans, so floats never enter a save.
 
-use hex_core::{HexCoord, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn};
+use hex_core::{
+    HexCoord, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+};
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
 macro_rules! assert_round_trips {
@@ -49,6 +51,18 @@ fn wire_formats_are_pinned() {
     let pos = TilePos::new(coord, 3);
     let json = serde_json::to_string(&pos).expect("serialize");
     assert_eq!(json, r#"{"coord":{"q":2,"r":-1},"level":3}"#);
+
+    let unit = UnitId(7);
+    let json = serde_json::to_string(&unit).expect("serialize");
+    assert_eq!(json, "7", "UnitId must serialize as its bare number");
+
+    let seeds = SimSeeds {
+        world: 1,
+        ai_flavor: 2,
+        cosmetic: 3,
+    };
+    let json = serde_json::to_string(&seeds).expect("serialize");
+    assert_eq!(json, r#"{"world":1,"ai_flavor":2,"cosmetic":3}"#);
 }
 
 #[test]
@@ -77,5 +91,20 @@ fn turn_round_trips() {
     assert_round_trips!(Turn {
         movement_left: 4,
         acted: true,
+    });
+}
+
+#[test]
+fn unit_id_round_trips() {
+    assert_round_trips!(UnitId(7));
+    assert_round_trips!(UnitId(u64::MAX));
+}
+
+#[test]
+fn sim_seeds_round_trip() {
+    assert_round_trips!(SimSeeds {
+        world: 11,
+        ai_flavor: 22,
+        cosmetic: 33,
     });
 }

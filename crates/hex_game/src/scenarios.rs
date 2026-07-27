@@ -21,7 +21,7 @@ use hex_assets::{
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
-    Screen, SpecialMovementRegions, TerrainReady,
+    Screen, SimSeeds, SpecialMovementRegions, TerrainReady,
 };
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::{Enemy, Player};
@@ -32,6 +32,7 @@ pub(super) fn plugin(app: &mut App) {
     // until somebody has picked a scenario. It shares the registration `hex_map`
     // already did, which is idempotent, so plugin order does not matter here.
     app.register_type::<ResolvedMapSeed>()
+        .register_type::<SimSeeds>()
         .register_type::<GameplaySetupFailure>()
         .select_settings::<MapSettings>(CONFIG_EXTENSIONS);
     // Lighting is chosen the same way, so a scenario brings its own sky and sun.
@@ -102,6 +103,7 @@ fn apply_selected_scenario(
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<ResolvedMapSeed>();
+    commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<TimeOfDay>();
     commands.remove_resource::<ScenarioTimeOverride>();
     commands.remove_resource::<GameplaySetupFailure>();
@@ -131,6 +133,7 @@ fn apply_selected_scenario(
     } else {
         info!("starting scenario: {}", scenario.name);
     }
+    commands.insert_resource(sim_seeds_for(&scenario.name, resolved_seed));
     commands.insert_resource(scenario.units.clone());
     commands.insert_resource(ScenarioTimeOverride(scenario.starting_time_hours));
     choose_settings::<MapSettings>(&mut commands, &asset_server, &mut registry, &scenario.world);
@@ -316,8 +319,39 @@ fn finalize_gameplay_setup(
 
 fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<ResolvedMapSeed>();
+    commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<ScenarioTimeOverride>();
     commands.remove_resource::<TimeOfDay>();
+}
+
+/// Derives the session's sim seeds from what already determines the world.
+///
+/// The world seed folds the scenario's name with the resolved map seed (or a
+/// fixed constant for authored maps), so the same launch always deals the same
+/// seeds — a replay's precondition. The three streams are decorrelated splits
+/// of that one value; see [`SimSeeds`] for why nothing reads them yet.
+fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
+    // FNV-1a over the name: tiny, stable, and dependency-free — this is an
+    // identity fold, not a quality hash.
+    let mut folded: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in name.bytes() {
+        folded ^= u64::from(byte);
+        folded = folded.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    let base = folded ^ resolved.map_or(0xA076_1D64_78BD_642F, |seed| seed.0);
+
+    // splitmix64 finalizer to decorrelate the three streams.
+    let mix = |mut value: u64| {
+        value = value.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        value ^ (value >> 31)
+    };
+    SimSeeds {
+        world: mix(base),
+        ai_flavor: mix(base.wrapping_add(1)),
+        cosmetic: mix(base.wrapping_add(2)),
+    }
 }
 
 #[cfg(test)]
@@ -1447,5 +1481,52 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    /// Sim seeds ride the same install path as the map seed, and the same
+    /// launch always deals the same seeds — the precondition for replays.
+    #[test]
+    fn sim_seeds_install_deterministically_while_loading() {
+        let procedural_index = library()
+            .scenarios
+            .iter()
+            .position(|scenario| scenario.generation_seed.is_some())
+            .expect("the shipped library should contain a generated scenario");
+
+        let mut app = test_app();
+        choose(&mut app, procedural_index);
+        use super::SimSeeds;
+
+        let first = *app
+            .world()
+            .get_resource::<SimSeeds>()
+            .expect("loading should install the sim seeds");
+
+        let mut relaunch = test_app();
+        choose(&mut relaunch, procedural_index);
+        let second = *relaunch
+            .world()
+            .get_resource::<SimSeeds>()
+            .expect("loading should install the sim seeds");
+
+        assert_eq!(first, second, "the same launch must deal the same seeds");
+        assert_ne!(
+            first.world, first.ai_flavor,
+            "the three streams must be decorrelated"
+        );
+        assert_ne!(first.ai_flavor, first.cosmetic);
+    }
+
+    /// Different scenarios must not share a seed by accident.
+    #[test]
+    fn different_scenarios_deal_different_sim_seeds() {
+        use super::sim_seeds_for;
+
+        let seeds_a = sim_seeds_for("The Crossing", None);
+        let seeds_b = sim_seeds_for("Procedural Hills", None);
+        assert_ne!(seeds_a, seeds_b);
+
+        let reseeded = sim_seeds_for("Procedural Hills", Some(ResolvedMapSeed(42)));
+        assert_ne!(seeds_b, reseeded, "the resolved map seed feeds the fold");
     }
 }

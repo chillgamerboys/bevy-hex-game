@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use hex_assets::SubstanceTable;
 use hex_core::{
     AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
-    TraversalEndpoint, TraversalProfile,
+    TraversalEndpoint, TraversalProfile, UnitId,
 };
 
 /// Ordering for systems that consume a unit's logical position.
@@ -61,21 +61,36 @@ pub enum MovementSystems {
 /// route passed through an intermediate position must inspect this resource after
 /// [`MovementSystems::Reconcile`] instead of sampling only the final
 /// [`StandsOn`](crate::StandsOn).
+///
+/// Iteration order is a sim input — "the first crossing within hostile reach"
+/// decides which unit combat freezes — so it must not inherit query iteration
+/// order. Entries sort by the crossing unit's stable [`UnitId`] (unregistered
+/// units last), and the stable sort keeps each unit's waypoints in route order.
 #[derive(Resource, Debug, Default)]
-pub struct MovementCrossings(Vec<(Entity, Standing)>);
+pub struct MovementCrossings(Vec<(Option<UnitId>, Entity, Standing)>);
 
 impl MovementCrossings {
-    /// Crossed waypoints in route order for each reconciled unit.
+    /// Crossed waypoints, deterministically ordered across units and in route
+    /// order within one.
     pub fn iter(&self) -> impl Iterator<Item = (Entity, Standing)> + '_ {
-        self.0.iter().copied()
+        self.0
+            .iter()
+            .map(|&(_, entity, standing)| (entity, standing))
     }
 
     pub(crate) fn clear(&mut self) {
         self.0.clear();
     }
 
-    pub(crate) fn push(&mut self, entity: Entity, standing: Standing) {
-        self.0.push((entity, standing));
+    pub(crate) fn push(&mut self, unit: Option<UnitId>, entity: Entity, standing: Standing) {
+        self.0.push((unit, entity, standing));
+    }
+
+    /// Orders entries by stable id; the stable sort preserves route order.
+    pub(crate) fn sort_deterministic(&mut self) {
+        // `is_none` first so unregistered units genuinely sort last —
+        // `Option`'s own ordering would put `None` first.
+        self.0.sort_by_key(|&(unit, _, _)| (unit.is_none(), unit));
     }
 }
 

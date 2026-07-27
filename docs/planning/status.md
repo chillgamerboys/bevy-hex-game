@@ -49,7 +49,7 @@ place** — they are meant to be replaced.
 
 | Thing | Now | What it is waiting for |
 |---|---|---|
-| **Initiative** | a number on a component, high to low, ties by entity index | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
+| **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
 | **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
@@ -59,7 +59,8 @@ place** — they are meant to be replaced.
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
 from hidden information rather than dice, so the turn order is deterministic: ties
-break by entity index, and the same units always produce the same order.
+break by the stable `UnitId` dealt at spawn, and the same units always
+produce the same order across runs and saves.
 
 ### Why there is no damage
 
