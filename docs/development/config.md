@@ -76,22 +76,8 @@ Colours are written as `(red, green, blue)`, each from `0.0` to `1.0`:
 
 ## If something goes wrong
 
-**On initial startup, the game sits on "loading…" forever.** One of the files has a
-mistake in it — most likely a missing comma. The terminal will name the file, the
-line, and the column.
-
-The game deliberately refuses to start without one valid value for every setting.
-If a hot reload fails later, the asset server reports the error and the last valid
-settings stay active; fix the file and save it again.
-
-**A change had no effect.** Check you saved the file, and that you are running with
-`cargo dev` rather than `cargo run --release`.
-
-**You want to undo everything.** These files are tracked in git:
-
-```sh
-git checkout assets/config/
-```
+See [troubleshooting.md](troubleshooting.md) — the single list of symptoms,
+including the ones that produce no log output at all.
 
 ## Things worth trying
 

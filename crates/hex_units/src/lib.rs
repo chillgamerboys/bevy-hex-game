@@ -18,7 +18,7 @@
 //!
 //! (The design notes call that grid a "core". It is called a **lattice** in this
 //! codebase, because `hex_core` is already a crate and the collision would be
-//! permanent. See `docs/GAMEPLAY_LOOP.md`.)
+//! permanent. See `docs/systems/combat.md`.)
 
 use bevy::prelude::*;
 

@@ -10,15 +10,16 @@ nothing. It never edits or closes existing tickets (see **Scope**).
 
 ## Precondition — the roadmap must exist
 
-This skill reads **`docs/planning/roadmap.md`**, which does not exist
-yet in this repo. Create it first — the roadmap is human-authored and
-this skill will not invent epics.
+This skill reads **`docs/planning/roadmap.md`**. It exists, and its
+`## Upcoming` table is the parse target. The roadmap is human-authored
+— this skill will not invent epics, and it will not rewrite a row's
+scope once a ticket exists for it.
 
-Good source material for a first roadmap, when you're ready to write
-one: CLAUDE.md's **Known gaps** section, the "not built" material in
-the gameplay/status docs, and the open questions in the design doc.
-The things that are genuinely next (abilities, lattices, multi-hex
-bodies, unit obstruction) are already written down in prose — the
+If it is ever missing (a fresh branch predating it, say), source
+material for rebuilding one: `docs/planning/status.md`'s "not built,
+and not next", the open questions in `docs/design/game.md`, and the
+production checklist in `docs/planning/production-audit.md`. The
+things that are genuinely next are already written down in prose — the
 roadmap is where they become rows.
 
 Suggested row shape (a table the skill can parse):

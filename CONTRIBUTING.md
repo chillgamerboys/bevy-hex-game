@@ -12,7 +12,7 @@ compiler on first build. Install the dependency auditor once with
 `cargo install cargo-deny --locked`. A cold build takes 10–20 minutes. Linux also
 needs the system packages in the README appendix; macOS and Windows do not.
 
-Only changing values in `assets/config/`? You want [docs/CONTENT.md](docs/CONTENT.md)
+Only changing values in `assets/config/`? You want [docs/development/config.md](docs/development/config.md)
 instead; none of this applies.
 
 ## Before opening a PR
@@ -62,7 +62,7 @@ If your change touches rendering, movement, or state transitions, walk it: splas
 
 ## Where code goes
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full reasoning. The short
+See [docs/architecture.md](docs/architecture.md) for the full reasoning. The short
 version:
 
 | Adding | Goes in |

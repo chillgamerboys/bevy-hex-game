@@ -41,7 +41,7 @@ use hex_core::{Level, TilePos};
 /// Levels of height that buy one extra hex of range.
 ///
 /// Provisional, like the engagement thresholds it feeds — see
-/// `docs/GAMEPLAY_LOOP.md`. Five is coarse enough that ordinary terracing does
+/// `docs/systems/combat.md`. Five is coarse enough that ordinary terracing does
 /// nothing and only a deliberate climb pays, which is the intent: high ground should
 /// be somewhere you went, not somewhere you happened to be standing.
 pub const LEVELS_PER_BONUS_RANGE: Level = 5;

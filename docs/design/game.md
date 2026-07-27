@@ -14,7 +14,7 @@ than merely compiles.
 > `hex_core` is already a crate and the collision would be permanent. A crystal
 > lattice is a structured arrangement of gems, which is what the thing is, and it
 > carries the connectedness that adjacency-based power depends on. See
-> [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md).
+> [systems/combat.md](../systems/combat.md).
 
 ---
 
@@ -386,6 +386,6 @@ campaign — the choice has teeth. Probably a quest-design question.
 
 ## What exists in code today
 
-Very little of the above. See [GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md) for what is built,
-what is a placeholder, and which of these open questions each placeholder is standing
-in for.
+Very little of the above. [planning/status.md](../planning/status.md) is the one
+doc allowed to be out of date: what is built, what is a placeholder, and which of
+the open questions above each placeholder is standing in for.

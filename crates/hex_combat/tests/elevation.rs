@@ -340,7 +340,7 @@ fn height_engages_from_further_away() {
 
 /// An enemy that cannot reach its target does not stall the turn order.
 ///
-/// The stalemate named in `GAMEPLAY_LOOP.md`: a melee-only unit separated by terrain it
+/// The stalemate named in `docs/planning/status.md`: a melee-only unit separated by terrain it
 /// cannot cross has nothing useful to do. It must still **end its turn**, or the fight
 /// hangs and the player cannot even walk away from it.
 #[test]

@@ -2,7 +2,7 @@
 
 A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
 
-Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
+Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
 summary.
 
@@ -90,7 +90,7 @@ malformed components can still break gameplay at runtime.
 and a review comment on a *design* question inside someone else's crate is an argument
 rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
 broken boundaries are the exception and should block. See
-`docs/ARCHITECTURE.md#ownership-cuts-both-ways`.
+`docs/architecture.md#ownership-cuts-both-ways`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
@@ -118,7 +118,7 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
   topmost material voxel. Its substance determines whether that position is solid
   footing. Interior voxels have no entity, which is why targeting is positional. See
-  `docs/MAP_MODEL.md`.
+  `docs/systems/map.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
   it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
   its traversal profile. The canonical walker is exactly 2 levels tall and may climb
@@ -165,15 +165,15 @@ and `Component`, and every query names concrete components.
 ## Traps
 
 Several failure modes produce **no log output**. A clean log is not evidence a
-change worked — look at the window.
+change worked — look at the window. The sharpest three:
 
-| Symptom | Cause |
-|---|---|
-| Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
-| Clouds smeared into streaks | Sky-projection singularity. Check from the *gameplay* camera: it looks down, so it sees the half of the sky a level screenshot never shows |
-| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
-| Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
+- **Plain blue window** — assets not found (see "Always run through cargo").
+- **Black sky** — the sky shader failed to load, or the dome was culled.
+- **Appears frozen** — it is paused. The overlay exists because this was
+  indistinguishable from a hang.
+
+Full list, including the map-specific ones:
+[docs/development/troubleshooting.md](docs/development/troubleshooting.md).
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
 resource must take `Option<Res<T>>` — Bevy validates parameters *before* the body
@@ -230,35 +230,27 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 226 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 316 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
-Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
-auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, level-based movement, body size via headroom, a turn order with two
-tempos, a breadth-first pathfinder over stacked surfaces, a movement preview that draws
-the reachable set and the route before a click commits to either, and surface-aware
-targeting where height buys range.
+**What is built, what is a placeholder, and what each placeholder is waiting for
+lives in [docs/planning/status.md](docs/planning/status.md)** — the one doc allowed
+to be out of date. Everything else under `docs/` describes contracts.
 
-There are still no abilities and no lattices. Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other — so a route may
-be drawn straight through another piece.
+## Constraints on how you write here
 
-## Known gaps
-
-- **`bevy_lint` is wired but unusable** — supports Bevy 0.18 at most. Adopting it
-  later costs no source changes.
-- **Bevy features untrimmed.** Still `default-features = true`. The `3d` collection
-  would cut compile time and binary size but risks silently dropping capability.
 - **Lints are strict, deliberately.** `#[allow]` is banned — use
   `#[expect(lint, reason = "…")]`. `unwrap`, `panic!`, slice indexing, `dbg!`,
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Animation is still `Box<dyn Transformer>`**, which is why `Transformation`
-  can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
-  rewritten when gameplay lands.
-- **Headless integration tests** live in `crates/hex_map/tests/` and
-  `crates/hex_units/tests/`. They cannot see anything visual — a black sky or a
-  mistransformed tile still needs a human looking at the window.
+- **Headless integration tests** live in `crates/hex_map/tests/`,
+  `crates/hex_units/tests/` and `crates/hex_combat/tests/`. They cannot see anything
+  visual — a black sky or a mistransformed tile still needs a human looking at the
+  window.
+
+**Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
+features untrimmed, animation still `Box<dyn Transformer>` — are recorded in
+[docs/planning/status.md](docs/planning/status.md) with the rest of the status, so
+there is one copy to keep current rather than three.

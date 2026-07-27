@@ -66,23 +66,56 @@ When invoked, follow these steps:
    grep -nE 'and [0-9]+ tests' CLAUDE.md
    ```
 
-   **Activates after the docs restructure (Phase 2)** — do not audit
-   these until the files exist:
-   - `docs/planning/status.md` — the designated drift doc: verify its
-     "what exists" claims against the diff, update counts.
-   - `docs/README.md` — index rows must match the files actually
-     present under `docs/`.
+   Two further anchors, live since the docs restructure:
+
+   - `docs/planning/status.md` — the designated drift doc. Verify its
+     "what is built" claims against the diff. Prose corrections beyond
+     a count need the operator, but **report** every claim the diff
+     falsified: this is the one doc whose whole job is to be current.
+   - `docs/README.md` — the index. Every tracked doc under `docs/`
+     needs a row, and every row needs a file (see the drift check in
+     step 6).
+
+   Note `docs/planning/production-audit.md` is a **dated snapshot and
+   must never be edited here** — its counts are historical by design.
+   It carries no `and NNN tests` clause, so the anchor grep does not
+   reach it; keep it that way.
 
 5. **Audit non-count fields.** Beyond counts: if the diff added or
    removed a skill, a doc, or a workflow step that CLAUDE.md's
    "Skill pipeline" subsection describes, flag the mismatch (report
    it; fixing prose beyond the allowlist needs the operator).
 
-6. **Drift checks.** None wired yet — add greps here as mechanical
-   drift surfaces are discovered (each check: a command, an expected
-   value, and the doc file + label it updates). Candidates: scenario
-   files named in `scenarios.ron` all exist; config files listed in
-   the config doc match `assets/config/`.
+6. **Drift checks.**
+
+   **Index completeness** — every tracked doc under `docs/` has a row
+   in `docs/README.md`'s index table, and every path that table names
+   exists. Scope the search to the table, not the whole file: several
+   docs are also linked from the "Start here" section, and matching
+   those would hide a row deleted from the index itself.
+
+   ```bash
+   TABLE=$(sed -n '/^## The index/,/^## /p' docs/README.md)
+
+   # Docs present but missing from the index table
+   for f in $(git ls-files 'docs/*.md' | grep -v '^docs/README.md$'); do
+       printf '%s\n' "$TABLE" | grep -q "(${f#docs/})" || echo "UNINDEXED: $f"
+   done
+
+   # Rows naming a file that no longer exists
+   printf '%s\n' "$TABLE" | grep -oE '\(([a-z0-9/._-]+\.md)\)' | tr -d '()' | sort -u \
+       | while read -r rel; do
+           [ -e "docs/$rel" ] || echo "INDEXED BUT MISSING: docs/$rel"
+       done
+   ```
+
+   A miss is reported, not auto-fixed: a new doc needs an audience and
+   a purpose, and only the person who wrote it knows them.
+
+   Add further greps here as mechanical drift surfaces are discovered
+   (each check: a command, an expected value, and the doc file + label
+   it updates). Candidates: scenario files named in `scenarios.ron` all
+   exist; config files listed in the config doc match `assets/config/`.
 
 7. **Commit.** If anything changed, commit with a descriptive message
    listing what was updated (Conventional subject, e.g.
@@ -138,10 +171,15 @@ removing tracked docs.
 - `CLAUDE.md` — the "… and NNN tests." clause in `## Current state`
   (exact count, maintained mechanically from `$UNIT`).
 
-**Pending (activate in the docs-restructure pass, Phase 2):**
-
-- `docs/planning/status.md` — status claims + counts.
+- `docs/planning/status.md` — status claims (report-only beyond
+  counts; it is the designated drift doc).
 - `docs/README.md` — index completeness vs the `docs/` tree.
+
+**Never touched:**
+
+- `docs/planning/production-audit.md` — a dated snapshot; its numbers
+  are a record, not a claim about now.
+- `docs/planning/audit-log.md` — `/audit-diff` owns it.
 
 ## Findings shape (for audit-pr receipt v3)
 
