@@ -6,6 +6,7 @@
 //! cannot use.
 
 use bevy_reflect::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{Headroom, Level, TilePos};
 
@@ -41,7 +42,7 @@ impl TraversalEndpoint {
 /// All values are quantized voxel levels. Live traversal should use
 /// [`Self::admits_transition`] so endpoint standability, positional stepping, and the
 /// shared lateral aperture are evaluated together.
-#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraversalProfile {
     /// Clear levels required directly above a surface.
     pub levels_tall: Level,
