@@ -129,6 +129,7 @@ pub(crate) struct V1HillsTopology {
 
 /// One fully evaluated V1 Hills candidate, retained as the V2 parity oracle.
 #[derive(Debug)]
+#[cfg(test)]
 pub(crate) struct V1HillsCandidate {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: GeneratedAnchors,
@@ -138,6 +139,13 @@ pub(crate) struct V1HillsCandidate {
     pub(crate) validation_notes: Vec<String>,
     pub(crate) repair_actions: Vec<String>,
     pub(crate) score: CandidateScore,
+    pub(crate) topology: V1HillsTopology,
+}
+
+/// Complete frozen V1 selection plus the semantic topology retained by V2 Hills.
+#[derive(Debug)]
+pub(crate) struct V1HillsBuild {
+    pub(crate) build: ProceduralBuild,
     pub(crate) topology: V1HillsTopology,
 }
 
@@ -265,12 +273,49 @@ pub(crate) fn build(
     build_with_candidate_selection(grid_radius, settings, seed, palette, walker, is_solid, true)
 }
 
+/// Runs the frozen V1 Hills selector once and retains its finalized topology for V2.
+///
+/// V2 converts only the selected result. Evaluating and converting every legacy
+/// candidate would repeat full-volume validation after V1 has already performed the
+/// exact eight-candidate selection and bounded repairs.
+pub(crate) fn build_hills_for_v2_parity(
+    grid_radius: u32,
+    settings: &ProceduralSettings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<V1HillsBuild, String> {
+    if !matches!(
+        (&settings.landform, &settings.tactical),
+        (LandformSettings::Hills(_), TacticalSettings::Crossing(_))
+    ) {
+        return Err("V2 Hills parity requires V1 Hills with Crossing".to_owned());
+    }
+
+    let (build, topology) = build_with_candidate_selection_details(
+        grid_radius,
+        settings,
+        seed,
+        palette,
+        TraversalProfile::WALKER,
+        is_solid,
+        CandidateSelectionOptions {
+            select_random_candidates: true,
+            retain_hills_topology: true,
+        },
+    );
+    let topology = topology
+        .ok_or_else(|| "V1 Hills selection did not retain finalized topology".to_owned())?;
+    Ok(V1HillsBuild { build, topology })
+}
+
 /// Evaluates exactly one requested V1 Hills candidate for V2 parity.
 ///
 /// Construction, bounded repair, exact validation, special-region assignment, and
 /// scoring all remain owned by the frozen V1 implementation. The compatibility DTO
 /// prevents V2 from reaching into construction-only plan fields while preserving the
 /// complete selected output. A canonical fallback is always candidate zero.
+#[cfg(test)]
 pub(crate) fn build_hills_candidate_for_v2_parity(
     grid_radius: u32,
     settings: &ProceduralSettings,
@@ -360,6 +405,36 @@ fn build_with_candidate_selection(
     is_solid: &dyn Fn(SubstanceId) -> bool,
     select_random_candidates: bool,
 ) -> ProceduralBuild {
+    build_with_candidate_selection_details(
+        grid_radius,
+        settings,
+        seed,
+        palette,
+        walker,
+        is_solid,
+        CandidateSelectionOptions {
+            select_random_candidates,
+            retain_hills_topology: false,
+        },
+    )
+    .0
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CandidateSelectionOptions {
+    select_random_candidates: bool,
+    retain_hills_topology: bool,
+}
+
+fn build_with_candidate_selection_details(
+    grid_radius: u32,
+    settings: &ProceduralSettings,
+    seed: u64,
+    palette: &TerrainPalette,
+    walker: TraversalProfile,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+    options: CandidateSelectionOptions,
+) -> (ProceduralBuild, Option<V1HillsTopology>) {
     let started = Instant::now();
     let mut valid = Vec::new();
     let mut rejected_notes = Vec::new();
@@ -372,7 +447,7 @@ fn build_with_candidate_selection(
         );
         if validation.valid {
             hard_valid_candidates = hard_valid_candidates.saturating_add(1);
-            if select_random_candidates {
+            if options.select_random_candidates {
                 let score =
                     score_candidate(&plan, settings.environment, validation.metrics, candidate);
                 valid.push(ValidCandidate {
@@ -408,8 +483,12 @@ fn build_with_candidate_selection(
         metrics,
         notes,
         validated,
+        hills_topology,
     ) = if let Some(candidate) = selected {
         let special_regions = special_movement_regions(&candidate.plan);
+        let hills_topology = options
+            .retain_hills_topology
+            .then(|| finalized_hills_topology(&candidate.plan));
         (
             candidate.map,
             candidate.plan.anchors,
@@ -420,6 +499,7 @@ fn build_with_candidate_selection(
             candidate.metrics,
             Vec::new(),
             true,
+            hills_topology,
         )
     } else {
         let mut plan = construct_plan(grid_radius, settings, seed, 0, true);
@@ -430,6 +510,9 @@ fn build_with_candidate_selection(
         notes.push("all random candidates failed; canonical fallback selected".to_owned());
         notes.extend(validation.notes);
         let validated = validation.valid;
+        let hills_topology = options
+            .retain_hills_topology
+            .then(|| finalized_hills_topology(&plan));
         (
             map,
             plan.anchors,
@@ -440,6 +523,7 @@ fn build_with_candidate_selection(
             validation.metrics,
             notes,
             validated,
+            hills_topology,
         )
     };
 
@@ -461,13 +545,16 @@ fn build_with_candidate_selection(
         notes,
     };
 
-    ProceduralBuild {
-        map,
-        anchors,
-        special_regions,
-        report,
-        validated,
-    }
+    (
+        ProceduralBuild {
+            map,
+            anchors,
+            special_regions,
+            report,
+            validated,
+        },
+        hills_topology,
+    )
 }
 
 /// Assigns deterministic map-local ids to connected gated areas in the final plan.

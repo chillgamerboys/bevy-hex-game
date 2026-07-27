@@ -40,8 +40,22 @@ pub(crate) enum V2GenerationError {
     /// Recipe inputs or imported compatibility metadata violated the V2 contract.
     RecipeContract(String),
     /// Candidate construction encountered an error that cannot be treated as rejection.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "native V2 recipes use fatal candidate construction errors"
+        )
+    )]
     FatalCandidateConstruction { candidate: u8, source: Box<Self> },
     /// A bounded repair encountered an error that must stop the complete generation run.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "native V2 recipes use fatal bounded-repair errors"
+        )
+    )]
     FatalCandidateRepair {
         candidate: u8,
         round: u8,

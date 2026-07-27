@@ -1,8 +1,8 @@
 //! V2 Hills compatibility recipe.
 //!
 //! V1 remains the source of candidate geometry, bounded repairs, exact validation, and
-//! scoring until parity is locked. This module converts each finalized candidate into
-//! the recipe-independent V2 volume without interpreting or regenerating its topology.
+//! scoring until parity is locked. This module converts the finalized selection into the
+//! recipe-independent V2 volume without interpreting or regenerating its topology.
 
 use std::collections::BTreeMap;
 
@@ -10,17 +10,20 @@ use hex_core::{
     HexCoord, MapViewHint, SpecialMovementRegions, SubstanceId, TilePos, TraversalProfile,
 };
 
+#[cfg(test)]
+use super::recipe::materialize_selection;
 use super::recipe::{
-    materialize_selection, run_recipe, CandidateAttemptError, CandidateContext, FallbackContext,
-    MaterializedSelection, RecipePlan, RecipeSelection, RecipeValidation, RepairOutcome, V2Recipe,
-    ValidationContext,
+    materialize_compatibility_selection, MaterializedSelection, RecipePlan, RecipeSelection,
+    MAX_REPAIR_ROUNDS,
 };
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, TerrainVolumePlan, VolumeColumn, VolumeElement,
 };
 use super::V2GenerationError;
-use crate::procedural::{self, CandidateScore, TacticalMetrics, V1HillsCandidate, V1HillsTopology};
+#[cfg(test)]
+use crate::procedural::V1HillsCandidate;
+use crate::procedural::{self, TacticalMetrics, V1HillsTopology};
 use crate::settings::{
     CrossingSettings, EnvironmentSettings, HillsSettings, LandformSettings, ProceduralV1Settings,
     ProceduralV2Settings, TacticalSettings, V2EnvironmentSettings, V2RecipeSettings,
@@ -28,11 +31,10 @@ use crate::settings::{
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
 
-/// V1 measurements and ordering key cached with one converted candidate.
+/// V1 tactical measurements retained with the converted selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HillsMetrics {
     pub(crate) tactical: TacticalMetrics,
-    score: CandidateScore,
 }
 
 /// Hills-only semantic facts retained for later layered recipes and diagnostics.
@@ -46,15 +48,22 @@ pub(crate) struct HillsMetadata {
         )
     )]
     pub(crate) topology: V1HillsTopology,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "layered recipes retain imported ground repair diagnostics"
+        )
+    )]
     repair_actions: Vec<String>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "layered recipes retain selected ground tactical metrics"
+        )
+    )]
     metrics: HillsMetrics,
-}
-
-struct HillsRecipe<'a> {
-    settings: ProceduralV1Settings,
-    view_hint: MapViewHint,
-    palette: &'a TerrainPalette,
-    is_solid: &'a dyn Fn(SubstanceId) -> bool,
 }
 
 /// Generates and materializes V2 Hills while V1 remains the parity oracle.
@@ -66,14 +75,26 @@ pub(crate) fn build(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedSelection<HillsMetadata, HillsMetrics>, V2GenerationError> {
-    let selection = select(grid_radius, level_height, settings, seed, palette, is_solid)?;
-    materialize_selection(selection, palette, is_solid)
+    let selection =
+        select_compatibility(grid_radius, level_height, settings, seed, palette, is_solid)?;
+    materialize_compatibility_selection(
+        selection.semantic,
+        selection.map,
+        selection.map_fingerprint,
+    )
 }
 
 /// Selects finalized Hills ground before materialization.
 ///
 /// Layered recipes use this boundary to add independent upper masses without
 /// regenerating or reverse-converting the approved ground plan.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Layered Sky Islands recipe consumes finalized Hills ground"
+    )
+)]
 pub(crate) fn select(
     grid_radius: u32,
     level_height: f32,
@@ -82,107 +103,97 @@ pub(crate) fn select(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<RecipeSelection<HillsMetadata, HillsMetrics>, V2GenerationError> {
-    let view_hint = hills_view_hint(grid_radius, level_height, settings)?;
-    let recipe = HillsRecipe {
-        settings: canonical_v1_settings(settings)?,
-        view_hint,
-        palette,
-        is_solid,
-    };
-    run_recipe(&recipe, &(), grid_radius, seed)
+    Ok(
+        select_compatibility(grid_radius, level_height, settings, seed, palette, is_solid)?
+            .semantic,
+    )
 }
 
-impl V2Recipe for HillsRecipe<'_> {
-    type Settings = ();
-    type Metadata = HillsMetadata;
-    type Metrics = HillsMetrics;
-    type Score = CandidateScore;
+struct HillsCompatibilitySelection {
+    semantic: RecipeSelection<HillsMetadata, HillsMetrics>,
+    map: VoxelMap,
+    map_fingerprint: u64,
+}
 
-    fn construct(
-        &self,
-        context: CandidateContext,
-        _settings: &Self::Settings,
-    ) -> Result<RecipePlan<Self::Metadata>, CandidateAttemptError> {
-        let candidate = procedural::build_hills_candidate_for_v2_parity(
-            context.grid_radius,
-            &self.settings,
-            context.seed,
-            context.candidate,
-            false,
-            self.palette,
-            self.is_solid,
-        )
-        .map_err(|reason| {
-            CandidateAttemptError::fatal(V2GenerationError::RecipeContract(format!(
-                "V1 Hills parity adapter failed: {reason}"
-            )))
-        })?;
-        if !candidate.valid {
-            return Err(CandidateAttemptError::Rejected(candidate.validation_notes));
-        }
-        candidate_to_plan(context.grid_radius, candidate, self.palette, self.view_hint)
-            .map_err(CandidateAttemptError::fatal)
+fn select_compatibility(
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV2Settings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<HillsCompatibilitySelection, V2GenerationError> {
+    let view_hint = hills_view_hint(grid_radius, level_height, settings)?;
+    let legacy_settings = canonical_v1_settings(settings)?;
+    let procedural::V1HillsBuild {
+        build: legacy,
+        topology,
+    } = procedural::build_hills_for_v2_parity(
+        grid_radius,
+        &legacy_settings,
+        seed,
+        palette,
+        is_solid,
+    )
+    .map_err(|reason| {
+        V2GenerationError::RecipeContract(format!("V1 Hills parity adapter failed: {reason}"))
+    })?;
+    let procedural::ProceduralBuild {
+        map,
+        anchors,
+        special_regions,
+        report,
+        validated,
+    } = legacy;
+    if !validated {
+        return Err(V2GenerationError::InvalidFallback(report.notes));
+    }
+    if report.candidates_evaluated != procedural::CANDIDATE_COUNT {
+        return Err(V2GenerationError::RecipeContract(format!(
+            "V1 Hills evaluated {} candidates; expected {}",
+            report.candidates_evaluated,
+            procedural::CANDIDATE_COUNT
+        )));
+    }
+    if report.repair_actions.len() > usize::from(MAX_REPAIR_ROUNDS) {
+        return Err(V2GenerationError::RecipeContract(format!(
+            "V1 Hills imported {} repair rounds; the V2 limit is {MAX_REPAIR_ROUNDS}",
+            report.repair_actions.len()
+        )));
     }
 
-    fn validate(
-        &self,
-        _context: ValidationContext,
-        _settings: &Self::Settings,
-        plan: &RecipePlan<Self::Metadata>,
-    ) -> RecipeValidation<Self::Metrics> {
-        RecipeValidation::valid(plan.metadata.metrics)
-    }
-
-    fn repair(
-        &self,
-        _context: CandidateContext,
-        _settings: &Self::Settings,
-        _plan: &mut RecipePlan<Self::Metadata>,
-        _round: u8,
-        _issues: &[String],
-    ) -> Result<RepairOutcome, CandidateAttemptError> {
-        Ok(RepairOutcome::NoChange)
-    }
-
-    fn score(
-        &self,
-        _settings: &Self::Settings,
-        metrics: &Self::Metrics,
-        _candidate: u8,
-    ) -> Self::Score {
-        metrics.score
-    }
-
-    fn preexisting_repair_actions(&self, plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
-        plan.metadata.repair_actions.clone()
-    }
-
-    fn canonical_fallback(
-        &self,
-        context: FallbackContext,
-        _settings: &Self::Settings,
-    ) -> Result<RecipePlan<Self::Metadata>, V2GenerationError> {
-        let candidate = procedural::build_hills_candidate_for_v2_parity(
-            context.grid_radius,
-            &self.settings,
-            context.seed,
-            0,
-            true,
-            self.palette,
-            self.is_solid,
-        )
-        .map_err(|reason| {
-            V2GenerationError::InvalidFallback(vec![format!(
-                "V1 Hills fallback adapter failed: {reason}"
-            )])
-        })?;
-        if !candidate.valid {
-            return Err(V2GenerationError::InvalidFallback(
-                candidate.validation_notes,
-            ));
-        }
-        candidate_to_plan(context.grid_radius, candidate, self.palette, self.view_hint)
-    }
+    let metrics = HillsMetrics {
+        tactical: report.metrics,
+    };
+    let map_fingerprint = report.map_fingerprint;
+    let plan = selected_map_to_plan(
+        grid_radius,
+        SelectedHills {
+            map: &map,
+            anchors: &anchors,
+            special_regions: &special_regions,
+            repair_actions: report.repair_actions.clone(),
+            metrics,
+            topology,
+        },
+        palette,
+        view_hint,
+    )?;
+    plan.volume.validate()?;
+    Ok(HillsCompatibilitySelection {
+        semantic: RecipeSelection {
+            plan,
+            metrics,
+            selected_candidate: report.selected_candidate,
+            candidates_evaluated: report.candidates_evaluated,
+            valid_candidates: report.valid_candidates,
+            repair_actions: report.repair_actions,
+            used_fallback: report.used_fallback,
+            notes: report.notes,
+        },
+        map,
+        map_fingerprint,
+    })
 }
 
 fn hills_view_hint(
@@ -260,44 +271,64 @@ fn canonical_v1_settings(
     })
 }
 
+#[cfg(test)]
 fn candidate_to_plan(
     grid_radius: u32,
-    candidate: V1HillsCandidate,
+    candidate: &V1HillsCandidate,
     palette: &TerrainPalette,
     view_hint: MapViewHint,
 ) -> Result<RecipePlan<HillsMetadata>, V2GenerationError> {
-    let V1HillsCandidate {
-        map,
-        anchors,
-        special_regions,
-        metrics,
-        valid: _,
-        validation_notes: _,
-        repair_actions,
-        score,
-        topology,
-    } = candidate;
-    let anchors = anchors
+    selected_map_to_plan(
+        grid_radius,
+        SelectedHills {
+            map: &candidate.map,
+            anchors: &candidate.anchors,
+            special_regions: &candidate.special_regions,
+            repair_actions: candidate.repair_actions.clone(),
+            metrics: HillsMetrics {
+                tactical: candidate.metrics,
+            },
+            topology: candidate.topology.clone(),
+        },
+        palette,
+        view_hint,
+    )
+}
+
+struct SelectedHills<'a> {
+    map: &'a VoxelMap,
+    anchors: &'a procedural::GeneratedAnchors,
+    special_regions: &'a SpecialMovementRegions,
+    repair_actions: Vec<String>,
+    metrics: HillsMetrics,
+    topology: V1HillsTopology,
+}
+
+fn selected_map_to_plan(
+    grid_radius: u32,
+    selected: SelectedHills<'_>,
+    palette: &TerrainPalette,
+    view_hint: MapViewHint,
+) -> Result<RecipePlan<HillsMetadata>, V2GenerationError> {
+    let anchors = selected
+        .anchors
         .iter()
         .map(|(name, position)| (name.to_owned(), position))
         .collect();
     let volume = convert_map(
         grid_radius,
-        &map,
+        selected.map,
         anchors,
-        &special_regions,
+        selected.special_regions,
         palette,
         view_hint,
     )?;
     Ok(RecipePlan {
         volume,
         metadata: HillsMetadata {
-            topology,
-            repair_actions,
-            metrics: HillsMetrics {
-                tactical: metrics,
-                score,
-            },
+            topology: selected.topology,
+            repair_actions: selected.repair_actions,
+            metrics: selected.metrics,
         },
     })
 }
@@ -749,6 +780,51 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual release/debug generator benchmark"]
+    fn v2_hills_radius_benchmark_meets_the_radius_40_target() {
+        let palette = palette();
+        let settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let mut radius_40_worst = 0;
+
+        for radius in [12, 20, 40] {
+            let warmup =
+                crate::procedural_v2::build(radius, 0.4, &settings, u64::MAX, &palette, &is_solid)
+                    .expect("the warm-up map should generate");
+            std::hint::black_box(warmup);
+
+            let mut samples = Vec::new();
+            for seed in 0..12 {
+                let result =
+                    crate::procedural_v2::build(radius, 0.4, &settings, seed, &palette, &is_solid)
+                        .expect("the benchmark map should generate");
+                assert_eq!(result.report.generator_version, 2);
+                assert_eq!(result.report.candidates_evaluated, 8);
+                samples.push(result.report.elapsed_micros);
+                std::hint::black_box(result);
+            }
+
+            samples.sort_unstable();
+            let median = samples.get(samples.len() / 2).copied().unwrap_or(u64::MAX);
+            let worst = samples.last().copied().unwrap_or(u64::MAX);
+            eprintln!("V2 Hills radius {radius}: median={median}us worst={worst}us");
+            if radius == 40 {
+                radius_40_worst = worst;
+            }
+        }
+
+        let target_micros = if cfg!(debug_assertions) {
+            250_000
+        } else {
+            50_000
+        };
+        assert!(
+            radius_40_worst < target_micros,
+            "V2 Hills radius 40 worst case was {radius_40_worst}us; \
+             target is {target_micros}us"
+        );
+    }
+
+    #[test]
     fn canonical_fallback_matches_nonzero_seed_v1_and_imports_bounded_repairs() {
         const REQUESTED_SEED: u64 = 505;
 
@@ -768,23 +844,14 @@ mod tests {
         .expect("the V1 canonical fallback should construct");
         assert!(expected.valid, "{:?}", expected.validation_notes);
 
-        let recipe = HillsRecipe {
-            settings: v1_settings,
-            view_hint: hills_view_hint(12, 0.4, &v2_settings)
-                .expect("the fallback view should derive"),
-            palette: &palette,
-            is_solid: &is_solid,
-        };
-        let fallback = recipe
-            .canonical_fallback(
-                FallbackContext {
-                    grid_radius: 12,
-                    seed: REQUESTED_SEED,
-                },
-                &(),
-            )
-            .expect("the V2 canonical fallback should construct");
-        let imported_repairs = recipe.preexisting_repair_actions(&fallback);
+        let fallback = candidate_to_plan(
+            12,
+            &expected,
+            &palette,
+            hills_view_hint(12, 0.4, &v2_settings).expect("the fallback view should derive"),
+        )
+        .expect("the V2 canonical fallback should convert");
+        let imported_repairs = fallback.metadata.repair_actions.clone();
         assert_eq!(imported_repairs, expected.repair_actions);
         assert!(
             imported_repairs.len() <= 4,
@@ -847,7 +914,7 @@ mod tests {
         let bridge = candidate.topology.bridge.clone();
         let plan = candidate_to_plan(
             12,
-            candidate,
+            &candidate,
             &palette,
             hills_view_hint(12, 0.4, &v2_settings).expect("the view should derive"),
         )
@@ -999,7 +1066,7 @@ mod tests {
             let expected_fingerprint = map_fingerprint(&candidate.map, &candidate.special_regions);
             let plan = candidate_to_plan(
                 12,
-                candidate,
+                &candidate,
                 &palette(),
                 MapViewHint::new((0.0, 48.0, 42.0), (0.0, 6.0, 0.0)),
             )

@@ -1,4 +1,11 @@
 //! Recipe-independent candidate selection for procedural generator V2.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the generic V2 runner becomes live with the first native recipe"
+    )
+)]
 
 use std::fmt::Debug;
 
@@ -8,7 +15,7 @@ use hex_core::{
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::seed::SeedStreams;
-use super::volume::{voxelize, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
+use super::volume::{voxelize_prevalidated, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
 use super::V2GenerationError;
 use crate::terrain::TerrainPalette;
 use crate::voxel::VoxelMap;
@@ -20,15 +27,15 @@ pub(crate) const MAX_REPAIR_ROUNDS: u8 = 4;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CandidateContext {
     pub(crate) grid_radius: u32,
-    pub(crate) seed: u64,
-    pub(crate) candidate: u8,
     #[cfg_attr(
-        not(test),
+        test,
         expect(
             dead_code,
-            reason = "V2 Hills preserves frozen V1 streams; native recipes consume this field"
+            reason = "mock recipes exercise named streams rather than the raw seed"
         )
     )]
+    pub(crate) seed: u64,
+    pub(crate) candidate: u8,
     pub(crate) streams: SeedStreams,
 }
 
@@ -52,6 +59,13 @@ impl CandidateContext {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FallbackContext {
     pub(crate) grid_radius: u32,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "mock canonical fallbacks deliberately ignore the requested seed"
+        )
+    )]
     pub(crate) seed: u64,
 }
 
@@ -110,13 +124,6 @@ pub(crate) enum CandidateAttemptError {
 
 impl CandidateAttemptError {
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "native V2 recipes use candidate-local construction rejection"
-        )
-    )]
     pub(crate) fn rejected(issue: impl Into<String>) -> Self {
         Self::Rejected(vec![issue.into()])
     }
@@ -141,13 +148,6 @@ impl<M> RecipeValidation<M> {
     }
 
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "native V2 recipes return recipe-specific validation issues"
-        )
-    )]
     pub(crate) fn invalid(issues: Vec<String>) -> Self {
         Self::Invalid(issues)
     }
@@ -156,13 +156,6 @@ impl<M> RecipeValidation<M> {
 /// Whether a bounded repair changed semantic intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepairOutcome {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "V2 Hills imports frozen repairs; native recipes construct this variant"
-        )
-    )]
     Changed(String),
     NoChange,
 }
@@ -248,13 +241,6 @@ pub(crate) struct MaterializedSelection<M, V> {
     pub(crate) special_regions: SpecialMovementRegions,
     pub(crate) interiors: InteriorRegions,
     pub(crate) view_hint: MapViewHint,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "layered recipes consume typed metadata from their completed base recipe"
-        )
-    )]
     pub(crate) metadata: M,
     pub(crate) metrics: V,
     pub(crate) selected_candidate: Option<u8>,
@@ -272,6 +258,72 @@ pub(crate) fn materialize_selection<M, V>(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
+    let VoxelizedTerrain { map, interiors } =
+        voxelize_prevalidated(&selection.plan.volume, palette, is_solid)?;
+    let special_regions = exact_special_regions(&selection.plan.volume);
+    let map_fingerprint = materialized_map_fingerprint(&map, &special_regions, &interiors);
+    Ok(assemble_materialized(
+        selection,
+        map,
+        interiors,
+        special_regions,
+        map_fingerprint,
+    ))
+}
+
+/// Publishes a frozen compatibility map already proven equivalent to its V2 plan.
+///
+/// Native and layered recipes always use [`materialize_selection`]. This boundary
+/// exists only so a parity adapter need not rebuild and rehash the legacy map that it
+/// converted into a validated semantic volume.
+pub(crate) fn materialize_compatibility_selection<M, V>(
+    selection: RecipeSelection<M, V>,
+    map: VoxelMap,
+    map_fingerprint: u64,
+) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
+    if !selection.plan.volume.interiors.is_empty() {
+        return Err(V2GenerationError::RecipeContract(
+            "a compatibility materialization cannot carry V2 interior geometry".to_owned(),
+        ));
+    }
+    let special_regions = exact_special_regions(&selection.plan.volume);
+    let materialized = assemble_materialized(
+        selection,
+        map,
+        InteriorRegions::new(),
+        special_regions,
+        map_fingerprint,
+    );
+    #[cfg(debug_assertions)]
+    {
+        let actual = materialized_map_fingerprint(
+            &materialized.map,
+            &materialized.special_regions,
+            &materialized.interiors,
+        );
+        debug_assert_eq!(actual, materialized.map_fingerprint);
+    }
+    Ok(materialized)
+}
+
+fn exact_special_regions(volume: &TerrainVolumePlan) -> SpecialMovementRegions {
+    volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, surface)| match surface.access {
+            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
+            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
+        })
+        .collect()
+}
+
+fn assemble_materialized<M, V>(
+    selection: RecipeSelection<M, V>,
+    map: VoxelMap,
+    interiors: InteriorRegions,
+    special_regions: SpecialMovementRegions,
+    map_fingerprint: u64,
+) -> MaterializedSelection<M, V> {
     let RecipeSelection {
         plan,
         metrics,
@@ -289,19 +341,9 @@ pub(crate) fn materialize_selection<M, V>(
         .iter()
         .map(|(name, position)| (MapAnchorId::from(name.clone()), *position))
         .collect();
-    let special_regions = volume
-        .surfaces
-        .iter()
-        .filter_map(|(position, surface)| match surface.access {
-            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
-            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
-        })
-        .collect();
     let view_hint = volume.view_hint;
-    let VoxelizedTerrain { map, interiors } = voxelize(&volume, palette, is_solid)?;
-    let map_fingerprint = materialized_map_fingerprint(&map, &special_regions, &interiors);
 
-    Ok(MaterializedSelection {
+    MaterializedSelection {
         map,
         anchors,
         special_regions,
@@ -316,7 +358,7 @@ pub(crate) fn materialize_selection<M, V>(
         used_fallback,
         notes,
         map_fingerprint,
-    })
+    }
 }
 
 /// Extends the frozen V1 identity only when a map has exact interior semantics.
@@ -565,8 +607,8 @@ mod tests {
 
     use super::*;
     use crate::procedural_v2::volume::{
-        LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
-        VolumeElement,
+        InteriorVolume, LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess,
+        SurfaceMetadata, VolumeColumn, VolumeElement,
     };
     use crate::terrain::TerrainPalette;
 
@@ -1122,6 +1164,26 @@ mod tests {
             crate::procedural::map_fingerprint(&materialized.map, &materialized.special_regions),
             "an interior-free V2 map must retain the exact V1 map identity"
         );
+    }
+
+    #[test]
+    fn compatibility_materialization_rejects_interior_geometry() {
+        let source = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+            .expect("the source selection should be valid");
+        let source = materialize_selection(source, &palette(), &test_is_solid)
+            .expect("the source map should materialize");
+        let mut incompatible = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+            .expect("the incompatible selection should begin valid");
+        incompatible
+            .plan
+            .volume
+            .interiors
+            .insert(InteriorRegionId(0), InteriorVolume::default());
+
+        let error =
+            materialize_compatibility_selection(incompatible, source.map, source.map_fingerprint)
+                .expect_err("interior geometry must use native V2 materialization");
+        assert!(error.to_string().contains("cannot carry V2 interior"));
     }
 
     #[test]
