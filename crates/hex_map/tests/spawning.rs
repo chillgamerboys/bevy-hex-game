@@ -753,39 +753,6 @@ fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
 }
 
 #[test]
-fn unavailable_v2_caves_recipe_reports_failure_without_partial_terrain() {
-    let mut app = procedural_app();
-    app.insert_resource(MapSettings {
-        grid_radius: 12,
-        level_height: 0.4,
-        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
-            environment: V2EnvironmentSettings::Rocky,
-            recipe: V2RecipeSettings::Caves(hex_map::CavesSettings {
-                surface_level: 15,
-                cave_floor_level: 8,
-                chamber_count: 7,
-            }),
-        })),
-    });
-
-    enter_gameplay(&mut app);
-
-    assert!(!app.world().contains_resource::<TerrainReady>());
-    assert!(!app.world().contains_resource::<VoxelMap>());
-    assert!(!app.world().contains_resource::<MapAnchors>());
-    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
-    assert!(!app.world().contains_resource::<InteriorRegions>());
-    assert!(!app.world().contains_resource::<MapViewHint>());
-    assert!(!app.world().contains_resource::<GenerationReport>());
-    assert!(app
-        .world()
-        .resource::<GameplaySetupFailure>()
-        .reason
-        .contains("V2 recipe Caves is not available"));
-    assert_eq!(tile_count(&mut app), 0);
-}
-
-#[test]
 fn a_missing_required_substance_never_marks_terrain_ready() {
     let mut app = procedural_app();
     app.insert_resource(substance_table_without(Some("water")));

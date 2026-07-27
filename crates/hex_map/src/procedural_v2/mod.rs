@@ -4,6 +4,7 @@
 //! a validated [`TerrainVolumePlan`] and only then materialize voxels; unsupported or
 //! unfinished recipes return an error rather than publishing an empty world.
 
+mod caves;
 mod hills;
 mod mountains;
 mod recipe;
@@ -148,7 +149,13 @@ pub(crate) fn build(
             seed,
             started,
         ),
-        V2RecipeSettings::Caves(_) => Err(unavailable_recipe(settings)),
+        V2RecipeSettings::Caves(_) => finish_build(
+            caves::build(grid_radius, level_height, settings, seed, palette, is_solid)?,
+            grid_radius,
+            settings,
+            seed,
+            started,
+        ),
     }
 }
 
@@ -205,16 +212,6 @@ where
         view_hint,
         report,
     })
-}
-
-fn unavailable_recipe(settings: &ProceduralV2Settings) -> V2GenerationError {
-    let name = match settings.recipe {
-        V2RecipeSettings::Hills(_) => "Hills",
-        V2RecipeSettings::LayeredSkyIslands(_) => "LayeredSkyIslands",
-        V2RecipeSettings::Mountains(_) => "Mountains",
-        V2RecipeSettings::Caves(_) => "Caves",
-    };
-    V2GenerationError::RecipeUnavailable(name)
 }
 
 /// Stable hash of every V2 setting that can affect generated output.
@@ -325,23 +322,6 @@ mod tests {
                 chamber_count: 7,
             }),
         }
-    }
-
-    #[test]
-    fn unfinished_recipe_returns_an_error_instead_of_an_empty_plan() {
-        let settings = ProceduralV2Settings {
-            environment: V2EnvironmentSettings::Frozen,
-            recipe: V2RecipeSettings::Mountains(MountainsSettings {
-                base_level: 15,
-                relief: 15,
-                peak_count: 4,
-            }),
-        };
-
-        assert_eq!(
-            unavailable_recipe(&settings),
-            V2GenerationError::RecipeUnavailable("Mountains")
-        );
     }
 
     #[test]
