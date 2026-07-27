@@ -7,20 +7,20 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{
-    Headroom, HexCoord, Level, MapViewHint, SpecialMovementRegion, SubstanceId, TilePos,
-    TraversalEndpoint, TraversalProfile, MAX_HEADROOM,
+    Headroom, HexCoord, Level, MAX_HEADROOM, MapViewHint, SpecialMovementRegion, SubstanceId,
+    TilePos, TraversalEndpoint, TraversalProfile,
 };
 
+use super::V2GenerationError;
 use super::recipe::{
-    materialize_selection, run_recipe, CandidateAttemptError, CandidateContext, FallbackContext,
-    MaterializedSelection, RecipePlan, RecipeValidation, RepairOutcome, ReportMetrics, V2Recipe,
-    ValidationContext,
+    CandidateAttemptError, CandidateContext, FallbackContext, MaterializedSelection, RecipePlan,
+    RecipeValidation, RepairOutcome, ReportMetrics, V2Recipe, ValidationContext,
+    materialize_selection, run_recipe,
 };
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, TerrainVolumePlan,
     VolumeColumn, VolumeElement,
 };
-use super::V2GenerationError;
 use crate::procedural::TacticalMetrics;
 use crate::settings::{
     MountainsSettings, ProceduralV2Settings, V2EnvironmentSettings, V2RecipeSettings,
@@ -32,6 +32,10 @@ const RIDGE_SHOULDER_RISE: Level = 2;
 const MOUNTAIN_EDGE_RISE: Level = 4;
 const ROUTE_HALF_LENGTH: i32 = 4;
 const MIN_PEAK_SEPARATION: u32 = 2;
+const EXPANDED_ROUTE_HALF_LENGTH: i32 = 6;
+const EXPANDED_RIDGE_RISE: Level = 7;
+const EXPANDED_BRANCH_RISE: Level = 5;
+const EXPANDED_MIN_PEAK_SEPARATION: u32 = 3;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
@@ -71,6 +75,9 @@ pub(crate) struct MountainsMetadata {
     high_pass: MountainRoute,
     low_bypass: MountainRoute,
     ordinary: BTreeSet<HexCoord>,
+    mountain_cells: BTreeSet<HexCoord>,
+    main_spine: Vec<HexCoord>,
+    branch_spines: Vec<Vec<HexCoord>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +88,10 @@ pub(crate) struct MountainsMetrics {
     high_pass_steps: u32,
     low_bypass_steps: u32,
     exposed_stone_percent: u32,
+    mountain_coverage_percent: u32,
+    peak_height_spread: Level,
+    spine_turns: u32,
+    branch_count: u32,
 }
 
 impl ReportMetrics for MountainsMetrics {
@@ -124,7 +135,7 @@ impl V2Recipe for MountainsRecipe {
     type Settings = MountainsSettings;
     type Metadata = MountainsMetadata;
     type Metrics = MountainsMetrics;
-    type Score = (u8, u32, u32, u8);
+    type Score = (u32, u32, u32, u32, u32, u32, u8);
 
     fn construct(
         &self,
@@ -160,14 +171,50 @@ impl V2Recipe for MountainsRecipe {
         metrics: &Self::Metrics,
         candidate: u8,
     ) -> Self::Score {
-        (
-            settings
-                .peak_count
-                .saturating_sub(metrics.inaccessible_peaks),
-            metrics.cliff_edges.abs_diff(36),
-            metrics.tactical.alternate_detour_percent.abs_diff(40),
-            candidate,
-        )
+        if uses_expanded_geometry(settings) {
+            (
+                u32::from(
+                    settings
+                        .peak_count
+                        .saturating_sub(metrics.inaccessible_peaks),
+                ),
+                metrics
+                    .mountain_coverage_percent
+                    .abs_diff(expanded_coverage_target(settings)),
+                u32::from(
+                    metrics
+                        .peak_height_spread
+                        .abs_diff(expanded_peak_spread(settings)),
+                ),
+                metrics
+                    .branch_count
+                    .abs_diff(expanded_branch_count(settings))
+                    .saturating_add(
+                        metrics
+                            .spine_turns
+                            .abs_diff(expanded_spine_turn_target(settings)),
+                    ),
+                metrics
+                    .cliff_edges
+                    .abs_diff(expanded_cliff_target(settings)),
+                metrics.tactical.alternate_detour_percent.abs_diff(40),
+                candidate,
+            )
+        } else {
+            (
+                u32::from(
+                    settings
+                        .peak_count
+                        .saturating_sub(metrics.inaccessible_peaks),
+                ),
+                metrics.cliff_edges.abs_diff(36),
+                metrics.tactical.alternate_detour_percent.abs_diff(40),
+                0,
+                0,
+                0,
+                candidate,
+            )
+        }
     }
 
     fn canonical_fallback(
@@ -193,6 +240,18 @@ impl V2Recipe for MountainsRecipe {
 }
 
 fn construct_plan(
+    recipe: &MountainsRecipe,
+    context: CandidateContext,
+    settings: &MountainsSettings,
+    fallback: bool,
+) -> Result<RecipePlan<MountainsMetadata>, CandidateAttemptError> {
+    if uses_expanded_geometry(settings) {
+        return construct_expanded_plan(recipe, context, settings, fallback);
+    }
+    construct_legacy_plan(recipe, context, settings, fallback)
+}
+
+fn construct_legacy_plan(
     recipe: &MountainsRecipe,
     context: CandidateContext,
     settings: &MountainsSettings,
@@ -354,6 +413,13 @@ fn construct_plan(
         .keys()
         .copied()
         .filter(|coord| to_local(*coord, orientation).y().unsigned_abs() <= 1)
+        .collect::<BTreeSet<_>>();
+    let mountain_cells = heights
+        .iter()
+        .filter_map(|(coord, height)| (*height > settings.base_level).then_some(*coord))
+        .collect();
+    let main_spine = (-radius..=radius)
+        .map(|local_u| from_local(local_u, 0, orientation))
         .collect();
     let view_hint = mountain_view_hint(
         context.grid_radius,
@@ -383,8 +449,652 @@ fn construct_plan(
             high_pass,
             low_bypass,
             ordinary,
+            mountain_cells,
+            main_spine,
+            branch_spines: Vec::new(),
         },
     })
+}
+
+const fn uses_expanded_geometry(settings: &MountainsSettings) -> bool {
+    settings.relief > 16 || settings.peak_count > 5
+}
+
+fn expanded_coverage_target(settings: &MountainsSettings) -> u32 {
+    let relief_bonus =
+        u32::try_from(settings.relief.saturating_sub(18).max(0) / 2).unwrap_or_default();
+    let peak_bonus = u32::from(settings.peak_count.saturating_sub(5)).saturating_mul(2);
+    53_u32
+        .saturating_add(relief_bonus)
+        .saturating_add(peak_bonus)
+        .clamp(52, 65)
+}
+
+fn expanded_peak_spread(settings: &MountainsSettings) -> Level {
+    (settings.relief / 3).clamp(5, 8)
+}
+
+fn expanded_branch_count(settings: &MountainsSettings) -> u32 {
+    u32::from(settings.peak_count.saturating_sub(3)).clamp(2, 5)
+}
+
+fn expanded_cliff_target(settings: &MountainsSettings) -> u32 {
+    60_u32.saturating_add(expanded_branch_count(settings).saturating_mul(12))
+}
+
+fn expanded_spine_turn_target(settings: &MountainsSettings) -> u32 {
+    expanded_branch_count(settings).saturating_mul(2)
+}
+
+fn construct_expanded_plan(
+    recipe: &MountainsRecipe,
+    context: CandidateContext,
+    settings: &MountainsSettings,
+    fallback: bool,
+) -> Result<RecipePlan<MountainsMetadata>, CandidateAttemptError> {
+    let radius = i32::try_from(context.grid_radius)
+        .map_err(|_out_of_range| CandidateAttemptError::rejected("mountain radius is too large"))?;
+    let orientation = if fallback {
+        0
+    } else {
+        u8::try_from(context.streams.stage("mountains.orientation").sample(0) % 3)
+            .unwrap_or_default()
+    };
+    let high_u = -radius / 3;
+    let low_u = radius / 3;
+    let spawn_v = (radius / 2).max(5);
+    let party_coord = from_local(high_u, -spawn_v, orientation);
+    let hostile_coord = from_local(high_u, spawn_v, orientation);
+    let footprint: BTreeSet<_> = HexCoord::ORIGIN
+        .within_radius(context.grid_radius)
+        .into_iter()
+        .collect();
+
+    let main_spine = expanded_main_spine(radius, orientation, context, settings, fallback)?;
+    let branch_spines = expanded_branch_spines(
+        radius,
+        orientation,
+        context,
+        settings,
+        fallback,
+        &main_spine,
+        &footprint,
+    )?;
+    let ridge_cells: BTreeSet<_> = main_spine.iter().copied().collect();
+    let spur_cells: BTreeSet<_> = branch_spines
+        .iter()
+        .flat_map(|branch| branch.iter().copied().skip(1))
+        .collect();
+
+    let high_pass = build_route_with_half_length(
+        high_u,
+        orientation,
+        settings.base_level,
+        EXPANDED_ROUTE_HALF_LENGTH,
+        |local_v| (EXPANDED_ROUTE_HALF_LENGTH - local_v.abs()).clamp(0, 4),
+    );
+    let low_bypass = build_route_with_half_length(
+        low_u,
+        orientation,
+        settings.base_level,
+        EXPANDED_ROUTE_HALF_LENGTH,
+        |local_v| i32::from(local_v.abs() <= 1),
+    );
+    let route_coords: BTreeSet<_> = high_pass
+        .coords()
+        .union(&low_bypass.coords())
+        .copied()
+        .collect();
+
+    let mut protected = BTreeSet::new();
+    protected.extend(party_coord.within_radius(2));
+    protected.extend(hostile_coord.within_radius(2));
+
+    let skeleton: BTreeSet<_> = ridge_cells
+        .union(&spur_cells)
+        .copied()
+        .filter(|coord| footprint.contains(coord))
+        .collect();
+    let target_count = coverage_cell_target(footprint.len(), expanded_coverage_target(settings));
+    let mut mountain_cells =
+        grow_mountain_footprint(skeleton, target_count, &footprint, &protected, context)?;
+
+    let peak_centres = expanded_peak_centres(
+        settings.peak_count,
+        &main_spine,
+        &branch_spines,
+        &route_coords,
+        &footprint,
+        context,
+    )?;
+    let peak_targets = expanded_peak_targets(&peak_centres, settings, context, fallback);
+
+    let mut heights: BTreeMap<_, _> = footprint
+        .iter()
+        .copied()
+        .map(|coord| (coord, settings.base_level))
+        .collect();
+    for coord in &mountain_cells {
+        let main_distance = distance_to_set(*coord, &ridge_cells);
+        let branch_distance = distance_to_set(*coord, &spur_cells);
+        let rise = if main_distance == 0 {
+            EXPANDED_RIDGE_RISE
+        } else if branch_distance == 0 {
+            EXPANDED_BRANCH_RISE
+        } else {
+            match main_distance.min(branch_distance) {
+                1 => 3,
+                2 => 2,
+                _ => 1,
+            }
+        };
+        if let Some(height) = heights.get_mut(coord) {
+            *height = settings.base_level.saturating_add(rise);
+        }
+    }
+    for (centre, target) in &peak_targets {
+        let target_rise = target.saturating_sub(settings.base_level);
+        for coord in &mountain_cells {
+            let falloff = Level::try_from(centre.distance(*coord))
+                .unwrap_or(Level::MAX)
+                .saturating_mul(3);
+            let rise = target_rise.saturating_sub(falloff);
+            if rise <= 0 {
+                continue;
+            }
+            if let Some(height) = heights.get_mut(coord) {
+                *height = (*height).max(settings.base_level.saturating_add(rise));
+            }
+        }
+    }
+
+    flatten_zone(&mut heights, party_coord, settings.base_level, 2);
+    flatten_zone(&mut heights, hostile_coord, settings.base_level, 2);
+    apply_route(&mut heights, &high_pass);
+    apply_route(&mut heights, &low_bypass);
+    mountain_cells = heights
+        .iter()
+        .filter_map(|(coord, height)| (*height > settings.base_level).then_some(*coord))
+        .collect();
+    top_up_mountain_coverage(
+        &mut heights,
+        &mut mountain_cells,
+        target_count,
+        settings.base_level,
+        &footprint,
+        &protected,
+        &route_coords,
+        context,
+    )?;
+
+    let party_position = surface_position(&heights, party_coord)?;
+    let hostile_position = surface_position(&heights, hostile_coord)?;
+    let components = walker_components(&heights);
+    let Some(ordinary) = components
+        .iter()
+        .find(|component| component.contains(&party_coord))
+        .cloned()
+    else {
+        return Err(CandidateAttemptError::rejected(
+            "party start is absent from the mountain surface graph",
+        ));
+    };
+    if !ordinary.contains(&hostile_coord) {
+        return Err(CandidateAttemptError::rejected(
+            "the two mountain routes do not connect the required actors",
+        ));
+    }
+
+    let mut access = BTreeMap::new();
+    for coord in &ordinary {
+        access.insert(*coord, SurfaceAccess::Ordinary);
+    }
+    let mut special_components: Vec<_> = components
+        .into_iter()
+        .filter(|component| !component.contains(&party_coord))
+        .collect();
+    special_components.sort_by_key(|component| component.first().copied());
+    for (index, component) in special_components.into_iter().enumerate() {
+        let region =
+            SpecialMovementRegion(u32::try_from(index.saturating_add(1)).unwrap_or(u32::MAX));
+        for coord in component {
+            access.insert(coord, SurfaceAccess::SpecialMovement(region));
+        }
+    }
+
+    let mut materials = BTreeMap::new();
+    let mut columns = BTreeMap::new();
+    let mut surfaces = BTreeMap::new();
+    for (coord, surface) in &heights {
+        let material = classify_material(*coord, *surface, settings, &heights, context);
+        materials.insert(*coord, material);
+        columns.insert(*coord, mountain_column(*surface, material));
+        surfaces.insert(
+            TilePos::new(*coord, *surface),
+            SurfaceMetadata {
+                access: access
+                    .get(coord)
+                    .copied()
+                    .unwrap_or(SurfaceAccess::Ordinary),
+                interior: None,
+            },
+        );
+    }
+
+    let high_position = high_pass
+        .rows
+        .get(high_pass.rows.len() / 2)
+        .and_then(|row| row.first().copied())
+        .ok_or_else(|| CandidateAttemptError::rejected("high pass has no centre"))?;
+    let low_position = low_bypass
+        .rows
+        .get(low_bypass.rows.len() / 2)
+        .and_then(|row| row.first().copied())
+        .ok_or_else(|| CandidateAttemptError::rejected("low bypass has no centre"))?;
+    let anchors = BTreeMap::from([
+        (PARTY_START.to_owned(), party_position),
+        (HOSTILE_START.to_owned(), hostile_position),
+        (CONFLICT_CENTER.to_owned(), high_position),
+        (HIGH_PASS.to_owned(), high_position),
+        (LOW_BYPASS.to_owned(), low_position),
+    ]);
+    let view_hint = mountain_view_hint(
+        context.grid_radius,
+        recipe.level_height,
+        settings.base_level,
+        settings.relief,
+        orientation,
+    )?;
+
+    Ok(RecipePlan {
+        volume: TerrainVolumePlan {
+            grid_radius: context.grid_radius,
+            columns,
+            surfaces,
+            anchors,
+            interiors: BTreeMap::new(),
+            view_hint,
+        },
+        metadata: MountainsMetadata {
+            orientation,
+            heights,
+            materials,
+            peak_centres,
+            peak_targets,
+            spur_cells,
+            ridge_cells,
+            high_pass,
+            low_bypass,
+            ordinary,
+            mountain_cells,
+            main_spine,
+            branch_spines,
+        },
+    })
+}
+
+fn expanded_main_spine(
+    radius: i32,
+    orientation: u8,
+    context: CandidateContext,
+    settings: &MountainsSettings,
+    fallback: bool,
+) -> Result<Vec<HexCoord>, CandidateAttemptError> {
+    let amplitude = 1_i32
+        .saturating_add(settings.relief.saturating_sub(18).max(0) / 3)
+        .clamp(1, 3);
+    let local_xs = [
+        -radius,
+        -radius.saturating_mul(2) / 3,
+        -radius / 3,
+        0,
+        radius / 3,
+        radius.saturating_mul(2) / 3,
+        radius,
+    ];
+    let mut knots = Vec::with_capacity(local_xs.len());
+    for (index, local_x) in local_xs.into_iter().enumerate() {
+        let local_y = if index == 0 || index == local_xs.len().saturating_sub(1) {
+            0
+        } else if fallback {
+            match index % 4 {
+                1 => amplitude,
+                3 => -amplitude,
+                _ => 0,
+            }
+        } else {
+            context
+                .streams
+                .stage("mountains.massif.spine")
+                .range_i32(
+                    u64::try_from(index).unwrap_or(u64::MAX),
+                    -amplitude,
+                    amplitude,
+                )
+                .map_err(CandidateAttemptError::rejected)?
+        };
+        knots.push(from_local(local_x, local_y, orientation));
+    }
+
+    let mut spine = Vec::new();
+    for pair in knots.windows(2) {
+        let [start, end] = pair else {
+            continue;
+        };
+        for coord in start.line_between(*end) {
+            if spine.last().copied() != Some(coord) {
+                spine.push(coord);
+            }
+        }
+    }
+    Ok(spine)
+}
+
+fn expanded_branch_spines(
+    radius: i32,
+    orientation: u8,
+    context: CandidateContext,
+    settings: &MountainsSettings,
+    fallback: bool,
+    main_spine: &[HexCoord],
+    footprint: &BTreeSet<HexCoord>,
+) -> Result<Vec<Vec<HexCoord>>, CandidateAttemptError> {
+    let count = usize::try_from(expanded_branch_count(settings)).unwrap_or_default();
+    let mut branches = Vec::with_capacity(count);
+    for index in 0..count {
+        let slot =
+            index.saturating_add(1).saturating_mul(main_spine.len()) / count.saturating_add(1);
+        let Some(start) = main_spine
+            .get(slot.min(main_spine.len().saturating_sub(1)))
+            .copied()
+        else {
+            return Err(CandidateAttemptError::rejected(
+                "expanded mountain spine has no branch attachment",
+            ));
+        };
+        let local = to_local(start, orientation);
+        let sampled_side: i32 = if fallback {
+            if index.is_multiple_of(2) { 1 } else { -1 }
+        } else if context
+            .streams
+            .stage("mountains.massif.branches")
+            .sample(u64::try_from(index).unwrap_or(u64::MAX))
+            .is_multiple_of(2)
+        {
+            1
+        } else {
+            -1
+        };
+        let base_length = 5_i32
+            .saturating_add(settings.relief.saturating_sub(18).max(0) / 3)
+            .clamp(5, 7);
+        let variation = if fallback {
+            0
+        } else {
+            i32::try_from(
+                context
+                    .streams
+                    .stage("mountains.massif.branch_lengths")
+                    .sample(u64::try_from(index).unwrap_or(u64::MAX))
+                    % 3,
+            )
+            .unwrap_or_default()
+        };
+        let length = base_length.saturating_add(variation).min(radius - 2);
+        let bend = if index.is_multiple_of(2) { 2 } else { -2 };
+        let endpoints = [
+            from_local(
+                local.x().saturating_add(bend),
+                local
+                    .y()
+                    .saturating_add(sampled_side.saturating_mul(length)),
+                orientation,
+            ),
+            from_local(
+                local.x().saturating_sub(bend),
+                local
+                    .y()
+                    .saturating_sub(sampled_side.saturating_mul(length)),
+                orientation,
+            ),
+        ];
+        let branch = endpoints
+            .into_iter()
+            .map(|end| {
+                start
+                    .line_between(end)
+                    .into_iter()
+                    .take_while(|coord| footprint.contains(coord))
+                    .collect::<Vec<_>>()
+            })
+            .max_by_key(Vec::len)
+            .unwrap_or_default();
+        if branch.len() < 4 {
+            return Err(CandidateAttemptError::rejected(
+                "expanded mountain branch is too short",
+            ));
+        }
+        branches.push(branch);
+    }
+    Ok(branches)
+}
+
+fn expanded_peak_centres(
+    peak_count: u8,
+    main_spine: &[HexCoord],
+    branch_spines: &[Vec<HexCoord>],
+    route_coords: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+    context: CandidateContext,
+) -> Result<Vec<HexCoord>, CandidateAttemptError> {
+    let desired = usize::from(peak_count);
+    let mut centres = Vec::with_capacity(desired);
+    for branch in branch_spines {
+        let Some(centre) = branch.get(branch.len().saturating_mul(2) / 3).copied() else {
+            continue;
+        };
+        if route_coords.iter().all(|route| centre.distance(*route) > 2)
+            && centres
+                .iter()
+                .all(|other| centre.distance(*other) >= EXPANDED_MIN_PEAK_SEPARATION)
+        {
+            centres.push(centre);
+        }
+    }
+
+    let candidates: Vec<_> = main_spine
+        .iter()
+        .copied()
+        .filter(|coord| {
+            footprint.contains(coord)
+                && coord.distance(HexCoord::ORIGIN)
+                    < footprint
+                        .iter()
+                        .map(|candidate| candidate.distance(HexCoord::ORIGIN))
+                        .max()
+                        .unwrap_or_default()
+                        .saturating_sub(1)
+                && route_coords.iter().all(|route| coord.distance(*route) > 2)
+        })
+        .collect();
+    while centres.len() < desired {
+        let centre = candidates
+            .iter()
+            .copied()
+            .filter(|candidate| !centres.contains(candidate))
+            .filter(|candidate| {
+                centres
+                    .iter()
+                    .all(|other| candidate.distance(*other) >= EXPANDED_MIN_PEAK_SEPARATION)
+            })
+            .max_by_key(|candidate| {
+                let separation = centres
+                    .iter()
+                    .map(|other| candidate.distance(*other))
+                    .min()
+                    .unwrap_or(u32::MAX);
+                let tie_break = context
+                    .streams
+                    .stage("mountains.massif.peaks")
+                    .sample_coord(*candidate, 0);
+                (separation, tie_break)
+            })
+            .ok_or_else(|| {
+                CandidateAttemptError::rejected(
+                    "expanded mountain cannot place enough separated peaks",
+                )
+            })?;
+        centres.push(centre);
+    }
+    Ok(centres)
+}
+
+fn expanded_peak_targets(
+    centres: &[HexCoord],
+    settings: &MountainsSettings,
+    context: CandidateContext,
+    fallback: bool,
+) -> BTreeMap<HexCoord, Level> {
+    let spread = expanded_peak_spread(settings);
+    let denominator = Level::try_from(centres.len().saturating_sub(1))
+        .unwrap_or(Level::MAX)
+        .max(1);
+    let rotation = if fallback || centres.len() <= 2 {
+        0
+    } else {
+        usize::try_from(
+            context
+                .streams
+                .stage("mountains.massif.peak_heights")
+                .sample(0)
+                % u64::try_from(centres.len().saturating_sub(1)).unwrap_or(1),
+        )
+        .unwrap_or_default()
+    };
+    centres
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(index, centre)| {
+            let spread_index = if index == 0 {
+                0
+            } else {
+                1 + (index.saturating_sub(1).saturating_add(rotation)
+                    % centres.len().saturating_sub(1))
+            };
+            let variation = Level::try_from(spread_index)
+                .unwrap_or(Level::MAX)
+                .saturating_mul(spread)
+                / denominator;
+            (
+                centre,
+                settings
+                    .base_level
+                    .saturating_add(settings.relief.saturating_sub(variation)),
+            )
+        })
+        .collect()
+}
+
+fn coverage_cell_target(cell_count: usize, percent: u32) -> usize {
+    cell_count
+        .saturating_mul(usize::try_from(percent).unwrap_or(usize::MAX))
+        .saturating_add(99)
+        / 100
+}
+
+fn grow_mountain_footprint(
+    mut mountain_cells: BTreeSet<HexCoord>,
+    target_count: usize,
+    footprint: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
+    context: CandidateContext,
+) -> Result<BTreeSet<HexCoord>, CandidateAttemptError> {
+    let skeleton = mountain_cells.clone();
+    while mountain_cells.len() < target_count {
+        let frontier: BTreeSet<_> = mountain_cells
+            .iter()
+            .flat_map(|coord| coord.neighbors())
+            .filter(|coord| {
+                footprint.contains(coord)
+                    && !protected.contains(coord)
+                    && !mountain_cells.contains(coord)
+            })
+            .collect();
+        let next = frontier
+            .into_iter()
+            .min_by_key(|coord| {
+                let distance = distance_to_set(*coord, &skeleton);
+                let roughness = context
+                    .streams
+                    .stage("mountains.massif.footprint")
+                    .sample_coord(
+                        HexCoord::from_axial(coord.x().div_euclid(2), coord.y().div_euclid(2)),
+                        0,
+                    )
+                    % 11;
+                (u64::from(distance).saturating_mul(5) + roughness, *coord)
+            })
+            .ok_or_else(|| {
+                CandidateAttemptError::rejected(
+                    "expanded mountain footprint cannot reach its coverage target",
+                )
+            })?;
+        mountain_cells.insert(next);
+    }
+    Ok(mountain_cells)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn top_up_mountain_coverage(
+    heights: &mut BTreeMap<HexCoord, Level>,
+    mountain_cells: &mut BTreeSet<HexCoord>,
+    target_count: usize,
+    base_level: Level,
+    footprint: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
+    route_coords: &BTreeSet<HexCoord>,
+    context: CandidateContext,
+) -> Result<(), CandidateAttemptError> {
+    while mountain_cells.len() < target_count {
+        let frontier: BTreeSet<_> = mountain_cells
+            .iter()
+            .flat_map(|coord| coord.neighbors())
+            .filter(|coord| {
+                footprint.contains(coord)
+                    && !protected.contains(coord)
+                    && !route_coords.contains(coord)
+                    && !mountain_cells.contains(coord)
+            })
+            .collect();
+        let next = frontier
+            .into_iter()
+            .min_by_key(|coord| {
+                (
+                    context
+                        .streams
+                        .stage("mountains.massif.coverage")
+                        .sample_coord(*coord, 0),
+                    *coord,
+                )
+            })
+            .ok_or_else(|| {
+                CandidateAttemptError::rejected(
+                    "expanded mountain elevations cannot reach their coverage target",
+                )
+            })?;
+        heights.insert(next, base_level.saturating_add(1));
+        mountain_cells.insert(next);
+    }
+    Ok(())
+}
+
+fn distance_to_set(coord: HexCoord, positions: &BTreeSet<HexCoord>) -> u32 {
+    positions
+        .iter()
+        .map(|other| coord.distance(*other))
+        .min()
+        .unwrap_or(u32::MAX)
 }
 
 fn peak_centres(
@@ -504,7 +1214,17 @@ fn build_route(
     base_level: Level,
     rise_at: impl Fn(i32) -> i32,
 ) -> MountainRoute {
-    let rows = (-ROUTE_HALF_LENGTH..=ROUTE_HALF_LENGTH)
+    build_route_with_half_length(local_u, orientation, base_level, ROUTE_HALF_LENGTH, rise_at)
+}
+
+fn build_route_with_half_length(
+    local_u: i32,
+    orientation: u8,
+    base_level: Level,
+    half_length: i32,
+    rise_at: impl Fn(i32) -> i32,
+) -> MountainRoute {
+    let rows = (-half_length..=half_length)
         .map(|local_v| {
             let level = base_level.saturating_add(rise_at(local_v));
             [
@@ -683,7 +1403,14 @@ fn validate_plan(
                 .peak_centres
                 .iter()
                 .skip(index.saturating_add(1))
-                .any(|other| centre.distance(*other) < MIN_PEAK_SEPARATION)
+                .any(|other| {
+                    centre.distance(*other)
+                        < if uses_expanded_geometry(settings) {
+                            EXPANDED_MIN_PEAK_SEPARATION
+                        } else {
+                            MIN_PEAK_SEPARATION
+                        }
+                })
         })
     {
         issues.push("mountain peak centres are not spatially distinct".to_owned());
@@ -722,6 +1449,87 @@ fn validate_plan(
             .any(|coord| !metadata.heights.contains_key(coord))
     {
         issues.push("mountain ridge has no valid attached spur cells".to_owned());
+    }
+    if uses_expanded_geometry(settings) {
+        let expected_mountain_cells: BTreeSet<_> = metadata
+            .heights
+            .iter()
+            .filter_map(|(coord, level)| (*level > settings.base_level).then_some(*coord))
+            .collect();
+        if metadata.mountain_cells != expected_mountain_cells {
+            issues.push("expanded mountain coverage metadata is stale".to_owned());
+        }
+        let coverage_percent = u32::try_from(metadata.mountain_cells.len())
+            .unwrap_or(u32::MAX)
+            .saturating_mul(100)
+            / u32::try_from(metadata.heights.len())
+                .unwrap_or(u32::MAX)
+                .max(1);
+        if !(52..=65).contains(&coverage_percent)
+            || coverage_percent.abs_diff(expanded_coverage_target(settings)) > 1
+        {
+            issues.push(format!(
+                "expanded mountain coverage is {coverage_percent}%; expected {}% within 52..=65",
+                expanded_coverage_target(settings)
+            ));
+        }
+        if metadata.main_spine.len() < 2
+            || metadata
+                .main_spine
+                .windows(2)
+                .any(|pair| matches!(pair, [first, second] if first.distance(*second) != 1))
+        {
+            issues.push("expanded mountain main spine is not contiguous".to_owned());
+        }
+        if count_spine_turns(&metadata.main_spine) < 2 {
+            issues.push("expanded mountain main spine does not meander".to_owned());
+        }
+        let expected_branches =
+            usize::try_from(expanded_branch_count(settings)).unwrap_or(usize::MAX);
+        if metadata.branch_spines.len() != expected_branches
+            || metadata.branch_spines.iter().any(|branch| {
+                branch.len() < 4
+                    || branch
+                        .first()
+                        .is_none_or(|start| !metadata.ridge_cells.contains(start))
+                    || branch
+                        .windows(2)
+                        .any(|pair| matches!(pair, [first, second] if first.distance(*second) != 1))
+            })
+        {
+            issues.push(
+                "expanded mountain branches do not match the requested contiguous complexity"
+                    .to_owned(),
+            );
+        }
+        let distinct_peak_levels = metadata
+            .peak_targets
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len();
+        let peak_spread = metadata
+            .peak_targets
+            .values()
+            .copied()
+            .max()
+            .zip(metadata.peak_targets.values().copied().min())
+            .map(|(highest, lowest)| highest.saturating_sub(lowest))
+            .unwrap_or_default();
+        if distinct_peak_levels < 3 || peak_spread != expanded_peak_spread(settings) {
+            issues.push(format!(
+                "expanded mountain summits have {distinct_peak_levels} levels spanning {peak_spread}; expected at least three levels spanning {}",
+                expanded_peak_spread(settings)
+            ));
+        }
+        let local_peak_rows: BTreeSet<_> = metadata
+            .peak_centres
+            .iter()
+            .map(|centre| to_local(*centre, metadata.orientation).y())
+            .collect();
+        if local_peak_rows.len() < 2 {
+            issues.push("expanded mountain summits remain collinear".to_owned());
+        }
     }
     if !valid_route(&metadata.high_pass) || !valid_route(&metadata.low_bypass) {
         issues.push("a mountain route is not a contiguous two-wide walker ribbon".to_owned());
@@ -886,6 +1694,22 @@ fn validate_plan(
             .count(),
     )
     .unwrap_or(u8::MAX);
+    let mountain_coverage_percent = u32::try_from(metadata.mountain_cells.len())
+        .unwrap_or(u32::MAX)
+        .saturating_mul(100)
+        / u32::try_from(metadata.heights.len())
+            .unwrap_or(u32::MAX)
+            .max(1);
+    let peak_height_spread = metadata
+        .peak_targets
+        .values()
+        .copied()
+        .max()
+        .zip(metadata.peak_targets.values().copied().min())
+        .map(|(highest, lowest)| highest.saturating_sub(lowest))
+        .unwrap_or_default();
+    let spine_turns = count_spine_turns(&metadata.main_spine);
+    let branch_count = u32::try_from(metadata.branch_spines.len()).unwrap_or(u32::MAX);
     if !issues.is_empty() {
         return RecipeValidation::invalid(issues);
     }
@@ -943,6 +1767,10 @@ fn validate_plan(
         high_pass_steps,
         low_bypass_steps,
         exposed_stone_percent,
+        mountain_coverage_percent,
+        peak_height_spread,
+        spine_turns,
+        branch_count,
     };
     RecipeValidation::valid(metrics)
 }
@@ -1007,6 +1835,27 @@ fn count_cliff_edges(heights: &BTreeMap<HexCoord, Level>) -> u32 {
                     .filter(move |(neighbor, other)| {
                         coord < neighbor && level.abs_diff(*other) >= 2
                     })
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+fn count_spine_turns(spine: &[HexCoord]) -> u32 {
+    u32::try_from(
+        spine
+            .windows(3)
+            .filter(|window| {
+                let [first, middle, last] = window else {
+                    return false;
+                };
+                (
+                    middle.x().saturating_sub(first.x()),
+                    middle.y().saturating_sub(first.y()),
+                ) != (
+                    last.x().saturating_sub(middle.x()),
+                    last.y().saturating_sub(middle.y()),
+                )
             })
             .count(),
     )
@@ -1115,6 +1964,17 @@ mod tests {
         }
     }
 
+    fn expanded_settings(relief: Level, peak_count: u8) -> ProceduralV2Settings {
+        ProceduralV2Settings {
+            environment: V2EnvironmentSettings::Frozen,
+            recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief,
+                peak_count,
+            }),
+        }
+    }
+
     #[test]
     fn shipped_mountains_are_deterministic_and_keep_two_independent_routes() {
         let first = build(12, 0.4, &settings(4), 129_704_046, &palette(), &is_solid)
@@ -1124,6 +1984,8 @@ mod tests {
 
         assert_eq!(first.map_fingerprint, second.map_fingerprint);
         assert_eq!(first.selected_candidate, second.selected_candidate);
+        assert_eq!(first.selected_candidate, Some(1));
+        assert_eq!(first.map_fingerprint, 4_445_202_355_468_180_347);
         assert_eq!(first.map.len(), 469);
         assert_eq!(first.candidates_evaluated, 8);
         assert!(!first.used_fallback);
@@ -1147,6 +2009,69 @@ mod tests {
                 .saturating_mul(100)
                 / first.metrics.high_pass_steps
         );
+    }
+
+    #[test]
+    fn expanded_mountain_options_are_broad_complex_and_deterministic() {
+        for (relief, peak_count, expected_coverage, expected_branches) in
+            [(18, 5, 53, 2), (21, 6, 56, 3), (24, 7, 60, 4)]
+        {
+            let settings = expanded_settings(relief, peak_count);
+            let first = build(12, 0.4, &settings, 129_704_046, &palette(), &is_solid)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "expanded relief {relief} with {peak_count} peaks should generate: {error}"
+                    )
+                });
+            let second = build(12, 0.4, &settings, 129_704_046, &palette(), &is_solid)
+                .expect("the repeated expanded mountain should generate");
+
+            assert_eq!(first.map_fingerprint, second.map_fingerprint);
+            assert_eq!(first.selected_candidate, second.selected_candidate);
+            assert!(!first.used_fallback);
+            assert_eq!(first.metrics.tactical.relief, relief);
+            assert_eq!(first.metrics.mountain_coverage_percent, expected_coverage);
+            assert_eq!(first.metrics.branch_count, expected_branches);
+            assert_eq!(
+                first.metrics.peak_height_spread,
+                expanded_peak_spread(match &settings.recipe {
+                    V2RecipeSettings::Mountains(settings) => settings,
+                    _ => unreachable!("fixture is Mountains"),
+                })
+            );
+            assert!(first.metrics.spine_turns >= 2);
+            assert!(first.metrics.low_bypass_steps > first.metrics.high_pass_steps);
+            assert!(first.metrics.inaccessible_peaks > 0);
+        }
+    }
+
+    #[test]
+    fn expanded_canonical_fallback_is_valid_and_seed_independent() {
+        let recipe = MountainsRecipe { level_height: 0.4 };
+        let settings = MountainsSettings {
+            base_level: 15,
+            relief: 24,
+            peak_count: 7,
+        };
+        let first = recipe
+            .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
+            .expect("the expanded mountain fallback should construct");
+        let second = recipe
+            .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
+            .expect("the repeated expanded mountain fallback should construct");
+
+        first
+            .volume
+            .validate()
+            .expect("the expanded mountain fallback volume should validate");
+        assert!(matches!(
+            validate_plan(&settings, &first),
+            RecipeValidation::Valid(_)
+        ));
+        assert_eq!(first.volume.columns, second.volume.columns);
+        assert_eq!(first.volume.surfaces, second.volume.surfaces);
+        assert_eq!(first.volume.anchors, second.volume.anchors);
+        assert_eq!(first.metadata.heights, second.metadata.heights);
     }
 
     #[test]
@@ -1240,9 +2165,11 @@ mod tests {
             .peak_centres
             .get_mut(1)
             .expect("the valid candidate should have a second peak") = first_peak;
-        assert!(validation_issues(&settings, &duplicate_peak)
-            .iter()
-            .any(|issue| issue.contains("peak count")));
+        assert!(
+            validation_issues(&settings, &duplicate_peak)
+                .iter()
+                .any(|issue| issue.contains("peak count"))
+        );
 
         let mut stale_target = valid.clone();
         let centre = stale_target
@@ -1252,17 +2179,21 @@ mod tests {
             .copied()
             .expect("the valid candidate should have a peak");
         stale_target.metadata.peak_targets.remove(&centre);
-        assert!(validation_issues(&settings, &stale_target)
-            .iter()
-            .any(|issue| issue.contains("summit targets")));
+        assert!(
+            validation_issues(&settings, &stale_target)
+                .iter()
+                .any(|issue| issue.contains("summit targets"))
+        );
 
         let mut inverted_routes = valid.clone();
         for position in inverted_routes.metadata.high_pass.rows.iter_mut().flatten() {
             position.level = settings.base_level;
         }
-        assert!(validation_issues(&settings, &inverted_routes)
-            .iter()
-            .any(|issue| issue.contains("high pass does not rise")));
+        assert!(
+            validation_issues(&settings, &inverted_routes)
+                .iter()
+                .any(|issue| issue.contains("high pass does not rise"))
+        );
 
         let mut extra_portal = valid.clone();
         let route_coords: BTreeSet<_> = extra_portal
@@ -1280,9 +2211,11 @@ mod tests {
             .find(|coord| !route_coords.contains(coord))
             .expect("the valid ridge should contain a non-route cell");
         extra_portal.metadata.ordinary.insert(undeclared);
-        assert!(validation_issues(&settings, &extra_portal)
-            .iter()
-            .any(|issue| issue.contains("undeclared third ridge crossing")));
+        assert!(
+            validation_issues(&settings, &extra_portal)
+                .iter()
+                .any(|issue| issue.contains("undeclared third ridge crossing"))
+        );
 
         let mut metal = valid;
         let column = metal
@@ -1299,9 +2232,11 @@ mod tests {
             panic!("the valid mountain column should end in solid material");
         };
         top.material = SolidMaterialRole::Metal;
-        assert!(validation_issues(&settings, &metal)
-            .iter()
-            .any(|issue| issue.contains("fill, metal, or non-Frozen")));
+        assert!(
+            validation_issues(&settings, &metal)
+                .iter()
+                .any(|issue| issue.contains("fill, metal, or non-Frozen"))
+        );
     }
 
     fn validation_issues(
