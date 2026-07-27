@@ -18,7 +18,7 @@ use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
 use crate::settings::{
     CrossingSettings, EnvironmentSettings, HillsSettings, LandformSettings, LinkedIslandsSettings,
-    ProceduralSettings, SkyIslandsSettings, TacticalSettings,
+    ProceduralV1Settings as ProceduralSettings, SkyIslandsSettings, TacticalSettings,
 };
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
@@ -333,7 +333,7 @@ fn build_with_candidate_selection(
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let repair_rounds = u8::try_from(repair_actions.len()).unwrap_or(u8::MAX);
     let report = GenerationReport {
-        generator_version: settings.generator_version,
+        generator_version: 1,
         seed,
         selected_candidate,
         candidates_evaluated: CANDIDATE_COUNT,
@@ -2985,7 +2985,7 @@ fn clamp_axial_y(x: i32, y: i32, radius: i32) -> i32 {
 fn settings_fingerprint(grid_radius: u32, settings: &ProceduralSettings) -> u64 {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&grid_radius.to_le_bytes());
-    bytes.extend_from_slice(&settings.generator_version.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
     match &settings.landform {
         LandformSettings::Hills(hills) => {
             bytes.push(0);
@@ -3106,7 +3106,6 @@ mod tests {
 
     fn hills(environment: EnvironmentSettings) -> ProceduralSettings {
         ProceduralSettings {
-            generator_version: 1,
             landform: LandformSettings::Hills(HillsSettings {
                 valley_level: 15,
                 max_relief: 8,
@@ -3125,7 +3124,6 @@ mod tests {
 
     fn sky() -> ProceduralSettings {
         ProceduralSettings {
-            generator_version: 1,
             landform: LandformSettings::SkyIslands(SkyIslandsSettings {
                 surface_level: 15,
                 island_radius: 3,
@@ -3222,7 +3220,9 @@ mod tests {
             expected_map_fingerprint,
         ) in cases
         {
-            let terrain = TerrainSettings::Procedural(settings.clone());
+            let terrain = TerrainSettings::Procedural(crate::settings::ProceduralSettings::V1(
+                settings.clone(),
+            ));
             let runtime_palette = TerrainPalette::for_terrain(&table, &terrain)
                 .expect("the shipped substance table should cover procedural terrain");
             let result = build(

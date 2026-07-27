@@ -9,10 +9,38 @@ use bevy_reflect::prelude::*;
 
 use crate::{Headroom, Level, TilePos};
 
+/// Exact geometric and material facts needed at one end of a traversal.
+///
+/// A position alone cannot describe a legal transition. Two individually standable
+/// surfaces may still meet beneath a low lintel with less shared clearance than the
+/// body needs while crossing between them.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TraversalEndpoint {
+    /// Exact surface position, including its vertical level.
+    pub pos: TilePos,
+    /// Whether the surface material can support a body.
+    pub is_solid: bool,
+    /// Consecutive clear levels directly above the surface.
+    pub headroom: Headroom,
+}
+
+impl TraversalEndpoint {
+    /// Creates an endpoint from the facts published for one surface.
+    #[must_use]
+    pub const fn new(pos: TilePos, is_solid: bool, headroom: Headroom) -> Self {
+        Self {
+            pos,
+            is_solid,
+            headroom,
+        }
+    }
+}
+
 /// Geometry an ordinary traversal mode can occupy and cross.
 ///
-/// All values are quantized voxel levels. A profile admits a destination only when
-/// [`Self::admits_surface`] and [`Self::admits_step`] both return true.
+/// All values are quantized voxel levels. Live traversal should use
+/// [`Self::admits_transition`] so endpoint standability, positional stepping, and the
+/// shared lateral aperture are evaluated together.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct TraversalProfile {
     /// Clear levels required directly above a surface.
@@ -62,6 +90,34 @@ impl TraversalProfile {
             true
         }
     }
+
+    /// Whether a body can move through the complete transition between two surfaces.
+    ///
+    /// Endpoint standability is necessary but not sufficient. On a one-level ramp, a
+    /// low ceiling over the lower floor can overlap the clear volume above the higher
+    /// floor by only one level. A two-level body fits while stationary at either end,
+    /// but cannot pass laterally through that one-level aperture.
+    ///
+    /// [`Self::admits_step`] remains the position-only part of the contract for frozen
+    /// generator compatibility. Live movement and new validators should use this
+    /// complete predicate.
+    #[must_use]
+    pub fn admits_transition(self, from: TraversalEndpoint, to: TraversalEndpoint) -> bool {
+        if !self.admits_surface(from.is_solid, from.headroom)
+            || !self.admits_surface(to.is_solid, to.headroom)
+            || !self.admits_step(from.pos, to.pos)
+        {
+            return false;
+        }
+
+        let higher_floor = from.pos.level.max(to.pos.level);
+        let lower_clear_top = from
+            .pos
+            .level
+            .saturating_add(from.headroom.0)
+            .min(to.pos.level.saturating_add(to.headroom.0));
+        lower_clear_top.saturating_sub(higher_floor) >= self.levels_tall
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +164,56 @@ mod tests {
 
         assert!(!TraversalProfile::WALKER.admits_step(from, from.above()));
         assert!(!TraversalProfile::WALKER.admits_step(from, far));
+    }
+
+    fn endpoint(pos: TilePos, headroom: Level) -> TraversalEndpoint {
+        TraversalEndpoint::new(pos, true, Headroom(headroom))
+    }
+
+    #[test]
+    fn flat_two_level_aperture_is_walkable() {
+        let from = TilePos::new(HexCoord::ORIGIN, 4);
+        let [to, ..] = from.neighbours();
+
+        assert!(TraversalProfile::WALKER.admits_transition(endpoint(from, 2), endpoint(to, 2)));
+    }
+
+    #[test]
+    fn individually_standable_endpoints_can_lack_shared_aperture() {
+        let low = TilePos::new(HexCoord::ORIGIN, 4);
+        let [neighbor, ..] = low.neighbours();
+        let high = neighbor.above();
+
+        assert!(TraversalProfile::WALKER.admits_surface(true, Headroom(2)));
+        assert!(!TraversalProfile::WALKER.admits_transition(endpoint(low, 2), endpoint(high, 2)));
+        assert!(!TraversalProfile::WALKER.admits_transition(endpoint(high, 2), endpoint(low, 2)));
+    }
+
+    #[test]
+    fn one_level_ramp_with_shared_aperture_is_walkable() {
+        let low = TilePos::new(HexCoord::ORIGIN, 4);
+        let [neighbor, ..] = low.neighbours();
+        let high = neighbor.above();
+
+        assert!(TraversalProfile::WALKER.admits_transition(endpoint(low, 3), endpoint(high, 2)));
+        assert!(TraversalProfile::WALKER.admits_transition(endpoint(high, 2), endpoint(low, 3)));
+    }
+
+    #[test]
+    fn complete_transition_rejects_bad_endpoints_and_cliffs() {
+        let from = TilePos::new(HexCoord::ORIGIN, 4);
+        let [neighbor, ..] = from.neighbours();
+
+        assert!(!TraversalProfile::WALKER.admits_transition(
+            TraversalEndpoint::new(from, false, Headroom(8)),
+            endpoint(neighbor, 8)
+        ));
+        assert!(
+            !TraversalProfile::WALKER.admits_transition(endpoint(from, 1), endpoint(neighbor, 8))
+        );
+        assert!(!TraversalProfile::WALKER
+            .admits_transition(endpoint(from, 8), endpoint(neighbor.above().above(), 8)));
+        assert!(!TraversalProfile::WALKER
+            .admits_transition(endpoint(from, 8), endpoint(from.above(), 8)));
     }
 }

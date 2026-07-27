@@ -15,12 +15,14 @@ use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
-    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, TraversalProfile,
+    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
+    HexTile, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
+    ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady,
+    TilePos, TraversalProfile,
 };
 
 use crate::procedural;
+use crate::procedural_v2;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, VoxelMap};
@@ -35,6 +37,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
         .register_type::<Headroom>()
+        .register_type::<InteriorRegionId>()
+        .register_type::<CutawayOccluder>()
         .register_type::<TerrainReady>()
         .register_type::<GenerationReport>()
         .add_message::<TerrainEdit>()
@@ -71,6 +75,8 @@ fn generate_world(
     commands.remove_resource::<GenerationReport>();
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<MapViewHint>();
     let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
         Ok(palette) => palette,
         Err(error) => {
@@ -93,6 +99,7 @@ fn generate_world(
         commands.insert_resource(map);
         commands.insert_resource(MapAnchors::new());
         commands.insert_resource(SpecialMovementRegions::new());
+        commands.insert_resource(InteriorRegions::new());
         commands.insert_resource(TerrainReady);
         return;
     };
@@ -104,14 +111,27 @@ fn generate_world(
         ));
         return;
     };
-    let generated = procedural::build(
-        settings.grid_radius,
-        procedural_settings,
-        seed.0,
-        &palette,
-        TraversalProfile::WALKER,
-        &|substance| table.is_solid(substance),
-    );
+    let generated = match procedural_settings {
+        crate::settings::ProceduralSettings::V1(v1) => procedural::build(
+            settings.grid_radius,
+            v1,
+            seed.0,
+            &palette,
+            TraversalProfile::WALKER,
+            &|substance| table.is_solid(substance),
+        ),
+        crate::settings::ProceduralSettings::V2(v2) => {
+            let reason = match procedural_v2::ensure_recipe_available(v2) {
+                Ok(()) => "procedural V2 recipe has no generation runner".to_owned(),
+                Err(error) => error.to_string(),
+            };
+            error!("cannot build procedural V2 terrain: {reason}");
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The selected procedural terrain cannot be built: {reason}."
+            )));
+            return;
+        }
+    };
     let anchors: MapAnchors = generated
         .anchors
         .iter()
@@ -126,6 +146,7 @@ fn generate_world(
             generated.report.elapsed_micros
         );
         commands.insert_resource(generated.special_regions);
+        commands.insert_resource(InteriorRegions::new());
         commands.insert_resource(TerrainReady);
     } else {
         error!(
@@ -148,6 +169,8 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<GenerationReport>();
     commands.remove_resource::<TerrainReady>();
 }
@@ -165,6 +188,7 @@ fn spawn_grid(
     map: Res<VoxelMap>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    interiors: Option<Res<InteriorRegions>>,
 ) {
     build_grid(
         &mut commands,
@@ -173,6 +197,7 @@ fn spawn_grid(
         &map,
         &table,
         &settings,
+        interiors.as_deref(),
     );
 }
 
@@ -185,6 +210,7 @@ fn build_grid(
     map: &VoxelMap,
     table: &SubstanceTable,
     settings: &MapSettings,
+    interiors: Option<&InteriorRegions>,
 ) {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
@@ -205,7 +231,7 @@ fn build_grid(
             // surface out, putting a dependency on the map straight back into movement.
             // Voxels inside the run are addressed by `TilePos`, not by this entity.
             let position = TilePos::new(coord, run.top - 1);
-            let tile = commands.spawn((
+            let mut tile = commands.spawn((
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(material),
                 Transform {
@@ -221,6 +247,9 @@ fn build_grid(
                 position,
                 headroom,
             ));
+            if let Some(region) = interiors.and_then(|interiors| interiors.occluder(position)) {
+                tile.insert(CutawayOccluder(region));
+            }
             tiles.push(tile.id());
         }
     }
@@ -288,6 +317,7 @@ fn apply_terrain_edits(
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
     mut special_regions: ResMut<SpecialMovementRegions>,
+    mut interiors: Option<ResMut<InteriorRegions>>,
 ) {
     let mut changed = false;
     for edit in edits.read() {
@@ -306,6 +336,24 @@ fn apply_terrain_edits(
             column.headroom_above(position.level.saturating_add(1)),
         )
     });
+    if let Some(interiors) = interiors.as_deref_mut() {
+        interiors.retain_surfaces(|position, _| {
+            let Some(column) = map.column(position.coord) else {
+                return false;
+            };
+            TraversalProfile::WALKER.admits_surface(
+                table.is_solid(column.get(position.level)),
+                column.headroom_above(position.level.saturating_add(1)),
+            )
+        });
+        interiors.retain_occluders(|position, _| {
+            map.column(position.coord).is_some_and(|column| {
+                runs(column).into_iter().any(|run| {
+                    run.top.saturating_sub(1) == position.level && table.is_solid(run.substance)
+                })
+            })
+        });
+    }
 
     for entity in &grids {
         commands.entity(entity).despawn();
@@ -317,6 +365,7 @@ fn apply_terrain_edits(
         &map,
         &table,
         &settings,
+        interiors.as_deref(),
     );
 }
 

@@ -108,6 +108,103 @@ impl FromIterator<(MapAnchorId, TilePos)> for MapAnchors {
     }
 }
 
+/// Stable identity of one generated interior network.
+///
+/// The number is deterministic only within one map. Exact floor and roof-run
+/// memberships live in [`InteriorRegions`].
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InteriorRegionId(pub u32);
+
+/// Marks one rendered terrain run as a roof that an interior view may cut away.
+///
+/// This component is a projection for live presentation queries. The exact positional
+/// source of truth remains [`InteriorRegions`], so rebuilding terrain entities cannot
+/// change which generated run the metadata names.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct CutawayOccluder(pub InteriorRegionId);
+
+/// Exact floor and roof-run memberships for generated interior networks.
+///
+/// Both collections use [`TilePos`] because caves may exist beneath another standable
+/// surface in the same column. Interior floors determine when an actor is inside or
+/// entering a region; roof runs identify the opaque geometry presentation may hide.
+#[derive(Resource, Debug, Default, Clone)]
+pub struct InteriorRegions {
+    by_surface: HashMap<TilePos, InteriorRegionId>,
+    occluders: HashMap<TilePos, InteriorRegionId>,
+}
+
+impl InteriorRegions {
+    /// Creates empty interior metadata.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds or replaces one exact interior floor.
+    pub fn insert_surface(
+        &mut self,
+        pos: TilePos,
+        region: InteriorRegionId,
+    ) -> Option<InteriorRegionId> {
+        self.by_surface.insert(pos, region)
+    }
+
+    /// Adds or replaces one exact cutaway roof run.
+    pub fn insert_occluder(
+        &mut self,
+        pos: TilePos,
+        region: InteriorRegionId,
+    ) -> Option<InteriorRegionId> {
+        self.occluders.insert(pos, region)
+    }
+
+    /// Region containing an exact interior floor.
+    #[must_use]
+    pub fn get(&self, pos: TilePos) -> Option<InteriorRegionId> {
+        self.by_surface.get(&pos).copied()
+    }
+
+    /// Region whose opaque roof is represented by the exact run at `pos`.
+    #[must_use]
+    pub fn occluder(&self, pos: TilePos) -> Option<InteriorRegionId> {
+        self.occluders.get(&pos).copied()
+    }
+
+    /// Every exact interior floor and its region, in unspecified order.
+    pub fn surfaces(&self) -> impl Iterator<Item = (TilePos, InteriorRegionId)> + '_ {
+        self.by_surface
+            .iter()
+            .map(|(position, region)| (*position, *region))
+    }
+
+    /// Every exact cutaway roof run and its region, in unspecified order.
+    pub fn occluders(&self) -> impl Iterator<Item = (TilePos, InteriorRegionId)> + '_ {
+        self.occluders
+            .iter()
+            .map(|(position, region)| (*position, *region))
+    }
+
+    /// Keeps only interior floors accepted by `keep`.
+    pub fn retain_surfaces(&mut self, mut keep: impl FnMut(TilePos, InteriorRegionId) -> bool) {
+        self.by_surface
+            .retain(|position, region| keep(*position, *region));
+    }
+
+    /// Keeps only cutaway roof runs accepted by `keep`.
+    pub fn retain_occluders(&mut self, mut keep: impl FnMut(TilePos, InteriorRegionId) -> bool) {
+        self.occluders
+            .retain(|position, region| keep(*position, *region));
+    }
+
+    /// Whether the active map has no interior floors or cutaway roof runs.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_surface.is_empty() && self.occluders.is_empty()
+    }
+}
+
 /// Opaque identity of an optional area that ordinary walking cannot reach.
 ///
 /// The id is deterministic only within one generated map. It groups exact surface
@@ -206,6 +303,44 @@ pub struct ResolvedMapSeed(pub u64);
 #[reflect(Resource)]
 pub struct TerrainReady;
 
+/// Preferred initial camera frame generated from the active map geometry.
+///
+/// Values are world-space positions because `hex_world` deliberately cannot depend on
+/// map settings such as `level_height`. The map converts its semantic hint before
+/// publishing this resource. Authored and compatibility maps may omit it and use the
+/// designer-authored camera settings instead.
+#[derive(Resource, Reflect, Debug, Clone, Copy, PartialEq)]
+#[reflect(Resource)]
+pub struct MapViewHint {
+    /// Initial camera position.
+    pub eye: (f32, f32, f32),
+    /// Point the camera looks at and orbits around.
+    pub focus: (f32, f32, f32),
+}
+
+impl MapViewHint {
+    /// Creates a world-space camera hint.
+    #[must_use]
+    pub const fn new(eye: (f32, f32, f32), focus: (f32, f32, f32)) -> Self {
+        Self { eye, focus }
+    }
+
+    /// Whether the two points describe a finite, non-degenerate camera frame.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        let (eye_x, eye_y, eye_z) = self.eye;
+        let (focus_x, focus_y, focus_z) = self.focus;
+        let offset = (eye_x - focus_x, eye_y - focus_y, eye_z - focus_z);
+        [eye_x, eye_y, eye_z, focus_x, focus_y, focus_z]
+            .into_iter()
+            .all(f32::is_finite)
+            && offset
+                .0
+                .mul_add(offset.0, offset.1.mul_add(offset.1, offset.2 * offset.2))
+                > f32::EPSILON
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +386,32 @@ mod tests {
 
         assert_eq!(regions.get(kept), Some(SpecialMovementRegion(0)));
         assert_eq!(regions.get(removed), None);
+    }
+
+    #[test]
+    fn interior_metadata_distinguishes_floors_and_roof_runs() {
+        let floor = TilePos::new(HexCoord::ORIGIN, 6);
+        let roof = TilePos::new(HexCoord::ORIGIN, 16);
+        let region = InteriorRegionId(3);
+        let mut interiors = InteriorRegions::new();
+
+        assert_eq!(interiors.insert_surface(floor, region), None);
+        assert_eq!(interiors.insert_occluder(roof, region), None);
+        assert_eq!(interiors.get(floor), Some(region));
+        assert_eq!(interiors.get(roof), None);
+        assert_eq!(interiors.occluder(roof), Some(region));
+        assert_eq!(interiors.occluder(floor), None);
+
+        interiors.retain_surfaces(|position, _| position != floor);
+        interiors.retain_occluders(|position, _| position != roof);
+        assert_eq!(interiors.get(floor), None);
+        assert_eq!(interiors.occluder(roof), None);
+    }
+
+    #[test]
+    fn map_view_hint_rejects_invalid_frames() {
+        assert!(MapViewHint::new((0.0, 1.0, 0.0), (0.0, 0.0, 0.0)).is_valid());
+        assert!(!MapViewHint::new((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)).is_valid());
+        assert!(!MapViewHint::new((f32::NAN, f32::NAN, f32::NAN), (0.0, 0.0, 0.0)).is_valid());
     }
 }

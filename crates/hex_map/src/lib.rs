@@ -42,6 +42,7 @@ pub mod generator;
 pub mod grid;
 /// Versioned semantic-first procedural map generation and diagnostics.
 mod procedural;
+mod procedural_v2;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
 /// Pure construction of complete voxel maps from terrain presets.
@@ -52,10 +53,12 @@ pub mod voxel;
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use procedural::{GenerationReport, TacticalMetrics};
 pub use settings::{
-    BridgeSettings, CrossingSettings, CubeCoord, EnvironmentSettings, HillsSettings,
-    LandformSettings, LinkedIslandsSettings, MapSettings, MountainSettings, PerlinSettings,
-    PerlinStepSettings, ProceduralSettings, RiverSettings, ShowcaseSettings, SkyIslandsSettings,
-    TacticalSettings, TerrainSettings,
+    BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
+    EnvironmentSettings, HillsSettings, LandformSettings, LayeredSkyIslandsSettings,
+    LinkedIslandsSettings, MapSettings, MountainSettings, MountainsSettings, PerlinSettings,
+    PerlinStepSettings, ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings,
+    RiverSettings, ShowcaseSettings, SkyIslandsSettings, TacticalSettings, TerrainSettings,
+    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

@@ -161,8 +161,9 @@ sets make the ordering that crosses crate boundaries explicit:
   state transitions and self-contained UI/presentation systems may run outside them.
 - **`PausableSystems`** — gates gameplay work such as movement animation behind
   `Pause(false)`.
-- **`GameplaySetup`** — `Resources → Terrain → Actors → Finalize`, for
-  `OnEnter(Screen::Gameplay)`.
+- **`GameplaySetup`** — `Resources → Terrain → Actors → View → Finalize`, for
+  `OnEnter(Screen::Gameplay)`. `View` applies generated framing only after terrain and
+  actors are queryable.
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 

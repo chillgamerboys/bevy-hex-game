@@ -97,7 +97,7 @@ must clear the water, and the switchback must be contiguous and long enough to c
 one level at a time. An invalid save is reported in the terminal and the previous
 valid settings remain active.
 
-**Use procedural terrain instead.** The primary recipe separates the broad landform,
+**Use procedural terrain instead.** Generator version 1 separates the broad landform,
 its materials, and its tactical structure:
 
 ```ron
@@ -121,7 +121,30 @@ terrain: Procedural((
 
 This combination generates grassland hills around an edge-to-edge river, with a
 bridge, an alternate crossing, and scenario anchors. Its reproducible seed belongs
-to the scenario, as described in **Configuring a scenario** below.
+to the scenario, as described in **Configuring a scenario** below. Version 1 is
+frozen: keep `generator_version: 1` to reproduce an existing seed with the original
+algorithm and fields.
+
+Generator version 2 uses one geometry recipe plus a separate material environment:
+
+```ron
+terrain: Procedural((
+    generator_version: 2,
+    environment: TemperateGrassland,
+    recipe: Hills((
+        valley_level: 15,
+        max_relief: 8,
+        hills_per_bank: 3,
+    )),
+)),
+```
+
+V2 Hills derives its three-wide hazard, two-wide crossings, bed and hazard bounds,
+and bridge level from `valley_level`; those invariants are intentionally not editable.
+Other V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`. Recipe and
+environment combinations are validated together: Mountains uses `Frozen`, Caves
+uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded settings
+active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

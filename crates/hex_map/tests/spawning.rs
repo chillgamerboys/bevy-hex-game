@@ -32,14 +32,16 @@ use std::collections::{BTreeMap, HashMap};
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level,
-    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SpecialMovementRegion,
-    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
+    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+    InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen,
+    SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos,
+    MAX_HEADROOM,
 };
 use hex_map::{
     CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
     LinkedIslandsSettings, MapSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
-    SkyIslandsSettings, TacticalSettings, TerrainSettings, VoxelMap,
+    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, TacticalSettings,
+    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -69,6 +71,7 @@ fn test_app() -> App {
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::View,
             GameplaySetup::Finalize,
         )
             .chain(),
@@ -165,8 +168,7 @@ fn procedural_app() -> App {
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
-        terrain: TerrainSettings::Procedural(ProceduralSettings {
-            generator_version: 1,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V1(ProceduralV1Settings {
             landform: LandformSettings::Hills(HillsSettings {
                 valley_level: 15,
                 max_relief: 8,
@@ -180,7 +182,7 @@ fn procedural_app() -> App {
                 hazard_top: 14,
                 bridge_level: 16,
             }),
-        }),
+        })),
     });
     app.insert_resource(ResolvedMapSeed(20_260_726));
     app
@@ -191,15 +193,14 @@ fn sky_islands_app() -> App {
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
-        terrain: TerrainSettings::Procedural(ProceduralSettings {
-            generator_version: 1,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V1(ProceduralV1Settings {
             landform: LandformSettings::SkyIslands(SkyIslandsSettings {
                 surface_level: 15,
                 island_radius: 3,
             }),
             environment: EnvironmentSettings::TemperateGrassland,
             tactical: TacticalSettings::LinkedIslands(LinkedIslandsSettings { bridge_width: 2 }),
-        }),
+        })),
     });
     app
 }
@@ -233,6 +234,7 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
         app.world().resource::<SpecialMovementRegions>().is_empty(),
         "the hills recipe does not introduce optional regions yet"
     );
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
 }
 
 #[test]
@@ -277,6 +279,36 @@ fn clearing_a_tagged_surface_prunes_its_exact_membership() {
 }
 
 #[test]
+fn terrain_edits_prune_stale_interior_floor_and_roof_metadata() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let target = {
+        let world = app.world_mut();
+        let table = world.resource::<SubstanceTable>().clone();
+        let mut tiles = world.query::<(&TilePos, &SubstanceId, &Headroom)>();
+        tiles
+            .iter(world)
+            .find(|(_, substance, headroom)| table.is_diggable(**substance) && headroom.0 >= 2)
+            .map(|(position, _, _)| *position)
+            .expect("the authored map should have a clearable exposed surface")
+    };
+    let region = InteriorRegionId(4);
+    let mut interiors = InteriorRegions::new();
+    interiors.insert_surface(target, region);
+    interiors.insert_occluder(target, region);
+    app.insert_resource(interiors);
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    let interiors = app.world().resource::<InteriorRegions>();
+    assert_eq!(interiors.get(target), None);
+    assert_eq!(interiors.occluder(target), None);
+}
+
+#[test]
 fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
     let mut app = procedural_app();
     app.world_mut().remove_resource::<ResolvedMapSeed>();
@@ -293,6 +325,36 @@ fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
         .resource::<GameplaySetupFailure>()
         .reason
         .contains("generation seed"));
+    assert_eq!(tile_count(&mut app), 0);
+}
+
+#[test]
+fn unavailable_v2_recipe_reports_failure_without_partial_terrain() {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::Hills(V2HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+        })),
+    });
+
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("V2 recipe Hills is not available"));
     assert_eq!(tile_count(&mut app), 0);
 }
 
@@ -329,6 +391,7 @@ fn nonprocedural_maps_publish_an_empty_region_registry() {
     enter_gameplay(&mut app);
 
     assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
 }
 
 /// Every column produces at least one entity, and typically several — one per

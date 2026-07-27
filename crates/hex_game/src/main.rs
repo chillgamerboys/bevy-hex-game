@@ -100,6 +100,7 @@ impl Plugin for AppPlugin {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::View,
                 GameplaySetup::Finalize,
             )
                 .chain(),
