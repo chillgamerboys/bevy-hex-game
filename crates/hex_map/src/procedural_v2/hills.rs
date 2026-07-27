@@ -525,6 +525,8 @@ mod tests {
     const BASALT: SubstanceId = SubstanceId(10);
     const LAVA: SubstanceId = SubstanceId(11);
     const HERO_SEED: u64 = 1_592_598_566;
+    const FROZEN_PROBE_SEED: u64 = 484_450_342;
+    const VOLCANIC_PROBE_SEED: u64 = 444_211_238;
     // Frozen after selecting the iteration-one V1 review pack from seeds 0..1_024.
     // The labels record why each seed entered the corpus; V2 must reproduce these
     // exact maps rather than rerunning the retired selector.
@@ -538,8 +540,8 @@ mod tests {
     ];
     const SHIPPED_ENVIRONMENT_SEEDS: [(V2EnvironmentSettings, u64); 3] = [
         (V2EnvironmentSettings::TemperateGrassland, HERO_SEED),
-        (V2EnvironmentSettings::Frozen, 484_450_342),
-        (V2EnvironmentSettings::Volcanic, 444_211_238),
+        (V2EnvironmentSettings::Frozen, FROZEN_PROBE_SEED),
+        (V2EnvironmentSettings::Volcanic, VOLCANIC_PROBE_SEED),
     ];
 
     fn palette() -> TerrainPalette {
@@ -775,13 +777,13 @@ mod tests {
         print_review_report(
             "frozen-probe",
             V2EnvironmentSettings::Frozen,
-            SHIPPED_ENVIRONMENT_SEEDS[1].1,
+            FROZEN_PROBE_SEED,
             &table,
         );
         print_review_report(
             "volcanic-probe",
             V2EnvironmentSettings::Volcanic,
-            SHIPPED_ENVIRONMENT_SEEDS[2].1,
+            VOLCANIC_PROBE_SEED,
             &table,
         );
     }
