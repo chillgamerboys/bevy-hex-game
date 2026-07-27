@@ -9,10 +9,6 @@
     reason = "the foundation is consumed by the sequential V2 recipe PRs"
 )]
 mod recipe;
-#[expect(
-    dead_code,
-    reason = "the foundation is consumed by the sequential V2 recipe PRs"
-)]
 mod seed;
 #[expect(
     dead_code,
@@ -22,7 +18,9 @@ mod volume;
 
 use std::fmt;
 
-use crate::settings::{ProceduralV2Settings, V2RecipeSettings};
+use crate::settings::{
+    ProceduralV2Settings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+};
 
 /// Failure to construct or validate one V2 map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -94,6 +92,55 @@ pub(crate) fn ensure_recipe_available(
     Err(V2GenerationError::RecipeUnavailable(name))
 }
 
+/// Stable hash of every V2 setting that can affect generated output.
+///
+/// This deliberately uses a V2-specific domain and includes the version number.
+/// Equivalent Hills parameters therefore remain output-compatible with V1 without
+/// making their settings/report identity ambiguous.
+pub(crate) fn settings_fingerprint(grid_radius: u32, settings: &ProceduralV2Settings) -> u64 {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"procedural-v2-settings");
+    bytes.extend_from_slice(&2_u32.to_le_bytes());
+    bytes.extend_from_slice(&grid_radius.to_le_bytes());
+    bytes.push(match settings.environment {
+        V2EnvironmentSettings::TemperateGrassland => 0,
+        V2EnvironmentSettings::Frozen => 1,
+        V2EnvironmentSettings::Volcanic => 2,
+        V2EnvironmentSettings::Rocky => 3,
+    });
+    match &settings.recipe {
+        V2RecipeSettings::Hills(hills) => {
+            bytes.push(0);
+            append_hills_settings(&mut bytes, hills);
+        }
+        V2RecipeSettings::LayeredSkyIslands(islands) => {
+            bytes.push(1);
+            append_hills_settings(&mut bytes, &islands.ground);
+            bytes.extend_from_slice(&islands.min_clearance.to_le_bytes());
+            bytes.push(islands.upper_coverage_percent);
+        }
+        V2RecipeSettings::Mountains(mountains) => {
+            bytes.push(2);
+            bytes.extend_from_slice(&mountains.base_level.to_le_bytes());
+            bytes.extend_from_slice(&mountains.relief.to_le_bytes());
+            bytes.push(mountains.peak_count);
+        }
+        V2RecipeSettings::Caves(caves) => {
+            bytes.push(3);
+            bytes.extend_from_slice(&caves.surface_level.to_le_bytes());
+            bytes.extend_from_slice(&caves.cave_floor_level.to_le_bytes());
+            bytes.push(caves.chamber_count);
+        }
+    }
+    seed::fingerprint(&bytes)
+}
+
+fn append_hills_settings(bytes: &mut Vec<u8>, hills: &V2HillsSettings) {
+    bytes.extend_from_slice(&hills.valley_level.to_le_bytes());
+    bytes.extend_from_slice(&hills.max_relief.to_le_bytes());
+    bytes.push(hills.hills_per_bank);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +163,36 @@ mod tests {
             ensure_recipe_available(&settings),
             Err(V2GenerationError::RecipeUnavailable("Hills"))
         );
+    }
+
+    #[test]
+    fn v2_settings_fingerprint_is_deterministic_and_version_distinct() {
+        let settings = ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::Hills(V2HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+        };
+        let fingerprint = settings_fingerprint(12, &settings);
+
+        assert_eq!(
+            fingerprint, 13_620_952_131_205_421_838,
+            "update only with an explicit V2 generator-version decision"
+        );
+        assert_eq!(settings_fingerprint(12, &settings), fingerprint);
+        assert_ne!(
+            fingerprint, 4_508_295_216_895_027_881,
+            "equivalent V1 and V2 settings need distinct report identities"
+        );
+        assert_ne!(settings_fingerprint(20, &settings), fingerprint);
+
+        let mut changed = settings.clone();
+        let V2RecipeSettings::Hills(hills) = &mut changed.recipe else {
+            unreachable!("the fixture is Hills");
+        };
+        hills.max_relief = 7;
+        assert_ne!(settings_fingerprint(12, &changed), fingerprint);
     }
 }

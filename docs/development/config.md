@@ -125,7 +125,10 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-Generator version 2 uses one geometry recipe plus a separate material environment:
+Generator version 2 uses one geometry recipe plus a separate material environment.
+The shape below documents the V2 schema while its recipes land in sequential PRs;
+until the V2 Hills recipe is shipped, selecting it reports a setup failure instead of
+publishing partial terrain:
 
 ```ron
 terrain: Procedural((
