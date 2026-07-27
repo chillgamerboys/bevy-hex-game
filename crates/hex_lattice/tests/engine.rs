@@ -31,6 +31,9 @@ const FIREBALL: SpellId = SpellId(1); // tier-6 fire evocation
 const SHIELD: SpellId = SpellId(2); // tier-1 fire enchantment, defence 1
 const THUNDERSPELL: SpellId = SpellId(3); // tier-1, needs a THUNDER source
 const FREE: SpellId = SpellId(4); // tier-0
+const WARD: SpellId = SpellId(5); // tier-1 fire enchantment, defence 0
+const AEGIS: SpellId = SpellId(6); // tier-2 fire enchantment (two funding gems)
+const HEAVY: SpellId = SpellId(7); // tier-2 fire evocation, draws 3 from each gem
 
 fn req(element: ElementId, mana: u16) -> Requirement {
     Requirement { element, mana }
@@ -49,6 +52,12 @@ impl SpellTable for Content {
             vec![req(FIRE, 2)]
         } else if spell == THUNDERSPELL {
             vec![req(THUNDER, 1)]
+        } else if spell == WARD {
+            vec![req(FIRE, 1)]
+        } else if spell == AEGIS {
+            vec![req(FIRE, 1); 2]
+        } else if spell == HEAVY {
+            vec![req(FIRE, 3); 2]
         } else {
             Vec::new()
         }
@@ -57,6 +66,10 @@ impl SpellTable for Content {
     fn casting(&self, spell: SpellId) -> Casting {
         if spell == SHIELD {
             Casting::Enchantment { defense: 1 }
+        } else if spell == WARD {
+            Casting::Enchantment { defense: 0 }
+        } else if spell == AEGIS {
+            Casting::Enchantment { defense: 2 }
         } else {
             Casting::Evocation
         }
@@ -140,6 +153,7 @@ fn a_lone_tier6_spell_ringed_by_gems_is_castable() {
 #[test]
 fn no_two_adjacent_tier6_spells_are_ever_both_castable() {
     // The theorem swept over random lattices.
+    let mut pairs_checked = 0usize;
     for seed in 0..64 {
         let (spec, stats) = random_lattice(seed);
         let state = LatticeState::new(&spec, &stats);
@@ -162,6 +176,7 @@ fn no_two_adjacent_tier6_spells_are_ever_both_castable() {
                 }
                 let a_ok = castable(&spec, &state, a, &Content).is_ok();
                 let b_ok = castable(&spec, &state, b, &Content).is_ok();
+                pairs_checked += 1;
                 assert!(
                     !(a_ok && b_ok),
                     "seed {seed}: adjacent tier-6 spells both castable at {a:?}/{b:?}"
@@ -169,6 +184,10 @@ fn no_two_adjacent_tier6_spells_are_ever_both_castable() {
             }
         }
     }
+    assert!(
+        pairs_checked > 0,
+        "the sweep never generated an adjacent tier-6 pair — the property would be vacuous"
+    );
 }
 
 // --- property 2: fusion chains die downstream -----------------------------
@@ -345,6 +364,93 @@ fn an_enchantment_ties_mana_up_and_a_break_consumes_it() {
         state.total_gem_mana() + state.total_locked_mana(),
         total_before - locked,
         "a broken enchantment consumes its locked mana"
+    );
+}
+
+// --- enchantment lock bookkeeping (regression + coverage) -----------------
+
+#[test]
+fn a_locked_gem_cannot_fund_a_second_enchantment() {
+    // Regression: one gem, two adjacent spell cells. The first enchantment locks
+    // the gem; the second must NOT be able to reuse it — doing so would overwrite
+    // the lock and orphan the first enchantment (it could then never break).
+    let gem_coord = LatticeCoord::new(0, 0);
+    let [s1, s2, ..] = gem_coord.neighbors();
+    let spec = LatticeSpec::default()
+        .with(gem_coord, gem(FIRE))
+        .with(s1, CellKind::Spell { spell: SHIELD }) // needs FIRE 2
+        .with(s2, CellKind::Spell { spell: WARD }); // needs FIRE 1
+
+    let mut state = LatticeState::new(&spec, &basic_stats()); // gem full at 3
+    let plan = castable(&spec, &state, s1, &Content).expect("the shield raises");
+    apply_cast(&mut state, &plan, &Content);
+    assert!(state.is_locked(gem_coord));
+    assert_eq!(state.enchantment_count(), 1);
+    // The gem keeps 1 residual mana (>= WARD's 1 requirement), so only the lock —
+    // not a mana shortfall — can be what stops the second cast.
+    assert_eq!(state.mana(gem_coord), 1);
+
+    assert_eq!(
+        castable(&spec, &state, s2, &Content),
+        Err(CastBlocked::Unsatisfiable),
+        "a gem already hosting an enchantment cannot fund a second"
+    );
+
+    // The first enchantment's lock is intact: disabling the gem still breaks it.
+    let broken = apply_disables(&mut state, &[gem_coord]);
+    assert_eq!(broken.len(), 1);
+    assert_eq!(state.enchantment_count(), 0);
+}
+
+#[test]
+fn an_enchantment_funded_by_two_gems_clears_both_locks_when_it_breaks() {
+    let spell = LatticeCoord::new(0, 0);
+    let [g1, g2, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: AEGIS }) // needs FIRE 1 x2
+        .with(g1, gem(FIRE))
+        .with(g2, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("aegis draws from both gems");
+    assert_eq!(plan.drains.len(), 2, "two distinct gems fund it");
+    apply_cast(&mut state, &plan, &Content);
+    assert!(state.is_locked(g1) && state.is_locked(g2));
+    assert_eq!(state.enchantment_count(), 1);
+
+    // Disabling just one funding gem breaks the enchantment and clears BOTH locks.
+    let broken = apply_disables(&mut state, &[g1]);
+    assert_eq!(broken.len(), 1);
+    assert_eq!(state.enchantment_count(), 0);
+    assert!(!state.is_locked(g2), "the other gem's lock is cleared too");
+}
+
+#[test]
+fn channel_distributes_a_budget_across_gems_in_coordinate_order() {
+    // Two empty fire gems and a channel budget that fills only one: the lower
+    // coordinate must fill first, the higher stay empty (budget exhausted).
+    let spell = LatticeCoord::new(0, 0);
+    let [ga, gb, ..] = spell.neighbors();
+    let (low, high) = if ga < gb { (ga, gb) } else { (gb, ga) };
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: HEAVY }) // draws FIRE 3 x2
+        .with(ga, gem(FIRE))
+        .with(gb, gem(FIRE));
+
+    // Capacity 3, channel budget exactly 3 — enough to refill one gem, not both.
+    let stats = LatticeStats::new(BTreeMap::from([(FIRE, 3)]), BTreeMap::from([(FIRE, 3)]));
+    let mut state = LatticeState::new(&spec, &stats); // both gems at 3
+    let plan = castable(&spec, &state, spell, &Content).expect("heavy drains both gems");
+    apply_cast(&mut state, &plan, &Content);
+    assert_eq!(state.mana(low), 0);
+    assert_eq!(state.mana(high), 0);
+
+    channel(&mut state, &spec, &stats);
+    assert_eq!(state.mana(low), 3, "the lower coordinate fills first");
+    assert_eq!(
+        state.mana(high),
+        0,
+        "the budget is spent before reaching the higher"
     );
 }
 

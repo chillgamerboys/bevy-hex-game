@@ -9,7 +9,9 @@
 //!
 //! [`SpellId`] and [`EnchantId`] are opaque integer handles in the
 //! [`SubstanceId`](crate::SubstanceId) style. All three carry `serde` so a
-//! `hex_lattice::LatticeSpec` round-trips to and from `lattices.ron`.
+//! `hex_lattice::LatticeSpec` round-trips — that spec serializes the *resolved*
+//! ids, while the hand-authored `lattices.ron` references elements and spells by
+//! name (resolved to these ids at load, in a later ticket).
 
 use bevy_reflect::prelude::*;
 use hexx::Hex;
@@ -89,8 +91,9 @@ impl LatticeCoord {
 
 /// Opaque identity of a spell.
 ///
-/// Assigned from sorted spell names by `hex_assets`; never written into files or
-/// saves (names are), so it is a session-local handle.
+/// A session-local handle assigned from sorted spell names by `hex_assets`. The
+/// hand-authored `lattices.ron` refers to spells by name; this id is the resolved
+/// form a `LatticeSpec` serializes.
 #[derive(
     Reflect,
     Serialize,

@@ -41,7 +41,8 @@ pub enum CastBlocked {
 ///
 /// Binary: it returns a complete [`CastPlan`] or a [`CastBlocked`] reason, never a
 /// partial cast. A requirement is met by a distinct adjacent live gem of the right
-/// element with enough mana, or by an adjacent live *fusion* whose output matches
+/// element with enough mana (and not already committed to an enchantment), or by an
+/// adjacent live *fusion* whose output matches
 /// and whose own recipe resolves the same way — recursively, and cycle-safe. The
 /// assignment is deterministic: candidates are tried in [`LatticeCoord`] order and
 /// the first complete one wins.
@@ -134,10 +135,17 @@ fn satisfy(
         return true;
     };
 
+    // A locked gem is spoken for by the enchantment it already hosts — its capacity
+    // is committed, so it can fund no further cast. Excluding it keeps `locks`
+    // one-enchantment-per-gem: without this, a second cast drawing on the same gem
+    // would overwrite its lock and orphan the first enchantment, which could then
+    // never break (its mana stranded, the disable→break invariant violated).
     let candidates: Vec<(LatticeCoord, CellKind)> = spec
         .present_neighbors(around)
         .into_iter()
-        .filter(|(coord, _)| !state.is_disabled(*coord) && !used.contains(coord))
+        .filter(|(coord, _)| {
+            !state.is_disabled(*coord) && !used.contains(coord) && !state.is_locked(*coord)
+        })
         .collect();
 
     for (coord, kind) in candidates {
