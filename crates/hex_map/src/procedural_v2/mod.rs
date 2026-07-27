@@ -4,10 +4,14 @@
 //! a validated [`TerrainVolumePlan`] and only then materialize voxels; unsupported or
 //! unfinished recipes return an error rather than publishing an empty world.
 
-#[expect(
-    dead_code,
-    reason = "the foundation is consumed by the sequential V2 recipe PRs"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the Hills entry point is consumed by the runtime-dispatch follow-up"
+    )
 )]
+mod hills;
 mod recipe;
 #[cfg_attr(
     not(test),
@@ -17,10 +21,6 @@ mod recipe;
     )
 )]
 mod seed;
-#[expect(
-    dead_code,
-    reason = "the foundation is consumed by the sequential V2 recipe PRs"
-)]
 mod volume;
 
 use std::fmt;

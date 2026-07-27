@@ -22,6 +22,13 @@ pub(crate) struct CandidateContext {
     pub(crate) grid_radius: u32,
     pub(crate) seed: u64,
     pub(crate) candidate: u8,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "V2 Hills preserves frozen V1 streams; native recipes consume this field"
+        )
+    )]
     pub(crate) streams: SeedStreams,
 }
 
@@ -98,6 +105,13 @@ pub(crate) enum CandidateAttemptError {
 
 impl CandidateAttemptError {
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "native V2 recipes use candidate-local construction rejection"
+        )
+    )]
     pub(crate) fn rejected(issue: impl Into<String>) -> Self {
         Self::Rejected(vec![issue.into()])
     }
@@ -122,6 +136,13 @@ impl<M> RecipeValidation<M> {
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "native V2 recipes return recipe-specific validation issues"
+        )
+    )]
     pub(crate) fn invalid(issues: Vec<String>) -> Self {
         Self::Invalid(issues)
     }
@@ -130,6 +151,13 @@ impl<M> RecipeValidation<M> {
 /// Whether a bounded repair changed semantic intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepairOutcome {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "V2 Hills imports frozen repairs; native recipes construct this variant"
+        )
+    )]
     Changed(String),
     NoChange,
 }
@@ -174,6 +202,15 @@ pub(crate) trait V2Recipe {
         candidate: u8,
     ) -> Self::Score;
 
+    /// Semantic repairs completed before the common V2 runner receives the plan.
+    ///
+    /// Compatibility constructors may import repairs already performed by a frozen
+    /// generator. Native V2 recipes should normally return an empty list and use
+    /// [`Self::repair`] so the common runner owns their repair bound.
+    fn preexisting_repair_actions(&self, _plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
+        Vec::new()
+    }
+
     fn canonical_fallback(
         &self,
         context: FallbackContext,
@@ -190,7 +227,21 @@ pub(crate) struct RecipeSelection<M, V> {
     pub(crate) candidates_evaluated: u8,
     pub(crate) valid_candidates: u8,
     pub(crate) repair_actions: Vec<String>,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consumed by runtime dispatch once the first V2 recipe is active"
+        )
+    )]
     pub(crate) used_fallback: bool,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consumed by runtime dispatch once the first V2 recipe is active"
+        )
+    )]
     pub(crate) notes: Vec<String>,
 }
 
@@ -200,6 +251,13 @@ pub(crate) struct RecipeSelection<M, V> {
 /// the final validated plan so repairs cannot leave stale anchors, region memberships,
 /// interior metadata, or framing behind.
 #[derive(Debug)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the runtime-dispatch follow-up consumes the complete materialized selection"
+    )
+)]
 pub(crate) struct MaterializedSelection<M, V> {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: MapAnchors,
@@ -398,6 +456,7 @@ where
 
     let fallback_context = FallbackContext::new(grid_radius);
     let fallback = recipe.canonical_fallback(fallback_context, settings)?;
+    let fallback_repair_actions = recipe.preexisting_repair_actions(&fallback);
     let validation = validate_plan(
         recipe,
         settings,
@@ -418,7 +477,7 @@ where
         selected_candidate: None,
         candidates_evaluated: CANDIDATE_COUNT,
         valid_candidates: 0,
-        repair_actions: Vec::new(),
+        repair_actions: fallback_repair_actions,
         used_fallback: true,
         notes: rejected_notes,
     })
@@ -433,7 +492,7 @@ fn validate_and_repair<R>(
 where
     R: V2Recipe,
 {
-    let mut repair_actions = Vec::new();
+    let mut repair_actions = recipe.preexisting_repair_actions(plan);
     let validation_context = ValidationContext::candidate(context.grid_radius, context.candidate);
     let mut validation = validate_plan(recipe, settings, validation_context, plan)?;
     for round in 0..MAX_REPAIR_ROUNDS {
@@ -629,6 +688,14 @@ mod tests {
             }
         }
 
+        fn preexisting_repair_actions(&self, plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
+            plan.metadata
+                .fallback
+                .then(|| "imported fallback repair".to_owned())
+                .into_iter()
+                .collect()
+        }
+
         fn canonical_fallback(
             &self,
             context: FallbackContext,
@@ -708,6 +775,10 @@ mod tests {
 
     #[test]
     fn evaluates_exactly_eight_candidates_and_caps_each_repair_sequence() {
+        let _stream_identity = CandidateContext::new(12, 77, 0)
+            .streams
+            .stage("mock.construct")
+            .sample(0);
         let recipe = MockRecipe::default();
         let selection = run_recipe(&recipe, &MockSettings::default(), 12, 77)
             .expect("at least one deterministic candidate should pass");
@@ -874,6 +945,11 @@ mod tests {
         assert_eq!(selection.selected_candidate, None);
         assert_eq!(selection.valid_candidates, 0);
         assert!(selection.plan.metadata.fallback);
+        assert_eq!(
+            selection.repair_actions,
+            ["imported fallback repair"],
+            "compatibility fallback repairs must survive common selection"
+        );
         assert_eq!(
             recipe.repairs.get(),
             CANDIDATE_COUNT.saturating_mul(MAX_REPAIR_ROUNDS)
