@@ -18,6 +18,12 @@ pub struct Requirement {
     /// The element the adjacent source must provide.
     pub element: ElementId,
     /// How much mana that source contributes to this cast.
+    ///
+    /// This is the cost when a **gem** satisfies the requirement. When a fusion
+    /// satisfies it, its *recipe* is drained instead and this amount is not —
+    /// the design scales high-tier spells by recipe complexity, not volume.
+    /// Whether the two costs should be validated against each other is a
+    /// content-design question deferred to the wiring ticket (HEX-12).
     pub mana: u16,
 }
 

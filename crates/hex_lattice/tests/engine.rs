@@ -645,6 +645,121 @@ fn channel_never_exceeds_capacity() {
     assert_eq!(state.mana(gem_coord), 3, "a full gem stays at capacity");
 }
 
+#[test]
+fn channelling_never_refills_a_locked_gem() {
+    // The wave review's ship-blocker: an enchantment's cost is CAPACITY — the
+    // locked gem is spoken for and must not be channelled. Refilling it would
+    // quietly refund the mana the enchantment tied up.
+    let gem_coord = LatticeCoord::new(0, 0);
+    let [s1, free_gem, ..] = gem_coord.neighbors();
+    let spec = LatticeSpec::default()
+        .with(gem_coord, gem(FIRE))
+        .with(free_gem, gem(FIRE))
+        .with(s1, CellKind::Spell { spell: SHIELD }); // FIRE 2, locks gem_coord
+
+    let stats = basic_stats();
+    let mut state = LatticeState::new(&spec, &stats);
+    // Drain the free gem so the positive control has room to refill.
+    let heavy_drain = state.mana(free_gem);
+    assert!(heavy_drain > 0, "fixture: the control gem starts funded");
+
+    let plan = castable(&spec, &state, s1, &Content).expect("the shield raises");
+    apply_cast(&mut state, &plan, &Content);
+    assert!(state.is_locked(gem_coord));
+    let locked_residual = state.mana(gem_coord);
+
+    channel(&mut state, &spec, &stats);
+
+    assert_eq!(
+        state.mana(gem_coord),
+        locked_residual,
+        "a locked gem is capacity, not throughput — channelling must not touch it"
+    );
+    assert_eq!(
+        state.mana(free_gem),
+        heavy_drain,
+        "the unlocked control gem still channels to its cap"
+    );
+}
+
+#[test]
+fn apply_cast_rejects_every_staleness_mode_and_leaves_state_untouched() {
+    // The staleness predicate names three modes: a funding gem drained, locked,
+    // or disabled between plan and apply. The locked mode has its own regression
+    // above; these are the other two, each asserting FULL state equality so the
+    // atomic-rejection claim is encoded rather than inferred.
+    let gem_coord = LatticeCoord::new(0, 0);
+    let [s1, s2, ..] = gem_coord.neighbors();
+    let spec = LatticeSpec::default()
+        .with(gem_coord, gem(FIRE))
+        .with(s1, CellKind::Spell { spell: SHIELD }) // draws 2
+        .with(s2, CellKind::Spell { spell: EMBER }); // draws 1
+
+    // Drained: plan the SHIELD while the gem holds 3 (needs 2), then burn the gem
+    // down to 1 with two separately-planned EMBERs before applying the stale plan.
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let shield_plan = castable(&spec, &state, s1, &Content).expect("shield on a full gem");
+    for _ in 0..2 {
+        let ember_plan = castable(&spec, &state, s2, &Content).expect("ember");
+        assert!(apply_cast(&mut state, &ember_plan, &Content));
+    }
+    assert_eq!(
+        state.mana(gem_coord),
+        1,
+        "fixture: below the shield's draw of 2"
+    );
+    let before = state.clone();
+    assert!(
+        !apply_cast(&mut state, &shield_plan, &Content),
+        "a drained funding gem stales the plan"
+    );
+    assert_eq!(state, before, "rejection mutates nothing");
+
+    // Disabled: plan, then disable the funding gem.
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let ember_plan = castable(&spec, &state, s2, &Content).expect("ember");
+    apply_disables(&mut state, &[gem_coord]);
+    let before = state.clone();
+    assert!(
+        !apply_cast(&mut state, &ember_plan, &Content),
+        "a disabled funding gem stales the plan"
+    );
+    assert_eq!(state, before, "rejection mutates nothing");
+}
+
+#[test]
+fn lattice_state_round_trips_through_ron() {
+    // The battle-mutable half is the save-relevant half; its BTree maps, the
+    // enchantment table, and the id counter must all survive serialization.
+    let gem_coord = LatticeCoord::new(0, 0);
+    let [s1, other, ..] = gem_coord.neighbors();
+    let spec = LatticeSpec::default()
+        .with(gem_coord, gem(FIRE))
+        .with(other, gem(LIGHT))
+        .with(s1, CellKind::Spell { spell: SHIELD });
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, s1, &Content).expect("shield");
+    apply_cast(&mut state, &plan, &Content); // an active enchantment + a lock
+    apply_disables(&mut state, &[other]); // and a disabled cell
+
+    let ron = ron::to_string(&state).expect("serialize");
+    let back: LatticeState = ron::from_str(&ron).expect("deserialize");
+    assert_eq!(state, back, "round trip changed the battle state");
+}
+
+#[test]
+fn lattice_wire_formats_are_pinned() {
+    // Same guard Wave 3 gave HexCoord: a symmetric field/variant rename passes
+    // every round-trip test while silently changing the authoring and save
+    // format, so the concrete text is asserted here.
+    let coord = ron::to_string(&LatticeCoord::new(2, -1)).expect("serialize");
+    assert_eq!(coord, "(q:2,r:-1)");
+
+    let cell = ron::to_string(&CellKind::Gem { element: FIRE }).expect("serialize");
+    assert_eq!(cell, "Gem(element:(0))");
+}
+
 // --- randomised lattice generator -----------------------------------------
 
 fn random_lattice(seed: u64) -> (LatticeSpec, LatticeStats) {

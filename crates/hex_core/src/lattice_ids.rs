@@ -8,8 +8,10 @@
 //! unrepresentable in the type system.
 //!
 //! [`EnchantId`] is an opaque integer handle in the
-//! [`SubstanceId`](crate::SubstanceId) style. Both types here carry `serde` so a
-//! `hex_lattice::LatticeSpec` round-trips. The content ids a lattice cell stores —
+//! [`SubstanceId`](crate::SubstanceId) style. Both types here carry `serde`:
+//! [`LatticeCoord`] keys a `hex_lattice::LatticeSpec`, and [`EnchantId`] keys the
+//! battle-mutable `hex_lattice::LatticeState` — the save-relevant half.
+//! The content ids a lattice cell stores —
 //! [`ElementId`](crate::ElementId) and [`SpellId`](crate::SpellId) — live in
 //! [`elements`](crate::elements), where `hex_assets` assigns them from sorted
 //! content names; a battle-local counter id like [`EnchantId`] is a different kind
