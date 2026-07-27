@@ -8,6 +8,7 @@
 )]
 
 use std::fmt::Debug;
+use std::ops::Deref;
 
 use hex_core::{
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
@@ -229,6 +230,43 @@ pub(crate) struct RecipeSelection<M, V> {
     pub(crate) notes: Vec<String>,
 }
 
+/// Type-state proof that the complete semantic volume passed common validation.
+///
+/// The wrapper deliberately exposes no mutable dereference. A layered recipe must
+/// consume it with [`Self::into_unvalidated`], change the raw plan, then submit the
+/// layered recipe through [`run_recipe`] before materialization.
+#[derive(Debug)]
+pub(crate) struct ValidatedRecipeSelection<M, V>(RecipeSelection<M, V>);
+
+impl<M, V> ValidatedRecipeSelection<M, V> {
+    /// Imports a selection whose recipe-specific validation happened outside V2.
+    ///
+    /// Native and layered V2 recipes must use [`run_recipe`] so this common volume
+    /// check cannot preserve stale recipe metrics after a semantic change.
+    pub(super) fn from_compatibility_import(
+        selection: RecipeSelection<M, V>,
+    ) -> Result<Self, V2GenerationError> {
+        selection.plan.volume.validate()?;
+        Ok(Self(selection))
+    }
+
+    pub(crate) fn into_unvalidated(self) -> RecipeSelection<M, V> {
+        self.0
+    }
+
+    const fn from_recipe_validation(selection: RecipeSelection<M, V>) -> Self {
+        Self(selection)
+    }
+}
+
+impl<M, V> Deref for ValidatedRecipeSelection<M, V> {
+    type Target = RecipeSelection<M, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Fully materialized result of one selected recipe candidate.
 ///
 /// Selection remains semantic until this boundary. Exact resources are derived from
@@ -254,10 +292,11 @@ pub(crate) struct MaterializedSelection<M, V> {
 
 /// Resolves one selected semantic plan into voxels and exact generated resources.
 pub(crate) fn materialize_selection<M, V>(
-    selection: RecipeSelection<M, V>,
+    selection: ValidatedRecipeSelection<M, V>,
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
+    let selection = selection.into_unvalidated();
     let VoxelizedTerrain { map, interiors } =
         voxelize_prevalidated(&selection.plan.volume, palette, is_solid)?;
     let special_regions = exact_special_regions(&selection.plan.volume);
@@ -269,41 +308,6 @@ pub(crate) fn materialize_selection<M, V>(
         special_regions,
         map_fingerprint,
     ))
-}
-
-/// Publishes a frozen compatibility map already proven equivalent to its V2 plan.
-///
-/// Native and layered recipes always use [`materialize_selection`]. This boundary
-/// exists only so a parity adapter need not rebuild and rehash the legacy map that it
-/// converted into a validated semantic volume.
-pub(crate) fn materialize_compatibility_selection<M, V>(
-    selection: RecipeSelection<M, V>,
-    map: VoxelMap,
-    map_fingerprint: u64,
-) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
-    if !selection.plan.volume.interiors.is_empty() {
-        return Err(V2GenerationError::RecipeContract(
-            "a compatibility materialization cannot carry V2 interior geometry".to_owned(),
-        ));
-    }
-    let special_regions = exact_special_regions(&selection.plan.volume);
-    let materialized = assemble_materialized(
-        selection,
-        map,
-        InteriorRegions::new(),
-        special_regions,
-        map_fingerprint,
-    );
-    #[cfg(debug_assertions)]
-    {
-        let actual = materialized_map_fingerprint(
-            &materialized.map,
-            &materialized.special_regions,
-            &materialized.interiors,
-        );
-        debug_assert_eq!(actual, materialized.map_fingerprint);
-    }
-    Ok(materialized)
 }
 
 fn exact_special_regions(volume: &TerrainVolumePlan) -> SpecialMovementRegions {
@@ -422,7 +426,7 @@ pub(crate) fn run_recipe<R>(
     settings: &R::Settings,
     grid_radius: u32,
     seed: u64,
-) -> Result<RecipeSelection<R::Metadata, R::Metrics>, V2GenerationError>
+) -> Result<ValidatedRecipeSelection<R::Metadata, R::Metrics>, V2GenerationError>
 where
     R: V2Recipe,
 {
@@ -475,16 +479,18 @@ where
             .cmp(&right.score)
             .then_with(|| left.candidate.cmp(&right.candidate))
     }) {
-        return Ok(RecipeSelection {
-            plan: selected.plan,
-            metrics: selected.metrics,
-            selected_candidate: Some(selected.candidate),
-            candidates_evaluated: CANDIDATE_COUNT,
-            valid_candidates,
-            repair_actions: selected.repair_actions,
-            used_fallback: false,
-            notes: rejected_notes,
-        });
+        return Ok(ValidatedRecipeSelection::from_recipe_validation(
+            RecipeSelection {
+                plan: selected.plan,
+                metrics: selected.metrics,
+                selected_candidate: Some(selected.candidate),
+                candidates_evaluated: CANDIDATE_COUNT,
+                valid_candidates,
+                repair_actions: selected.repair_actions,
+                used_fallback: false,
+                notes: rejected_notes,
+            },
+        ));
     }
 
     let fallback_context = FallbackContext::new(grid_radius, seed);
@@ -504,16 +510,18 @@ where
     };
     rejected_notes.push("all random candidates failed; canonical fallback selected".to_owned());
 
-    Ok(RecipeSelection {
-        plan: fallback,
-        metrics,
-        selected_candidate: None,
-        candidates_evaluated: CANDIDATE_COUNT,
-        valid_candidates: 0,
-        repair_actions: fallback_repair_actions,
-        used_fallback: true,
-        notes: rejected_notes,
-    })
+    Ok(ValidatedRecipeSelection::from_recipe_validation(
+        RecipeSelection {
+            plan: fallback,
+            metrics,
+            selected_candidate: None,
+            candidates_evaluated: CANDIDATE_COUNT,
+            valid_candidates: 0,
+            repair_actions: fallback_repair_actions,
+            used_fallback: true,
+            notes: rejected_notes,
+        },
+    ))
 }
 
 fn validate_and_repair<R>(
@@ -607,8 +615,8 @@ mod tests {
 
     use super::*;
     use crate::procedural_v2::volume::{
-        InteriorVolume, LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess,
-        SurfaceMetadata, VolumeColumn, VolumeElement,
+        LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
+        VolumeElement,
     };
     use crate::terrain::TerrainPalette;
 
@@ -1167,23 +1175,18 @@ mod tests {
     }
 
     #[test]
-    fn compatibility_materialization_rejects_interior_geometry() {
-        let source = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+    fn compatibility_import_rechecks_common_volume() {
+        let validated = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
             .expect("the source selection should be valid");
-        let source = materialize_selection(source, &palette(), &test_is_solid)
-            .expect("the source map should materialize");
-        let mut incompatible = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
-            .expect("the incompatible selection should begin valid");
-        incompatible
-            .plan
-            .volume
-            .interiors
-            .insert(InteriorRegionId(0), InteriorVolume::default());
+        let mut changed = validated.into_unvalidated();
+        changed.plan.volume.columns.remove(&HexCoord::ORIGIN);
 
-        let error =
-            materialize_compatibility_selection(incompatible, source.map, source.map_fingerprint)
-                .expect_err("interior geometry must use native V2 materialization");
-        assert!(error.to_string().contains("cannot carry V2 interior"));
+        let error = ValidatedRecipeSelection::from_compatibility_import(changed)
+            .expect_err("a compatibility import must re-enter common validation");
+        assert!(
+            error.to_string().contains("volume footprint"),
+            "the common validation issue should be preserved: {error}"
+        );
     }
 
     #[test]

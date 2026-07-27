@@ -539,8 +539,9 @@ pub(crate) fn voxelize(
 
 /// Materializes a plan already admitted by recipe selection.
 ///
-/// The debug assertion protects this internal contract without charging release
-/// generation for a second full connectivity pass.
+/// The validated-selection type state protects this contract in release builds.
+/// The debug assertion also rechecks it locally without charging release generation
+/// for a second full connectivity pass.
 pub(crate) fn voxelize_prevalidated(
     plan: &TerrainVolumePlan,
     palette: &TerrainPalette,
