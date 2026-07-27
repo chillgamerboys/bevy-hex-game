@@ -4,10 +4,7 @@
 //! a validated [`TerrainVolumePlan`] and only then materialize voxels; unsupported or
 //! unfinished recipes return an error rather than publishing an empty world.
 
-#[expect(
-    dead_code,
-    reason = "the foundation is consumed by the sequential V2 recipe PRs"
-)]
+mod hills;
 mod recipe;
 #[cfg_attr(
     not(test),
@@ -17,17 +14,19 @@ mod recipe;
     )
 )]
 mod seed;
-#[expect(
-    dead_code,
-    reason = "the foundation is consumed by the sequential V2 recipe PRs"
-)]
 mod volume;
 
 use std::fmt;
+use std::time::Instant;
 
+use hex_core::{InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId};
+
+use crate::procedural::GenerationReport;
 use crate::settings::{
     ProceduralV2Settings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
 };
+use crate::terrain::TerrainPalette;
+use crate::voxel::VoxelMap;
 
 /// Failure to construct or validate one V2 map.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,26 +34,28 @@ pub(crate) enum V2GenerationError {
     /// The sequential recipe PR has not supplied this implementation yet.
     RecipeUnavailable(&'static str),
     /// Recipe-independent volume invariants failed.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "constructed once a V2 recipe reaches common volume validation"
-        )
-    )]
     InvalidVolume(Vec<String>),
     /// A semantic solid/fill role resolved to the wrong substance behavior.
+    MaterialContract(String),
+    /// Recipe inputs or imported compatibility metadata violated the V2 contract.
+    RecipeContract(String),
+    /// Candidate construction encountered an error that cannot be treated as rejection.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "constructed once a V2 recipe reaches semantic voxelization"
+            reason = "native V2 recipes use fatal candidate construction errors"
         )
     )]
-    MaterialContract(String),
-    /// Candidate construction encountered an error that cannot be treated as rejection.
     FatalCandidateConstruction { candidate: u8, source: Box<Self> },
     /// A bounded repair encountered an error that must stop the complete generation run.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "native V2 recipes use fatal bounded-repair errors"
+        )
+    )]
     FatalCandidateRepair {
         candidate: u8,
         round: u8,
@@ -78,6 +79,9 @@ impl fmt::Display for V2GenerationError {
                 )
             }
             Self::MaterialContract(reason) => formatter.write_str(reason),
+            Self::RecipeContract(reason) => {
+                write!(formatter, "procedural V2 recipe contract failed: {reason}")
+            }
             Self::FatalCandidateConstruction { candidate, source } => {
                 write!(
                     formatter,
@@ -114,25 +118,91 @@ impl std::error::Error for V2GenerationError {
             Self::RecipeUnavailable(_)
             | Self::InvalidVolume(_)
             | Self::MaterialContract(_)
+            | Self::RecipeContract(_)
             | Self::InvalidFallback(_) => None,
         }
     }
 }
 
-/// Controlled dispatch point used until each sequential recipe PR lands.
-///
-/// Returning an explicit error is part of the foundation contract: construction must
-/// never fabricate an empty semantic plan for an unsupported combination.
-pub(crate) fn ensure_recipe_available(
+/// Complete generated resources published by the runtime after hard validation.
+#[derive(Debug)]
+pub(crate) struct ProceduralBuild {
+    pub(crate) map: VoxelMap,
+    pub(crate) anchors: MapAnchors,
+    pub(crate) special_regions: SpecialMovementRegions,
+    pub(crate) interiors: InteriorRegions,
+    pub(crate) view_hint: MapViewHint,
+    pub(crate) report: GenerationReport,
+}
+
+/// Dispatches a V2 recipe and turns its typed selection into runtime resources.
+pub(crate) fn build(
+    grid_radius: u32,
+    level_height: f32,
     settings: &ProceduralV2Settings,
-) -> Result<(), V2GenerationError> {
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<ProceduralBuild, V2GenerationError> {
+    let started = Instant::now();
+    let selection = match settings.recipe {
+        V2RecipeSettings::Hills(_) => {
+            hills::build(grid_radius, level_height, settings, seed, palette, is_solid)?
+        }
+        _ => return Err(unavailable_recipe(settings)),
+    };
+    let recipe::MaterializedSelection {
+        map,
+        anchors,
+        special_regions,
+        interiors,
+        view_hint,
+        metadata: _,
+        metrics,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_actions,
+        used_fallback,
+        notes,
+        map_fingerprint,
+    } = selection;
+    let repair_rounds = u8::try_from(repair_actions.len()).unwrap_or(u8::MAX);
+    let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    let report = GenerationReport {
+        generator_version: 2,
+        seed,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_rounds,
+        repair_actions,
+        used_fallback,
+        settings_fingerprint: settings_fingerprint(grid_radius, settings),
+        map_fingerprint,
+        metrics: metrics.tactical,
+        elapsed_micros,
+        notes,
+    };
+
+    Ok(ProceduralBuild {
+        map,
+        anchors,
+        special_regions,
+        interiors,
+        view_hint,
+        report,
+    })
+}
+
+fn unavailable_recipe(settings: &ProceduralV2Settings) -> V2GenerationError {
     let name = match settings.recipe {
         V2RecipeSettings::Hills(_) => "Hills",
         V2RecipeSettings::LayeredSkyIslands(_) => "LayeredSkyIslands",
         V2RecipeSettings::Mountains(_) => "Mountains",
         V2RecipeSettings::Caves(_) => "Caves",
     };
-    Err(V2GenerationError::RecipeUnavailable(name))
+    V2GenerationError::RecipeUnavailable(name)
 }
 
 /// Stable hash of every V2 setting that can affect generated output.
@@ -140,13 +210,6 @@ pub(crate) fn ensure_recipe_available(
 /// This deliberately uses a V2-specific domain and includes the version number.
 /// Equivalent Hills parameters therefore remain output-compatible with V1 without
 /// making their settings/report identity ambiguous.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the fingerprint is published once the first V2 recipe lands"
-    )
-)]
 pub(crate) fn settings_fingerprint(grid_radius: u32, settings: &ProceduralV2Settings) -> u64 {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"procedural-v2-settings");
@@ -185,13 +248,6 @@ pub(crate) fn settings_fingerprint(grid_radius: u32, settings: &ProceduralV2Sett
     seed::fingerprint(&bytes)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the fingerprint is published once the first V2 recipe lands"
-    )
-)]
 fn append_hills_settings(bytes: &mut Vec<u8>, hills: &V2HillsSettings) {
     bytes.extend_from_slice(&hills.valley_level.to_le_bytes());
     bytes.extend_from_slice(&hills.max_relief.to_le_bytes());
@@ -262,17 +318,17 @@ mod tests {
     #[test]
     fn unfinished_recipe_returns_an_error_instead_of_an_empty_plan() {
         let settings = ProceduralV2Settings {
-            environment: V2EnvironmentSettings::TemperateGrassland,
-            recipe: V2RecipeSettings::Hills(V2HillsSettings {
-                valley_level: 15,
-                max_relief: 8,
-                hills_per_bank: 3,
+            environment: V2EnvironmentSettings::Frozen,
+            recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief: 15,
+                peak_count: 4,
             }),
         };
 
         assert_eq!(
-            ensure_recipe_available(&settings),
-            Err(V2GenerationError::RecipeUnavailable("Hills"))
+            unavailable_recipe(&settings),
+            V2GenerationError::RecipeUnavailable("Mountains")
         );
     }
 

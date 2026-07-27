@@ -1,7 +1,15 @@
 //! Recipe-independent semantic volume model for procedural generator V2.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "native recipes consume the generic V2 voxelizer in sequential PRs"
+    )
+)]
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use bevy::platform::collections::{HashMap, HashSet};
 use hex_core::{
     Headroom, HexCoord, InteriorRegionId, InteriorRegions, Level, MapViewHint,
     SpecialMovementRegion, SubstanceId, TilePos, TraversalEndpoint, TraversalProfile, MAX_HEADROOM,
@@ -24,11 +32,6 @@ impl LevelInterval {
     #[must_use]
     pub(crate) const fn new(bottom: Level, top: Level) -> Self {
         Self { bottom, top }
-    }
-
-    #[must_use]
-    const fn contains(self, level: Level) -> bool {
-        self.bottom <= level && level < self.top
     }
 }
 
@@ -136,16 +139,18 @@ impl TerrainVolumePlan {
             )]));
         }
         let mut issues = Vec::new();
-        let footprint: BTreeSet<HexCoord> = HexCoord::ORIGIN
-            .within_radius(self.grid_radius)
-            .into_iter()
-            .collect();
-        let actual: BTreeSet<HexCoord> = self.columns.keys().copied().collect();
-        if actual != footprint {
+        let radius = usize::try_from(self.grid_radius).unwrap_or(usize::MAX);
+        let expected_columns = 1_usize.saturating_add(
+            3_usize.saturating_mul(radius.saturating_mul(radius.saturating_add(1))),
+        );
+        let outside_footprint = self
+            .columns
+            .keys()
+            .any(|coord| HexCoord::ORIGIN.distance(*coord) > self.grid_radius);
+        if self.columns.len() != expected_columns || outside_footprint {
             issues.push(format!(
-                "volume footprint has {} columns; expected {}",
-                actual.len(),
-                footprint.len()
+                "volume footprint has {} in-bounds columns; expected {expected_columns}",
+                self.columns.len()
             ));
         }
         if !self.view_hint.is_valid() {
@@ -178,17 +183,26 @@ impl TerrainVolumePlan {
             }
         }
 
-        let declared: BTreeSet<TilePos> = self.surfaces.keys().copied().collect();
-        if declared != expected_surfaces {
-            let missing = expected_surfaces.difference(&declared).next();
-            let extra = declared.difference(&expected_surfaces).next();
+        if self.surfaces.len() != expected_surfaces.len()
+            || !self
+                .surfaces
+                .keys()
+                .all(|position| expected_surfaces.contains(position))
+        {
+            let missing = expected_surfaces
+                .iter()
+                .find(|position| !self.surfaces.contains_key(position));
+            let extra = self
+                .surfaces
+                .keys()
+                .find(|position| !expected_surfaces.contains(position));
             issues.push(format!(
                 "surface metadata does not match exposed solid boundaries \
                  (missing {missing:?}, extra {extra:?})"
             ));
         }
 
-        let mut traversable = BTreeMap::new();
+        let mut traversable = HashMap::new();
         let mut ordinary = BTreeSet::new();
         let mut special = BTreeMap::<SpecialMovementRegion, BTreeSet<TilePos>>::new();
         for (position, metadata) in &self.surfaces {
@@ -297,23 +311,25 @@ fn same_render_semantics(left: VolumeElement, right: VolumeElement) -> bool {
 }
 
 fn clear_levels_above(column: &VolumeColumn, from: Level) -> Level {
-    (0..MAX_HEADROOM)
-        .take_while(|offset| {
-            let level = from.saturating_add(*offset);
-            !column
-                .elements
-                .iter()
-                .any(|element| element.levels().contains(level))
-        })
-        .count()
-        .try_into()
-        .unwrap_or(MAX_HEADROOM)
+    let Some(obstruction) = column
+        .elements
+        .iter()
+        .map(|element| element.levels())
+        .find(|levels| levels.top > from)
+    else {
+        return MAX_HEADROOM;
+    };
+    if obstruction.bottom <= from {
+        0
+    } else {
+        obstruction.bottom.saturating_sub(from).min(MAX_HEADROOM)
+    }
 }
 
 fn validate_traversal_components(
     ordinary: &BTreeSet<TilePos>,
     special: &BTreeMap<SpecialMovementRegion, BTreeSet<TilePos>>,
-    endpoints: &BTreeMap<TilePos, TraversalEndpoint>,
+    endpoints: &HashMap<TilePos, TraversalEndpoint>,
     issues: &mut Vec<String>,
 ) {
     if let Some(start) = ordinary.first().copied() {
@@ -393,10 +409,10 @@ fn validate_traversal_components(
 fn reachable(
     start: TilePos,
     allowed: &BTreeSet<TilePos>,
-    endpoints: &BTreeMap<TilePos, TraversalEndpoint>,
-) -> BTreeSet<TilePos> {
+    endpoints: &HashMap<TilePos, TraversalEndpoint>,
+) -> HashSet<TilePos> {
     let by_coord = positions_by_coord(allowed);
-    let mut reached = BTreeSet::from([start]);
+    let mut reached = HashSet::from([start]);
     let mut frontier = VecDeque::from([start]);
     while let Some(from) = frontier.pop_front() {
         for neighbor in from.neighbours() {
@@ -414,19 +430,15 @@ fn reachable(
     reached
 }
 
-fn positions_by_coord(surfaces: &BTreeSet<TilePos>) -> BTreeMap<HexCoord, Vec<TilePos>> {
-    let mut by_coord = BTreeMap::<HexCoord, Vec<TilePos>>::new();
+fn positions_by_coord(surfaces: &BTreeSet<TilePos>) -> HashMap<HexCoord, Vec<TilePos>> {
+    let mut by_coord = HashMap::<HexCoord, Vec<TilePos>>::new();
     for surface in surfaces {
         by_coord.entry(surface.coord).or_default().push(*surface);
     }
     by_coord
 }
 
-fn transition(
-    from: TilePos,
-    to: TilePos,
-    endpoints: &BTreeMap<TilePos, TraversalEndpoint>,
-) -> bool {
+fn transition(from: TilePos, to: TilePos, endpoints: &HashMap<TilePos, TraversalEndpoint>) -> bool {
     let (Some(from), Some(to)) = (endpoints.get(&from), endpoints.get(&to)) else {
         return false;
     };
@@ -522,6 +534,29 @@ pub(crate) fn voxelize(
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<VoxelizedTerrain, V2GenerationError> {
     plan.validate()?;
+    voxelize_plan(plan, palette, is_solid)
+}
+
+/// Materializes a plan already admitted by recipe selection.
+///
+/// The validated-selection type state protects this contract in release builds.
+/// The debug assertion also rechecks it locally without charging release generation
+/// for a second full connectivity pass.
+pub(crate) fn voxelize_prevalidated(
+    plan: &TerrainVolumePlan,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<VoxelizedTerrain, V2GenerationError> {
+    #[cfg(debug_assertions)]
+    plan.validate()?;
+    voxelize_plan(plan, palette, is_solid)
+}
+
+fn voxelize_plan(
+    plan: &TerrainVolumePlan,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<VoxelizedTerrain, V2GenerationError> {
     let mut map = VoxelMap::new();
     for (coord, planned) in &plan.columns {
         let mut column = Column::new();
@@ -723,6 +758,25 @@ mod tests {
         let error = plan.validate().expect_err("overlap must fail");
         assert!(error.to_string().contains("overlapping intervals"));
         assert!(error.to_string().contains("surface metadata"));
+    }
+
+    #[test]
+    fn footprint_rejects_an_equal_sized_out_of_bounds_substitution() {
+        let mut plan = empty_plan(TEST_RADIUS);
+        let removed = plan
+            .columns
+            .remove(&HexCoord::ORIGIN)
+            .expect("the complete footprint should contain its origin");
+        let outside = HexCoord::from_axial(
+            i32::try_from(TEST_RADIUS).expect("the test radius should fit") + 1,
+            0,
+        );
+        assert!(plan.columns.insert(outside, removed).is_none());
+
+        let error = plan
+            .validate()
+            .expect_err("an outside column cannot replace a missing in-bounds column");
+        assert!(error.to_string().contains("volume footprint"));
     }
 
     #[test]

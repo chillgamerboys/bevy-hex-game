@@ -111,55 +111,79 @@ fn generate_world(
         ));
         return;
     };
-    let generated = match procedural_settings {
-        crate::settings::ProceduralSettings::V1(v1) => procedural::build(
-            settings.grid_radius,
-            v1,
-            seed.0,
-            &palette,
-            TraversalProfile::WALKER,
-            &|substance| table.is_solid(substance),
-        ),
-        crate::settings::ProceduralSettings::V2(v2) => {
-            let reason = match procedural_v2::ensure_recipe_available(v2) {
-                Ok(()) => "procedural V2 recipe has no generation runner".to_owned(),
-                Err(error) => error.to_string(),
-            };
-            error!("cannot build procedural V2 terrain: {reason}");
-            commands.insert_resource(GameplaySetupFailure::new(format!(
-                "The selected procedural terrain cannot be built: {reason}."
-            )));
-            return;
+    match procedural_settings {
+        crate::settings::ProceduralSettings::V1(v1) => {
+            let generated = procedural::build(
+                settings.grid_radius,
+                v1,
+                seed.0,
+                &palette,
+                TraversalProfile::WALKER,
+                &|substance| table.is_solid(substance),
+            );
+            let anchors: MapAnchors = generated
+                .anchors
+                .iter()
+                .map(|(name, pos)| (MapAnchorId::from(name), pos))
+                .collect();
+            if generated.validated {
+                info!(
+                    "generated procedural map seed={} candidate={:?} fingerprint={} in {}us",
+                    generated.report.seed,
+                    generated.report.selected_candidate,
+                    generated.report.map_fingerprint,
+                    generated.report.elapsed_micros
+                );
+                commands.insert_resource(generated.special_regions);
+                commands.insert_resource(InteriorRegions::new());
+                commands.insert_resource(TerrainReady);
+            } else {
+                error!(
+                    "procedural map and canonical fallback failed validation: {:?}",
+                    generated.report.notes
+                );
+                commands.insert_resource(GameplaySetupFailure::new(
+                    "Procedural generation and its canonical fallback both failed validation.",
+                ));
+            }
+            commands.insert_resource(generated.map);
+            commands.insert_resource(anchors);
+            commands.insert_resource(generated.report);
         }
-    };
-    let anchors: MapAnchors = generated
-        .anchors
-        .iter()
-        .map(|(name, pos)| (MapAnchorId::from(name), pos))
-        .collect();
-    if generated.validated {
-        info!(
-            "generated procedural map seed={} candidate={:?} fingerprint={} in {}us",
-            generated.report.seed,
-            generated.report.selected_candidate,
-            generated.report.map_fingerprint,
-            generated.report.elapsed_micros
-        );
-        commands.insert_resource(generated.special_regions);
-        commands.insert_resource(InteriorRegions::new());
-        commands.insert_resource(TerrainReady);
-    } else {
-        error!(
-            "procedural map and canonical fallback failed validation: {:?}",
-            generated.report.notes
-        );
-        commands.insert_resource(GameplaySetupFailure::new(
-            "Procedural generation and its canonical fallback both failed validation.",
-        ));
+        crate::settings::ProceduralSettings::V2(v2) => {
+            let generated = match procedural_v2::build(
+                settings.grid_radius,
+                settings.level_height,
+                v2,
+                seed.0,
+                &palette,
+                &|substance| table.is_solid(substance),
+            ) {
+                Ok(generated) => generated,
+                Err(error) => {
+                    error!("cannot build procedural V2 terrain: {error}");
+                    commands.insert_resource(GameplaySetupFailure::new(format!(
+                        "The selected procedural terrain cannot be built: {error}."
+                    )));
+                    return;
+                }
+            };
+            info!(
+                "generated procedural V2 map seed={} candidate={:?} fingerprint={} in {}us",
+                generated.report.seed,
+                generated.report.selected_candidate,
+                generated.report.map_fingerprint,
+                generated.report.elapsed_micros
+            );
+            commands.insert_resource(generated.map);
+            commands.insert_resource(generated.anchors);
+            commands.insert_resource(generated.special_regions);
+            commands.insert_resource(generated.interiors);
+            commands.insert_resource(generated.view_hint);
+            commands.insert_resource(generated.report);
+            commands.insert_resource(TerrainReady);
+        }
     }
-    commands.insert_resource(generated.map);
-    commands.insert_resource(anchors);
-    commands.insert_resource(generated.report);
 }
 
 fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {

@@ -1084,8 +1084,12 @@ mod tests {
             let report = app.world().resource::<GenerationReport>();
             assert_eq!(report.seed, configured_seed);
             assert!(
-                report.notes.is_empty(),
-                "{scenario_name}: {:?}",
+                report
+                    .notes
+                    .iter()
+                    .all(|note| note.starts_with("candidate ")),
+                "{scenario_name} retained a non-candidate diagnostic after successful generation: \
+                 {:?}",
                 report.notes
             );
             assert!(

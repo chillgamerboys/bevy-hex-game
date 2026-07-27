@@ -140,6 +140,13 @@ hazards without recipe-specific storage exceptions. Validation rejects missing
 columns, invalid or overlapping intervals, incompatible materials, and malformed
 interior references before the plan becomes a `VoxelMap`.
 
+Hills is the first shipped V2 recipe. Its compatibility adapter evaluates the frozen
+V1 candidates unchanged, then losslessly lifts the selected map and its exact anchors,
+optional regions, and tactical metadata into `TerrainVolumePlan` for final
+materialization. Equivalent V1 and V2 Hills settings therefore select the same
+candidate and retain the same map fingerprint. New recipes build the volume directly;
+V1 remains loadable for saved-seed compatibility.
+
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
 non-standable and may associate it with an interior. Anchors also name exact

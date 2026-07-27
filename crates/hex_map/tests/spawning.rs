@@ -33,15 +33,16 @@ use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-    HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, ResolvedMapSeed,
-    Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady,
-    TilePos, MAX_HEADROOM,
+    HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
+    ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
+    TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
 };
 use hex_map::{
     CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
-    LinkedIslandsSettings, MapSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings,
-    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
+    LinkedIslandsSettings, MapSettings, MountainsSettings, PerlinSettings, PerlinStepSettings,
+    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings,
+    SubstanceRun, TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings,
+    V2RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -188,6 +189,23 @@ fn procedural_app() -> App {
     app
 }
 
+fn v2_hills_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::Hills(V2HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+        })),
+    });
+    app
+}
+
 fn sky_islands_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
@@ -235,6 +253,63 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
         "the hills recipe does not introduce optional regions yet"
     );
     assert!(app.world().resource::<InteriorRegions>().is_empty());
+}
+
+#[test]
+fn v2_hills_setup_preserves_v1_map_identity_with_v2_report_identity() {
+    let mut v1 = procedural_app();
+    enter_gameplay(&mut v1);
+    let v1_report = v1.world().resource::<GenerationReport>().clone();
+    let v1_anchors: BTreeMap<String, TilePos> = v1
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+
+    let mut v2 = v2_hills_app();
+    enter_gameplay(&mut v2);
+
+    assert!(v2.world().contains_resource::<TerrainReady>());
+    assert!(!v2.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(v2.world().resource::<VoxelMap>().len(), 469);
+
+    let report = v2.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.seed, 20_260_726);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert_eq!(report.map_fingerprint, v1_report.map_fingerprint);
+    assert_eq!(report.selected_candidate, v1_report.selected_candidate);
+    assert_eq!(report.valid_candidates, v1_report.valid_candidates);
+    assert_eq!(report.repair_actions, v1_report.repair_actions);
+    assert_eq!(report.used_fallback, v1_report.used_fallback);
+    assert_eq!(report.metrics, v1_report.metrics);
+    assert_ne!(
+        report.settings_fingerprint, v1_report.settings_fingerprint,
+        "V2 output parity must not erase generator-version identity"
+    );
+
+    let anchors: BTreeMap<String, TilePos> = v2
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    assert_eq!(anchors, v1_anchors);
+}
+
+#[test]
+fn v2_hills_publishes_geometry_derived_view_and_empty_interiors() {
+    let mut app = v2_hills_app();
+    enter_gameplay(&mut app);
+
+    let view = *app.world().resource::<MapViewHint>();
+    assert!(view.is_valid());
+    assert_eq!(view, MapViewHint::new((0.0, 48.0, 42.0), (0.0, 6.0, 0.0)));
+    assert!(
+        app.world().resource::<InteriorRegions>().is_empty(),
+        "Hills must publish explicit empty interior metadata"
+    );
 }
 
 #[test]
@@ -464,11 +539,11 @@ fn unavailable_v2_recipe_reports_failure_without_partial_terrain() {
         grid_radius: 12,
         level_height: 0.4,
         terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
-            environment: V2EnvironmentSettings::TemperateGrassland,
-            recipe: V2RecipeSettings::Hills(V2HillsSettings {
-                valley_level: 15,
-                max_relief: 8,
-                hills_per_bank: 3,
+            environment: V2EnvironmentSettings::Frozen,
+            recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief: 15,
+                peak_count: 4,
             }),
         })),
     });
@@ -479,11 +554,14 @@ fn unavailable_v2_recipe_reports_failure_without_partial_terrain() {
     assert!(!app.world().contains_resource::<VoxelMap>());
     assert!(!app.world().contains_resource::<MapAnchors>());
     assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
     assert!(app
         .world()
         .resource::<GameplaySetupFailure>()
         .reason
-        .contains("V2 recipe Hills is not available"));
+        .contains("V2 recipe Mountains is not available"));
     assert_eq!(tile_count(&mut app), 0);
 }
 
@@ -1033,6 +1111,29 @@ fn leaving_gameplay_removes_the_map() {
     );
 }
 
+#[test]
+fn leaving_v2_hills_removes_all_generated_resources() {
+    let mut app = v2_hills_app();
+    enter_gameplay(&mut app);
+    assert!(app.world().contains_resource::<MapViewHint>());
+    assert!(app.world().contains_resource::<GenerationReport>());
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+}
+
 /// Re-entering rebuilds a complete grid rather than doubling it or leaving gaps.
 #[test]
 fn gameplay_can_be_re_entered() {
@@ -1052,6 +1153,53 @@ fn gameplay_can_be_re_entered() {
         first,
         "rebuild should match the first"
     );
+}
+
+#[test]
+fn v2_hills_reentry_is_deterministic() {
+    let mut app = v2_hills_app();
+    enter_gameplay(&mut app);
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    enter_gameplay(&mut app);
+
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.valid_candidates,
+        first_report.valid_candidates
+    );
+    assert_eq!(second_report.repair_actions, first_report.repair_actions);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    assert_eq!(second_anchors, first_anchors);
 }
 
 #[test]
