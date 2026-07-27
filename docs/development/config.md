@@ -74,22 +74,25 @@ The optional review overrides are:
 | `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
+| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
 
-`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, and `HEX_REVIEW_FOCUS_ANCHOR` require
-`HEX_REVIEW_CAPTURE`. The focus override resolves the anchor's full `TilePos`, not
-just its horizontal coordinate, so it can target an underground floor beneath a
-surface. It also applies the selected actor's normal solidity and headroom rules.
-An unknown anchor or one the actor cannot stand on fails the review process instead
-of silently capturing the wrong place.
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
+`HEX_REVIEW_CUTAWAY` require `HEX_REVIEW_CAPTURE`. The focus override resolves the
+anchor's full `TilePos`, not just its horizontal coordinate, so it can target an
+underground floor beneath a surface. It also applies the selected actor's normal
+solidity and headroom rules. An unknown anchor or one the actor cannot stand on fails
+the review process instead of silently capturing the wrong place. The full cutaway
+still requires the selected actor to occupy an exact interior surface and affects
+only that interior; ordinary gameplay retains the local cutaway.
 
-For example, this opens the cave cutaway around its generated deep chamber before a
-close capture:
+For example, this exposes the complete generated cave network for a top-down overview:
 
 ```sh
 HEX_REVIEW_SCENARIO="Caves" \
 HEX_REVIEW_CAPTURE=".context/caves/deep-chamber.png" \
 HEX_REVIEW_FOCUS_ANCHOR="deep_chamber" \
-HEX_REVIEW_CAMERA="character" \
+HEX_REVIEW_VIEW="top-down" \
+HEX_REVIEW_CUTAWAY="full" \
 cargo run -p hex_game --release --features map-review
 ```
 

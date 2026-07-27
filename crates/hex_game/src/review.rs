@@ -11,6 +11,8 @@
 //! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
+//! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
+//! captures while leaving the normal local cutaway unchanged.
 
 use std::env;
 use std::ffi::OsString;
@@ -40,6 +42,7 @@ const VIEW_ENV: &str = "HEX_REVIEW_VIEW";
 const TIME_ENV: &str = "HEX_REVIEW_TIME";
 const CAMERA_ENV: &str = "HEX_REVIEW_CAMERA";
 const FOCUS_ANCHOR_ENV: &str = "HEX_REVIEW_FOCUS_ANCHOR";
+const CUTAWAY_ENV: &str = "HEX_REVIEW_CUTAWAY";
 const SETTLE_FRAMES: u32 = 90;
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
@@ -72,6 +75,9 @@ pub(super) fn plugin(app: &mut App) {
 }
 
 fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
+    if capture.full_cutaway {
+        hex_world::install_full_cutaway_review_override(app);
+    }
     app.insert_resource(ReviewCaptureState::new(capture))
         .add_systems(Update, capture_watchdog)
         .add_systems(
@@ -117,6 +123,7 @@ impl ReviewRequest {
             environment_value(TIME_ENV)?,
             environment_value(CAMERA_ENV)?,
             environment_value(FOCUS_ANCHOR_ENV)?,
+            environment_value(CUTAWAY_ENV)?,
         )
     }
 
@@ -128,6 +135,7 @@ impl ReviewRequest {
         time: Option<String>,
         camera: Option<String>,
         focus_anchor: Option<String>,
+        cutaway: Option<String>,
     ) -> Result<Option<Self>, String> {
         let any_value = scenario.is_some()
             || seed.is_some()
@@ -135,7 +143,8 @@ impl ReviewRequest {
             || view.is_some()
             || time.is_some()
             || camera.is_some()
-            || focus_anchor.is_some();
+            || focus_anchor.is_some()
+            || cutaway.is_some();
         if !any_value {
             return Ok(None);
         }
@@ -174,15 +183,22 @@ impl ReviewRequest {
                     view: ReviewView::parse(view.as_deref().unwrap_or("default"))?,
                     camera: ReviewCamera::parse(camera.as_deref().unwrap_or("map"))?,
                     focus_anchor,
+                    full_cutaway: parse_review_cutaway(cutaway.as_deref())?,
                 })
             }
-            None if view.is_some() || camera.is_some() || focus_anchor.is_some() => {
+            None if view.is_some()
+                || camera.is_some()
+                || focus_anchor.is_some()
+                || cutaway.is_some() =>
+            {
                 let dependent = if view.is_some() {
                     VIEW_ENV
                 } else if camera.is_some() {
                     CAMERA_ENV
-                } else {
+                } else if focus_anchor.is_some() {
                     FOCUS_ANCHOR_ENV
+                } else {
+                    CUTAWAY_ENV
                 };
                 return Err(format!("{dependent} requires {CAPTURE_ENV}"));
             }
@@ -196,6 +212,14 @@ impl ReviewRequest {
             capture,
             launched: false,
         }))
+    }
+}
+
+fn parse_review_cutaway(value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some("full") => Ok(true),
+        Some(value) => Err(format!("{CUTAWAY_ENV} must be full; got {value:?}")),
     }
 }
 
@@ -333,6 +357,7 @@ struct ReviewCapture {
     view: ReviewView,
     camera: ReviewCamera,
     focus_anchor: Option<String>,
+    full_cutaway: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -859,14 +884,14 @@ mod tests {
     #[test]
     fn review_automation_is_dormant_without_environment_values() {
         assert!(
-            ReviewRequest::from_values(None, None, None, None, None, None, None)
+            ReviewRequest::from_values(None, None, None, None, None, None, None, None)
                 .expect("empty review configuration should be valid")
                 .is_none()
         );
     }
 
     #[test]
-    fn capture_configuration_parses_seed_time_view_and_camera() {
+    fn capture_configuration_parses_seed_time_view_camera_and_cutaway() {
         let request = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
             Some("42".to_owned()),
@@ -875,6 +900,7 @@ mod tests {
             Some("18.5".to_owned()),
             Some("character".to_owned()),
             Some("deep_chamber".to_owned()),
+            Some("full".to_owned()),
         )
         .expect("valid review configuration should parse")
         .expect("review configuration should be enabled");
@@ -887,6 +913,7 @@ mod tests {
         assert_eq!(capture.view, ReviewView::TopDown);
         assert_eq!(capture.camera, ReviewCamera::Character);
         assert_eq!(capture.focus_anchor.as_deref(), Some("deep_chamber"));
+        assert!(capture.full_cutaway);
     }
 
     #[test]
@@ -896,6 +923,7 @@ mod tests {
             None,
             None,
             Some("rotated".to_owned()),
+            None,
             None,
             None,
             None,
@@ -915,6 +943,7 @@ mod tests {
             None,
             Some("character".to_owned()),
             None,
+            None,
         )
         .expect_err("a camera mode without an output should be invalid");
 
@@ -932,6 +961,7 @@ mod tests {
             None,
             None,
             Some("deep_chamber".to_owned()),
+            None,
         )
         .expect_err("a focus override without an output should be invalid");
         assert!(without_capture.contains(FOCUS_ANCHOR_ENV));
@@ -945,10 +975,42 @@ mod tests {
             None,
             None,
             Some("  ".to_owned()),
+            None,
         )
         .expect_err("an empty focus anchor should be invalid");
         assert!(empty.contains(FOCUS_ANCHOR_ENV));
         assert!(empty.contains("must not be empty"));
+    }
+
+    #[test]
+    fn full_cutaway_requires_capture_and_rejects_unknown_modes() {
+        let without_capture = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("full".to_owned()),
+        )
+        .expect_err("a cutaway override without an output should be invalid");
+        assert!(without_capture.contains(CUTAWAY_ENV));
+        assert!(without_capture.contains(CAPTURE_ENV));
+
+        let unknown = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            Some(".context/cave.png".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            Some("wide".to_owned()),
+        )
+        .expect_err("an unknown cutaway mode should be invalid");
+        assert!(unknown.contains(CUTAWAY_ENV));
+        assert!(unknown.contains("must be full"));
     }
 
     #[test]
@@ -1082,6 +1144,7 @@ mod tests {
             None,
             Some("first-person".to_owned()),
             None,
+            None,
         )
         .expect_err("an unknown review camera should be rejected");
 
@@ -1098,6 +1161,7 @@ mod tests {
                 None,
                 None,
                 Some(invalid.to_owned()),
+                None,
                 None,
                 None,
             )
@@ -1312,6 +1376,7 @@ mod tests {
                 view: ReviewView::Default,
                 camera: ReviewCamera::Map,
                 focus_anchor: None,
+                full_cutaway: false,
             });
             state.view_applied = phase != CapturePhase::AwaitingCamera;
             state.requested = requested;
@@ -1344,6 +1409,7 @@ mod tests {
                 view: ReviewView::Default,
                 camera: ReviewCamera::Map,
                 focus_anchor: None,
+                full_cutaway: false,
             },
         );
         let camera = app
@@ -1425,6 +1491,7 @@ mod tests {
                 view: ReviewView::Rotated,
                 camera: ReviewCamera::Character,
                 focus_anchor: None,
+                full_cutaway: false,
             },
         );
         app.world_mut().spawn((
@@ -1505,6 +1572,7 @@ mod tests {
             view: ReviewView::Default,
             camera: ReviewCamera::Map,
             focus_anchor: Some(anchor.to_owned()),
+            full_cutaway: false,
         }
     }
 

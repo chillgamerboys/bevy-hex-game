@@ -18,6 +18,10 @@ use hex_core::{
 /// Horizontal radius of the local roof opening, measured in hexes.
 const CUTAWAY_RADIUS_HEXES: u32 = 6;
 
+/// Marker installed only by deterministic capture tooling to expose a whole interior.
+#[derive(Resource, Debug, Default)]
+struct FullCutawayReviewOverride;
+
 /// The exact presentation state to restore when a roof leaves the local cutaway.
 #[derive(Component, Debug, Clone, Copy)]
 struct CutawayHidden {
@@ -51,10 +55,15 @@ pub(super) fn plugin(app: &mut App) {
     );
 }
 
+pub(super) fn install_full_review_override(app: &mut App) {
+    app.init_resource::<FullCutawayReviewOverride>();
+}
+
 /// Opens one local roof window around the selected actor and restores everything else.
 fn reconcile_cutaway(
     mut commands: Commands,
     interiors: Option<Res<InteriorRegions>>,
+    full_review_override: Option<Res<FullCutawayReviewOverride>>,
     targets: Query<(&CameraFocusTarget, &Transform)>,
     mut candidates: CutawayCandidateQuery,
 ) {
@@ -64,7 +73,8 @@ fn reconcile_cutaway(
     {
         let should_hide = active.is_some_and(|(region, centre)| {
             occluder.is_some_and(|occluder| occluder.0 == region)
-                && position.coord.distance(centre) <= CUTAWAY_RADIUS_HEXES
+                && (full_review_override.is_some()
+                    || position.coord.distance(centre) <= CUTAWAY_RADIUS_HEXES)
         });
 
         match (should_hide, hidden) {
@@ -191,6 +201,32 @@ mod tests {
 
         assert_ordinary(&app, near);
         assert_ordinary(&app, boundary);
+    }
+
+    #[test]
+    fn full_review_override_hides_the_whole_active_region_and_restores_normally() {
+        let target = position(0, 0, 7);
+        let region = InteriorRegionId(2);
+        let other_region = InteriorRegionId(9);
+        let (mut app, _) = test_app(target, region);
+        let near = spawn_roof(&mut app, position(1, 0, 13), region);
+        let distant = spawn_roof(&mut app, position(12, 0, 13), region);
+        let unrelated = spawn_roof(&mut app, position(12, 0, 13), other_region);
+        install_full_review_override(&mut app);
+
+        app.update();
+
+        assert_hidden(&app, near);
+        assert_hidden(&app, distant);
+        assert_ordinary(&app, unrelated);
+
+        app.world_mut()
+            .remove_resource::<FullCutawayReviewOverride>();
+        app.update();
+
+        assert_hidden(&app, near);
+        assert_ordinary(&app, distant);
+        assert_ordinary(&app, unrelated);
     }
 
     #[test]

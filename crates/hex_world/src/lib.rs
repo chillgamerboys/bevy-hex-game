@@ -21,6 +21,14 @@ mod sky_material;
 pub use camera::{CameraMode, PanOrbitCamera};
 pub use sky::TimeOfDay;
 
+/// Enables a full-interior cutaway for one deterministic review capture.
+///
+/// Ordinary gameplay does not call this function and retains the local six-hex
+/// opening around the selected unit.
+pub fn install_full_cutaway_review_override(app: &mut App) {
+    cutaway::install_full_review_override(app);
+}
+
 /// Same-frame ordering for resolving designer inputs and applying one coherent frame.
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum LightingSystems {
