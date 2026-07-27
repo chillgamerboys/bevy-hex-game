@@ -205,7 +205,16 @@ Accepted state names map to the constants-table IDs:
 
 - `in-progress` → In Progress (after a revert, or back to the drawing board)
 - `in-review` → In Review
-- `done` → Done (what `/merge-pr` sets when a feature PR lands on `dev`)
+- `done` → Done (what `/merge-pr` sets when a feature PR lands on `dev`,
+  or batch-sets when a wave lands)
+
+**The partial-epic rule (wave model):** a ticket whose PR merged into a
+*wave* stays **In Review** until the wave lands on `dev` — and stays In
+Review even then if the epic is only partially delivered; it goes Done
+when its *scope* is done, not when a PR merges. Linear's GitHub
+integration fights this by auto-closing tickets on PR merge — check
+after every into-wave merge and revert auto-closes to In Review with a
+comment naming the outstanding scope (wave 1's HEX-6 precedent).
 
 The skill **rejects** state names outside this map with a clear
 "unknown state" message — never falls back to fuzzy resolution. That

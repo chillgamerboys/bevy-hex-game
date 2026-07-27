@@ -7,6 +7,26 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 8 — chore(skills): formalize the wave delivery model (2026-07-27)
+
+- **PR**: (this branch) — `chore/wave-model-skills`
+- **Outcome**: green — docs-only path (4 docs lenses + fresh-eyes)
+- **Lenses triggered**: D1 (one fix), D2–D4 clean
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D1 | `.claude/skills/merge-pr/SKILL.md` (Step 1.2) | NON-BLOCKER | fixed in-branch — the four merge classes overlap (a wave→dev landing also matches the plain feature case); routing is now explicitly first-match-wins with the order called load-bearing |
+
+**Notes**: encodes wave 1's proven process into the pipeline: create-pr/plan-ticket
+learn wave bases, merge-pr gains the four merge classes with the stacked-child
+check and the Linear auto-close guard, audit-diff/test-full resolve their diff
+base from the PR's `baseRefName`, update-linear states the partial-epic rule, and
+CONTRIBUTING.md/CLAUDE.md document the model once each at their own altitude
+(full rules vs summary-and-pointer). All historical claims cross-checked against
+the wave-1 record (HEX-6 auto-close, #62 closed by base deletion). D2: the
+CLAUDE.md → CONTRIBUTING wave-section reference resolves; relative-link sweep
+green. No Rust in the diff; test tiers short-circuit per the doc-only path.
+
 ## Wave 7 — feat(world): add celestial lighting and time-of-day scrubber (2026-07-27)
 
 - **PR**: #64 — `feat/celestial-lighting`

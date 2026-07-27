@@ -241,15 +241,17 @@ the branch?"), then:
    — never a state *name*; resolution is unreliable (see
    `/update-linear`'s constants table, the source of truth). Also set
    `assignee: "me"`.
-3. **Create the branch off `origin/dev`** — the branch `/create-pr`
-   targets as the PR base and `/merge-pr` merges into. Use this
-   repo's prefixes (`feat/`, `fix/`, `perf/`, `chore/`, `docs/`,
-   `refactor/`) and include the ticket ID so `/audit-linear` can find
-   it:
+3. **Create the branch off the right base** — `origin/dev` normally;
+   **an active `wave/N-*` branch when the ticket belongs to that
+   wave** (the roadmap's wave groupings say which; when a wave branch
+   exists for the ticket's wave, it is the base and `/create-pr`
+   targets it). Use this repo's prefixes (`feat/`, `fix/`, `perf/`,
+   `chore/`, `docs/`, `refactor/`) and include the ticket ID so
+   `/audit-linear` can find it:
 
    ```bash
-   git fetch origin dev
-   git checkout -b "feat/hex-N-<kebab-slug>" origin/dev
+   git fetch origin
+   git checkout -b "feat/hex-N-<kebab-slug>" origin/dev   # or origin/wave/N-...
    ```
 
    Pick the prefix that matches the work, not always `feat/`.
