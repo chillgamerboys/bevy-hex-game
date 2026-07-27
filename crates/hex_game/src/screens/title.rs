@@ -346,6 +346,7 @@ mod tests {
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),
             generation_seed: None,
+            starting_time_hours: None,
             units: ScenarioSettings {
                 player: ScenarioPlacement::Fixed(at(0, 0, 0)),
                 enemy: ScenarioPlacement::Fixed(enemy),
