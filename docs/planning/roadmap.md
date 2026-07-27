@@ -51,14 +51,22 @@ phase, `TraversalEndpoint`/`admits_transition`, `InteriorRegions`,
 `MapViewHint`); the recipe PRs after it churn only `hex_map` internals — so
 one merge, not his whole sequence, is the gate below.
 
-- **Wave 1 — start now.** Deterministic sim seams (first: smallest, and it
-  unblocks the funnel and saves), Lattice engine (started early — it is the
-  long pole), Elements and spells, Ship-hygiene basics. Every file these
-  touch is clear of the open #56.
-- **Wave 2 — after #56 merges.** Combat policy knobs and Command funnel:
-  both edit files #56 is holding (`targeting.rs`, the elevation tests,
-  `app.rs`), and touching those while it is open hands the other person
-  rebase conflicts.
+- **Wave 1 — start now.** Lattice engine (started early — it is the long
+  pole), Elements and spells, Ship-hygiene basics, and **most of**
+  Deterministic sim seams (first: smallest, and it unblocks the funnel and
+  saves). These live in new modules and in files #56 does not hold; the
+  hex_core additions they make (`lattice_ids`, `ElementId`, `UnitId`) are
+  new lines that merge cleanly past #56's `lib.rs` edits. Two slivers of
+  the seams are the exception and wait for the gate: the serde derives on
+  `Turn` and `Body` each edit one line of a file #56 is holding
+  (`app.rs`, `movement.rs`).
+- **Wave 2 — after #56 merges.** Combat policy knobs — its height-bonus
+  parameterization rewrites the elevation tests, which #56 is extending
+  right now — and Command funnel, which is sequenced here by dependency
+  (it needs the seams' `UnitId`) and lands more cleanly once `app.rs` is
+  quiet. `targeting.rs` is contested too, but by our own knobs ticket, not
+  by #56 — the funnel and knobs should not run concurrently with each
+  other in that file.
 - **Wave 3 — the slice becomes a game.** Lattices wired (needs content +
   engine + funnel), Knowledge seam (needs the engine only), Save and load
   (needs the seams; opens the terrain-snapshot conversation below),
@@ -73,11 +81,16 @@ engine wiring; engine → {lattices wired, knowledge}; funnel → lattices
 wired.
 
 **Standing toe-stepping rules.** Never touch `crates/hex_map/**`. While
-#56 is open, also leave `hex_core/app.rs`, `hex_units/movement.rs`,
-`hex_units/targeting.rs`, `hex_combat/tests/elevation.rs` and
-`hex_game/scenarios.rs` alone. New system ordering builds against the
-five-phase `GameplaySetup` (`Resources → Terrain → Actors → View →
-Finalize`).
+#56 is open it holds, on the gameplay side: `hex_core/{app,lib,terrain,traversal}.rs`,
+`hex_units/movement.rs` (+ its integration tests), `hex_combat/tests/elevation.rs`,
+`hex_world/camera.rs`, `hex_game/{main,review,scenarios}.rs`. The working
+rule: **adding new lines** to those files (a fresh `pub mod`, a new enum, a
+new test fn) merges cleanly and is fine; **editing lines that exist** is
+what hands the other person a rebase conflict — defer those edits until it
+lands. System-ordering note that ages with the gate: `dev` today has the
+four-phase `GameplaySetup`; #56 adds `View` between `Actors` and
+`Finalize`, so anything written against the five-phase set compiles only
+after it merges.
 
 The `map` rows are specified precisely, with fallbacks if deferred, in
 [map-asks.md](map-asks.md) — two further asks (the seed contract and
@@ -95,16 +108,22 @@ unblocked either way.
 
 The cheapest-now, brutal-later foundations for saves, replays, and future
 co-op. Four small PRs: serde derives on the hex_core vocabulary (`HexCoord`
-via its constructor invariant, `TilePos`, `SubstanceId`, `TerrainEdit`,
-`Turn`) plus `Body`/`Faction`, with round-trip tests and the `CubeCoord`
-dedup; a `UnitId(u64)` component with a saved allocator and an
-entity-registry, allocation in scenario spawn order; `TurnOrder` keyed by
-`UnitId` with ties broken initiative-then-id (today's entity-index tie-break
-is not stable across runs or saves); AI target and selection tie-breaks moved
-to `UnitId`; a `SimSeeds` resource (world / ai-flavor / cosmetic — resolution
-itself takes no RNG, by signature). Also `PlayerSeat`/`ControlOwner` (seat 0
-everywhere today) and a `Party` roster resource — one field each, and they are
-the entire future co-op ownership model.
+via its constructor invariant, `TilePos`, `SubstanceId`, `TerrainEdit`) and
+`Faction`, with round-trip tests and the `CubeCoord` dedup; a `UnitId(u64)`
+component with a saved allocator and an entity-registry, allocation in
+scenario spawn order; `TurnOrder` keyed by `UnitId` with ties broken
+initiative-then-id (today's entity-index tie-break is not stable across
+runs or saves); AI target and selection tie-breaks moved to `UnitId`; a
+`SimSeeds` resource (world / ai-flavor / cosmetic — resolution itself takes
+no RNG, by signature). Also `PlayerSeat`/`ControlOwner` (seat 0 everywhere
+today) and a `Party` roster resource — one field each, and they are the
+entire future co-op ownership model.
+
+Two derives deliberately trail the rest: `Turn` and `Body` live on lines
+inside files the open #56 is editing (`app.rs`, `movement.rs`), so their
+serde attributes land as a follow-up commit once it merges — see the
+toe-stepping rules above. Nothing downstream needs them before the save
+work starts.
 
 ### Command funnel
 
