@@ -5,12 +5,13 @@ owner**, in one table. [architecture.md](architecture.md) describes the structur
 this describes the interfaces across it, and who may change each one.
 
 The two of us work independently, so this page exists to answer one question quickly:
-*is this thing something I can rely on today, something reserved for later, or
-something still being asked for?*
+*is this thing something I can rely on today, something accepted and scheduled,
+something reserved for later, or something still being asked for?*
 
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
+| **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Type and ordering exist; nothing produces or consumes it yet |
 | **asked** | Proposed in [planning/boundary.md](planning/boundary.md), not yet agreed |
 
@@ -33,9 +34,9 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — biome membership by exact `TilePos` | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — surfaces occupied by generated features | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `RunBottom(Level)` — each run's lowest voxel | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask C |
-| `TerrainImpact { batch, volume, element, power }` — declarative elemental effect | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
-| Terrain-edit acknowledgment — what each announced voxel became | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask H |
+| `RunBottom(Level)` — each run's lowest voxel; prerequisite to wave 3 terrain casting | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) C |
+| `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
+| `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
 | `TerrainSnapshot` — generator-independent dump | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask D2 |
 
@@ -49,7 +50,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `LocalMapKnowledge` — the compact traversal projection | perception | `hex_units` | reserved | [systems/perception.md](systems/perception.md) |
 | Richer faction-knowledge API — observation queries | perception | `hex_combat` | reserved | [systems/perception.md](systems/perception.md) |
 | `PresentationOcclusion` — composed hide reasons, no single owner of `Visibility` | shared | presentation | reserved | [systems/perception.md](systems/perception.md) |
-| `perception.ron` — sight tunables as designer-facing settings | world | perception | **asked** | [planning/boundary.md](planning/boundary.md) ask J |
+| `perception.ron` — sight tunables as designer-facing settings | world | perception | **agreed** | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
 
@@ -69,7 +70,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
-| Terrain-response table — (element, power, substance) → outcome | world | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
+| Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
+| `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask L |
 
 Cross-file references between the two content domains are resolved and validated by
 [`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets a spell name a substance without either side

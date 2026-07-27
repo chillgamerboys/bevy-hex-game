@@ -208,10 +208,10 @@ thing that can go wrong is something they could in principle have known.
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
   period rather than a slog, and gives enemies a legible rout condition.
-- **First implementation:** a unit whose hexes are all disabled leaves the turn order
-  and is **downed**, revivable by a restoring spell. Whether being downed can become
-  permanent is the [permadeath question](#permadeath), and is deliberately not settled
-  by the mechanic shipping first.
+- **Provisional first implementation:** a unit whose hexes are all disabled leaves the
+  turn order and is **downed**, revivable by a restoring spell. This is a testable
+  starting behavior, not the answer to functional death or the
+  [permadeath question](#permadeath).
 
 ### Information and divination
 
@@ -223,6 +223,10 @@ where it is and permits targeting; it does not reveal the enemy's lattice or int
 The sun, moon, caves, local lights, faction memory, and loss of contact follow the
 [perception contract](../systems/perception.md). Divination changes the separate
 lattice-information channel.
+
+Observation gates combat without replacing distance: an observed hostile pair must
+also satisfy `engage_range` to start combat. The existing `disengage_margin` handles
+an observed retreat, while losing sight starts a separate one-round search.
 
 - What a divination reveals scales with tier: full lattice or partial, one enemy or
   all, everything in a radius.
@@ -296,20 +300,27 @@ properties and elevations:
 
 ### Magic shapes the world; the world decides how
 
-**Evocations change terrain. Enchantments do not.** What an evocation builds is
-permanent — conjured stone is simply stone, destroyed the way any stone is — while an
-enchantment's manifestations are bound to it and vanish when it breaks. That division
-means no spell ever has to remember what it built or clean up after itself.
+**Evocations make persistent terrain changes.** They last at least across multiple
+turns rather than vanishing with the casting animation. The initial implementation
+makes applied terrain edits permanent: conjured stone is simply stone until something
+changes it again. It initially represents enchantment manifestations as bound
+entities that vanish when the enchantment breaks, but that implementation split is
+provisional.
 
 **A cast announces; the world answers.** A spell says which voxels it reaches and what
 kind of energy arrives there; what the *material* does about it is the world's own
-rule. Fire on dirt, fire on granite, and fire on a tree are three different outcomes
-that a fireball does not need to know about — and the fireball is a legal, paid-for
-cast either way. **Casting is committing**: throwing fire at a mountain scorches
-nothing and costs the same mana as burning a field.
+rule. Fire on dirt and fire on granite may produce different outcomes that a fireball
+does not need to predict. How the first wave charges a fully resisted cast is
+provisional rather than a permanent design rule. Generated feature effects, including
+burning trees and tall grass, are deferred.
 
-The exception is conjuration, which has no material to consult: a spell that summons
-dirt names dirt, because that is the spell's identity rather than the world's opinion.
+Conjuration still names its material because that is part of the spell's identity, but
+the world explicitly marks which substances are admissible for spell content. Merely
+defining bedrock, water, or lava does not make it conjurable.
+
+Every cast anchors on a currently Observed exact position. An area resolved from that
+anchor may extend into hidden terrain and affect hidden units, including allies, but
+its acknowledgments, presentation, and logs cannot reveal those hidden outcomes.
 
 The full contract is [casting.md](../systems/casting.md).
 

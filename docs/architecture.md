@@ -25,7 +25,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 |---|---|---|---|
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
-| `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` | infra: gameplay; map content: world |
+| `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
@@ -74,12 +74,22 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, and map-domain content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
-| **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, the `hex_assets` loader infrastructure, and gameplay content: `combat.ron`, `spells.ron`, `elements.ron` |
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
+| **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
 whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
 shared middle, flagged to the other side when a change touches their domain.
+
+`hex_assets` is split by concern rather than guarded as one person's directory.
+Generic mechanisms — loader traits, load tracking, common registration patterns, and
+cross-domain reference infrastructure — remain gameplay-owned. A domain's schema
+types, validation, settings resources, and matching RON content belong to that
+domain's owner. The world owner may therefore add or change world/perception schemas
+and perform their routine exports and registration without waiting on a permanent
+loader gate. A change to the generic loading mechanism or to a cross-domain contract
+still requires the owning review; placing domain code in `hex_assets` does not waive
+the crate graph or the contract-first process.
 
 Where the two meet is [contracts.md](contracts.md); what each is still asking of the
 other is [planning/boundary.md](planning/boundary.md).

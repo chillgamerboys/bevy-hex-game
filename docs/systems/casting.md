@@ -22,18 +22,22 @@ That single line settles most of the questions below, and it is the reason casti
 be validated before it is announced: we always know *which* voxels, even when we do not
 know what will become of them.
 
-## Casting is committing
+## Casting is committing — provisionally
 
-A cast that reaches the world is paid for. Mana is spent, the action is taken, and the
-presentation plays — **whether or not anything changes**.
+The initial wave charges a cast that reaches the world: mana is spent, the action is
+taken, and the presentation plays even when no material changes. **That payment policy
+is provisional.** The binding boundary is that gameplay announces the effect and the
+world decides the material response; playtesting may change when or how a fully
+resisted cast is charged without moving that responsibility.
 
 A fireball thrown at bedrock is a legal cast that scorches nothing. It is not a
-refusal, not an error, and not a bug: the caster committed, and the mountain won. This
-is deliberate, and it is what keeps gameplay from having to know which materials yield
-to which forces — a table gameplay has no business owning.
+map error, and gameplay still does not predict which materials yield. In the first
+implementation it also costs the full cast. That last rule is a starting point to
+test, not permanent game design.
 
-Partial application is therefore normal. A blast across a hillside may clear the dirt
-and leave the granite ridge running through it untouched.
+Partial material application remains normal regardless of payment policy. A blast
+across a hillside may clear the dirt and leave the granite ridge running through it
+untouched.
 
 ## Two write paths
 
@@ -72,23 +76,31 @@ survives as a variant at all is decided then — nothing else uses it.
 
 Power will be an explicit content field — `Impact(element, power: N)`, a variant
 `Effect` does not have yet — so designers tune it directly rather than having it
-inferred from tier. Any defined substance is conjurable; balance lives in a spell's gem
-cost and tier, not in a whitelist.
+inferred from tier. A conjuration may name only a substance the world marks
+`conjurable`; existence alone is insufficient. The content loader validates that
+cross-domain reference before the spell becomes available, as specified by
+[boundary.md](../planning/boundary.md) ask L. This prevents ordinary spell content
+from creating protected bedrock or static hazards merely because those substances
+exist.
 
-## Evocations shape the world; enchantments do not
+## Shaped terrain persists
 
-- **Only evocations write terrain**, and every terrain edit is **permanent and
-  atomic**. There is no conjuration ledger, no provenance tracking, and no un-build:
-  conjured stone is simply stone, destroyed the way any stone is.
-- **Enchantments never touch terrain.** Anything an enchantment manifests is an
-  *entity* bound to its [`EnchantId`](../../crates/hex_core/src/lattice_ids.rs)
-  (**built**), and enchantment start and break are announced like any other effect —
-  when the enchantment breaks, whatever it manifested despawns with it.
+**An evocation's terrain change is persistent.** It lasts for at least multiple turns
+rather than disappearing with its casting animation. The initial implementation makes
+every accepted voxel edit permanent: there is no conjuration ledger, provenance,
+expiry, or automatic un-build, so conjured stone is simply stone until something
+changes it again. Whole-cast batch atomicity is not implied; it needs an explicit
+terrain-edit batch contract if the first multi-voxel implementation requires it.
 
-This deletes an entire class of problem. The alternative — enchantment-conjured terrain
-that must be un-built when the enchantment falls — needs a ledger, needs provenance,
-and has to answer what happens when someone else reshapes those voxels in between.
-Splitting by *what kind of thing is created* means the question never arises.
+The first implementation keeps enchantment manifestations as entities bound to their
+[`EnchantId`](../../crates/hex_core/src/lattice_ids.rs) (**built**) rather than terrain,
+and despawns them when the enchantment breaks. That is a provisional implementation
+split, not a ruling that every future enchantment must avoid terrain.
+
+Permanent initial edits avoid an immediate class of provenance problems. Expiring
+terrain would need a ledger and an answer for what happens when another effect reshapes
+the same voxels before expiry; that design may be added later without weakening the
+multi-turn persistence rule.
 
 Honest caveat: an entity-shaped barrier does not block movement, because units do not
 obstruct each other yet ([status.md](../planning/status.md)). Terrain walls are the
@@ -109,16 +121,14 @@ applier in `hex_combat` is authoritative.
    inherit high-ground-buys-range automatically** — the rule was written for this and
    has had exactly one consumer until now, engagement. Trajectory is deferred; see
    *Obstruction*.
-4. **Unit interaction** — **terrain-creation voxels that intersect a unit's body are
-   illegal.** A single-target shaping spell aimed at an occupied hex is refused *before
-   mana moves*; an area spell drops only the conflicting *terrain* voxels and still
-   applies its other effects, because a fireball must stay castable in a melee.
+4. **Unit interaction — provisional first-wave safety policy.** Terrain-creation
+   voxels that intersect a unit's body are initially illegal. A single-target shaping
+   spell aimed at an occupied hex is refused before mana moves; an area spell drops
+   only the conflicting terrain voxels and still applies its other effects.
 
-   Also refused: edits to any voxel that is a unit's supporting surface. **Nobody can
-   be entombed or undermined.** That one clause deletes falling rules, post-edit
-   footing reconciliation, and a class of races with the world's re-meshing — all of
-   which can be relaxed deliberately later if undermining becomes a mechanic worth
-   designing.
+   The first wave also refuses edits to a unit's supporting surface, so nobody can be
+   entombed or undermined before falling and post-edit footing rules exist. This is a
+   temporary safety policy to test, not a permanent prohibition on undermining.
 5. **Announce** — the surviving volume goes to the world, which arbitrates.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
@@ -128,11 +138,19 @@ through a character. Only rung 5 defers, because only material response is the w
 
 ### Observation
 
-A unit-directed cast requires the acting faction to observe its target
-([perception.md](perception.md)). The rung is written now as one function that returns
-`true` — which is **not a stub but the truth**, since no fog exists yet and every unit
-genuinely is observed by everyone. It becomes a real query when `hex_perception` lands,
-and that is a one-function change inside `hex_combat`.
+Every cast requires its exact positional anchor to be currently Observed by the acting
+faction, whether that anchor identifies terrain or an observed unit
+([perception.md](perception.md)). Remembered terrain is not sufficient, and Unknown
+terrain exposes no targetable `TilePos`.
+
+Once the Observed anchor resolves, an area shape may extend into Remembered or Unknown
+positions. The effect still applies authoritatively to hidden terrain and units, but
+its acknowledgments, animations, and combat-log entries are filtered through faction
+knowledge and do not reveal hidden outcomes.
+
+The observation rung returns `true` until fog exists because every current target
+genuinely is Observed. It becomes a real query when `hex_perception` lands, and that is
+a one-function change inside `hex_combat`.
 
 ### Occupancy
 
@@ -166,12 +184,15 @@ slightly squashed on screen. That is the correct trade.
 `Path` rotates in sextants — 60° steps are exact on cube coordinates, so an authored
 pattern keeps its shape in all six directions.
 
-**One volume affects everything inside it**: units, the terrain announcement, and
-features alike. A blast that reaches a bridge deck hits whoever is standing on it.
-Vertical reach is the entire point of describing volumes rather than footprints.
+**One volume affects every unit and terrain voxel inside it**, including allies,
+enemies, and the caster. A blast that reaches a bridge deck hits whoever is standing
+on it. Generated feature effects are deferred: trees, tall grass, and other feature
+entities ignore the initial impact even when their occupied positions lie inside the
+volume. Vertical reach is the entire point of describing volumes rather than
+footprints.
 
-Conjured walls are **2 voxels tall**. The canonical walker is 2 tall and climbs 1, so a
-1-voxel wall is a step, not a wall.
+Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and climbs
+1, so a 1-voxel wall is a step rather than a useful first implementation.
 
 ### Obstruction
 
@@ -238,33 +259,38 @@ without touching the framework, which is the point of having one.
 
 - **There is no ally/enemy targeting filter, and there will not be one.** You may heal
   an enemy and immolate a friend. Area effects hit everyone inside the volume, always.
-- **Casting is combat-only** in wave 3. Shaping terrain out of combat is attractive and
-  waits on an answer to out-of-combat mana regeneration, which channelling's per-turn
-  model does not provide.
+- **Combat-only casting is provisional in wave 3.** Shaping terrain out of combat is
+  attractive and waits on an answer to out-of-combat mana regeneration, which
+  channelling's per-turn model does not provide.
 - **Channelling and rituals are deferred.** `co_castable` parses and feeds
   `Spell::is_ritual()` (**built**, and read today only by the lattice demo and the dev
   content dump); it has no mechanical effect. Co-casting is entangled with the
   unresolved initiative question.
-- **Death** removes a unit from the turn order and leaves it downed, revivable by a
-  restoring spell. Permadeath is a separate decision.
+- **Downed-first death is provisional.** Wave 3 initially removes a fully disabled
+  unit from the turn order and leaves it revivable by a restoring spell. Functional
+  death and permadeath remain separate design decisions.
 - **`Reveal` and `Illuminate` reject with a reason** naming what they wait on: the
   knowledge seam, and spell-created lights in the perception lane. They are in the
   shipped roster and must not silently do nothing.
+- **Generated features are unaffected initially.** Destructible trees, tall grass,
+  and other feature effects wait on an explicit world response and outcome contract.
 
 ## Verification gate
 
 Legality tests cover each rung independently and in combination: a cast refused for
-lack of mana must not also consume the action; a shaping cast onto an occupied hex must
-refuse before mana moves; an area cast in a melee must still apply its damage while
-dropping conflicting terrain voxels; an undermining edit must be refused.
+lack of mana must not also consume the action; every target anchor must be Observed; a
+shape may spill into hidden positions without exposing them; and the provisional
+occupied-voxel and supporting-surface policies behave consistently.
 
 Volume tests pin the grid-space metric on stacked surfaces — a sphere centred on a
 bridge deck must reach the ground below it exactly when the level distance says so, and
-`Path` rotation must produce congruent shapes in all six sextants.
+`Path` rotation must produce congruent shapes in all six sextants. They also pin
+friendly fire and prove generated features remain unaffected in the first wave.
 
-Announcement tests prove the contract's honesty: a cast at undiggable material spends
-mana and changes nothing, and the acknowledgment reports it unchanged rather than
-silently succeeding.
+Announcement tests prove the contract's honesty: under the provisional payment rule,
+a cast at undiggable material spends mana and changes nothing. The authoritative
+acknowledgment reports it unchanged, while player-facing presentation and logs reveal
+that result only to a faction currently observing it.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.

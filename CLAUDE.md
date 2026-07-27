@@ -123,12 +123,21 @@ while `hex_combat` may consume the richer perception API. Neither gameplay crate
 import map-generator internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
-`hex_perception`, and map-domain content (world files, `substances.ron`, lighting
-profiles). The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`,
-`hex_lattice`, `hex_anim`, the `hex_assets` loader, and gameplay content
-(`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared. Every fact that
-crosses between them, and whether it is live, reserved, or still an ask, is
-`docs/contracts.md`; the open asks are `docs/planning/boundary.md`.
+`hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
+content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
+`hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is
+shared. Every fact that crosses between them, and whether it is live, agreed, reserved,
+or still an ask, is `docs/contracts.md`; the open asks are
+`docs/planning/boundary.md`.
+
+`hex_assets` ownership follows the concern, not the directory. Generic loader traits,
+load tracking, registration patterns, and cross-domain reference machinery stay with
+the gameplay owner. A domain owner may change its own schema types, validation,
+settings resources, content, and routine registration without a permanent loader
+bottleneck. Generic loader behavior and cross-domain contracts still require their
+owner's review; crate boundaries do not change.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,

@@ -70,7 +70,7 @@ version:
 | Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` | gameplay |
 | The lattice rules engine: gems, fusions, spells, mana, disables, enchantments | `hex_lattice` | gameplay |
 | Voxels, terrain, tile spawning, map settings | `hex_map` | world |
-| Asset loading, shared settings | `hex_assets` | infra gameplay; map content world |
+| Generic asset loading; domain schema/settings modules | `hex_assets` | loader infra gameplay; each schema and its content follow the domain owner |
 | Sky, camera, presentation cutaways | `hex_world` | world |
 | Rules: input, movement, interaction | `hex_units` | gameplay |
 | Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
@@ -81,6 +81,13 @@ The two roles are defined in
 [docs/architecture.md](docs/architecture.md#ownership-cuts-both-ways). What crosses
 between them is [docs/contracts.md](docs/contracts.md); what each is still asking of
 the other is [docs/planning/boundary.md](docs/planning/boundary.md).
+
+Ownership inside `hex_assets` follows the concern, not the directory. The gameplay
+owner maintains generic loader traits, load tracking, and cross-domain reference
+machinery. A world, perception, or gameplay owner may edit its own schema module,
+validation, settings resource, content, and routine loader registration. Such a PR
+does not need another owner merely because the schema lives in `hex_assets`; it does
+need that review if it changes generic loader behavior or a cross-domain contract.
 
 **`hex_map`, `hex_world` and `hex_units` may not depend on each other.** If you
 need something in more than one, it belongs in `hex_core`. Cargo will stop you either
@@ -195,7 +202,8 @@ implementation lanes so both owners compile against one boundary.
 
 After the contract lands:
 
-- map PRs may change `hex_map` and its assets but do not edit `hex_units` or
+- world PRs may change world-owned crates plus world/perception schema modules,
+  settings, and content in `hex_assets`, but do not edit `hex_units` or
   `hex_combat`;
 - gameplay and perception PRs consume published shared facts and do not import
   `hex_map` internals;

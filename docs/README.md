@@ -29,7 +29,7 @@ doc or the code, not drift.
 | Doc | Audience | Purpose | Owner |
 |---|---|---|---|
 | [architecture.md](architecture.md) | Contributors, agents | Crate graph, ownership, conventions, states, settings, testing philosophy — and the reasoning behind each | Both, jointly |
-| [contracts.md](contracts.md) | Both owners | Every fact crossing the world/gameplay boundary, with its status: live, reserved, or asked | Both, jointly |
+| [contracts.md](contracts.md) | Both owners | Every fact crossing the world/gameplay boundary, with its status: live, agreed, reserved, or asked | Both, jointly |
 | [systems/map.md](systems/map.md) | Anyone touching terrain | The voxel model: columns, runs, surfaces, headroom, and the rules everything else depends on | World owner |
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | Gameplay owner |

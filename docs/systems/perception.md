@@ -152,14 +152,27 @@ do not leak hidden geometry.
 
 ## Combat contact
 
-Combat begins when either hostile faction currently observes a member of the other.
-Detection need not be mutual: being discovered by an unseen hostile still changes
-the game to combat tempo.
+Observation gates the existing reach trigger; it does not replace it. Combat begins
+when either faction currently observes a hostile **and** that hostile pair satisfies
+the existing `engage_range` reach rule. Detection need not be mutual: an unseen
+hostile that observes and reaches the party still changes the game to combat tempo.
+Seeing a hostile beyond `engage_range` does not start combat by itself.
 
-An attack, spell target, or other unit-directed command requires the acting faction
-to observe its target at command validation time. Current position knowledge does
-not grant lattice or intent knowledge. AI is subject to its faction's knowledge
-rather than reading every hostile entity in the world.
+Every attack, cast, or ability target anchor requires its exact `TilePos` to be
+currently Observed by the acting faction at command validation time. Remembered and
+Unknown positions cannot anchor those effects. Movement destinations remain governed
+by the separate remembered-route and one-step-frontier rule above. A valid area effect
+may extend beyond the Observed area after its anchor resolves and still affects hidden
+terrain and units. Its outcomes do not promote those positions to Observed or reveal
+them through presentation or logs.
+
+Current position knowledge does not grant lattice or intent knowledge. AI is subject
+to its faction's knowledge rather than reading every hostile entity in the world.
+
+The current `disengage_margin` remains the spatial hysteresis for hostiles that are
+still observed: crossing `engage_range` starts combat, while retreating beyond
+`engage_range + disengage_margin` may end it. Lost contact is a separate information
+transition, not a replacement for that distance rule.
 
 When all hostile contact is lost, combat records each faction's own last observed
 hostile positions. The next normal round boundary begins one complete search round;
@@ -167,7 +180,8 @@ losing contact partway through the preceding round does not consume it. During t
 search round, a faction may move toward only its own contact records. Those records
 do not render or make a hidden unit targetable.
 
-Reacquiring any hostile cancels the search and restores normal contact. If no faction
+Reacquiring any hostile cancels the search and restores normal contact; the
+independent reach and disengage-margin rules then apply normally. If no faction
 re-establishes hostile contact by the end of the complete search round, combat ends.
 Losing contact again later starts a new search on the same rule.
 
@@ -179,6 +193,11 @@ Fog presentation consumes faction knowledge:
 - Remembered terrain is visually distinct from current observation and cannot show
   units or unseen changes.
 - Observed places render current world state.
+
+Authoritative effects may change hidden terrain or units, but player-facing impact
+presentation and combat logs filter every outcome through the receiving faction's
+current knowledge. An acknowledgment may exist for simulation, replay, or saving
+without disclosing its hidden position, material, resistance, occupancy, or damage.
 
 Fog, cave roof cutaway, and future canopy cutaway all need to affect presentation.
 They must contribute independent occlusion reasons to one composed result. No system
@@ -205,10 +224,12 @@ units vanish outside observation, and re-observation replaces stale facts. Route
 tests cover the one-step Unknown frontier without exposing hidden level, headroom,
 material, or rejection reason.
 
-Combat adapters require asymmetric-detection, target-observation, full one-round
-search, reacquisition, and search-expiry tests before they change live rules.
-Gameplay teardown and re-entry must clear ambient, observation, memory, contact, and
-presentation state.
+Combat adapters require observation-gated engage reach, asymmetric detection,
+independent disengage-margin and lost-contact behavior, full one-round search,
+reacquisition, and search-expiry tests before they change live rules. Targeting tests
+require an Observed exact anchor, allow area spillover into hidden positions, and
+prove neither acknowledgments nor logs disclose those outcomes. Gameplay teardown
+and re-entry must clear ambient, observation, memory, contact, and presentation state.
 
 Benchmarks record faction-knowledge and fog recomputation after unit movement and
 terrain edits. Review captures use one seed and azimuth at noon, moonlight,

@@ -30,7 +30,8 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Elements and spells as content | `elements.ron` (wheel, opposition, fusion recipes) and `spells.ron` (closed-enum effects, targeting specs); a cross-file `ContentIndex` with load-time and test-time reference checks | assets | <!-- linear: HEX-7 owner: shravan-kumaran -->
 | Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat | <!-- linear: HEX-8 owner: shravan-kumaran -->
 | Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat | <!-- linear: HEX-12 owner: shravan-kumaran -->
-| Terrain magic | the declarative `TerrainImpact` announcement, conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and consumption of the world's edit acknowledgment | combat |
+| Run bottoms on tiles | publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to wave 3 terrain casting | map |
+| Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat |
 | Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat |
 | Casting UX | shape previews under the cursor, blocked-reason surfacing from `castable()`, target cycling, and cast presentation per element | units |
 | Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game |
@@ -47,7 +48,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | V3 procedural foundation | `generator_version: 3`; private `GeneratedWorldPlan`; `Single` and radius-33 `Ring7` layouts; patch masks, edge contracts, named streams, validation, scoring, repair, fallback, and diagnostics | map |
 | Steady-state liquids and Waterfall | directed water topology; still/current/rapid/fall rendering; elevated inlet, rapids, fall, basin, outlet, and ordinary-walker bypass | map |
-| Authoritative spatial perception | new headless `hex_perception`: illumination domains, pooled faction sight, Unknown/Remembered/Observed knowledge, deterministic visibility, and cave-local lights | perception |
+| Authoritative spatial perception | new headless `hex_perception`: validated `perception.ron`, illumination domains, pooled faction sight, Unknown/Remembered/Observed knowledge, deterministic visibility, and cave-local lights | perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
 | Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
 | Surface features and Forest | deterministic low-poly trees and grass, exact root blockers, protected routes, clearings, prairie, and composable canopy cutaway | map |
@@ -55,7 +56,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
 | V3 recipe migration and legacy removal | rebuild every active V1/V2 recipe and scenario in V3; approve replacement corpora; then remove both legacy parsers, generators, assets, and runtime tests | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
-| Run bottoms on tiles | when obstruction-aware sight or cover lands, publish `RunBottom(Level)` beside each tile's `TilePos` so occupancy under bridges is exact | map |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
 
@@ -83,6 +83,12 @@ contract. Forest and Fort do not depend on combat integration. `Ring7` waits
 for Waterfall, Forest, and Fort semantic plans; V3 migration waits for the
 composite contracts but not for final combat tuning.
 
+The first liquid implementation also records an explicit terrain-edit policy for
+support removal and stale flow topology. The `diggable` flag governs only direct
+edits to a liquid voxel; it is not a substitute for that policy. Dynamic cave-breach
+illumination remains unresolved: terrain edits do not reclassify an entire chamber
+until aperture and domain semantics are agreed.
+
 The pre-existing gameplay critical path remains independent: sim seams →
 funnel → lattices wired, with element content and the lattice engine feeding
 it from the side. Spatial map knowledge does not replace the lattice-specific
@@ -100,7 +106,10 @@ and ship hygiene are on `dev`.
 
 - **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
   disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
-  Encounters. Damage exists at the end of it.
+  Encounters. `RunBottom` lands before Terrain magic starts, and Terrain magic starts
+  only after the declarative impact, outcome, and conjuration-admission asks G/H/L have
+  an agreed shape. Other wave work need not wait for those boundary contracts. Damage
+  exists at the end of it.
 - **Wave 4 — combat feel and casting UX.** Casting UX, Outcome flow, Combat
   readability, Trajectories and lingering effects, Magic outside combat, Channelling
   and co-casting — plus **Movement and combat perception adapters**, the gameplay half
