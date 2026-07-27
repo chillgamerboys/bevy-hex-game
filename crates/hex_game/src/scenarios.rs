@@ -365,15 +365,17 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        CubeCoord, GameAssets, LightingSettings, PlayerSettings, ScenarioLibrary,
+        CombatSettings, CubeCoord, GameAssets, LightingSettings, PlayerSettings, ScenarioLibrary,
         ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
-        GameplaySetup, GameplaySetupFailure, HexGrid, InteriorRegions, MapAnchorId, MapAnchors,
-        MapViewHint, Mode, Pause, ResolvedMapSeed, Screen, SpecialMovementRegions, TerrainReady,
+        AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
+        InteriorRegions, IssuedCommand, MapAnchorId, MapAnchors, MapViewHint, Mode,
+        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegions,
+        TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
-    use hex_units::{Enemy, Player, StandsOn};
+    use hex_units::{either_in_reach, Body, Enemy, Footing, Player, Reach, StandsOn};
     use hex_world::TimeOfDay;
 
     use super::{
@@ -1251,6 +1253,10 @@ mod tests {
     }
 
     fn procedural_gameplay_app(scenario_name: &str) -> App {
+        procedural_gameplay_app_with_combat(scenario_name, false)
+    }
+
+    fn procedural_gameplay_app_with_combat(scenario_name: &str, with_combat: bool) -> App {
         let entry = library()
             .scenarios
             .into_iter()
@@ -1279,6 +1285,16 @@ mod tests {
         app.add_sub_state::<Mode>();
         app.add_sub_state::<Pause>();
         app.configure_sets(
+            Update,
+            (
+                AppSystems::TickTimers,
+                AppSystems::RecordInput,
+                AppSystems::Update,
+            )
+                .chain(),
+        );
+        app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
+        app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 GameplaySetup::Resources,
@@ -1300,6 +1316,13 @@ mod tests {
         app.insert_resource(seed);
         app.add_plugins((hex_map::plugin, hex_units::movement::plugin));
         hex_units::units::plugin(&mut app);
+        if with_combat {
+            let combat: CombatSettings =
+                ron::from_str(include_str!("../../../assets/config/combat.ron"))
+                    .expect("the shipped combat settings should deserialize");
+            app.insert_resource(combat);
+            app.add_plugins(hex_combat::plugin);
+        }
         app.add_systems(
             OnEnter(Screen::Gameplay),
             finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
@@ -1415,14 +1438,22 @@ mod tests {
     }
 
     #[test]
-    fn every_procedural_probe_loads_terrain_anchors_and_actors() {
-        for scenario_name in ["Frozen Hills", "Volcanic Hills", "Sky Islands"] {
-            let configured_seed = library()
+    fn every_additional_procedural_scenario_loads_terrain_anchors_and_actors() {
+        for scenario_name in [
+            "Frozen Hills",
+            "Volcanic Hills",
+            "Sky Islands",
+            "Mountains",
+            "Caves",
+        ] {
+            let scenario = library()
                 .scenarios
                 .into_iter()
                 .find(|scenario| scenario.name == scenario_name)
-                .and_then(|scenario| scenario.generation_seed)
-                .expect("the probe should have a configured seed");
+                .expect("the procedural scenario should be shipped");
+            let configured_seed = scenario
+                .generation_seed
+                .expect("the procedural scenario should have a configured seed");
             let mut app = procedural_gameplay_app(scenario_name);
             enter_screen(&mut app, Screen::Gameplay);
 
@@ -1446,28 +1477,55 @@ mod tests {
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
             let anchors = app.world().resource::<MapAnchors>();
-            for required in [
-                "party_start",
-                "hostile_start",
-                "conflict_center",
-                "bridge",
-                "alternate_crossing",
-            ] {
+            for required in [&scenario.units.player, &scenario.units.enemy]
+                .into_iter()
+                .filter_map(|placement| match placement {
+                    ScenarioPlacement::Anchor(name) => Some(name.as_str()),
+                    ScenarioPlacement::Fixed(_) => None,
+                })
+            {
                 assert!(
                     anchors.get(&MapAnchorId::from(required)).is_some(),
                     "{scenario_name} omitted {required}"
                 );
             }
-            let special_regions = app.world().resource::<SpecialMovementRegions>();
-            if scenario_name == "Sky Islands" {
+            let recipe_anchors: &[&str] = match scenario_name {
+                "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
+                "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
+                _ => &["conflict_center", "bridge", "alternate_crossing"],
+            };
+            for required in recipe_anchors {
                 assert!(
+                    anchors.get(&MapAnchorId::from(*required)).is_some(),
+                    "{scenario_name} omitted recipe anchor {required}"
+                );
+            }
+            let special_regions = app.world().resource::<SpecialMovementRegions>();
+            match scenario_name {
+                "Sky Islands" => assert!(
                     !special_regions.is_empty(),
-                    "Sky Islands dropped its optional island semantics"
+                    "Sky Islands dropped its flight-gated upper layer"
+                ),
+                "Mountains" => {}
+                _ => assert!(
+                    special_regions.is_empty(),
+                    "{scenario_name} introduced an unexpected optional region"
+                ),
+            }
+            let interiors = app.world().resource::<InteriorRegions>();
+            if scenario_name == "Caves" {
+                assert!(
+                    interiors.surfaces().next().is_some(),
+                    "Caves dropped its exact interior floors"
+                );
+                assert!(
+                    interiors.roof_voxels().next().is_some(),
+                    "Caves dropped its exact cutaway roofs"
                 );
             } else {
                 assert!(
-                    special_regions.is_empty(),
-                    "{scenario_name} introduced an unexpected optional region"
+                    interiors.is_empty(),
+                    "{scenario_name} introduced unexpected interior metadata"
                 );
             }
             assert!(standing_pos::<Player>(&mut app).is_some());
@@ -1481,6 +1539,153 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    /// The shipped cave is only playable if the ECS terrain, command funnel, and
+    /// combat loop agree with the semantic cave validator across the complete entry
+    /// route. Premature combat freezes free exploration and made a valid ramp look
+    /// like broken movement when the old deep anchor could target through the rock.
+    #[test]
+    fn shipped_cave_entrance_is_live_walkable_before_combat_can_begin() {
+        let mut app = procedural_gameplay_app_with_combat("Caves", true);
+        enter_screen(&mut app, Screen::Gameplay);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        let party_position = anchors
+            .get(&MapAnchorId::from("party_start"))
+            .expect("Caves should publish party_start");
+        let hostile_position = anchors
+            .get(&MapAnchorId::from("hostile_start"))
+            .expect("Caves should publish hostile_start");
+        let conflict_position = anchors
+            .get(&MapAnchorId::from("conflict_center"))
+            .expect("Caves should publish conflict_center");
+        let (body, player_unit) = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&Body, &UnitId), With<Player>>();
+            let (body, unit) = players
+                .single(world)
+                .expect("Caves should spawn exactly one identified player");
+            (*body, *unit)
+        };
+
+        let footing = {
+            let world = app.world_mut();
+            let mut tiles = world.query_filtered::<(
+                &TilePos,
+                &hex_core::HexSpan,
+                &hex_core::SubstanceId,
+                &hex_core::Headroom,
+            ), With<hex_core::HexTile>>();
+            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body)
+        };
+        let party = footing
+            .at(party_position)
+            .expect("the shipped player anchor should be live footing");
+        let hostile = footing
+            .at(hostile_position)
+            .expect("the shipped hostile anchor should be live footing");
+        let from_party = Reach::from(party, &footing, None);
+        let approach = from_party
+            .path_to(conflict_position)
+            .expect("party cannot traverse the complete cave entry connector");
+        let conflict = *approach
+            .last()
+            .expect("the route to the conflict anchor should not be empty");
+        let to_conflict = Reach::from(conflict, &footing, None);
+        assert!(
+            app.world()
+                .resource::<InteriorRegions>()
+                .get(conflict.pos)
+                .is_some(),
+            "the entry route never reached a covered cave floor"
+        );
+        assert!(
+            to_conflict.cost(party.pos).is_some(),
+            "party cannot walk back from the cave entry connector"
+        );
+
+        // Cover both lanes, not only the deterministic shortest path chosen for the
+        // command below. A two-step detour admits the parallel ribbon while excluding
+        // the deeper chamber network.
+        let shortest_steps = from_party
+            .cost(conflict.pos)
+            .expect("the conflict anchor should have a forward cost");
+        let entry_envelope: Vec<_> = {
+            let interiors = app.world().resource::<InteriorRegions>();
+            from_party
+                .surfaces()
+                .filter(|surface| interiors.get(surface.pos).is_some())
+                .filter(|surface| {
+                    from_party
+                        .cost(surface.pos)
+                        .zip(to_conflict.cost(surface.pos))
+                        .is_some_and(|(from_start, to_end)| {
+                            from_start.saturating_add(to_end) <= shortest_steps.saturating_add(2)
+                        })
+                })
+                .collect()
+        };
+        assert!(
+            entry_envelope
+                .iter()
+                .any(|surface| !approach.contains(surface)),
+            "the cave safety envelope did not include the parallel entrance lane"
+        );
+        let combat = app.world().resource::<CombatSettings>();
+        for surface in &entry_envelope {
+            assert!(
+                !either_in_reach(
+                    surface.pos,
+                    hostile.pos,
+                    combat.engage_range,
+                    combat.levels_per_bonus_range,
+                ),
+                "hostile at {:?} can start combat through rock while the party is still on \
+                 entrance surface {:?}",
+                hostile.pos,
+                surface.pos
+            );
+        }
+
+        // Remove presentation timing so the headless app reconciles every route
+        // waypoint on its next update. Engagement still consumes those exact
+        // MovementCrossings, which is the production path that exposed this bug.
+        app.world_mut().remove_resource::<PlayerSettings>();
+        let walk = |app: &mut App, path: Vec<TilePos>| {
+            app.world_mut()
+                .resource_mut::<CommandQueue>()
+                .push(IssuedCommand {
+                    seat: PlayerSeat(0),
+                    command: GameCommand::MoveAlong {
+                        unit: player_unit,
+                        path,
+                    },
+                });
+            for _ in 0..4 {
+                app.update();
+            }
+        };
+
+        walk(
+            &mut app,
+            approach.iter().map(|surface| surface.pos).collect(),
+        );
+        assert_eq!(standing_pos::<Player>(&mut app), Some(conflict_position));
+        assert_eq!(
+            *app.world().resource::<State<Mode>>().get(),
+            Mode::Exploring
+        );
+
+        walk(
+            &mut app,
+            approach.iter().rev().map(|surface| surface.pos).collect(),
+        );
+        assert_eq!(standing_pos::<Player>(&mut app), Some(party_position));
+        assert_eq!(
+            *app.world().resource::<State<Mode>>().get(),
+            Mode::Exploring
+        );
     }
 
     /// Sim seeds ride the same install path as the map seed, and the same

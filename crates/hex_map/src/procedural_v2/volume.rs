@@ -1,12 +1,4 @@
 //! Recipe-independent semantic volume model for procedural generator V2.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "native recipes consume the generic V2 voxelizer in sequential PRs"
-    )
-)]
-
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bevy::platform::collections::{HashMap, HashSet};
@@ -528,6 +520,13 @@ pub(crate) struct VoxelizedTerrain {
 }
 
 /// Resolves semantic materials only after a plan has passed validation.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "production materialization enters through the validated-selection boundary"
+    )
+)]
 pub(crate) fn voxelize(
     plan: &TerrainVolumePlan,
     palette: &TerrainPalette,

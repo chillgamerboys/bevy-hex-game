@@ -54,6 +54,53 @@ way — the rebuild is quick.
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
 
+## Deterministic review captures
+
+Renderer captures are compiled only with the default-off `map-review` feature. Normal
+development and release binaries ignore every `HEX_REVIEW_*` variable. A complete
+capture names one scenario and one PNG:
+
+```sh
+HEX_REVIEW_SCENARIO="Caves" \
+HEX_REVIEW_CAPTURE=".context/caves/default.png" \
+cargo run -p hex_game --release --features map-review
+```
+
+The optional review overrides are:
+
+| Variable | Effect |
+|---|---|
+| `HEX_REVIEW_SEED` | Replaces the configured seed of a seeded scenario |
+| `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
+| `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
+| `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
+| `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
+| `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
+
+`HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
+`HEX_REVIEW_CUTAWAY` require `HEX_REVIEW_CAPTURE`. The focus override resolves the
+anchor's full `TilePos`, not just its horizontal coordinate, so it can target an
+underground floor beneath a surface. It also applies the selected actor's normal
+solidity and headroom rules. An unknown anchor or one the actor cannot stand on fails
+the review process instead of silently capturing the wrong place. The full cutaway
+still requires the selected actor to occupy an exact interior surface and affects
+only that interior; ordinary gameplay retains the local cutaway.
+
+For example, this exposes the complete generated cave network for a top-down overview:
+
+```sh
+HEX_REVIEW_SCENARIO="Caves" \
+HEX_REVIEW_CAPTURE=".context/caves/full-overview.png" \
+HEX_REVIEW_FOCUS_ANCHOR="conflict_center" \
+HEX_REVIEW_VIEW="top-down" \
+HEX_REVIEW_CUTAWAY="full" \
+cargo run -p hex_game --release --features map-review
+```
+
+Use the unoccupied `conflict_center` anchor for a neutral cave overview.
+`deep_chamber` is also the configured enemy position, so relocating the player there
+can start combat before capture.
+
 ## The format
 
 These are RON files. Three rules cover almost everything:
@@ -151,12 +198,83 @@ two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`;
 invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
 this recipe in the shipped scenario library.
 
-The remaining V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`.
-Their settings schemas are reserved while those generators land sequentially; selecting
-an unavailable recipe reports a setup failure rather than publishing partial terrain.
-Recipe and environment combinations are validated together: Mountains uses `Frozen`,
-Caves uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded
-settings active.
+`LayeredSkyIslands` finalizes the same Hills ground before sampling any independent
+`sky.*` stream, then adds three primary islands, one or two satellites, and a two-wide
+upper bridge network:
+
+```ron
+recipe: LayeredSkyIslands((
+    ground: (
+        valley_level: 15,
+        max_relief: 8,
+        hills_per_bank: 3,
+    ),
+    min_clearance: 22,
+    upper_coverage_percent: 24,
+)),
+```
+
+The upper layer covers 15–25% of map columns, remains an exact special-movement
+region, and cannot replace the finalized ground, its anchors, or its protected
+crossing approaches. The selected scenario uses 22 clear levels and 24% coverage for
+a distinct high city layer, varied walkable terraces, and tapered stone undersides.
+The original eight-level-clearance construction remains deterministic and loadable
+for seed compatibility. The recipe supports `TemperateGrassland` and `Frozen`.
+
+`Mountains` builds a broad, sharp frozen massif with explicit ordinary-walker routes
+instead of projecting the whole map into gentle slopes:
+
+```ron
+terrain: Procedural((
+    generator_version: 2,
+    environment: Frozen,
+    recipe: Mountains((
+        base_level: 15,
+        relief: 24,
+        peak_count: 7,
+    )),
+)),
+```
+
+It publishes a two-wide elevated saddle and a separated low-valley bypass, with no
+river or crossing structures. Inaccessible summit components are exact
+special-movement regions; naturally walkable peaks remain ordinary terrain. Valid
+settings use relief `14..=24` and three through seven peaks. The low-relief
+compatibility path remains deterministic. The selected scenario uses the upper bounds
+to form a branched massif across most of the map and distribute peaks across multiple
+heights. Its player-facing edge includes a substantial, three-level walker-connected
+foothill apron, so ordinary access extends into the range instead of ending at the two
+through routes.
+
+`Caves` carves one ordinary-walkable underground network beneath a varied rocky
+surface:
+
+```ron
+terrain: Procedural((
+    generator_version: 2,
+    environment: Rocky,
+    recipe: Caves((
+        surface_level: 17,
+        cave_floor_level: 6,
+        chamber_count: 12,
+    )),
+)),
+```
+
+It publishes a two-wide descending entrance, a rooted network of six to twelve
+chambers, at least three clear levels in critical corridors, at least four in
+chambers, and at least three solid roof levels. The selected scenario uses twelve
+chambers, two floor bands, loop corridors, varied chamber heights, and the most
+developed rocky surface. Six-through-eight-room settings retain their deterministic
+compatibility geometry.
+Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
+underground floor cannot be confused with the surface above it. The hostile remains
+inside the deepest chamber on the floor with the greatest minimum horizontal
+separation from the complete ramp and entry connector. A live scenario regression
+checks that placement against the loaded combat policy so combat through rock cannot
+interrupt entry. Recipe and environment combinations are validated together:
+Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
+the previous valid hot-reloaded settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

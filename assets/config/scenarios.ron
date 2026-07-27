@@ -93,9 +93,29 @@
         ),
         (
             name: "Sky Islands",
-            blurb: "A floating-island probe with a connected critical route and optional unreachable islands.",
+            blurb: "A playable hills map beneath a high, flight-gated city of floating islands.",
             world: "config/worlds/procedural-sky-islands.ron",
             generation_seed: Some(94445606),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
+            name: "Mountains",
+            blurb: "A broad frozen massif split by a high saddle and a longer low-valley bypass.",
+            world: "config/worlds/procedural-mountains.ron",
+            generation_seed: Some(129704046),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
+            name: "Caves",
+            blurb: "A varied rocky surface opening into a dense network of full-height underground passages.",
+            world: "config/worlds/procedural-caves.ron",
+            generation_seed: Some(736283041),
             units: (
                 player: Anchor("party_start"),
                 enemy: Anchor("hostile_start"),

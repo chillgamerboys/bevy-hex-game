@@ -11,7 +11,7 @@ use hex_core::{
 };
 
 use super::recipe::{
-    materialize_selection, MaterializedSelection, RecipePlan, RecipeSelection,
+    materialize_selection, MaterializedSelection, RecipePlan, RecipeSelection, ReportMetrics,
     ValidatedRecipeSelection, MAX_REPAIR_ROUNDS,
 };
 use super::volume::{
@@ -35,33 +35,18 @@ pub(crate) struct HillsMetrics {
     pub(crate) tactical: TacticalMetrics,
 }
 
+impl ReportMetrics for HillsMetrics {
+    fn tactical(&self) -> TacticalMetrics {
+        self.tactical
+    }
+}
+
 /// Hills-only semantic facts retained for later layered recipes and diagnostics.
 #[derive(Debug, Clone)]
 pub(crate) struct HillsMetadata {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the next Layered Sky Islands recipe consumes the finalized Hills topology"
-        )
-    )]
     pub(crate) topology: V1HillsTopology,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "layered recipes retain imported ground repair diagnostics"
-        )
-    )]
-    repair_actions: Vec<String>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "layered recipes retain selected ground tactical metrics"
-        )
-    )]
-    metrics: HillsMetrics,
+    pub(crate) repair_actions: Vec<String>,
+    pub(crate) metrics: HillsMetrics,
 }
 
 /// Generates and materializes V2 Hills while V1 remains the parity oracle.

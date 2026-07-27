@@ -147,6 +147,41 @@ materialization. Equivalent V1 and V2 Hills settings therefore select the same
 candidate and retain the same map fingerprint. New recipes build the volume directly;
 V1 remains loadable for saved-seed compatibility.
 
+Layered Sky Islands consumes that finalized Hills selection before it samples any
+`sky.*` stream. Eight native upper-layer candidates append floating solid masses and
+two-wide metal lanes without changing a ground column prefix, ground surface, anchor,
+interior, river crossing, or protected approach. The selected upper footprint is
+15–25% of map columns, has at least eight empty levels below it, and is published as
+one exact flight-gated `SpecialMovementRegion`. Its combined `MapViewHint` frames both
+ground play and the upper network. The selected scenario uses 22 clear levels and
+24% coverage, with independently varied island footprints, walkable terraces, and
+tapered stone underbodies. The original eight-level-clearance path remains frozen for
+seed compatibility.
+
+Mountains supports the original frozen ridge for compatibility and broader expanded
+massifs. The selected scenario raises 60% of the map above the base, uses a
+meandering edge-to-edge spine with four long branches, and distributes seven
+non-collinear peaks across varied summit levels. The ordinary network keeps a
+two-wide high pass and a separated two-wide low bypass. A substantial three-level
+foothill apron on the player side is walker-connected beyond those routes; the rest
+of the range deliberately retains cliff edges. It has no hazard fill or crossing
+material. Only summit components that are actually disconnected under the shared
+walker predicate are published as special-movement terrain, while the generated view
+looks across the range so both routes remain legible.
+
+Caves keeps a playable rocky surface above one rooted underground network. A two-wide
+open entrance descends one level per row to six through twelve chambers joined by
+two-wide critical corridors. The selected scenario has twelve chambers, selected
+loop connections, two walkable floor bands, varied ceiling levels, larger chambers,
+and five levels of surface relief. The original six-through-eight-room path remains
+frozen for compatibility. Every corridor retains at least three clear levels, every
+chamber at least four, and cutaway roofs remain at least three solid levels thick.
+The party anchor names the surface entrance while the hostile anchor names the
+deepest main chamber. The hostile's exact floor maximizes its minimum horizontal
+distance from the ramp and entry connector; the shipped scenario checks that floor
+against the live combat policy so entry cannot be interrupted through an opaque roof.
+Both anchors are validated on the same exact walker graph as live movement.
+
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
 non-standable and may associate it with an interior. Anchors also name exact

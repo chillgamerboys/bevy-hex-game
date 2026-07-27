@@ -19,6 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_assets::{Scenario, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
 
@@ -29,6 +30,11 @@ use crate::menus::widgets::{
 use crate::scenarios::ScenarioToLoad;
 
 use super::{despawn_screen, screen_root};
+
+/// The scenario table and the static controls below it share this alignment.
+const SCENARIO_LIST_WIDTH: f32 = 564.0;
+/// Keeps the menu compact on tall windows while flexing down on the default 720p view.
+const SCENARIO_LIST_MAX_HEIGHT: f32 = 600.0;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<SessionSeeds>();
@@ -179,17 +185,25 @@ fn spawn_title(
                 .spawn((
                     Name::new("Scenario List"),
                     ScenarioList,
+                    ScrollArea,
                     Node {
+                        width: Val::Px(SCENARIO_LIST_WIDTH),
+                        min_height: Val::Px(0.0),
+                        max_height: Val::Px(SCENARIO_LIST_MAX_HEIGHT),
+                        flex_basis: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_shrink: 1.0,
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(8.0),
                         align_items: AlignItems::Center,
+                        overflow: Overflow::scroll_y(),
                         ..default()
                     },
                 ))
                 .with_children(|list| {
                     list.spawn((ListPlaceholder, blurb(&assets, "loading scenarios...")));
                 });
-            parent.spawn(divider(564.0));
+            parent.spawn(divider(SCENARIO_LIST_WIDTH));
             parent
                 .spawn((button("Lattice Demo"), OpensLatticeDemo))
                 .insert(BorderColor::all(ACCENT_EDGE))
@@ -276,7 +290,7 @@ fn rebuild_scenario_list(
                 Name::new("Scenario Entry"),
                 ScenarioEntry,
                 Node {
-                    width: Val::Px(564.0),
+                    width: Val::Px(SCENARIO_LIST_WIDTH),
                     flex_direction: FlexDirection::Row,
                     column_gap: Val::Px(12.0),
                     align_items: AlignItems::Center,
@@ -432,6 +446,11 @@ mod tests {
         }
     }
 
+    fn shipped_library() -> ScenarioLibrary {
+        ron::from_str(include_str!("../../../../assets/config/scenarios.ron"))
+            .expect("the shipped scenario library should parse")
+    }
+
     fn test_app_with(library: ScenarioLibrary) -> App {
         let mut app = App::new();
         // `InputPlugin` because `handle_input` reads `ButtonInput<KeyCode>`, which
@@ -468,6 +487,35 @@ mod tests {
             .world_mut()
             .query_filtered::<Entity, With<StartsScenario>>();
         query.iter(app.world()).count()
+    }
+
+    fn scenario_entries(app: &mut App) -> usize {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<Entity, With<ScenarioEntry>>();
+        query.iter(app.world()).count()
+    }
+
+    fn assert_scrollable_scenario_list(app: &mut App) {
+        let world = app.world_mut();
+        let mut lists = world.query_filtered::<
+            (&Node, Option<&ScrollPosition>),
+            (With<ScenarioList>, With<ScrollArea>),
+        >();
+        let (node, scroll) = lists
+            .single(world)
+            .expect("the title should have exactly one scrollable scenario list");
+
+        assert_eq!(node.width, Val::Px(SCENARIO_LIST_WIDTH));
+        assert_eq!(node.min_height, Val::Px(0.0));
+        assert_eq!(node.max_height, Val::Px(SCENARIO_LIST_MAX_HEIGHT));
+        assert_eq!(node.flex_basis, Val::Px(0.0));
+        assert!((node.flex_grow - 1.0).abs() <= f32::EPSILON);
+        assert_eq!(node.overflow.y, OverflowAxis::Scroll);
+        assert!(
+            scroll.is_some(),
+            "ScrollArea should require the ScrollPosition its wheel observer updates"
+        );
     }
 
     fn button_named(app: &mut App, name: &str) -> Entity {
@@ -537,6 +585,26 @@ mod tests {
         assert_eq!(notices.iter(app.world()).count(), 1);
     }
 
+    /// The real library is large enough to need a viewport at the default window height.
+    /// Every row must still be built; scrolling changes presentation, not content.
+    #[test]
+    fn shipped_scenarios_build_all_rows_inside_a_scroll_area() {
+        let library = shipped_library();
+        assert_eq!(
+            library.scenarios.len(),
+            9,
+            "update the title-screen coverage when the shipped scenario count changes"
+        );
+        let expected_rows = library.scenarios.len();
+        let mut app = test_app_with(library);
+
+        go_to(&mut app, Screen::Title);
+
+        assert_eq!(scenario_entries(&mut app), expected_rows);
+        assert_eq!(buttons(&mut app), expected_rows);
+        assert_scrollable_scenario_list(&mut app);
+    }
+
     /// The menu still has its scenarios when you come back to it.
     ///
     /// Reported from play: quitting to the title left it stuck on "loading scenarios…"
@@ -556,6 +624,7 @@ mod tests {
             1,
             "the first visit should list a scenario"
         );
+        assert_scrollable_scenario_list(&mut app);
 
         go_to(&mut app, Screen::Gameplay);
         assert_eq!(
@@ -570,6 +639,7 @@ mod tests {
             1,
             "coming back left the menu empty — the list was never repopulated"
         );
+        assert_scrollable_scenario_list(&mut app);
     }
 
     /// A library that arrives after the screen does still gets listed.

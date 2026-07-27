@@ -21,7 +21,7 @@ use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
-const SKY_UPPER_VERTICAL_BUDGET: Level = 8;
+const SKY_UPPER_VERTICAL_BUDGET: Level = 20;
 
 /// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
@@ -142,7 +142,7 @@ pub struct HillsSettings {
     pub hills_per_bank: u8,
 }
 
-/// Parameters for the structural sky-island probe.
+/// Parameters for the retained V1 sky-island landform.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SkyIslandsSettings {
     /// Surface level of the critical island chain.
@@ -186,7 +186,7 @@ pub struct CrossingSettings {
     pub bridge_level: Level,
 }
 
-/// Parameters for the linked-island structural probe.
+/// Parameters for the retained V1 linked-island topology.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LinkedIslandsSettings {
     /// Width of every required bridge in cells.
@@ -285,7 +285,7 @@ pub struct MountainsSettings {
     pub base_level: Level,
     /// Difference between the base and the tallest peak.
     pub relief: Level,
-    /// Number of sharp peaks distributed along the main ridge.
+    /// Number of sharp peaks distributed through the range.
     pub peak_count: u8,
 }
 
@@ -698,11 +698,11 @@ impl MountainsSettings {
         if self.base_level < 5 {
             return Err("Mountains base_level must leave room for bedrock and strata".to_owned());
         }
-        if !(14..=16).contains(&self.relief) {
-            return Err("Mountains relief must be between 14 and 16".to_owned());
+        if !(14..=24).contains(&self.relief) {
+            return Err("Mountains relief must be between 14 and 24".to_owned());
         }
-        if !(3..=5).contains(&self.peak_count) {
-            return Err("Mountains peak_count must be between 3 and 5".to_owned());
+        if !(3..=7).contains(&self.peak_count) {
+            return Err("Mountains peak_count must be between 3 and 7".to_owned());
         }
         let Some(highest_surface) = self.base_level.checked_add(self.relief) else {
             return Err("Mountains level relationship overflows Level".to_owned());
@@ -727,8 +727,8 @@ impl CavesSettings {
         if !(6..=8).contains(&self.cave_floor_level) {
             return Err("Caves cave_floor_level must be between 6 and 8".to_owned());
         }
-        if !(6..=8).contains(&self.chamber_count) {
-            return Err("Caves chamber_count must be between 6 and 8".to_owned());
+        if !(6..=12).contains(&self.chamber_count) {
+            return Err("Caves chamber_count must be between 6 and 12".to_owned());
         }
         let Some(vertical_space) = self.surface_level.checked_sub(self.cave_floor_level) else {
             return Err("Caves cave_floor_level must be below the surface".to_owned());
@@ -1215,7 +1215,15 @@ mod tests {
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
-                1,
+                2,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
+                2,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-caves.ron"),
+                2,
             ),
         ] {
             let settings: MapSettings =
@@ -1350,6 +1358,101 @@ mod tests {
             };
             assert_eq!(procedural.generator_version(), 2);
             assert!(matches!(procedural, ProceduralSettings::V2(_)));
+        }
+    }
+
+    #[test]
+    fn expanded_recipe_settings_validate_without_loosening_their_bounds() {
+        for (min_clearance, upper_coverage_percent) in [(14, 18), (18, 21), (22, 24)] {
+            let settings = MapSettings {
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V2(
+                    ProceduralV2Settings {
+                        environment: V2EnvironmentSettings::TemperateGrassland,
+                        recipe: V2RecipeSettings::LayeredSkyIslands(LayeredSkyIslandsSettings {
+                            ground: V2HillsSettings {
+                                valley_level: 15,
+                                max_relief: 8,
+                                hills_per_bank: 3,
+                            },
+                            min_clearance,
+                            upper_coverage_percent,
+                        }),
+                    },
+                )),
+            };
+            assert!(
+                settings.validate().is_ok(),
+                "expanded sky settings {min_clearance}/{upper_coverage_percent} should validate"
+            );
+        }
+
+        for (relief, peak_count) in [(18, 5), (21, 6), (24, 7)] {
+            let settings = MapSettings {
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V2(
+                    ProceduralV2Settings {
+                        environment: V2EnvironmentSettings::Frozen,
+                        recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                            base_level: 15,
+                            relief,
+                            peak_count,
+                        }),
+                    },
+                )),
+            };
+            assert!(
+                settings.validate().is_ok(),
+                "expanded mountain settings {relief}/{peak_count} should validate"
+            );
+        }
+
+        for (surface_level, cave_floor_level, chamber_count) in
+            [(16, 7, 9), (16, 6, 10), (17, 6, 12)]
+        {
+            let settings = MapSettings {
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V2(
+                    ProceduralV2Settings {
+                        environment: V2EnvironmentSettings::Rocky,
+                        recipe: V2RecipeSettings::Caves(CavesSettings {
+                            surface_level,
+                            cave_floor_level,
+                            chamber_count,
+                        }),
+                    },
+                )),
+            };
+            assert!(
+                settings.validate().is_ok(),
+                "expanded cave settings {surface_level}/{cave_floor_level}/{chamber_count} should validate"
+            );
+        }
+
+        for (relief, peak_count) in [(13, 5), (25, 5), (18, 2), (18, 8)] {
+            let settings = MountainsSettings {
+                base_level: 15,
+                relief,
+                peak_count,
+            };
+            assert!(
+                settings.validate(12).is_err(),
+                "mountain bounds should reject {relief}/{peak_count}"
+            );
+        }
+        for chamber_count in [5, 13] {
+            let settings = CavesSettings {
+                surface_level: 17,
+                cave_floor_level: 6,
+                chamber_count,
+            };
+            assert!(
+                settings.validate(12).is_err(),
+                "cave bounds should reject {chamber_count} chambers"
+            );
         }
     }
 
@@ -1576,7 +1679,7 @@ mod tests {
         );
 
         let sky = include_str!("../../../assets/config/worlds/procedural-sky-islands.ron")
-            .replacen("surface_level: 15", "surface_level: 125", 1);
+            .replacen("valley_level: 15", "valley_level: 125", 1);
         let sky_error = ron::from_str::<MapSettings>(&sky)
             .expect_err("sky islands must reserve bounded space for optional relief");
         assert!(

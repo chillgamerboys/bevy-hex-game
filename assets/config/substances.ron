@@ -59,8 +59,8 @@
             diggable: true,
         ),
 
-        // Structural-probe materials for procedural environments. Their behaviour is
-        // intentionally simple until temperature, slipping, and hazards exist.
+        // Procedural-environment materials. Their behaviour is intentionally simple
+        // until temperature, slipping, and hazards exist.
         "snow": (
             color: (0.82, 0.88, 0.92),
             solid: true,
