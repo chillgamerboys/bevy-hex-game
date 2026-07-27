@@ -1215,7 +1215,7 @@ mod tests {
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
-                1,
+                2,
             ),
         ] {
             let settings: MapSettings =
@@ -1576,7 +1576,7 @@ mod tests {
         );
 
         let sky = include_str!("../../../assets/config/worlds/procedural-sky-islands.ron")
-            .replacen("surface_level: 15", "surface_level: 125", 1);
+            .replacen("valley_level: 15", "valley_level: 125", 1);
         let sky_error = ron::from_str::<MapSettings>(&sky)
             .expect_err("sky islands must reserve bounded space for optional relief");
         assert!(

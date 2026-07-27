@@ -39,10 +39,10 @@ use hex_core::{
 };
 use hex_map::{
     CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
-    LinkedIslandsSettings, MapSettings, MountainsSettings, PerlinSettings, PerlinStepSettings,
-    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings,
-    SubstanceRun, TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings,
-    V2RecipeSettings, VoxelMap,
+    LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings, MountainsSettings,
+    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
+    ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings, TerrainSettings,
+    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -223,6 +223,27 @@ fn sky_islands_app() -> App {
     app
 }
 
+fn v2_layered_sky_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::LayeredSkyIslands(LayeredSkyIslandsSettings {
+                ground: V2HillsSettings {
+                    valley_level: 15,
+                    max_relief: 8,
+                    hills_per_bank: 3,
+                },
+                min_clearance: 8,
+                upper_coverage_percent: 20,
+            }),
+        })),
+    });
+    app
+}
+
 #[test]
 fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
     let mut app = procedural_app();
@@ -327,6 +348,46 @@ fn sky_region_registry_contains_exact_generated_surfaces() {
         .world()
         .resource::<VoxelMap>()
         .get(*position)
+        .is_air()));
+}
+
+#[test]
+fn v2_layered_sky_publishes_ground_anchors_upper_regions_and_combined_view() {
+    let mut hills = v2_hills_app();
+    enter_gameplay(&mut hills);
+    let expected_anchors: BTreeMap<_, _> = hills
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(name, position)| (name.as_str().to_owned(), position))
+        .collect();
+
+    let mut app = v2_layered_sky_app();
+    enter_gameplay(&mut app);
+
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.candidates_evaluated, 8);
+    let actual_anchors: BTreeMap<_, _> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(name, position)| (name.as_str().to_owned(), position))
+        .collect();
+    assert_eq!(actual_anchors, expected_anchors);
+
+    let regions = app.world().resource::<SpecialMovementRegions>();
+    assert!(!regions.is_empty());
+    assert!(regions.iter().all(|(position, _region)| !app
+        .world()
+        .resource::<VoxelMap>()
+        .get(position)
         .is_air()));
 }
 

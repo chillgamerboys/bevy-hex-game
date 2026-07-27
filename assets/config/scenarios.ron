@@ -92,7 +92,7 @@
         ),
         (
             name: "Sky Islands",
-            blurb: "A floating-island probe with a connected critical route and optional unreachable islands.",
+            blurb: "A playable hills map beneath a separate flight-gated network of floating islands.",
             world: "config/worlds/procedural-sky-islands.ron",
             generation_seed: Some(94445606),
             units: (

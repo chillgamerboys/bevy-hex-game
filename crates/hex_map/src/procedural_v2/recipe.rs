@@ -1,12 +1,4 @@
 //! Recipe-independent candidate selection for procedural generator V2.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the generic V2 runner becomes live with the first native recipe"
-    )
-)]
-
 use std::fmt::Debug;
 use std::ops::Deref;
 
@@ -18,24 +10,26 @@ use xxhash_rust::xxh3::xxh3_64;
 use super::seed::SeedStreams;
 use super::volume::{voxelize_prevalidated, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
 use super::V2GenerationError;
+use crate::procedural::TacticalMetrics;
 use crate::terrain::TerrainPalette;
 use crate::voxel::VoxelMap;
 
 pub(crate) const CANDIDATE_COUNT: u8 = 8;
 pub(crate) const MAX_REPAIR_ROUNDS: u8 = 4;
 
+/// Supplies the stable tactical subset used by the cross-version generation report.
+///
+/// Recipe-specific metrics remain strongly typed. This adapter is the only shared
+/// reporting surface, so Mountains and Caves do not have to pretend their semantic
+/// measurements are Hills measurements.
+pub(crate) trait ReportMetrics {
+    fn tactical(&self) -> TacticalMetrics;
+}
+
 /// Stable inputs available while constructing or repairing one candidate.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CandidateContext {
     pub(crate) grid_radius: u32,
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "mock recipes exercise named streams rather than the raw seed"
-        )
-    )]
-    pub(crate) seed: u64,
     pub(crate) candidate: u8,
     pub(crate) streams: SeedStreams,
 }
@@ -45,7 +39,6 @@ impl CandidateContext {
     fn new(grid_radius: u32, seed: u64, candidate: u8) -> Self {
         Self {
             grid_radius,
-            seed,
             candidate,
             streams: SeedStreams::new(seed, candidate),
         }
@@ -54,26 +47,16 @@ impl CandidateContext {
 
 /// Stable inputs available while constructing a separately authored fallback.
 ///
-/// Native V2 fallbacks should derive geometry without sampling the seed. The seed is
-/// retained for compatibility recipes whose frozen material classification included
-/// it even on an otherwise canonical fallback.
+/// Native V2 fallbacks derive geometry without sampling the requested seed.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FallbackContext {
     pub(crate) grid_radius: u32,
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "mock canonical fallbacks deliberately ignore the requested seed"
-        )
-    )]
-    pub(crate) seed: u64,
 }
 
 impl FallbackContext {
     #[must_use]
-    const fn new(grid_radius: u32, seed: u64) -> Self {
-        Self { grid_radius, seed }
+    const fn new(grid_radius: u32) -> Self {
+        Self { grid_radius }
     }
 }
 
@@ -120,6 +103,13 @@ pub(crate) struct RecipePlan<M> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CandidateAttemptError {
     Rejected(Vec<String>),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "fatal native-recipe construction is exercised by the common runner tests"
+        )
+    )]
     Fatal(V2GenerationError),
 }
 
@@ -130,6 +120,13 @@ impl CandidateAttemptError {
     }
 
     #[must_use]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "fatal native-recipe construction is exercised by the common runner tests"
+        )
+    )]
     pub(crate) const fn fatal(error: V2GenerationError) -> Self {
         Self::Fatal(error)
     }
@@ -157,6 +154,13 @@ impl<M> RecipeValidation<M> {
 /// Whether a bounded repair changed semantic intent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RepairOutcome {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "Layered Sky Islands constructs hard-valid candidates without local repairs"
+        )
+    )]
     Changed(String),
     NoChange,
 }
@@ -252,6 +256,12 @@ impl<M, V> ValidatedRecipeSelection<M, V> {
 
     pub(crate) fn into_unvalidated(self) -> RecipeSelection<M, V> {
         self.0
+    }
+
+    /// Adds report-only facts without reopening the validated semantic plan.
+    pub(crate) fn prepend_diagnostics(&mut self, note: String, inherited_fallback: bool) {
+        self.0.notes.insert(0, note);
+        self.0.used_fallback |= inherited_fallback;
     }
 
     const fn from_recipe_validation(selection: RecipeSelection<M, V>) -> Self {
@@ -493,7 +503,7 @@ where
         ));
     }
 
-    let fallback_context = FallbackContext::new(grid_radius, seed);
+    let fallback_context = FallbackContext::new(grid_radius);
     let fallback = recipe.canonical_fallback(fallback_context, settings)?;
     let fallback_repair_actions = bounded_preexisting_repairs(recipe, &fallback)?;
     let validation = validate_plan(

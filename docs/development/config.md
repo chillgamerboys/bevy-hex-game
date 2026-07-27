@@ -146,12 +146,31 @@ two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`;
 invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
 this recipe in the shipped scenario library.
 
-The remaining V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`.
-Their settings schemas are reserved while those generators land sequentially; selecting
-an unavailable recipe reports a setup failure rather than publishing partial terrain.
-Recipe and environment combinations are validated together: Mountains uses `Frozen`,
-Caves uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded
-settings active.
+`LayeredSkyIslands` finalizes the same Hills ground before sampling any independent
+`sky.*` stream, then adds three primary islands, one or two satellites, and a two-wide
+upper bridge network:
+
+```ron
+recipe: LayeredSkyIslands((
+    ground: (
+        valley_level: 15,
+        max_relief: 8,
+        hills_per_bank: 3,
+    ),
+    min_clearance: 8,
+    upper_coverage_percent: 20,
+)),
+```
+
+The upper layer covers 15–25% of map columns, remains an exact special-movement
+region, and cannot replace the finalized ground, its anchors, or its protected
+crossing approaches. It supports `TemperateGrassland` and `Frozen`.
+
+The remaining V2 recipe forms are `Mountains` and `Caves`. Their settings schemas are
+reserved while those generators land sequentially; selecting an unavailable recipe
+reports a setup failure rather than publishing partial terrain. Recipe and environment
+combinations are validated together: Mountains uses `Frozen`, Caves uses `Rocky`, and
+invalid combinations leave the previous valid hot-reloaded settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

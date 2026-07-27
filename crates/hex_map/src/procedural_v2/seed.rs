@@ -64,6 +64,13 @@ impl SeedStream<'_> {
     }
 
     /// Maps a sample into an inclusive integer range.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the sequential Mountains recipe consumes signed stage ranges"
+        )
+    )]
     pub(crate) fn range_i32(self, index: u64, min: i32, max: i32) -> Result<i32, String> {
         if min > max {
             return Err(format!("invalid deterministic range {min}..={max}"));

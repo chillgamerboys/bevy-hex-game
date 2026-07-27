@@ -147,6 +147,14 @@ materialization. Equivalent V1 and V2 Hills settings therefore select the same
 candidate and retain the same map fingerprint. New recipes build the volume directly;
 V1 remains loadable for saved-seed compatibility.
 
+Layered Sky Islands consumes that finalized Hills selection before it samples any
+`sky.*` stream. Eight native upper-layer candidates append floating solid masses and
+two-wide metal lanes without changing a ground column prefix, ground surface, anchor,
+interior, river crossing, or protected approach. The selected upper footprint is
+15–25% of map columns, has at least eight empty levels below it, and is published as
+one exact flight-gated `SpecialMovementRegion`. Its combined `MapViewHint` frames both
+ground play and the upper network.
+
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
 non-standable and may associate it with an interior. Anchors also name exact

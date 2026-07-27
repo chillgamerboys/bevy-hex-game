@@ -6,14 +6,8 @@
 
 mod hills;
 mod recipe;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the V2 seed API is consumed by the sequential recipe PRs"
-    )
-)]
 mod seed;
+mod sky;
 mod volume;
 
 use std::fmt;
@@ -40,22 +34,8 @@ pub(crate) enum V2GenerationError {
     /// Recipe inputs or imported compatibility metadata violated the V2 contract.
     RecipeContract(String),
     /// Candidate construction encountered an error that cannot be treated as rejection.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "native V2 recipes use fatal candidate construction errors"
-        )
-    )]
     FatalCandidateConstruction { candidate: u8, source: Box<Self> },
     /// A bounded repair encountered an error that must stop the complete generation run.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "native V2 recipes use fatal bounded-repair errors"
-        )
-    )]
     FatalCandidateRepair {
         candidate: u8,
         round: u8,
@@ -145,19 +125,44 @@ pub(crate) fn build(
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<ProceduralBuild, V2GenerationError> {
     let started = Instant::now();
-    let selection = match settings.recipe {
-        V2RecipeSettings::Hills(_) => {
-            hills::build(grid_radius, level_height, settings, seed, palette, is_solid)?
+    match &settings.recipe {
+        V2RecipeSettings::Hills(_) => finish_build(
+            hills::build(grid_radius, level_height, settings, seed, palette, is_solid)?,
+            grid_radius,
+            settings,
+            seed,
+            started,
+        ),
+        V2RecipeSettings::LayeredSkyIslands(_) => finish_build(
+            sky::build(grid_radius, level_height, settings, seed, palette, is_solid)?,
+            grid_radius,
+            settings,
+            seed,
+            started,
+        ),
+        V2RecipeSettings::Mountains(_) | V2RecipeSettings::Caves(_) => {
+            Err(unavailable_recipe(settings))
         }
-        _ => return Err(unavailable_recipe(settings)),
-    };
+    }
+}
+
+fn finish_build<M, V>(
+    selection: recipe::MaterializedSelection<M, V>,
+    grid_radius: u32,
+    settings: &ProceduralV2Settings,
+    seed: u64,
+    started: Instant,
+) -> Result<ProceduralBuild, V2GenerationError>
+where
+    V: recipe::ReportMetrics,
+{
     let recipe::MaterializedSelection {
         map,
         anchors,
         special_regions,
         interiors,
         view_hint,
-        metadata: _,
+        metadata,
         metrics,
         selected_candidate,
         candidates_evaluated,
@@ -167,6 +172,7 @@ pub(crate) fn build(
         notes,
         map_fingerprint,
     } = selection;
+    drop(metadata);
     let repair_rounds = u8::try_from(repair_actions.len()).unwrap_or(u8::MAX);
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let report = GenerationReport {
@@ -180,7 +186,7 @@ pub(crate) fn build(
         used_fallback,
         settings_fingerprint: settings_fingerprint(grid_radius, settings),
         map_fingerprint,
-        metrics: metrics.tactical,
+        metrics: metrics.tactical(),
         elapsed_micros,
         notes,
     };
