@@ -81,19 +81,23 @@ pub struct UiAssets {
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.add_systems(PreStartup, load_ui_assets);
+    // Inserted at plugin build rather than from a `PreStartup` system: the
+    // initial state's `OnEnter(Screen::Splash)` runs during startup, before a
+    // startup system's commands would flush, and `spawn_splash` reads this
+    // with a plain `Res` — the exact absent-resource panic this project has
+    // shipped before. Existing before any schedule runs makes hard `Res`
+    // correct everywhere.
+    let asset_server = app.world().resource::<AssetServer>();
+    let assets = UiAssets {
+        display: asset_server.load("fonts/Cinzel.ttf"),
+        body: asset_server.load("fonts/Inter.ttf"),
+        hex_cell: asset_server.load("ui/hex-cell.png"),
+    };
+    app.insert_resource(assets);
     // Not gated on any state: buttons belong to whatever screen spawned them, and that
     // screen despawns them on exit. A run condition here would only add a way for the
     // colours to get stuck.
     app.add_systems(Update, paint_interactions);
-}
-
-fn load_ui_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
-    commands.insert_resource(UiAssets {
-        display: asset_server.load("fonts/Cinzel.ttf"),
-        body: asset_server.load("fonts/Inter.ttf"),
-        hex_cell: asset_server.load("ui/hex-cell.png"),
-    });
 }
 
 /// A screen title in the display face.
@@ -198,9 +202,9 @@ pub fn button(name: &'static str) -> impl Bundle {
 /// Fixed dimensions so its row cannot resize when a numeric label changes, and
 /// short enough that a table of them keeps an even rhythm.
 #[must_use]
-pub fn small_button(name: &'static str) -> impl Bundle {
+pub fn small_button(name: impl Into<String>) -> impl Bundle {
     (
-        Name::new(name),
+        Name::new(name.into()),
         Button,
         Node {
             width: Val::Px(132.0),

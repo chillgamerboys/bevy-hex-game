@@ -785,11 +785,17 @@ fn spawn_control_panel(
                             Ok(plan) => {
                                 let cost: u32 =
                                     plan.drains.values().map(|&mana| u32::from(mana)).sum();
-                                row.spawn((small_button("Cast"), CastsSpell(coord)))
-                                    .with_children(|cast| {
-                                        cast.spawn(blurb(assets, "cast"));
-                                        cast.spawn(fine(assets, format!("{cost} mana")));
-                                    });
+                                // The spell's name in the button `Name` gives
+                                // walk scripts a stable handle — entity order
+                                // is not stable across UI rebuilds.
+                                row.spawn((
+                                    small_button(format!("Cast {name}")),
+                                    CastsSpell(coord),
+                                ))
+                                .with_children(|cast| {
+                                    cast.spawn(blurb(assets, "cast"));
+                                    cast.spawn(fine(assets, format!("{cost} mana")));
+                                });
                             }
                             Err(blocked) => {
                                 row.spawn((
