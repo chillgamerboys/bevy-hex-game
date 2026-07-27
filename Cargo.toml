@@ -6,6 +6,7 @@ members = ["crates/*"]
 # opts in with `foo = { workspace = true }` and states its own features.
 [workspace.dependencies]
 hex_core = { path = "crates/hex_core" }
+hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
 hex_anim = { path = "crates/hex_anim" }
 hex_combat = { path = "crates/hex_combat" }

@@ -7,6 +7,7 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 ```
@@ -21,7 +22,8 @@ will, and no amount of documentation prevents it. A compiler error does.
 
 | Crate | Holds | Depends on |
 |---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets | Bevy sub-crates only — no renderer |
+| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer |
+| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` |
 | `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
 | `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
@@ -41,6 +43,28 @@ The boundary does not make malformed output harmless. Those crates consume the
 components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can still
 break movement or presentation. Cargo protects the dependency graph; tests and visual
 review protect the component contract.
+
+### `hex_lattice` is the rules engine, built like `hex_core`
+
+The lattice — the game's core system: gems holding element mana, fusions combining
+them, spells powered by adjacency, damage that disables hexes rather than subtracting
+hit points — is a pure, headless, deterministic, serializable rules crate, built like
+`hex_core`: Bevy sub-crates only, no `App`, no plugin, no renderer, so its property
+suite (the geometric theorems: two tier-6 spells can never be adjacent, fusion chains
+die downstream, a disabled locked gem breaks its enchantment, serde round-trips are
+identity) runs headless in milliseconds. Every field is an integer and every
+container a `BTreeMap`/`BTreeSet`, so determinism is a property of the types. It
+settles none of [the design's open questions](design/game.md#open-questions) —
+initiative, action economy, fight length, the functional-death threshold — it exposes
+primitives and leaves the policy to the crates above it.
+
+Its designed seat is `hex_core → hex_lattice → hex_assets`: `hex_assets` implements
+the engine's content lookup traits over `elements.ron`/`spells.ron`, and gameplay
+reads the engine through it. Today it depends only on `hex_core`, and nothing in the
+workspace depends on it yet — the `hex_assets` edge lands with the elements/spells
+content, and the combat wiring (spawning units with lattices, casting through the
+command funnel, the defender-chooses decision flow) lands after that. Like the map,
+it is one person's, and its contract is the types it exposes.
 
 ### Ownership cuts both ways
 

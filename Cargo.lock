@@ -3262,6 +3262,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_lattice"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_reflect",
+ "hex_core",
+ "rand 0.8.7",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "hex_map"
 version = "0.1.0"
 dependencies = [
