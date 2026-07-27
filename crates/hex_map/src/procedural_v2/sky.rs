@@ -27,6 +27,9 @@ use crate::terrain::TerrainPalette;
 
 const PRIMARY_ISLAND_COUNT: usize = 3;
 const UPPER_REGION_OFFSET: u32 = 1;
+const LEGACY_MIN_CLEARANCE: Level = 8;
+const ELEVATED_UNDERBODY_BUDGET: Level = 4;
+const ELEVATED_RELIEF_CAP: u32 = 3;
 
 /// Measurements used to validate and rank one upper-layer candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,10 +53,12 @@ pub(crate) struct SkyMetadata {
     bridge_level: Level,
     primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
     satellite_centres: Vec<HexCoord>,
+    island_bodies: Vec<BTreeSet<HexCoord>>,
     island_cells: BTreeSet<HexCoord>,
     bridge_rows: Vec<Vec<[HexCoord; 2]>>,
     upper_cells: BTreeSet<HexCoord>,
     upper_surfaces: BTreeMap<HexCoord, Level>,
+    upper_bottoms: BTreeMap<HexCoord, Level>,
     ground_repair_actions: Vec<String>,
 }
 
@@ -211,17 +216,49 @@ fn layered_plan(
         .checked_add(1)
         .and_then(|level| level.checked_add(settings.min_clearance))
         .ok_or_else(|| CandidateAttemptError::rejected("upper clearance level overflowed"))?;
+    let elevated = settings.min_clearance > LEGACY_MIN_CLEARANCE;
+    let underbody_budget = if elevated {
+        ELEVATED_UNDERBODY_BUDGET
+    } else {
+        1
+    };
     let bridge_level = lowest_upper
-        .checked_add(1)
+        .checked_add(underbody_budget)
         .ok_or_else(|| CandidateAttemptError::rejected("upper island level overflowed"))?;
     let upper_region = next_special_region(&volume);
-    let island_depths = island_depths(&layout.island_cells);
+    let reliefs = if elevated {
+        landing_distance_reliefs(&layout, ELEVATED_RELIEF_CAP)?
+    } else {
+        island_depths(&layout.island_cells)
+            .into_iter()
+            .map(|(coord, depth)| (coord, depth.min(2)))
+            .collect()
+    };
     let mut upper_surfaces = BTreeMap::new();
+    let mut upper_bottoms = BTreeMap::new();
 
     for coord in &layout.upper_cells {
         let is_bridge = layout.bridge_cells.contains(coord) && !layout.island_cells.contains(coord);
-        let relief = island_depths.get(coord).copied().unwrap_or(0).min(2);
+        let relief = reliefs.get(coord).copied().unwrap_or(0);
         let upper_surface = bridge_level.saturating_add_unsigned(relief);
+        let underside_depth = if is_bridge {
+            0
+        } else if elevated {
+            tapered_underbody_depth(
+                relief,
+                context
+                    .streams
+                    .stage("sky.shape.underside")
+                    .sample_coord(*coord, 0),
+            )
+        } else {
+            1
+        };
+        let upper_bottom = if is_bridge {
+            upper_surface
+        } else {
+            bridge_level.saturating_sub(underside_depth)
+        };
         let column = volume.columns.get_mut(coord).ok_or_else(|| {
             CandidateAttemptError::rejected(format!(
                 "upper layout escaped the map footprint at {coord:?}"
@@ -231,7 +268,7 @@ fn layered_plan(
             &mut column.elements,
             bridge_level,
             upper_surface,
-            relief,
+            underside_depth,
             is_bridge,
             recipe.environment,
             context
@@ -247,16 +284,23 @@ fn layered_plan(
             },
         );
         upper_surfaces.insert(*coord, upper_surface);
+        upper_bottoms.insert(*coord, upper_bottom);
     }
     let highest_upper = upper_surfaces
         .values()
         .copied()
         .max()
         .unwrap_or(bridge_level);
+    let lowest_upper = upper_bottoms
+        .values()
+        .copied()
+        .min()
+        .unwrap_or(bridge_level);
     volume.view_hint = sky_view_hint(
         context.grid_radius,
         recipe.level_height,
         highest_ground,
+        lowest_upper,
         highest_upper,
     )?;
 
@@ -267,10 +311,12 @@ fn layered_plan(
             bridge_level,
             primary_centres: layout.primary_centres,
             satellite_centres: layout.satellite_centres,
+            island_bodies: layout.island_bodies,
             island_cells: layout.island_cells,
             bridge_rows: layout.bridge_rows,
             upper_cells: layout.upper_cells,
             upper_surfaces,
+            upper_bottoms,
             ground_repair_actions: recipe.ground.plan.metadata.repair_actions.clone(),
         },
     })
@@ -279,6 +325,7 @@ fn layered_plan(
 struct SkyLayout {
     primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
     satellite_centres: Vec<HexCoord>,
+    island_bodies: Vec<BTreeSet<HexCoord>>,
     island_cells: BTreeSet<HexCoord>,
     bridge_cells: BTreeSet<HexCoord>,
     bridge_rows: Vec<Vec<[HexCoord; 2]>>,
@@ -383,15 +430,28 @@ fn choose_layout(
     let mut layouts = Vec::new();
     for primary_radius in 1..=max_island_radius {
         let satellite_radius = primary_radius.saturating_div(2).max(1);
-        let layout = match build_layout(
-            context.grid_radius,
-            primary_centres,
-            &satellite_centres,
-            primary_radius,
-            satellite_radius,
-            protected_approaches,
-            &bridge_rows,
-        ) {
+        let constructed = if settings.min_clearance > LEGACY_MIN_CLEARANCE {
+            build_elevated_layout(
+                context,
+                primary_centres,
+                &satellite_centres,
+                primary_radius,
+                satellite_radius,
+                protected_approaches,
+                &bridge_rows,
+            )
+        } else {
+            build_layout(
+                context.grid_radius,
+                primary_centres,
+                &satellite_centres,
+                primary_radius,
+                satellite_radius,
+                protected_approaches,
+                &bridge_rows,
+            )
+        };
+        let layout = match constructed {
             Ok(layout) => layout,
             Err(CandidateAttemptError::Rejected(_issues)) => continue,
             Err(CandidateAttemptError::Fatal(error)) => {
@@ -455,48 +515,173 @@ fn build_layout(
     protected_approaches: &BTreeSet<HexCoord>,
     bridge_rows: &[Vec<[HexCoord; 2]>],
 ) -> Result<SkyLayout, CandidateAttemptError> {
-    let mut island_cells = BTreeSet::new();
-    for centre in primary_centres {
-        let footprint: BTreeSet<_> = centre
-            .within_radius(primary_radius)
-            .into_iter()
-            .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
-            .collect();
-        if !footprint.is_disjoint(protected_approaches) {
-            return Err(CandidateAttemptError::rejected(
-                "primary island footprint overlaps a protected ground approach",
-            ));
-        }
-        island_cells.extend(footprint);
-    }
-    for centre in satellite_centres {
-        let footprint: BTreeSet<_> = centre
-            .within_radius(satellite_radius)
-            .into_iter()
-            .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
-            .collect();
-        if !footprint.is_disjoint(protected_approaches) {
-            return Err(CandidateAttemptError::rejected(
-                "satellite footprint overlaps a protected ground approach",
-            ));
-        }
-        island_cells.extend(footprint);
-    }
+    build_layout_with_radii(IslandLayoutInputs {
+        grid_radius,
+        primary_centres,
+        satellite_centres,
+        primary_radii: [primary_radius; PRIMARY_ISLAND_COUNT],
+        satellite_radii: vec![satellite_radius; satellite_centres.len()],
+        protected_approaches,
+        bridge_rows,
+        edge_stream: None,
+    })
+}
 
+fn build_elevated_layout(
+    context: CandidateContext,
+    primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
+    satellite_centres: &[HexCoord],
+    primary_radius: u32,
+    satellite_radius: u32,
+    protected_approaches: &BTreeSet<HexCoord>,
+    bridge_rows: &[Vec<[HexCoord; 2]>],
+) -> Result<SkyLayout, CandidateAttemptError> {
+    let primary_radii = varied_primary_radii(
+        primary_radius,
+        context.streams.stage("sky.shape.radii").sample(0),
+    );
+    let satellite_radii =
+        varied_satellite_radii(satellite_centres.len(), satellite_radius, context);
+    build_layout_with_radii(IslandLayoutInputs {
+        grid_radius: context.grid_radius,
+        primary_centres,
+        satellite_centres,
+        primary_radii,
+        satellite_radii,
+        protected_approaches,
+        bridge_rows,
+        edge_stream: Some(context.streams.stage("sky.shape.edge")),
+    })
+}
+
+struct IslandLayoutInputs<'a> {
+    grid_radius: u32,
+    primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
+    satellite_centres: &'a [HexCoord],
+    primary_radii: [u32; PRIMARY_ISLAND_COUNT],
+    satellite_radii: Vec<u32>,
+    protected_approaches: &'a BTreeSet<HexCoord>,
+    bridge_rows: &'a [Vec<[HexCoord; 2]>],
+    edge_stream: Option<super::seed::SeedStream<'a>>,
+}
+
+fn build_layout_with_radii(
+    inputs: IslandLayoutInputs<'_>,
+) -> Result<SkyLayout, CandidateAttemptError> {
+    let IslandLayoutInputs {
+        grid_radius,
+        primary_centres,
+        satellite_centres,
+        primary_radii,
+        satellite_radii,
+        protected_approaches,
+        bridge_rows,
+        edge_stream,
+    } = inputs;
     let bridge_cells = bridge_rows
         .iter()
         .flatten()
         .flat_map(|row| row.iter().copied())
-        .collect();
+        .collect::<BTreeSet<_>>();
+    let bodies = primary_centres
+        .into_iter()
+        .zip(primary_radii)
+        .map(|(centre, radius)| (centre, radius, "primary"))
+        .chain(
+            satellite_centres
+                .iter()
+                .copied()
+                .zip(satellite_radii)
+                .map(|(centre, radius)| (centre, radius, "satellite")),
+        );
+    let mut island_bodies = Vec::new();
+    let mut island_cells = BTreeSet::new();
+    for (index, (centre, requested_radius, label)) in bodies.enumerate() {
+        let mut radius = requested_radius;
+        let footprint = loop {
+            let mut footprint: BTreeSet<_> = centre
+                .within_radius(radius)
+                .into_iter()
+                .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
+                .collect();
+            if let Some(edge_stream) = edge_stream {
+                footprint.retain(|coord| {
+                    centre.distance(*coord) < radius
+                        || bridge_cells.contains(coord)
+                        || !edge_stream
+                            .sample_coord(*coord, u64::try_from(index).unwrap_or(u64::MAX))
+                            .is_multiple_of(5)
+                });
+            }
+            let overlaps_protected = !footprint.is_disjoint(protected_approaches);
+            let touches_another = footprint.iter().any(|coord| {
+                island_cells.contains(coord)
+                    || coord
+                        .neighbors()
+                        .into_iter()
+                        .any(|neighbor| island_cells.contains(&neighbor))
+            });
+            if !overlaps_protected && !touches_another {
+                break footprint;
+            }
+            if edge_stream.is_some() && radius > 1 {
+                radius = radius.saturating_sub(1);
+                continue;
+            }
+            let reason = if overlaps_protected {
+                format!("{label} island footprint overlaps a protected ground approach")
+            } else {
+                "island footprints touch before their bridges are added".to_owned()
+            };
+            return Err(CandidateAttemptError::rejected(reason));
+        };
+        if footprint.is_empty() || !footprint.contains(&centre) {
+            return Err(CandidateAttemptError::rejected(format!(
+                "{label} island footprint lost its centre"
+            )));
+        }
+        island_cells.extend(&footprint);
+        island_bodies.push(footprint);
+    }
+
     let upper_cells = island_cells.union(&bridge_cells).copied().collect();
     Ok(SkyLayout {
         primary_centres,
         satellite_centres: satellite_centres.to_vec(),
+        island_bodies,
         island_cells,
         bridge_cells,
         bridge_rows: bridge_rows.to_vec(),
         upper_cells,
     })
+}
+
+fn varied_primary_radii(nominal: u32, sample: u64) -> [u32; PRIMARY_ISLAND_COUNT] {
+    let radii = [
+        nominal.saturating_add(1),
+        nominal,
+        nominal.saturating_sub(1).max(1),
+    ];
+    match sample % 3 {
+        0 => radii,
+        1 => [radii[2], radii[0], radii[1]],
+        _ => [radii[1], radii[2], radii[0]],
+    }
+}
+
+fn varied_satellite_radii(count: usize, nominal: u32, context: CandidateContext) -> Vec<u32> {
+    let mut radii = vec![nominal; count];
+    if count > 1 && nominal > 1 {
+        let smaller = usize::try_from(
+            context.streams.stage("sky.shape.satellite_radii").sample(0)
+                % u64::try_from(count).unwrap_or(1),
+        )
+        .unwrap_or_default();
+        if let Some(radius) = radii.get_mut(smaller) {
+            *radius = radius.saturating_sub(1).max(1);
+        }
+    }
+    radii
 }
 
 fn bridge_tree(
@@ -765,7 +950,7 @@ fn append_upper_mass(
     elements: &mut Vec<VolumeElement>,
     bridge_level: Level,
     surface: Level,
-    relief: u32,
+    underside_depth: Level,
     bridge: bool,
     environment: V2EnvironmentSettings,
     material_sample: u64,
@@ -779,9 +964,9 @@ fn append_upper_mass(
         return;
     }
 
-    let thickness = 2_i32.saturating_add_unsigned(relief);
-    let bottom = surface.saturating_add(1).saturating_sub(thickness);
-    debug_assert_eq!(bottom, bridge_level.saturating_sub(1));
+    let bottom = bridge_level.saturating_sub(underside_depth);
+    debug_assert!(underside_depth > 0);
+    debug_assert!(bottom <= surface);
     let top_material = match environment {
         V2EnvironmentSettings::TemperateGrassland => SolidMaterialRole::Grass,
         V2EnvironmentSettings::Frozen if material_sample.is_multiple_of(11) => {
@@ -803,6 +988,59 @@ fn append_upper_mass(
         material: top_material,
         cutaway_for: None,
     }));
+}
+
+fn landing_distance_reliefs(
+    layout: &SkyLayout,
+    relief_cap: u32,
+) -> Result<BTreeMap<HexCoord, u32>, CandidateAttemptError> {
+    let mut reliefs = BTreeMap::new();
+    for body in &layout.island_bodies {
+        let landings: Vec<_> = body.intersection(&layout.bridge_cells).copied().collect();
+        if landings.is_empty() {
+            return Err(CandidateAttemptError::rejected(
+                "an elevated island has no bridge landing",
+            ));
+        }
+
+        let mut distances: BTreeMap<_, _> = landings
+            .iter()
+            .copied()
+            .map(|coord| (coord, 0_u32))
+            .collect();
+        let mut frontier: VecDeque<_> = landings.into_iter().collect();
+        while let Some(coord) = frontier.pop_front() {
+            let distance = distances.get(&coord).copied().unwrap_or(0);
+            for neighbor in coord.neighbors() {
+                if !body.contains(&neighbor) || distances.contains_key(&neighbor) {
+                    continue;
+                }
+                distances.insert(neighbor, distance.saturating_add(1));
+                frontier.push_back(neighbor);
+            }
+        }
+        if distances.len() != body.len() {
+            return Err(CandidateAttemptError::rejected(
+                "an elevated island silhouette is disconnected from its bridge landing",
+            ));
+        }
+        for (coord, distance) in distances {
+            if reliefs.insert(coord, distance.min(relief_cap)).is_some() {
+                return Err(CandidateAttemptError::rejected(
+                    "elevated island bodies overlap",
+                ));
+            }
+        }
+    }
+    Ok(reliefs)
+}
+
+fn tapered_underbody_depth(relief: u32, sample: u64) -> Level {
+    let relief = Level::try_from(relief).unwrap_or(Level::MAX);
+    2_i32
+        .saturating_add(relief)
+        .saturating_add(i32::from(!sample.is_multiple_of(2)))
+        .min(ELEVATED_UNDERBODY_BUDGET)
 }
 
 fn island_depths(islands: &BTreeSet<HexCoord>) -> BTreeMap<HexCoord, u32> {
@@ -867,6 +1105,25 @@ fn validate_layered_plan(
     }
     let expected_island_components =
         PRIMARY_ISLAND_COUNT.saturating_add(metadata.satellite_centres.len());
+    if metadata.island_bodies.len() != expected_island_components {
+        issues.push(format!(
+            "upper layer records {} island bodies; expected {expected_island_components}",
+            metadata.island_bodies.len()
+        ));
+    }
+    let recorded_island_cells: BTreeSet<_> = metadata
+        .island_bodies
+        .iter()
+        .flat_map(|body| body.iter().copied())
+        .collect();
+    if recorded_island_cells != metadata.island_cells
+        || metadata
+            .island_bodies
+            .iter()
+            .any(|body| connected_component_count(body) != 1)
+    {
+        issues.push("recorded island bodies do not exactly partition the footprint".to_owned());
+    }
     if connected_component_count(&metadata.island_cells) != expected_island_components {
         issues.push(format!(
             "island footprint does not contain {expected_island_components} distinct bodies"
@@ -923,10 +1180,26 @@ fn validate_layered_plan(
     {
         issues.push("upper surface levels do not match the upper footprint".to_owned());
     }
+    if metadata.upper_bottoms.len() != metadata.upper_cells.len()
+        || !metadata
+            .upper_bottoms
+            .keys()
+            .all(|coord| metadata.upper_cells.contains(coord))
+    {
+        issues.push("upper mass bottoms do not match the upper footprint".to_owned());
+    }
+    let relief_cap = if settings.min_clearance > LEGACY_MIN_CLEARANCE {
+        ELEVATED_RELIEF_CAP
+    } else {
+        2
+    };
     if metadata.upper_surfaces.values().any(|surface| {
-        !(metadata.bridge_level..=metadata.bridge_level.saturating_add(2)).contains(surface)
+        !(metadata.bridge_level..=metadata.bridge_level.saturating_add_unsigned(relief_cap))
+            .contains(surface)
     }) {
-        issues.push("upper island relief exceeds the supported zero-to-two range".to_owned());
+        issues.push(format!(
+            "upper island relief exceeds the supported zero-to-{relief_cap} range"
+        ));
     }
 
     for coord in &metadata.upper_cells {
@@ -958,11 +1231,38 @@ fn validate_layered_plan(
             })
             .min()
             .unwrap_or(Level::MAX);
+        if metadata.upper_bottoms.get(coord).copied() != Some(upper_bottom) {
+            issues.push(format!(
+                "upper column {coord:?} bottom does not match its exact metadata"
+            ));
+        }
         if upper_bottom.saturating_sub(ground_top) < settings.min_clearance {
             issues.push(format!(
                 "upper column {coord:?} has less than {} empty levels",
                 settings.min_clearance
             ));
+        }
+        let bridge_only = bridge_cells.contains(coord) && !metadata.island_cells.contains(coord);
+        let underside_depth = metadata.bridge_level.saturating_sub(upper_bottom);
+        if bridge_only
+            && (upper_bottom != metadata.bridge_level
+                || metadata.upper_surfaces.get(coord).copied() != Some(metadata.bridge_level))
+        {
+            issues.push(format!(
+                "upper bridge column {coord:?} is not a flat one-voxel deck"
+            ));
+        } else if !bridge_only {
+            let maximum_depth = if settings.min_clearance > LEGACY_MIN_CLEARANCE {
+                ELEVATED_UNDERBODY_BUDGET
+            } else {
+                1
+            };
+            if !(1..=maximum_depth).contains(&underside_depth) {
+                issues.push(format!(
+                    "upper island column {coord:?} has unsupported underbody depth \
+                     {underside_depth}"
+                ));
+            }
         }
     }
 
@@ -1058,6 +1358,7 @@ fn sky_view_hint(
     grid_radius: u32,
     level_height: f32,
     ground_surface: Level,
+    lowest_upper: Level,
     upper_surface: Level,
 ) -> Result<MapViewHint, CandidateAttemptError> {
     let radius = u16::try_from(grid_radius)
@@ -1066,10 +1367,13 @@ fn sky_view_hint(
         .map_err(|_out_of_range| CandidateAttemptError::rejected("ground level is too large"))?;
     let upper = i16::try_from(upper_surface)
         .map_err(|_out_of_range| CandidateAttemptError::rejected("upper level is too large"))?;
-    let focus_level = f32::from(ground.saturating_add(upper)) * 0.5;
+    let lowest_upper = i16::try_from(lowest_upper)
+        .map_err(|_out_of_range| CandidateAttemptError::rejected("upper base is too large"))?;
+    let lowest = ground.min(lowest_upper);
+    let focus_level = f32::from(lowest.saturating_add(upper)) * 0.5;
     let focus_height = focus_level * level_height;
     let frame =
-        (f32::from(radius) * 4.2).max(f32::from(upper.saturating_sub(ground)) * level_height * 3.0);
+        (f32::from(radius) * 4.2).max(f32::from(upper.saturating_sub(lowest)) * level_height * 3.0);
     Ok(MapViewHint::new(
         (0.0, focus_height + frame, frame),
         (0.0, focus_height, 0.0),
@@ -1131,6 +1435,14 @@ mod tests {
     }
 
     fn settings(environment: V2EnvironmentSettings) -> ProceduralV2Settings {
+        settings_with_geometry(environment, LEGACY_MIN_CLEARANCE, 20)
+    }
+
+    fn settings_with_geometry(
+        environment: V2EnvironmentSettings,
+        min_clearance: Level,
+        upper_coverage_percent: u8,
+    ) -> ProceduralV2Settings {
         ProceduralV2Settings {
             environment,
             recipe: V2RecipeSettings::LayeredSkyIslands(LayeredSkyIslandsSettings {
@@ -1139,8 +1451,8 @@ mod tests {
                     max_relief: 8,
                     hills_per_bank: 3,
                 },
-                min_clearance: 8,
-                upper_coverage_percent: 20,
+                min_clearance,
+                upper_coverage_percent,
             }),
         }
     }
@@ -1272,6 +1584,128 @@ mod tests {
             sky.map.get(TilePos::new(*coord, surface)) == GRASS
         }));
         assert!(sky.anchors.get(&MapAnchorId::from("party_start")).is_some());
+    }
+
+    #[test]
+    fn elevated_review_options_are_deterministic_varied_and_clear_of_ground() {
+        let options = [(14, 18), (18, 21), (22, 24)];
+        for (min_clearance, coverage) in options {
+            let settings = settings_with_geometry(
+                V2EnvironmentSettings::TemperateGrassland,
+                min_clearance,
+                coverage,
+            );
+            let first = build(12, 0.4, &settings, SKY_SEED, &palette(), &is_solid).unwrap_or_else(
+                |error| {
+                    panic!(
+                        "elevated option clearance={min_clearance}, coverage={coverage} \
+                     should generate: {error}"
+                    )
+                },
+            );
+            let second = build(12, 0.4, &settings, SKY_SEED, &palette(), &is_solid)
+                .expect("the repeated elevated map should generate");
+            let ground = hills::build(
+                12,
+                0.4,
+                &ground_settings(V2EnvironmentSettings::TemperateGrassland),
+                SKY_SEED,
+                &palette(),
+                &is_solid,
+            )
+            .expect("the matching finalized Hills ground should generate");
+
+            assert_eq!(first.map_fingerprint, second.map_fingerprint);
+            assert_eq!(first.selected_candidate, second.selected_candidate);
+            assert!(!first.used_fallback);
+            assert!((15..=25).contains(&first.metrics.coverage_percent));
+
+            let body_sizes: BTreeSet<_> = first
+                .metadata
+                .island_bodies
+                .iter()
+                .map(BTreeSet::len)
+                .collect();
+            assert!(
+                body_sizes.len() >= 2,
+                "clearance={min_clearance} produced uniform island silhouettes"
+            );
+            let body_peaks: BTreeSet<_> = first
+                .metadata
+                .island_bodies
+                .iter()
+                .filter_map(|body| {
+                    body.iter()
+                        .filter_map(|coord| first.metadata.upper_surfaces.get(coord))
+                        .max()
+                        .copied()
+                })
+                .collect();
+            assert!(
+                body_peaks.len() >= 2,
+                "clearance={min_clearance} produced uniform island elevations"
+            );
+            assert!(first.metadata.upper_bottoms.iter().any(|(coord, bottom)| {
+                first.metadata.island_cells.contains(coord)
+                    && first.metadata.bridge_level.saturating_sub(*bottom) > 1
+            }));
+
+            for coord in &first.metadata.upper_cells {
+                let ground_top = ground
+                    .map
+                    .column(*coord)
+                    .expect("the finalized ground should contain every upper coordinate")
+                    .top();
+                let upper_bottom = first
+                    .metadata
+                    .upper_bottoms
+                    .get(coord)
+                    .copied()
+                    .expect("every upper coordinate should publish its exact bottom");
+                assert!(
+                    upper_bottom.saturating_sub(ground_top) >= min_clearance,
+                    "upper mass at {coord:?} violates clearance={min_clearance}"
+                );
+            }
+
+            let bridge_cells: BTreeSet<_> = first
+                .metadata
+                .bridge_rows
+                .iter()
+                .flatten()
+                .flat_map(|row| row.iter().copied())
+                .filter(|coord| !first.metadata.island_cells.contains(coord))
+                .collect();
+            assert!(!bridge_cells.is_empty());
+            assert!(bridge_cells.iter().all(|coord| {
+                first.metadata.upper_surfaces.get(coord) == Some(&first.metadata.bridge_level)
+                    && first.metadata.upper_bottoms.get(coord) == Some(&first.metadata.bridge_level)
+            }));
+            for (name, position) in ground.anchors.iter() {
+                assert_eq!(first.anchors.get(name), Some(position));
+            }
+        }
+    }
+
+    #[test]
+    fn sky_view_frames_the_full_vertical_volume_without_moving_the_legacy_pose() {
+        let legacy_focus_height = f32::from(23_i16.saturating_add(35)) * 0.5 * 0.4;
+        let legacy_frame = (12_f32 * 4.2).max(f32::from(35_i16.saturating_sub(23)) * 0.4 * 3.0);
+        assert_eq!(
+            sky_view_hint(12, 0.4, 23, 32, 35).expect("the legacy bounds should frame"),
+            MapViewHint::new(
+                (0.0, legacy_focus_height + legacy_frame, legacy_frame),
+                (0.0, legacy_focus_height, 0.0)
+            )
+        );
+
+        let underside_below_ground =
+            sky_view_hint(12, 0.4, 60, 40, 70).expect("all finite bounds should frame");
+        assert_eq!(underside_below_ground.focus, (0.0, 22.0, 0.0));
+        assert!(
+            underside_below_ground.eye.1 > underside_below_ground.focus.1,
+            "the full ground-to-top volume should remain below the camera"
+        );
     }
 
     #[test]
@@ -1434,6 +1868,32 @@ mod tests {
                 .any(|issue| issue.contains("membership is not exact"))
         );
 
+        let mut stale_bottom = valid.clone();
+        let bottom = stale_bottom
+            .metadata
+            .upper_bottoms
+            .values_mut()
+            .next()
+            .expect("the candidate should record an upper bottom");
+        *bottom = bottom.saturating_sub(1);
+        assert!(validation_issues(&recipe, layered_settings, &stale_bottom)
+            .iter()
+            .any(|issue| issue.contains("exact metadata")));
+
+        let mut broken_partition = valid.clone();
+        let removed = broken_partition
+            .metadata
+            .island_bodies
+            .first_mut()
+            .and_then(BTreeSet::pop_first)
+            .expect("the candidate should record a non-empty island body");
+        assert!(broken_partition.metadata.island_cells.contains(&removed));
+        assert!(
+            validation_issues(&recipe, layered_settings, &broken_partition)
+                .iter()
+                .any(|issue| issue.contains("partition"))
+        );
+
         let mut changed_ground = valid;
         changed_ground
             .volume
@@ -1483,25 +1943,35 @@ mod tests {
     #[ignore = "manual release/debug generator benchmark"]
     fn layered_sky_radius_benchmark_tracks_the_radius_40_target() {
         let palette = palette();
-        let settings = settings(V2EnvironmentSettings::TemperateGrassland);
         let mut radius_40_median = 0_u128;
-        for radius in [12, 20, 40] {
-            let mut samples = Vec::new();
-            for seed in 0..8 {
-                let started = Instant::now();
-                let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
-                    .expect("the benchmark map should generate");
-                samples.push(started.elapsed().as_micros());
-                std::hint::black_box(generated);
-            }
-            samples.sort_unstable();
-            let median = samples
-                .get(samples.len() / 2)
-                .copied()
-                .expect("the benchmark always records eight samples");
-            eprintln!("Layered Sky radius {radius}: median={median}us");
-            if radius == 40 {
-                radius_40_median = median;
+        for (label, settings) in [
+            (
+                "legacy",
+                settings(V2EnvironmentSettings::TemperateGrassland),
+            ),
+            (
+                "elevated",
+                settings_with_geometry(V2EnvironmentSettings::TemperateGrassland, 22, 24),
+            ),
+        ] {
+            for radius in [12, 20, 40] {
+                let mut samples = Vec::new();
+                for seed in 0..8 {
+                    let started = Instant::now();
+                    let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
+                        .expect("the benchmark map should generate");
+                    samples.push(started.elapsed().as_micros());
+                    std::hint::black_box(generated);
+                }
+                samples.sort_unstable();
+                let median = samples
+                    .get(samples.len() / 2)
+                    .copied()
+                    .expect("the benchmark always records eight samples");
+                eprintln!("Layered Sky {label} radius {radius}: median={median}us");
+                if radius == 40 {
+                    radius_40_median = radius_40_median.max(median);
+                }
             }
         }
 
