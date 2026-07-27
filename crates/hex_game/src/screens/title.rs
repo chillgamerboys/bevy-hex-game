@@ -207,6 +207,19 @@ fn spawn_title(
                 },
                 children![blurb(&assets, "click a scenario to play   ·   ESC to quit")],
             ));
+            // The version a bug report needs, where a screenshot catches it.
+            // Absolute so it rides the corner instead of the menu column.
+            parent.spawn((
+                Name::new("Version"),
+                Node {
+                    position_type: PositionType::Absolute,
+                    right: Val::Px(12.0),
+                    bottom: Val::Px(8.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+                children![fine(&assets, concat!("v", env!("CARGO_PKG_VERSION")))],
+            ));
         });
 }
 

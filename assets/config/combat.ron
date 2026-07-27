@@ -1,0 +1,16 @@
+// Combat policy knobs. The numbers are the provisional values the code
+// shipped with; the policy enums name the design's open questions
+// (docs/design/game.md) — an unbuilt variant fails loading with a reason
+// naming what it waits on, so flipping one is an experiment, never an
+// accidental decision.
+(
+    engage_range: 4,
+    disengage_margin: 2,
+    movement_per_turn: 4,
+    default_initiative: 10,
+    levels_per_bonus_range: 5,
+    initiative_policy: FlatComponent,
+    action_economy: MoveAndAction,
+    channelling_trickle: BurstOnly,
+    rout_policy: FightToTheEnd,
+)

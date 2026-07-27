@@ -38,8 +38,10 @@ pub use pathing::HexPathingLine;
 pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
 };
-pub use targeting::{either_in_reach, high_ground_bonus, in_reach, LEVELS_PER_BONUS_RANGE};
-pub use units::{Enemy, Faction, MovingTo, Player, StandsOn, StopMovingAt};
+pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use units::{
+    Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
+};
 
 /// Adds every unit system.
 ///

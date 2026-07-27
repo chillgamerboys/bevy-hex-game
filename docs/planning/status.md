@@ -20,7 +20,11 @@ terrain. Movement is level-based over stacked surfaces, with body size decided b
 headroom and a breadth-first pathfinder that cannot collapse a stack. A movement
 preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
-targeting where height buys range.
+targeting where height buys range. Its tuning values are designer-facing knobs in
+`assets/config/combat.ron`, and every sim mutation flows through one **command
+funnel**: clicks, the end-turn key, and the AI emit `GameCommand`s into a queue,
+and a single applier in `hex_combat` validates each against seat, turn, reach, and
+budget before anything moves — which is what makes an input log a replay.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
@@ -41,6 +45,18 @@ lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). 
 are one hex wide; there is no footprint for anything larger, and units do not obstruct
 each other — so a route may be drawn straight through another piece.
 
+Around the game sits its own verification tooling. A **lattice-demo screen** on the
+title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
+**`visual-walk`** build drives the whole game through scripted RON walks — screens,
+clicks by `Name`, keys, scenario launches — photographing every step through an
+offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
+mechanical gate, and the *Close Quarters* scenario exists so a walk (or a person)
+reaches combat in one click. The menus wear vendored Cinzel/Inter type over a
+design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
+time-of-day is available to those that opt in. The title screen shows the workspace
+version, sessions write a `hex_game.log` beside the executable (fresh per launch),
+and a panic hook puts the last words in it.
+
 ## What is provisional
 
 Everything in this table is a guess standing in for a decision that
@@ -49,7 +65,7 @@ place** — they are meant to be replaced.
 
 | Thing | Now | What it is waiting for |
 |---|---|---|
-| **Initiative** | a number on a component, high to low, ties by entity index | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
+| **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
 | **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
@@ -59,7 +75,8 @@ place** — they are meant to be replaced.
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
 from hidden information rather than dice, so the turn order is deterministic: ties
-break by entity index, and the same units always produce the same order.
+break by the stable `UnitId` dealt at spawn, and the same units always
+produce the same order across runs and saves.
 
 ### Why there is no damage
 
@@ -105,8 +122,11 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 
 ## The production gap
 
-Nothing that makes this a product exists yet: no saves, no settings menu, no audio,
-no input rebinding, no crash reporting, no log files, and no signing or store
-packaging. The full checklist, with the evidence behind each line and the crate
-choices for closing them, is [production-audit.md](production-audit.md); the
-sequenced work is the production-hygiene epic in [roadmap.md](roadmap.md).
+Most of what makes this a product does not exist yet: no saves, no settings menu,
+no audio, no input rebinding, and no signing or store packaging. The first hygiene
+slice has landed — a per-session log file beside the executable, a panic hook that
+writes into it, and the version on the title screen — but full crash *reporting*
+(symbolication, upload, a dialog) has not. The full checklist, with the evidence
+behind each line and the crate choices for closing them, is
+[production-audit.md](production-audit.md); the sequenced work is the
+production-hygiene epic in [roadmap.md](roadmap.md).

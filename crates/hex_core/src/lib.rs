@@ -10,6 +10,7 @@
 //! their common language belongs.
 
 pub mod app;
+pub mod commands;
 pub mod config;
 pub mod elements;
 pub mod hex;
@@ -17,10 +18,12 @@ pub mod lattice_ids;
 pub mod setup;
 pub mod terrain;
 pub mod traversal;
+pub mod unit_ids;
 pub mod view;
 pub mod voxel;
 
 pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, Turn};
+pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 pub use elements::{ElementId, SpellId};
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};
 pub use lattice_ids::{EnchantId, LatticeCoord};
@@ -30,5 +33,6 @@ pub use terrain::{
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
+pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};
 pub use view::CameraFocusTarget;
 pub use voxel::{Headroom, Level, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

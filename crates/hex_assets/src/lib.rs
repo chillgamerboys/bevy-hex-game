@@ -31,9 +31,10 @@ pub use loader::{
 };
 pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
-    to_color, CameraSettings, CelestialBody, CelestialCycleSettings, CubeCoord, DisplaySettings,
+    to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
+    ChannellingTrickle, CombatSettings, CubeCoord, DisplaySettings, InitiativePolicy,
     LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
-    PresentModeSetting, ResolvedLighting, Rgb, ScenarioPlacement, ScenarioSettings,
+    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy, ScenarioPlacement, ScenarioSettings,
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
@@ -52,6 +53,7 @@ pub fn plugin(app: &mut App) {
     app.add_systems(PreStartup, load_assets);
 
     app.register_type::<CameraSettings>()
+        .register_type::<CombatSettings>()
         .register_type::<LightingSettings>()
         .register_type::<LightingProfile>()
         .register_type::<CelestialCycleSettings>()
@@ -80,6 +82,7 @@ pub fn plugin(app: &mut App) {
     // `apply_settings_choice` against one resource, and hold the loading screen open
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
+        .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
