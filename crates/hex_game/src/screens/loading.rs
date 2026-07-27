@@ -11,6 +11,7 @@ use hex_assets::{GameAssets, SettingsRegistry, SubstanceFile, SubstanceTable};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
+use crate::menus::widgets::UiAssets;
 use crate::scenarios::ScenarioContractStatus;
 
 pub(super) fn plugin(app: &mut App) {
@@ -27,13 +28,16 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnExit(Screen::Loading), despawn_screen(Screen::Loading));
 }
 
-fn spawn_loading(mut commands: Commands) {
+fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn(screen_root(Screen::Loading, "Loading Screen"))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("loading..."),
-                TextFont::from_font_size(28.0),
+                TextFont {
+                    font: assets.body.clone().into(),
+                    ..TextFont::from_font_size(24.0)
+                },
                 TextColor(Color::srgb(0.8, 0.8, 0.8)),
             ));
         });
@@ -115,6 +119,11 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
         app.insert_state(Screen::Loading);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
         app.init_resource::<SettingsRegistry>();
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),

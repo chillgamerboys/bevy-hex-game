@@ -29,7 +29,9 @@ use hex_lattice::{
     FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement, SpellTable,
 };
 
-use crate::menus::widgets::{compact_button, OwnColors, LABEL, MUTED};
+use crate::menus::widgets::{
+    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets, LABEL,
+};
 
 use super::{despawn_screen, screen_root};
 
@@ -45,23 +47,29 @@ const DEMO_SPELLS: [&str; 4] = ["Ember", "Metal Shield", "Flamethrower", "Fireba
 /// rather than overwriting, at worst leaving a spell honestly unsatisfiable.
 const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 
-/// Pixel size of one lattice cell button.
-const CELL_SIZE: f32 = 74.0;
+/// Pixel width of one hex cell sprite (pointy-top, so height runs longer).
+const CELL_SIZE: f32 = 62.0;
 
-/// Horizontal distance between neighbouring cell centres.
-const CELL_STEP: f32 = 82.0;
+/// Pixel height of the hex sprite: width times the 256/222 sprite ratio.
+const CELL_HEIGHT: f32 = 71.5;
 
-/// Vertical distance between rows, under `CELL_STEP` so the layout packs like hexes.
-const ROW_STEP: f32 = 72.0;
+/// Horizontal distance between neighbouring cell centres — a slim gap keeps
+/// the cells reading as one bonded lattice rather than scattered dots.
+const CELL_STEP: f32 = 66.0;
+
+/// Vertical distance between rows: three quarters of the hex height.
+const ROW_STEP: f32 = 56.0;
 
 /// How many log lines the demo keeps.
 const LOG_LINES: usize = 6;
 
-const GEM_COLOR: Color = Color::srgba(0.25, 0.55, 0.65, 0.35);
-const FUSION_COLOR: Color = Color::srgba(0.55, 0.40, 0.75, 0.35);
-const SPELL_COLOR: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
-const LOCKED_COLOR: Color = Color::srgba(0.85, 0.65, 0.20, 0.40);
-const DISABLED_COLOR: Color = Color::srgba(0.60, 0.15, 0.12, 0.50);
+/// Tints multiplied over the white hex sprite. Saturated and mostly opaque —
+/// the first walk photograph showed the old low-alpha fills washing out.
+const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
+const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
+const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
+const LOCKED_COLOR: Color = Color::srgba(0.72, 0.54, 0.18, 0.95);
+const DISABLED_COLOR: Color = Color::srgba(0.46, 0.13, 0.11, 0.95);
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
@@ -170,39 +178,28 @@ fn poison_element(elements: &ElementCatalog) -> ElementId {
     elements.wheel().first().copied().unwrap_or_default()
 }
 
-fn spawn_demo_screen(mut commands: Commands) {
+fn spawn_demo_screen(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn(screen_root(Screen::LatticeDemo, "Lattice Demo Screen"))
         .with_children(|parent| {
-            parent.spawn((
-                Text::new("the lattice"),
-                TextFont::from_font_size(40.0),
-                TextColor(LABEL),
-            ));
+            parent.spawn(display(&assets, "The Lattice"));
             parent
                 .spawn((
                     Name::new("Demo Body"),
                     DemoBody,
                     Node {
                         flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(56.0),
-                        align_items: AlignItems::FlexStart,
+                        column_gap: Val::Px(32.0),
+                        align_items: AlignItems::Stretch,
                         ..default()
                     },
                 ))
                 .with_children(|body| {
-                    body.spawn((
-                        Text::new("waiting for content..."),
-                        TextFont::from_font_size(16.0),
-                        TextColor(MUTED),
-                    ));
+                    body.spawn(blurb(&assets, "waiting for content..."));
                 });
-            parent.spawn((
-                Text::new(
-                    "cast from the right panel - click a gem to strike it - BACKSPACE to return",
-                ),
-                TextFont::from_font_size(14.0),
-                TextColor(MUTED),
+            parent.spawn(blurb(
+                &assets,
+                "cast from the right panel   ·   click a gem to strike it   ·   BACKSPACE to return",
             ));
         });
 }
@@ -514,9 +511,9 @@ fn strike(demo: &mut DemoLattice, coord: LatticeCoord, spells: &SpellBook) {
 
 fn blocked_reason(blocked: &CastBlocked) -> &'static str {
     match blocked {
-        CastBlocked::NotASpell => "that cell holds no spell",
-        CastBlocked::SpellDisabled => "the spell hex is disabled",
-        CastBlocked::Unsatisfiable => "cannot draw its full cost from adjacent sources",
+        CastBlocked::NotASpell => "no spell here",
+        CastBlocked::SpellDisabled => "spell hex disabled",
+        CastBlocked::Unsatisfiable => "not enough adjacent mana",
     }
 }
 
@@ -539,6 +536,7 @@ fn rebuild_readout(
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
     bodies: Query<Entity, With<DemoBody>>,
+    assets: Res<UiAssets>,
 ) {
     let Some(demo) = demo else { return };
     if !demo.is_changed() {
@@ -555,8 +553,8 @@ fn rebuild_readout(
 
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|panels| {
-        spawn_lattice_panel(panels, &demo, &elements, &spells);
-        spawn_control_panel(panels, &demo, &tables, &spells);
+        spawn_lattice_panel(panels, &demo, &elements, &spells, &assets);
+        spawn_control_panel(panels, &demo, &tables, &spells, &assets);
     });
 }
 
@@ -574,6 +572,7 @@ fn spawn_lattice_panel(
     demo: &DemoLattice,
     elements: &ElementCatalog,
     spells: &SpellBook,
+    assets: &UiAssets,
 ) {
     let mut min = (f32::MAX, f32::MAX);
     let mut max = (f32::MIN, f32::MIN);
@@ -583,65 +582,87 @@ fn spawn_lattice_panel(
         max = (max.0.max(x), max.1.max(y));
     }
     if demo.spec.capacity() == 0 {
-        panels.spawn((
-            Text::new("the content defined no demo lattice"),
-            TextFont::from_font_size(16.0),
-            TextColor(MUTED),
-        ));
+        panels.spawn(blurb(assets, "the content defined no demo lattice"));
         return;
     }
 
     panels
-        .spawn((
-            Name::new("Demo Lattice"),
-            Node {
-                width: Val::Px(max.0 - min.0 + CELL_SIZE),
-                height: Val::Px(max.1 - min.1 + CELL_SIZE),
-                ..default()
-            },
-        ))
-        .with_children(|lattice| {
-            for (coord, kind) in demo.spec.cells() {
-                let (x, y) = cell_position(coord);
-                let (color, title, line) = cell_face(coord, kind, demo, elements, spells);
-                lattice
-                    .spawn((
-                        // Coordinates in the name give the visual-walk scripts a
-                        // deterministic handle on one specific cell.
-                        Name::new(format!("Demo Cell ({}, {})", coord.q(), coord.r())),
-                        Button,
-                        DemoCell(coord),
-                        OwnColors,
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(x - min.0),
-                            top: Val::Px(y - min.1),
-                            width: Val::Px(CELL_SIZE),
-                            height: Val::Px(CELL_SIZE),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            flex_direction: FlexDirection::Column,
-                            border_radius: BorderRadius::all(Val::Px(CELL_SIZE / 2.0)),
-                            ..default()
-                        },
-                        BackgroundColor(color),
-                    ))
-                    .with_children(|cell| {
-                        cell.spawn((
-                            Text::new(title),
-                            TextFont::from_font_size(13.0),
-                            TextColor(LABEL),
-                            Pickable::IGNORE,
-                        ));
-                        cell.spawn((
-                            Text::new(line),
-                            TextFont::from_font_size(11.0),
-                            TextColor(MUTED),
-                            Pickable::IGNORE,
-                        ));
-                    });
-            }
+        .spawn((Name::new("Lattice Panel"), panel()))
+        .with_children(|framed| {
+            framed.spawn(heading(assets, "the inscription"));
+            framed
+                .spawn((
+                    Name::new("Demo Lattice"),
+                    Node {
+                        width: Val::Px(max.0 - min.0 + CELL_SIZE),
+                        height: Val::Px(max.1 - min.1 + CELL_HEIGHT),
+                        ..default()
+                    },
+                ))
+                .with_children(|lattice| {
+                    spawn_lattice_cells(lattice, demo, elements, spells, assets, min);
+                });
         });
+}
+
+fn spawn_lattice_cells(
+    lattice: &mut ChildSpawnerCommands,
+    demo: &DemoLattice,
+    elements: &ElementCatalog,
+    spells: &SpellBook,
+    assets: &UiAssets,
+    min: (f32, f32),
+) {
+    for (coord, kind) in demo.spec.cells() {
+        let (x, y) = cell_position(coord);
+        let (color, title, line) = cell_face(coord, kind, demo, elements, spells);
+        lattice
+            .spawn((
+                // Coordinates in the name give the visual-walk scripts a
+                // deterministic handle on one specific cell.
+                Name::new(format!("Demo Cell ({}, {})", coord.q(), coord.r())),
+                Button,
+                DemoCell(coord),
+                OwnColors,
+                ImageNode {
+                    image: assets.hex_cell.clone(),
+                    color,
+                    ..default()
+                },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(x - min.0),
+                    top: Val::Px(y - min.1),
+                    width: Val::Px(CELL_SIZE),
+                    height: Val::Px(CELL_HEIGHT),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|cell| {
+                cell.spawn((
+                    Text::new(title),
+                    TextFont {
+                        font: assets.body.clone().into(),
+                        ..TextFont::from_font_size(11.0)
+                    },
+                    TextColor(LABEL),
+                    Pickable::IGNORE,
+                ));
+                cell.spawn((
+                    Text::new(line),
+                    TextFont {
+                        font: assets.body.clone().into(),
+                        ..TextFont::from_font_size(10.0)
+                    },
+                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.75)),
+                    Pickable::IGNORE,
+                ));
+            });
+    }
 }
 
 /// What one cell shows: its colour, headline, and detail line.
@@ -667,7 +688,7 @@ fn cell_face(
     };
     let (title, mut line) = match kind {
         CellKind::Gem { element } => (
-            elements.name(element).unwrap_or("gem").to_owned(),
+            short_name(elements.name(element).unwrap_or("gem")),
             format!(
                 "{}/{}",
                 demo.state.mana(coord),
@@ -676,10 +697,10 @@ fn cell_face(
         ),
         CellKind::Fusion { output } => (
             "fusion".to_owned(),
-            elements.name(output).unwrap_or("?").to_owned(),
+            short_name(elements.name(output).unwrap_or("?")),
         ),
         CellKind::Spell { spell } => (
-            spells.name(spell).unwrap_or("spell").to_owned(),
+            short_name(spells.name(spell).unwrap_or("spell")),
             spells
                 .spell(spell)
                 .map(|entry| format!("tier {}", entry.tier()))
@@ -688,11 +709,23 @@ fn cell_face(
         CellKind::Blank => ("-".to_owned(), String::new()),
     };
     if disabled {
-        line = format!("{line} - disabled");
+        line = "disabled".to_owned();
     } else if locked {
-        line = format!("{line} - locked");
+        line = format!("{line} locked");
     }
     (color, title, line)
+}
+
+/// Truncates a name to what fits inside one hex cell; the control panel
+/// carries the full name.
+fn short_name(name: &str) -> String {
+    const FITS: usize = 8;
+    if name.chars().count() <= FITS {
+        name.to_owned()
+    } else {
+        let head: String = name.chars().take(FITS - 1).collect();
+        format!("{head}…")
+    }
 }
 
 fn spawn_control_panel(
@@ -700,23 +733,21 @@ fn spawn_control_panel(
     demo: &DemoLattice,
     tables: &DemoTables,
     spells: &SpellBook,
+    assets: &UiAssets,
 ) {
     panels
-        .spawn((
-            Name::new("Demo Controls"),
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(10.0),
-                min_width: Val::Px(420.0),
-                ..default()
-            },
-        ))
+        .spawn((Name::new("Demo Controls"), panel()))
+        .insert(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            width: Val::Px(470.0),
+            padding: UiRect::all(Val::Px(18.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(10.0)),
+            ..default()
+        })
         .with_children(|controls| {
-            controls.spawn((
-                Text::new("spells"),
-                TextFont::from_font_size(18.0),
-                TextColor(LABEL),
-            ));
+            controls.spawn(heading(assets, "spells"));
 
             for (coord, kind) in demo.spec.cells() {
                 let CellKind::Spell { spell } = kind else {
@@ -724,79 +755,83 @@ fn spawn_control_panel(
                 };
                 let name = spells.name(spell).unwrap_or("unknown spell");
                 let kind_line = match tables.casting(spell) {
-                    Casting::Enchantment { defense } => format!("enchantment, defense {defense}"),
+                    Casting::Enchantment { defense } => format!("enchantment · defense {defense}"),
                     Casting::Evocation => "evocation".to_owned(),
                 };
                 let ritual = spells
                     .spell(spell)
                     .is_some_and(hex_assets::Spell::is_ritual);
                 let headline = if ritual {
-                    format!("{name} (ritual) - {kind_line}")
+                    format!("{name} (ritual)")
                 } else {
-                    format!("{name} - {kind_line}")
+                    name.to_owned()
                 };
 
                 controls
                     .spawn((
                         Name::new("Spell Row"),
                         Node {
+                            height: Val::Px(50.0),
                             flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(12.0),
+                            column_gap: Val::Px(14.0),
                             align_items: AlignItems::Center,
                             ..default()
                         },
                     ))
                     .with_children(|row| {
+                        // The action slot is a fixed 132px whether it holds a
+                        // button or a blocked reason, so every row aligns.
                         match castable(&demo.spec, &demo.state, coord, tables) {
                             Ok(plan) => {
                                 let cost: u32 =
                                     plan.drains.values().map(|&mana| u32::from(mana)).sum();
-                                row.spawn((compact_button("Cast"), CastsSpell(coord)))
-                                    .with_children(|cast| {
-                                        cast.spawn((
-                                            Text::new("cast"),
-                                            TextFont::from_font_size(14.0),
-                                            TextColor(LABEL),
-                                            Pickable::IGNORE,
-                                        ));
-                                        cast.spawn((
-                                            Text::new(format!("{cost} mana")),
-                                            TextFont::from_font_size(11.0),
-                                            TextColor(MUTED),
-                                            Pickable::IGNORE,
-                                        ));
-                                    });
+                                // The spell's name in the button `Name` gives
+                                // walk scripts a stable handle — entity order
+                                // is not stable across UI rebuilds.
+                                row.spawn((
+                                    small_button(format!("Cast {name}")),
+                                    CastsSpell(coord),
+                                ))
+                                .with_children(|cast| {
+                                    cast.spawn(blurb(assets, "cast"));
+                                    cast.spawn(fine(assets, format!("{cost} mana")));
+                                });
                             }
                             Err(blocked) => {
                                 row.spawn((
-                                    Text::new(format!("blocked: {}", blocked_reason(&blocked))),
-                                    TextFont::from_font_size(12.0),
-                                    TextColor(MUTED),
+                                    Name::new("Blocked Reason"),
                                     Node {
-                                        max_width: Val::Px(150.0),
+                                        width: Val::Px(132.0),
                                         ..default()
                                     },
+                                    children![fine(
+                                        assets,
+                                        format!("blocked · {}", blocked_reason(&blocked))
+                                    )],
                                 ));
                             }
                         }
                         row.spawn((
-                            Text::new(headline),
-                            TextFont::from_font_size(14.0),
-                            TextColor(LABEL),
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                row_gap: Val::Px(2.0),
+                                ..default()
+                            },
+                            children![label(assets, headline), fine(assets, kind_line)],
                         ));
                     });
             }
 
-            controls.spawn((
-                Text::new(format!(
-                    "free mana {}  -  locked {}  -  enchantments {}  -  burns {}",
+            controls.spawn(divider(430.0));
+            controls.spawn(blurb(
+                assets,
+                format!(
+                    "free mana {}   ·   locked {}   ·   enchantments {}   ·   burns {}",
                     demo.state.total_gem_mana(),
                     demo.state.total_locked_mana(),
                     demo.state.enchantment_count(),
                     demo.state.burns().len(),
-                )),
-                TextFont::from_font_size(14.0),
-                TextColor(LABEL),
+                ),
             ));
 
             controls
@@ -810,45 +845,21 @@ fn spawn_control_panel(
                 ))
                 .with_children(|actions| {
                     actions
-                        .spawn((compact_button("End Turn"), EndsTurn))
+                        .spawn((small_button("End Turn"), EndsTurn))
                         .with_children(|action| {
-                            action.spawn((
-                                Text::new("end turn"),
-                                TextFont::from_font_size(14.0),
-                                TextColor(LABEL),
-                                Pickable::IGNORE,
-                            ));
-                            action.spawn((
-                                Text::new("channel mana"),
-                                TextFont::from_font_size(11.0),
-                                TextColor(MUTED),
-                                Pickable::IGNORE,
-                            ));
+                            action.spawn(blurb(assets, "end turn"));
+                            action.spawn(fine(assets, "channel mana"));
                         });
                     actions
-                        .spawn((compact_button("Reset"), ResetsDemo))
+                        .spawn((small_button("Reset"), ResetsDemo))
                         .with_children(|action| {
-                            action.spawn((
-                                Text::new("reset"),
-                                TextFont::from_font_size(14.0),
-                                TextColor(LABEL),
-                                Pickable::IGNORE,
-                            ));
-                            action.spawn((
-                                Text::new("fresh state"),
-                                TextFont::from_font_size(11.0),
-                                TextColor(MUTED),
-                                Pickable::IGNORE,
-                            ));
+                            action.spawn(blurb(assets, "reset"));
+                            action.spawn(fine(assets, "fresh state"));
                         });
                 });
 
             for line in &demo.log {
-                controls.spawn((
-                    Text::new(format!("> {line}")),
-                    TextFont::from_font_size(12.0),
-                    TextColor(MUTED),
-                ));
+                controls.spawn(fine(assets, format!("·  {line}")));
             }
         });
 }
