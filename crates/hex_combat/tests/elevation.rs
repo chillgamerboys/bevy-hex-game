@@ -361,8 +361,8 @@ fn flat_ground_engages_at_the_same_range_as_ever() {
 /// Standing high starts a fight from further off than standing level does.
 ///
 /// The only behaviour the new engagement rule actually changes, and therefore the only
-/// world-level test that fails against the old one. Five hexes is outside
-/// `ENGAGE_RANGE`; eight levels of height buys the fifth hex and the fight starts.
+/// world-level test that fails against the old one. Five hexes is outside the shipped
+/// `engage_range`; eight levels of height buys the fifth hex and the fight starts.
 #[test]
 fn height_engages_from_further_away() {
     let high = HexCoord::new_cubic(5, 0, -5);

@@ -2193,12 +2193,12 @@ mod tests {
             (
                 "initiative_policy: FlatComponent",
                 "initiative_policy: DerivedFromLattice",
-                "not built yet",
+                "initiative question being settled",
             ),
             (
                 "action_economy: MoveAndAction",
                 "action_economy: FreeMovementPlusAction",
-                "not built yet",
+                "command funnel",
             ),
             (
                 "channelling_trickle: BurstOnly",

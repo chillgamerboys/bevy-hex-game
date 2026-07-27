@@ -45,12 +45,6 @@ use hex_units::{
 #[reflect(Component)]
 pub struct Initiative(pub u32);
 
-impl Default for Initiative {
-    fn default() -> Self {
-        Self(10)
-    }
-}
-
 /// The running order, and where in it we are.
 ///
 /// Rebuilt whenever combat starts. Cleared when it ends, so its emptiness is the
