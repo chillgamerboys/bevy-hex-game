@@ -7,6 +7,29 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 6 — feat(map): add procedural V2 Hills parity (2026-07-27)
+
+- **PR**: #58 — `feat/procedural-v2-hills`
+- **Outcome**: green — 0 ship-blockers, 4 non-blockers, all left with the crate owner
+- **Lenses triggered**: 2, 7, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_map/src/procedural_v2/hills.rs`:331 | NON-BLOCKER | deferred to owner — `covered_by_solid` surface rule and `element_levels` duplicate `volume.rs` logic; drift fails loudly (`InvalidVolume` at load), never silently |
+| 2 | `crates/hex_map/src/settings.rs`:635 | NON-BLOCKER | deferred to owner — V2 bounds duplicate `HillsSettings::validate`, and `canonical_v1_settings` bypasses V1 parse-time validation, so the V2 copy is the only fence keeping the frozen selector in its tested domain (verified identical today) |
+| 7 | `crates/hex_map/src/procedural_v2/hills.rs`:679 | NON-BLOCKER | deferred to owner — `_candidate_diagnostics` binds `notes` without asserting; a notes-pollution regression would pass the parity suite |
+| fresh-eyes | `crates/hex_map/src/grid.rs`:182 | NON-BLOCKER | **walk-checklist item** — the three shipped worlds now frame the opening camera from the generated `MapViewHint` instead of `camera.ron`; terrain is byte-identical, the first view is not; only a human can judge it |
+
+**Notes**: the deep walk corrected two characterizations from the initial review
+comment: a future substance whose palette role disagrees with `is_solid` fails
+**loudly** (`voxelize_plan` re-checks solidity per element → `MaterialContract` →
+`GameplaySetupFailure`), and success-path `GenerationReport.notes` stay empty on
+the shipped Hills path (V1 discards rejected-candidate notes on non-fallback
+success; the `scenarios.rs` relaxation is future-proofing for `run_recipe`
+consumers). Silent-failures pass: 0 real candidates. Numbering: Waves 3–5 were
+recorded on `wave/1-foundations` and land with the wave merge; this entry takes 6
+so the merged log stays monotonic.
+
 ## Wave 2 — docs(planning): sequence the roadmap into waves around the V2 work (2026-07-26)
 
 - **PR**: #57 — `docs/roadmap-waves`

@@ -15,6 +15,7 @@ pub mod hex;
 pub mod setup;
 pub mod terrain;
 pub mod traversal;
+pub mod view;
 pub mod voxel;
 
 pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, Turn};
@@ -25,4 +26,5 @@ pub use terrain::{
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
+pub use view::CameraFocusTarget;
 pub use voxel::{Headroom, Level, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

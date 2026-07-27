@@ -16,6 +16,22 @@ struct SkyParams {
     // Field order and 16-byte pairing must match `SkyParams` in sky_material.rs.
     cloud_roundness: f32,
     cloud_noise: f32,
+    sun_direction: vec3<f32>,
+    celestial_bodies_enabled: f32,
+    sun_disc_color: vec3<f32>,
+    sun_angular_radius_radians: f32,
+    moon_direction: vec3<f32>,
+    moon_angular_radius_radians: f32,
+    moon_disc_color: vec3<f32>,
+    sun_halo_width_radians: f32,
+    lower_glow_direction: vec3<f32>,
+    moon_halo_width_radians: f32,
+    lower_glow_color: vec3<f32>,
+    sun_halo_strength: f32,
+    moon_halo_strength: f32,
+    lower_glow_angular_radius_radians: f32,
+    lower_glow_strength: f32,
+    _padding: f32,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> sky: SkyParams;
@@ -98,6 +114,56 @@ fn cloud_bump(p: vec2<f32>, cell: vec2<f32>) -> f32 {
     return present * bump;
 }
 
+// Chord distance is monotonic with angular distance on the unit sphere, and has a
+// better-behaved screen-space derivative at the centre of a disc than `acos(dot)`.
+fn angular_chord(radians: f32) -> f32 {
+    return 2.0 * sin(0.5 * radians);
+}
+
+fn celestial_body(
+    color: vec3<f32>,
+    view_dir: vec3<f32>,
+    body_dir: vec3<f32>,
+    disc_color: vec3<f32>,
+    disc_radius: f32,
+    halo_width: f32,
+    halo_strength: f32,
+) -> vec3<f32> {
+    // Reject only once the disc and halo are wholly below the geometric horizon.
+    // Centre-culling here would make a rising body pop into existence all at once.
+    let body_elevation = asin(clamp(body_dir.y, -1.0, 1.0));
+    let outer_radius = disc_radius + halo_width;
+    if (body_elevation + outer_radius <= 0.0) {
+        return color;
+    }
+
+    let distance = length(view_dir - body_dir);
+    let disc_edge = angular_chord(disc_radius);
+    let halo_edge = angular_chord(outer_radius);
+    let derivative_width = max(fwidth(distance), 0.00001);
+    var disc = 1.0 - smoothstep(
+        disc_edge - derivative_width,
+        disc_edge + derivative_width,
+        distance,
+    );
+    var halo = 1.0 - smoothstep(
+        disc_edge,
+        max(disc_edge + 0.00001, halo_edge),
+        distance,
+    );
+
+    // Clip coverage at the true horizon with an analytic pixel-width transition.
+    // This avoids both a hard aliased edge and a partial disc suddenly appearing.
+    let horizon_width = max(fwidth(view_dir.y), 0.00001);
+    let horizon = smoothstep(0.0, horizon_width, view_dir.y);
+    disc = disc * horizon;
+    halo = halo * horizon;
+
+    var result = mix(color, disc_color, clamp(halo * halo_strength, 0.0, 1.0));
+    result = mix(result, disc_color, clamp(disc, 0.0, 1.0));
+    return result;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let dir = normalize(in.world_position.xyz - view.world_position.xyz);
@@ -105,6 +171,41 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // vertical gradient (horizon -> zenith)
     let t = clamp(dir.y, 0.0, 1.0);
     var color = mix(sky.horizon_color, sky.zenith_color, t);
+
+    if (sky.celestial_bodies_enabled > 0.5) {
+        // The lower glow is an authored, azimuth-local reflection used by the map
+        // camera, whose downward view mostly sees the lower half of the dome. It is
+        // deliberately a compact patch instead of a warm tint over the whole sky.
+        if (dir.y < 0.0 && sky.lower_glow_direction.y < 0.0) {
+            let glow_distance = length(dir - sky.lower_glow_direction);
+            let glow_edge = angular_chord(sky.lower_glow_angular_radius_radians);
+            let glow = 1.0 - smoothstep(0.0, max(glow_edge, 0.00001), glow_distance);
+            color = mix(
+                color,
+                sky.lower_glow_color,
+                clamp(glow * sky.lower_glow_strength, 0.0, 1.0),
+            );
+        }
+
+        color = celestial_body(
+            color,
+            dir,
+            sky.sun_direction,
+            sky.sun_disc_color,
+            sky.sun_angular_radius_radians,
+            sky.sun_halo_width_radians,
+            sky.sun_halo_strength,
+        );
+        color = celestial_body(
+            color,
+            dir,
+            sky.moon_direction,
+            sky.moon_disc_color,
+            sky.moon_angular_radius_radians,
+            sky.moon_halo_width_radians,
+            sky.moon_halo_strength,
+        );
+    }
 
     // Azimuthal-equidistant projection: the radius on the hex plane is the angle
     // away from the zenith, so a hex covers the same angular size straight up as it
@@ -157,6 +258,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let w = max(fwidth(density), 0.001) + sky.cloud_softness;
     let mask = smoothstep(0.5 - w, 0.5 + w, density);
 
+    // Clouds composite last so a dense cloud can obscure a celestial disc and halo.
     color = mix(color, sky.cloud_color, clamp(mask, 0.0, 1.0));
     return vec4<f32>(color, 1.0);
 }
