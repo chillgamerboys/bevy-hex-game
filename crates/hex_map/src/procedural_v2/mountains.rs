@@ -7,20 +7,20 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{
-    Headroom, HexCoord, Level, MAX_HEADROOM, MapViewHint, SpecialMovementRegion, SubstanceId,
-    TilePos, TraversalEndpoint, TraversalProfile,
+    Headroom, HexCoord, Level, MapViewHint, SpecialMovementRegion, SubstanceId, TilePos,
+    TraversalEndpoint, TraversalProfile, MAX_HEADROOM,
 };
 
-use super::V2GenerationError;
 use super::recipe::{
-    CandidateAttemptError, CandidateContext, FallbackContext, MaterializedSelection, RecipePlan,
-    RecipeValidation, RepairOutcome, ReportMetrics, V2Recipe, ValidationContext,
-    materialize_selection, run_recipe,
+    materialize_selection, run_recipe, CandidateAttemptError, CandidateContext, FallbackContext,
+    MaterializedSelection, RecipePlan, RecipeValidation, RepairOutcome, ReportMetrics, V2Recipe,
+    ValidationContext,
 };
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, TerrainVolumePlan,
     VolumeColumn, VolumeElement,
 };
+use super::V2GenerationError;
 use crate::procedural::TacticalMetrics;
 use crate::settings::{
     MountainsSettings, ProceduralV2Settings, V2EnvironmentSettings, V2RecipeSettings,
@@ -32,7 +32,7 @@ const RIDGE_SHOULDER_RISE: Level = 2;
 const MOUNTAIN_EDGE_RISE: Level = 4;
 const ROUTE_HALF_LENGTH: i32 = 4;
 const MIN_PEAK_SEPARATION: u32 = 2;
-const EXPANDED_ROUTE_HALF_LENGTH: i32 = 6;
+const EXPANDED_ROUTE_HALF_LENGTH: i32 = 5;
 const EXPANDED_RIDGE_RISE: Level = 7;
 const EXPANDED_BRANCH_RISE: Level = 5;
 const EXPANDED_MIN_PEAK_SEPARATION: u32 = 3;
@@ -181,11 +181,9 @@ impl V2Recipe for MountainsRecipe {
                 metrics
                     .mountain_coverage_percent
                     .abs_diff(expanded_coverage_target(settings)),
-                u32::from(
-                    metrics
-                        .peak_height_spread
-                        .abs_diff(expanded_peak_spread(settings)),
-                ),
+                metrics
+                    .peak_height_spread
+                    .abs_diff(expanded_peak_spread(settings)),
                 metrics
                     .branch_count
                     .abs_diff(expanded_branch_count(settings))
@@ -549,6 +547,31 @@ fn construct_expanded_plan(
     let mut protected = BTreeSet::new();
     protected.extend(party_coord.within_radius(2));
     protected.extend(hostile_coord.within_radius(2));
+    let party_approach = [
+        party_coord,
+        from_local(high_u.saturating_add(1), -spawn_v, orientation),
+    ];
+    let hostile_approach = [
+        hostile_coord,
+        from_local(high_u.saturating_add(1), spawn_v, orientation),
+    ];
+    for route in [&high_pass, &low_bypass] {
+        let route_start =
+            route.rows.first().copied().ok_or_else(|| {
+                CandidateAttemptError::rejected("mountain route has no first row")
+            })?;
+        let route_end = route
+            .rows
+            .last()
+            .copied()
+            .ok_or_else(|| CandidateAttemptError::rejected("mountain route has no last row"))?;
+        for (start, end) in party_approach.into_iter().zip(route_start) {
+            protected.extend(start.line_between(end.coord));
+        }
+        for (start, end) in hostile_approach.into_iter().zip(route_end) {
+            protected.extend(start.line_between(end.coord));
+        }
+    }
 
     let skeleton: BTreeSet<_> = ridge_cells
         .union(&spur_cells)
@@ -564,6 +587,7 @@ fn construct_expanded_plan(
         &main_spine,
         &branch_spines,
         &route_coords,
+        &protected,
         &footprint,
         context,
     )?;
@@ -610,6 +634,11 @@ fn construct_expanded_plan(
 
     flatten_zone(&mut heights, party_coord, settings.base_level, 2);
     flatten_zone(&mut heights, hostile_coord, settings.base_level, 2);
+    for coord in &protected {
+        if let Some(height) = heights.get_mut(coord) {
+            *height = settings.base_level;
+        }
+    }
     apply_route(&mut heights, &high_pass);
     apply_route(&mut heights, &low_bypass);
     mountain_cells = heights
@@ -814,7 +843,11 @@ fn expanded_branch_spines(
         };
         let local = to_local(start, orientation);
         let sampled_side: i32 = if fallback {
-            if index.is_multiple_of(2) { 1 } else { -1 }
+            if index.is_multiple_of(2) {
+                1
+            } else {
+                -1
+            }
         } else if context
             .streams
             .stage("mountains.massif.branches")
@@ -884,6 +917,7 @@ fn expanded_peak_centres(
     main_spine: &[HexCoord],
     branch_spines: &[Vec<HexCoord>],
     route_coords: &BTreeSet<HexCoord>,
+    protected: &BTreeSet<HexCoord>,
     footprint: &BTreeSet<HexCoord>,
     context: CandidateContext,
 ) -> Result<Vec<HexCoord>, CandidateAttemptError> {
@@ -893,7 +927,8 @@ fn expanded_peak_centres(
         let Some(centre) = branch.get(branch.len().saturating_mul(2) / 3).copied() else {
             continue;
         };
-        if route_coords.iter().all(|route| centre.distance(*route) > 2)
+        if !route_coords.contains(&centre)
+            && !protected.contains(&centre)
             && centres
                 .iter()
                 .all(|other| centre.distance(*other) >= EXPANDED_MIN_PEAK_SEPARATION)
@@ -914,7 +949,8 @@ fn expanded_peak_centres(
                         .max()
                         .unwrap_or_default()
                         .saturating_sub(1)
-                && route_coords.iter().all(|route| coord.distance(*route) > 2)
+                && !route_coords.contains(coord)
+                && !protected.contains(coord)
         })
         .collect();
     while centres.len() < desired {
@@ -1011,41 +1047,63 @@ fn grow_mountain_footprint(
     context: CandidateContext,
 ) -> Result<BTreeSet<HexCoord>, CandidateAttemptError> {
     let skeleton = mountain_cells.clone();
+    let mut frontier = BTreeSet::new();
+    for coord in &mountain_cells {
+        for neighbor in coord.neighbors() {
+            if footprint.contains(&neighbor)
+                && !protected.contains(&neighbor)
+                && !mountain_cells.contains(&neighbor)
+            {
+                frontier.insert((
+                    mountain_footprint_priority(neighbor, &skeleton, context),
+                    neighbor,
+                ));
+            }
+        }
+    }
     while mountain_cells.len() < target_count {
-        let frontier: BTreeSet<_> = mountain_cells
-            .iter()
-            .flat_map(|coord| coord.neighbors())
-            .filter(|coord| {
-                footprint.contains(coord)
-                    && !protected.contains(coord)
-                    && !mountain_cells.contains(coord)
-            })
-            .collect();
-        let next = frontier
-            .into_iter()
-            .min_by_key(|coord| {
-                let distance = distance_to_set(*coord, &skeleton);
-                let roughness = context
-                    .streams
-                    .stage("mountains.massif.footprint")
-                    .sample_coord(
-                        HexCoord::from_axial(coord.x().div_euclid(2), coord.y().div_euclid(2)),
-                        0,
-                    )
-                    % 11;
-                (u64::from(distance).saturating_mul(5) + roughness, *coord)
-            })
-            .ok_or_else(|| {
-                CandidateAttemptError::rejected(
-                    "expanded mountain footprint cannot reach its coverage target",
-                )
-            })?;
+        let Some((_priority, next)) = frontier.pop_first() else {
+            return Err(CandidateAttemptError::rejected(
+                "expanded mountain footprint cannot reach its coverage target",
+            ));
+        };
         mountain_cells.insert(next);
+        for neighbor in next.neighbors() {
+            if footprint.contains(&neighbor)
+                && !protected.contains(&neighbor)
+                && !mountain_cells.contains(&neighbor)
+            {
+                frontier.insert((
+                    mountain_footprint_priority(neighbor, &skeleton, context),
+                    neighbor,
+                ));
+            }
+        }
     }
     Ok(mountain_cells)
 }
 
-#[allow(clippy::too_many_arguments)]
+fn mountain_footprint_priority(
+    coord: HexCoord,
+    skeleton: &BTreeSet<HexCoord>,
+    context: CandidateContext,
+) -> u64 {
+    let distance = distance_to_set(coord, skeleton);
+    let roughness = context
+        .streams
+        .stage("mountains.massif.footprint")
+        .sample_coord(
+            HexCoord::from_axial(coord.x().div_euclid(2), coord.y().div_euclid(2)),
+            0,
+        )
+        % 11;
+    u64::from(distance).saturating_mul(5) + roughness
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "coverage top-up needs the exact immutable exclusion sets that define its contract"
+)]
 fn top_up_mountain_coverage(
     heights: &mut BTreeMap<HexCoord, Level>,
     mountain_cells: &mut BTreeSet<HexCoord>,
@@ -1056,37 +1114,44 @@ fn top_up_mountain_coverage(
     route_coords: &BTreeSet<HexCoord>,
     context: CandidateContext,
 ) -> Result<(), CandidateAttemptError> {
+    let mut frontier = BTreeSet::new();
+    for coord in mountain_cells.iter() {
+        for neighbor in coord.neighbors() {
+            if footprint.contains(&neighbor)
+                && !protected.contains(&neighbor)
+                && !route_coords.contains(&neighbor)
+                && !mountain_cells.contains(&neighbor)
+            {
+                frontier.insert((mountain_coverage_priority(neighbor, context), neighbor));
+            }
+        }
+    }
     while mountain_cells.len() < target_count {
-        let frontier: BTreeSet<_> = mountain_cells
-            .iter()
-            .flat_map(|coord| coord.neighbors())
-            .filter(|coord| {
-                footprint.contains(coord)
-                    && !protected.contains(coord)
-                    && !route_coords.contains(coord)
-                    && !mountain_cells.contains(coord)
-            })
-            .collect();
-        let next = frontier
-            .into_iter()
-            .min_by_key(|coord| {
-                (
-                    context
-                        .streams
-                        .stage("mountains.massif.coverage")
-                        .sample_coord(*coord, 0),
-                    *coord,
-                )
-            })
-            .ok_or_else(|| {
-                CandidateAttemptError::rejected(
-                    "expanded mountain elevations cannot reach their coverage target",
-                )
-            })?;
+        let Some((_priority, next)) = frontier.pop_first() else {
+            return Err(CandidateAttemptError::rejected(
+                "expanded mountain elevations cannot reach their coverage target",
+            ));
+        };
         heights.insert(next, base_level.saturating_add(1));
         mountain_cells.insert(next);
+        for neighbor in next.neighbors() {
+            if footprint.contains(&neighbor)
+                && !protected.contains(&neighbor)
+                && !route_coords.contains(&neighbor)
+                && !mountain_cells.contains(&neighbor)
+            {
+                frontier.insert((mountain_coverage_priority(neighbor, context), neighbor));
+            }
+        }
     }
     Ok(())
+}
+
+fn mountain_coverage_priority(coord: HexCoord, context: CandidateContext) -> u64 {
+    context
+        .streams
+        .stage("mountains.massif.coverage")
+        .sample_coord(coord, 0)
 }
 
 fn distance_to_set(coord: HexCoord, positions: &BTreeSet<HexCoord>) -> u32 {
@@ -1985,7 +2050,7 @@ mod tests {
         assert_eq!(first.map_fingerprint, second.map_fingerprint);
         assert_eq!(first.selected_candidate, second.selected_candidate);
         assert_eq!(first.selected_candidate, Some(1));
-        assert_eq!(first.map_fingerprint, 4_445_202_355_468_180_347);
+        assert_eq!(first.map_fingerprint, 5_936_297_593_294_798_068);
         assert_eq!(first.map.len(), 469);
         assert_eq!(first.candidates_evaluated, 8);
         assert!(!first.used_fallback);
@@ -2042,6 +2107,42 @@ mod tests {
             assert!(first.metrics.spine_turns >= 2);
             assert!(first.metrics.low_bypass_steps > first.metrics.high_pass_steps);
             assert!(first.metrics.inaccessible_peaks > 0);
+        }
+    }
+
+    #[test]
+    fn expanded_mountain_coverage_scales_to_large_radii() {
+        for (radius, relief, peak_count, expected_coverage, expected_branches) in
+            [(20, 21, 6, 56, 3), (40, 24, 7, 60, 4)]
+        {
+            let generated = build(
+                radius,
+                0.4,
+                &expanded_settings(relief, peak_count),
+                129_704_046,
+                &palette(),
+                &is_solid,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "expanded radius {radius} with relief {relief} and {peak_count} peaks should generate: {error}"
+                )
+            });
+
+            let expected_columns =
+                1_u32.saturating_add(3_u32.saturating_mul(radius).saturating_mul(radius + 1));
+            assert_eq!(
+                generated.map.len(),
+                usize::try_from(expected_columns).unwrap_or(usize::MAX)
+            );
+            assert!(!generated.used_fallback);
+            assert_eq!(
+                generated.metrics.mountain_coverage_percent,
+                expected_coverage
+            );
+            assert_eq!(generated.metrics.branch_count, expected_branches);
+            assert!(generated.metrics.spine_turns >= 2);
+            assert!(generated.metrics.low_bypass_steps > generated.metrics.high_pass_steps);
         }
     }
 
@@ -2165,11 +2266,9 @@ mod tests {
             .peak_centres
             .get_mut(1)
             .expect("the valid candidate should have a second peak") = first_peak;
-        assert!(
-            validation_issues(&settings, &duplicate_peak)
-                .iter()
-                .any(|issue| issue.contains("peak count"))
-        );
+        assert!(validation_issues(&settings, &duplicate_peak)
+            .iter()
+            .any(|issue| issue.contains("peak count")));
 
         let mut stale_target = valid.clone();
         let centre = stale_target
@@ -2179,21 +2278,17 @@ mod tests {
             .copied()
             .expect("the valid candidate should have a peak");
         stale_target.metadata.peak_targets.remove(&centre);
-        assert!(
-            validation_issues(&settings, &stale_target)
-                .iter()
-                .any(|issue| issue.contains("summit targets"))
-        );
+        assert!(validation_issues(&settings, &stale_target)
+            .iter()
+            .any(|issue| issue.contains("summit targets")));
 
         let mut inverted_routes = valid.clone();
         for position in inverted_routes.metadata.high_pass.rows.iter_mut().flatten() {
             position.level = settings.base_level;
         }
-        assert!(
-            validation_issues(&settings, &inverted_routes)
-                .iter()
-                .any(|issue| issue.contains("high pass does not rise"))
-        );
+        assert!(validation_issues(&settings, &inverted_routes)
+            .iter()
+            .any(|issue| issue.contains("high pass does not rise")));
 
         let mut extra_portal = valid.clone();
         let route_coords: BTreeSet<_> = extra_portal
@@ -2211,11 +2306,9 @@ mod tests {
             .find(|coord| !route_coords.contains(coord))
             .expect("the valid ridge should contain a non-route cell");
         extra_portal.metadata.ordinary.insert(undeclared);
-        assert!(
-            validation_issues(&settings, &extra_portal)
-                .iter()
-                .any(|issue| issue.contains("undeclared third ridge crossing"))
-        );
+        assert!(validation_issues(&settings, &extra_portal)
+            .iter()
+            .any(|issue| issue.contains("undeclared third ridge crossing")));
 
         let mut metal = valid;
         let column = metal
@@ -2232,11 +2325,9 @@ mod tests {
             panic!("the valid mountain column should end in solid material");
         };
         top.material = SolidMaterialRole::Metal;
-        assert!(
-            validation_issues(&settings, &metal)
-                .iter()
-                .any(|issue| issue.contains("fill, metal, or non-Frozen"))
-        );
+        assert!(validation_issues(&settings, &metal)
+            .iter()
+            .any(|issue| issue.contains("fill, metal, or non-Frozen")));
     }
 
     fn validation_issues(
@@ -2316,6 +2407,43 @@ mod tests {
         assert!(
             radius_40_median < target_micros,
             "Mountains radius 40 median was {radius_40_median}us; target is {target_micros}us"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release/debug expanded-generator benchmark"]
+    fn expanded_mountain_radius_benchmark_tracks_the_radius_40_target() {
+        let settings = expanded_settings(24, 7);
+        let palette = palette();
+        let mut radius_40_median = 0_u128;
+        for radius in [12, 20, 40] {
+            let mut samples = Vec::new();
+            for seed in 0..8 {
+                let started = Instant::now();
+                let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
+                    .expect("the expanded benchmark map should generate");
+                samples.push(started.elapsed().as_micros());
+                std::hint::black_box(generated);
+            }
+            samples.sort_unstable();
+            let median = samples
+                .get(samples.len() / 2)
+                .copied()
+                .expect("the benchmark always records eight samples");
+            eprintln!("Expanded Mountains radius {radius}: median={median}us");
+            if radius == 40 {
+                radius_40_median = median;
+            }
+        }
+
+        let target_micros = if cfg!(debug_assertions) {
+            250_000
+        } else {
+            50_000
+        };
+        assert!(
+            radius_40_median < target_micros,
+            "Expanded Mountains radius 40 median was {radius_40_median}us; target is {target_micros}us"
         );
     }
 }
