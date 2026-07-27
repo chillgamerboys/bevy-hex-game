@@ -1,0 +1,26 @@
+[package]
+name = "hex_lattice"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "The lattice: the game's core rules engine — gems, fusions, spells, mana, disables and enchantments as a pure, deterministic, serializable core with no App, no plugin and no renderer."
+
+# Built like `hex_core`: Bevy sub-crates only (no `bevy` facade), no `App`, no
+# renderer, so the property suite runs headless in milliseconds.
+[dependencies]
+hex_core = { workspace = true }
+bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
+bevy_reflect = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+# Seeded generators for the randomised property tests — deterministic, no new
+# third-party surface (proptest was considered and declined; see the crate docs).
+rand = { workspace = true }
+# The serde round-trip property tests exercise the actual authoring format. RON
+# (unlike JSON) serializes maps with struct keys, which a `LatticeSpec`'s
+# `BTreeMap<LatticeCoord, _>` needs.
+ron = "0.12.2"
+
+[lints]
+workspace = true

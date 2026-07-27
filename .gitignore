@@ -1,2 +1,4 @@
 /target
 *.DS_Store
+# Visual-walk output frames are per-run artifacts, not repo content.
+/.context/visual-walks/

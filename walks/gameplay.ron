@@ -1,0 +1,27 @@
+// The gameplay walk: both scenario families, the pause overlay, and the
+// return trip. Complements walks/menus.ron; run the same way. The long
+// settles after AwaitTerrain mirror the map-review harness's frame budget so
+// the camera and lighting have settled before the photograph.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "The Crossing"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("10-crossing"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+    Settle(30),
+    StartScenario(name: "Procedural Hills"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("11-hills"),
+    Key("Escape"),
+    Settle(10),
+    Capture("12-hills-paused"),
+    Key("Escape"),
+    Settle(10),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

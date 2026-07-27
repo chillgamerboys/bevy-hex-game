@@ -22,7 +22,10 @@ use bevy::prelude::*;
 use hex_assets::{Scenario, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
 
-use crate::menus::widgets::{blurb, button, compact_button, label, LABEL, MUTED};
+use crate::menus::widgets::{
+    blurb, button, display, divider, fine, heading, label, small_button, UiAssets, ACCENT_EDGE,
+    BLURB_SIZE,
+};
 use crate::scenarios::ScenarioToLoad;
 
 use super::{despawn_screen, screen_root};
@@ -36,6 +39,7 @@ pub(super) fn plugin(app: &mut App) {
             rebuild_scenario_list,
             reroll_scenario_seed,
             start_chosen_scenario,
+            open_lattice_demo,
             handle_input,
         )
             .chain()
@@ -63,6 +67,10 @@ struct StartsScenario {
 struct RerollsScenario {
     scenario: Scenario,
 }
+
+/// The button that opens the lattice ruleset demo.
+#[derive(Component)]
+struct OpensLatticeDemo;
 
 /// The line that stands in for the list until the library has loaded.
 #[derive(Component)]
@@ -134,22 +142,32 @@ fn mixed_seed(mut value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
-fn spawn_title(mut commands: Commands, failure: Option<Res<GameplaySetupFailure>>) {
+fn spawn_title(
+    mut commands: Commands,
+    failure: Option<Res<GameplaySetupFailure>>,
+    assets: Res<UiAssets>,
+) {
     let failure_reason = failure.as_deref().map(|failure| failure.reason.clone());
     commands
         .spawn(screen_root(Screen::Title, "Title Screen"))
         .with_children(|parent| {
+            parent.spawn(display(&assets, "Hex Game"));
             parent.spawn((
-                Text::new("hex game"),
-                TextFont::from_font_size(56.0),
-                TextColor(LABEL),
+                Node {
+                    margin: UiRect::bottom(Val::Px(10.0)),
+                    ..default()
+                },
+                children![heading(&assets, "scenarios")],
             ));
             if let Some(reason) = failure_reason {
                 parent.spawn((
                     Name::new("Gameplay Setup Failure"),
                     SetupFailureNotice,
                     Text::new(reason),
-                    TextFont::from_font_size(15.0),
+                    TextFont {
+                        font: assets.body.clone().into(),
+                        ..TextFont::from_font_size(BLURB_SIZE)
+                    },
                     TextColor(Color::srgb(0.95, 0.45, 0.40)),
                     Node {
                         max_width: Val::Px(720.0),
@@ -163,23 +181,31 @@ fn spawn_title(mut commands: Commands, failure: Option<Res<GameplaySetupFailure>
                     ScenarioList,
                     Node {
                         flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(6.0),
+                        row_gap: Val::Px(8.0),
                         align_items: AlignItems::Center,
                         ..default()
                     },
                 ))
                 .with_children(|list| {
-                    list.spawn((
-                        ListPlaceholder,
-                        Text::new("loading scenarios..."),
-                        TextFont::from_font_size(16.0),
-                        TextColor(MUTED),
+                    list.spawn((ListPlaceholder, blurb(&assets, "loading scenarios...")));
+                });
+            parent.spawn(divider(564.0));
+            parent
+                .spawn((button("Lattice Demo"), OpensLatticeDemo))
+                .insert(BorderColor::all(ACCENT_EDGE))
+                .with_children(|entry| {
+                    entry.spawn(label(&assets, "Lattice Demo"));
+                    entry.spawn(blurb(
+                        &assets,
+                        "Poke the magic ruleset: cast, channel, strike, break enchantments.",
                     ));
                 });
             parent.spawn((
-                Text::new("click a scenario to play    -    ESC to quit"),
-                TextFont::from_font_size(14.0),
-                TextColor(MUTED),
+                Node {
+                    margin: UiRect::top(Val::Px(8.0)),
+                    ..default()
+                },
+                children![blurb(&assets, "click a scenario to play   ·   ESC to quit")],
             ));
         });
 }
@@ -194,6 +220,7 @@ fn rebuild_scenario_list(
     clicked_starts: Query<&Interaction, (Changed<Interaction>, With<StartsScenario>)>,
     clicked_rerolls: Query<&Interaction, (Changed<Interaction>, With<RerollsScenario>)>,
     seeds: Res<SessionSeeds>,
+    assets: Res<UiAssets>,
 ) {
     let Some(library) = library else { return };
     let Ok(list) = lists.single() else { return };
@@ -228,13 +255,17 @@ fn rebuild_scenario_list(
     }
 
     for scenario in &library.scenarios {
+        // A fixed-width row with a permanent right-hand slot: rows with and
+        // without a seed control keep identical left edges. The first walk
+        // photograph showed the zig-zag the old optional slot produced.
         let row = commands
             .spawn((
                 Name::new("Scenario Entry"),
                 ScenarioEntry,
                 Node {
+                    width: Val::Px(564.0),
                     flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(10.0),
+                    column_gap: Val::Px(12.0),
                     align_items: AlignItems::Center,
                     ..default()
                 },
@@ -250,37 +281,37 @@ fn rebuild_scenario_list(
                 },
             ))
             .with_children(|entry| {
-                entry.spawn(label(scenario.name.clone()));
-                entry.spawn(blurb(scenario.blurb.clone()));
+                entry.spawn(label(&assets, scenario.name.clone()));
+                entry.spawn(blurb(&assets, scenario.blurb.clone()));
             })
             .id();
         commands.entity(row).add_child(launch);
 
-        if let Some(seed) = seed {
-            let reroll = commands
+        let slot = if let Some(seed) = seed {
+            commands
                 .spawn((
-                    compact_button("Reroll Seed"),
+                    small_button("Reroll Seed"),
                     RerollsScenario {
                         scenario: scenario.clone(),
                     },
                 ))
                 .with_children(|control| {
-                    control.spawn((
-                        Text::new("reroll"),
-                        TextFont::from_font_size(14.0),
-                        TextColor(LABEL),
-                        Pickable::IGNORE,
-                    ));
-                    control.spawn((
-                        Text::new(format!("seed {seed}")),
-                        TextFont::from_font_size(11.0),
-                        TextColor(MUTED),
-                        Pickable::IGNORE,
-                    ));
+                    control.spawn(blurb(&assets, "reroll"));
+                    control.spawn(fine(&assets, format!("seed {seed}")));
                 })
-                .id();
-            commands.entity(row).add_child(reroll);
-        }
+                .id()
+        } else {
+            commands
+                .spawn((
+                    Name::new("Seed Slot Spacer"),
+                    Node {
+                        width: Val::Px(132.0),
+                        ..default()
+                    },
+                ))
+                .id()
+        };
+        commands.entity(row).add_child(slot);
 
         commands.entity(list).add_child(row);
     }
@@ -317,6 +348,18 @@ fn start_chosen_scenario(
                 resolved_seed: seeds.resolved(&starts.scenario).map(ResolvedMapSeed),
             });
             next.set(Screen::Loading);
+        }
+    }
+}
+
+/// Opens the lattice ruleset demo when its button is pressed.
+fn open_lattice_demo(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensLatticeDemo>)>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    for interaction in &clicked {
+        if *interaction == Interaction::Pressed {
+            next.set(Screen::LatticeDemo);
         }
     }
 }
@@ -384,6 +427,13 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
         app.init_state::<Screen>();
         app.insert_resource(library);
+        // Default handles stand in for the real fonts; layout logic under test
+        // does not care what the glyphs would rasterize from.
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
         app.add_plugins(super::plugin);
         app
     }
@@ -429,6 +479,30 @@ mod tests {
         let world = app.world_mut();
         let mut query = world.query::<&Text>();
         query.iter(world).any(|text| text.0.contains(wanted))
+    }
+
+    /// The demo button is part of the static title layout and switches screens.
+    #[test]
+    fn the_lattice_demo_button_opens_the_demo_screen() {
+        let mut app = test_app();
+        go_to(&mut app, Screen::Title);
+
+        let world = app.world_mut();
+        let mut buttons = world.query_filtered::<Entity, With<OpensLatticeDemo>>();
+        let button = buttons
+            .single(world)
+            .expect("the title screen should offer exactly one demo button");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::LatticeDemo,
+            "pressing the demo button should enter the demo screen"
+        );
     }
 
     #[test]
@@ -494,6 +568,11 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
         app.init_state::<Screen>();
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
         app.add_plugins(super::plugin);
 
         go_to(&mut app, Screen::Title);

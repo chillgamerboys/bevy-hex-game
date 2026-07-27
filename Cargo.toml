@@ -6,6 +6,7 @@ members = ["crates/*"]
 # opts in with `foo = { workspace = true }` and states its own features.
 [workspace.dependencies]
 hex_core = { path = "crates/hex_core" }
+hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
 hex_anim = { path = "crates/hex_anim" }
 hex_combat = { path = "crates/hex_combat" }
@@ -22,6 +23,7 @@ bevy_reflect = "0.19"
 bevy-inspector-egui = "0.37"
 rand = "0.8.5"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
+serde = { version = "1.0.229", features = ["derive"] }
 
 [workspace.package]
 version = "0.1.0"

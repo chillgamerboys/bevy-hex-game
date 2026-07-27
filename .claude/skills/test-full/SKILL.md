@@ -47,18 +47,22 @@ builds and what ships — `hex_dev` and the `dev` feature excluded. It
 catches "builds with the inspector but not without", which Phase 1
 cannot see because every other command runs `--all-features`.
 
-## Phase 3 — Visual verification (manual)
+## Phase 3 — Visual verification (two tiers)
 
-**This phase cannot be automated and must not be skipped silently.**
-Several failure modes in this repo produce a clean log, green tests,
-and a wrong window — a black sky, a plain blue screen, a piece sunk
-into the terrain. Every serious bug so far was found by a person
-looking at the window.
+**The automated tier is `/visual-walk`** — as `/audit-pr` Step 2.5 it
+drives the game through `walks/*.ron`, photographs every screen, and
+the agent reads the frames. Blue windows, black skies, dead screens
+and missing panels are caught there mechanically. When running
+`/test-full` standalone on a runtime-surface change, invoke
+`/visual-walk` here rather than skipping straight to the reminder.
 
-Print the walk for the operator:
+**The human tier must not be skipped silently.** Stills are not play:
+motion, feel, hairline seams and taste are still found by a person
+looking at the window — as every serious bug here was before the walk
+existed. Print the walk for the operator:
 
 ```
-Manual walk (PR checkbox: "I ran the game and looked at it"):
+Manual walk (PR checkbox: "A human ran the game and looked at it"):
   cargo dev
   splash → title → click a scenario → gameplay
   orbit (right-drag), WASD pan, zoom
@@ -66,9 +70,9 @@ Manual walk (PR checkbox: "I ran the game and looked at it"):
   ESC pause/resume, BACKSPACE to title, re-enter a scenario (rebuild)
 ```
 
-Report this phase as `manual — operator confirms`. It maps to the
-"I ran the game and looked at it" checkbox in the PR template; the
-operator ticks that box, not this skill.
+Report this phase as `automated walk: <verdict>; human walk: operator
+confirms`. The human box in the PR template belongs to the operator,
+not this skill.
 
 ## Output
 

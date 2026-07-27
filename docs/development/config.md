@@ -8,6 +8,8 @@ Rust, and you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
+| `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
+| `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size, movement speed and colour |
@@ -34,6 +36,8 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
+| `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
+| `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale and colour on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
@@ -487,6 +491,88 @@ a warm horizon colour fills the screen with terracotta and reads as clay, not ev
 Both `world` and `lighting` are paths, and neither is checked by the compiler. A typo
 fails `cargo test` rather than at the loading screen, but only because a test opens
 every file the scenarios name — keep it that way.
+
+## Elements and spells
+
+Two files define the magic system as content. Nothing in the game reads them *yet* —
+the lattice that actually casts spells is being built alongside this — but they load,
+validate and cross-check now, so authoring can begin.
+
+### `elements.ron`
+
+The six-element **wheel** and the **fusion recipes** that build higher-order elements
+from it.
+
+```ron
+(
+    wheel: ["Light", "Air", "Fire", "Metal", "Earth", "Water"],
+    fusions: {
+        "Lightning": [(element: "Light", mana: 1), (element: "Fire", mana: 1)],
+    },
+)
+```
+
+- **`wheel`** lists the basic elements. Opposition is their position on the wheel:
+  each element opposes the one halfway round — with six, that is three apart, giving
+  Light/Metal, Air/Earth, Fire/Water. Reorder the wheel and you change *which elements
+  oppose which*; that is the wheel's whole job.
+- **`fusions`** are higher-order elements. Each names its output and the inputs it
+  draws (an element and how much mana). Lightning is Light + Fire. A fusion output is
+  never itself a basic wheel element, every input must be a basic element or another
+  fusion's output, and the recipes may not form a loop — all checked when the file
+  loads.
+
+One rule worth knowing: an element's internal **id is assigned from its name in
+alphabetical order**, *not* from where it sits in the file or on the wheel. So you can
+reorder entries freely without silently rewriting anything — and it is why wheel order
+(which sets opposition) is written out separately.
+
+### `spells.ron`
+
+Each spell by name:
+
+```ron
+(
+    spells: {
+        "Ember": (
+            requirements: [(element: "Fire", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 3, shape: Single, needs_los: true),
+            effects: [DisableHexes(count: 1, targeted: false)],
+        ),
+    },
+)
+```
+
+- **`requirements`** are the adjacent gems the spell draws on — an element and its
+  mana. The *number* of requirements is the spell's **tier** (at most six, a full
+  ring). Ember needs one Fire gem; Fireball needs six.
+- **`casting`** is `Evocation` (spends the mana outright) or `Enchantment(defense: N)`
+  (ties mana up while it lasts; `defense` is how much it subtracts from incoming
+  disables — `0` for a non-defensive enchantment).
+- **`mana`** is `Fixed` (all-or-nothing) or `Variable` (scales with the mana given).
+- **`co_castable`** allows casting alongside another spell. A spell that is both
+  `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
+  "ritual"; it follows from the two flags.
+- **`targeting`** is `range` (in hexes), `shape` (`SelfCast`, `Single`, `Line` or
+  `Blast`) and `needs_los` (whether line of sight is required).
+- **`effects`** is a **fixed list** of what a spell can do — you cannot invent new ones
+  without a programmer, which is deliberate:
+
+  `DisableHexes`, `Burn`, `RestoreHexes`, `ModifyIncomingDisables`, `Reveal`,
+  `Illuminate`, `SetTerrain`, `ClearTerrain`, `SpawnWall`, `Displace`.
+
+  `SetTerrain` and `SpawnWall` name a substance from `substances.ron`.
+
+### When a reference is wrong
+
+A spell that requires an element `elements.ron` does not define, or an effect that
+names a substance `substances.ron` does not have, is a **dangling reference**. On load
+the game logs exactly which one and keeps the last content that was valid — the same
+way a broken `lighting.ron` keeps the last good sky. A test also opens every shipped
+file and fails if any reference dangles, so the shipped game never carries a broken one.
 
 ## One thing that will not do anything on a Mac
 
