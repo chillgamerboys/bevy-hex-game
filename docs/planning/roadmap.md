@@ -23,19 +23,19 @@ else is the gameplay side. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Deterministic sim seams | serde across the hex_core domain vocabulary; a stable `UnitId` with allocator and registry; every sim tie-break moved off entity ids; a `SimSeeds` resource | core |
-| Command funnel | `GameCommand` vocabulary and queue in hex_core; one validating applier in hex_combat; click, SPACE, and the AI become emitters; a `Busy` gate replaces animation-component gating | combat |
-| Combat policy knobs | `combat.ron`: engage/disengage ranges, movement budget, height bonus, and the open design questions as named policy enums that parse but reject-with-reason until built | combat |
-| Elements and spells as content | `elements.ron` (wheel, opposition, fusion recipes) and `spells.ron` (closed-enum effects, targeting specs); a cross-file `ContentIndex` with load-time and test-time reference checks | assets |
-| Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat |
-| Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat |
-| Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game |
-| Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game |
-| Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat |
-| Ship-hygiene basics | panic hook, log-to-file, version display in the title, diagnostics logging off in release | game |
-| Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game |
-| Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game |
-| Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game |
+| Deterministic sim seams | serde across the hex_core domain vocabulary; a stable `UnitId` with allocator and registry; every sim tie-break moved off entity ids; a `SimSeeds` resource | core | <!-- linear: HEX-6 owner: shravan-kumaran -->
+| Command funnel | `GameCommand` vocabulary and queue in hex_core; one validating applier in hex_combat; click, SPACE, and the AI become emitters; a `Busy` gate replaces animation-component gating | combat | <!-- linear: HEX-11 owner: shravan-kumaran -->
+| Combat policy knobs | `combat.ron`: engage/disengage ranges, movement budget, height bonus, and the open design questions as named policy enums that parse but reject-with-reason until built | combat | <!-- linear: HEX-10 owner: shravan-kumaran -->
+| Elements and spells as content | `elements.ron` (wheel, opposition, fusion recipes) and `spells.ron` (closed-enum effects, targeting specs); a cross-file `ContentIndex` with load-time and test-time reference checks | assets | <!-- linear: HEX-7 owner: shravan-kumaran -->
+| Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat | <!-- linear: HEX-8 owner: shravan-kumaran -->
+| Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat | <!-- linear: HEX-12 owner: shravan-kumaran -->
+| Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game | <!-- linear: HEX-14 owner: shravan-kumaran -->
+| Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
+| Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
+| Ship-hygiene basics | panic hook, log-to-file, version display in the title, diagnostics logging off in release | game | <!-- linear: HEX-9 owner: shravan-kumaran -->
+| Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
+| Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
+| Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Named region tags | `regions:` in world files, published as `RegionTags` on tile entities — anti-magic fields, lit zones, any painted area | map |
 | Run bottoms on tiles | publish `RunBottom(Level)` beside each tile's `TilePos` so line-of-sight and cover can see under bridges | map |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
