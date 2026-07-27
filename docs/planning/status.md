@@ -45,6 +45,18 @@ lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). 
 are one hex wide; there is no footprint for anything larger, and units do not obstruct
 each other — so a route may be drawn straight through another piece.
 
+Around the game sits its own verification tooling. A **lattice-demo screen** on the
+title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
+**`visual-walk`** build drives the whole game through scripted RON walks — screens,
+clicks by `Name`, keys, scenario launches — photographing every step through an
+offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
+mechanical gate, and the *Close Quarters* scenario exists so a walk (or a person)
+reaches combat in one click. The menus wear vendored Cinzel/Inter type over a
+design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
+time-of-day is available to those that opt in. The title screen shows the workspace
+version, sessions write a `hex_game.log` beside the executable (fresh per launch),
+and a panic hook puts the last words in it.
+
 ## What is provisional
 
 Everything in this table is a guess standing in for a decision that
@@ -110,8 +122,11 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 
 ## The production gap
 
-Nothing that makes this a product exists yet: no saves, no settings menu, no audio,
-no input rebinding, no crash reporting, no log files, and no signing or store
-packaging. The full checklist, with the evidence behind each line and the crate
-choices for closing them, is [production-audit.md](production-audit.md); the
-sequenced work is the production-hygiene epic in [roadmap.md](roadmap.md).
+Most of what makes this a product does not exist yet: no saves, no settings menu,
+no audio, no input rebinding, and no signing or store packaging. The first hygiene
+slice has landed — a per-session log file beside the executable, a panic hook that
+writes into it, and the version on the title screen — but full crash *reporting*
+(symbolication, upload, a dialog) has not. The full checklist, with the evidence
+behind each line and the crate choices for closing them, is
+[production-audit.md](production-audit.md); the sequenced work is the
+production-hygiene epic in [roadmap.md](roadmap.md).
