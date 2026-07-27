@@ -3233,6 +3233,7 @@ dependencies = [
  "bevy_state",
  "hexx",
  "rand 0.8.7",
+ "serde",
  "xxhash-rust",
 ]
 
@@ -3257,6 +3258,18 @@ dependencies = [
  "hex_units",
  "hex_world",
  "ron",
+]
+
+[[package]]
+name = "hex_lattice"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "bevy_reflect",
+ "hex_core",
+ "rand 0.8.7",
+ "ron",
+ "serde",
 ]
 
 [[package]]

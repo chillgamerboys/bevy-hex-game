@@ -68,6 +68,7 @@ version:
 | Adding | Goes in |
 |---|---|
 | Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` |
+| The lattice rules engine: gems, fusions, spells, mana, disables, enchantments | `hex_lattice` |
 | Voxels, terrain, tile spawning, map settings | `hex_map` |
 | Asset loading, shared settings | `hex_assets` |
 | Sky and camera | `hex_world` |

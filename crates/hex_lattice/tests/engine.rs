@@ -1,0 +1,528 @@
+//! The property suite and unit tests for the lattice engine.
+//!
+//! Headless, no `App`, no fixtures — the cheapest test surface in the workspace.
+//! It carries the design's geometric theorems (two tier-6 spells can never be
+//! adjacent, fusion chains die downstream, disabling a locked gem breaks its
+//! enchantment, serde round-trips are identity, channel/cast conserves mana)
+//! alongside targeted unit checks.
+
+use std::collections::BTreeMap;
+
+use hex_core::{ElementId, LatticeCoord, SpellId};
+use hex_lattice::{
+    apply_cast, apply_disables, castable, channel, resolve_incoming, tick_burns, CastBlocked,
+    Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement,
+    SpellTable,
+};
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
+
+// --- content the tests speak against --------------------------------------
+
+const FIRE: ElementId = ElementId(0);
+const LIGHT: ElementId = ElementId(1);
+const AIR: ElementId = ElementId(2);
+const WATER: ElementId = ElementId(3);
+const LIGHTNING: ElementId = ElementId(10);
+const THUNDER: ElementId = ElementId(11);
+
+const EMBER: SpellId = SpellId(0); // tier-1 fire evocation
+const FIREBALL: SpellId = SpellId(1); // tier-6 fire evocation
+const SHIELD: SpellId = SpellId(2); // tier-1 fire enchantment, defence 1
+const THUNDERSPELL: SpellId = SpellId(3); // tier-1, needs a THUNDER source
+const FREE: SpellId = SpellId(4); // tier-0
+
+fn req(element: ElementId, mana: u16) -> Requirement {
+    Requirement { element, mana }
+}
+
+/// An in-memory stand-in for the RON content `hex_assets` will supply later.
+struct Content;
+
+impl SpellTable for Content {
+    fn requirements(&self, spell: SpellId) -> Vec<Requirement> {
+        if spell == EMBER {
+            vec![req(FIRE, 1)]
+        } else if spell == FIREBALL {
+            vec![req(FIRE, 1); 6]
+        } else if spell == SHIELD {
+            vec![req(FIRE, 2)]
+        } else if spell == THUNDERSPELL {
+            vec![req(THUNDER, 1)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn casting(&self, spell: SpellId) -> Casting {
+        if spell == SHIELD {
+            Casting::Enchantment { defense: 1 }
+        } else {
+            Casting::Evocation
+        }
+    }
+}
+
+impl FusionTable for Content {
+    fn recipe(&self, output: ElementId) -> Option<Vec<Requirement>> {
+        if output == LIGHTNING {
+            Some(vec![req(LIGHT, 1), req(FIRE, 1)])
+        } else if output == THUNDER {
+            Some(vec![req(LIGHTNING, 1), req(WATER, 1)])
+        } else {
+            None
+        }
+    }
+}
+
+fn basic_stats() -> LatticeStats {
+    LatticeStats::new(
+        BTreeMap::from([(FIRE, 3), (LIGHT, 3), (AIR, 3), (WATER, 3)]),
+        BTreeMap::from([(FIRE, 5), (LIGHT, 5), (AIR, 5), (WATER, 5)]),
+    )
+}
+
+/// A gem of `element`, for terser spec construction.
+fn gem(element: ElementId) -> CellKind {
+    CellKind::Gem { element }
+}
+
+// --- property 1: two tier-6 spells can never be adjacent ------------------
+
+#[test]
+fn two_tier6_spells_cannot_both_be_castable_when_adjacent() {
+    // Two adjacent full-ring spells, every other neighbour a full fire gem.
+    let a = LatticeCoord::new(0, 0);
+    let b = LatticeCoord::new(1, 0);
+    assert!(
+        a.is_adjacent(b),
+        "test fixture must place the spells adjacent"
+    );
+
+    let mut spec = LatticeSpec::default()
+        .with(a, CellKind::Spell { spell: FIREBALL })
+        .with(b, CellKind::Spell { spell: FIREBALL });
+    for neighbor in a.neighbors() {
+        if neighbor != b {
+            spec = spec.with(neighbor, gem(FIRE));
+        }
+    }
+    for neighbor in b.neighbors() {
+        if neighbor != a && spec.get(neighbor).is_none() {
+            spec = spec.with(neighbor, gem(FIRE));
+        }
+    }
+
+    let state = LatticeState::new(&spec, &basic_stats());
+    let a_ok = castable(&spec, &state, a, &Content).is_ok();
+    let b_ok = castable(&spec, &state, b, &Content).is_ok();
+    assert!(
+        !(a_ok && b_ok),
+        "adjacent tier-6 spells cannot both be castable"
+    );
+    // In fact neither is: each occupies the other's sixth slot.
+    assert!(!a_ok && !b_ok);
+}
+
+#[test]
+fn a_lone_tier6_spell_ringed_by_gems_is_castable() {
+    // The positive control: the theorem forbids *adjacent* pairs, not the spell.
+    let center = LatticeCoord::new(0, 0);
+    let mut spec = LatticeSpec::default().with(center, CellKind::Spell { spell: FIREBALL });
+    for neighbor in center.neighbors() {
+        spec = spec.with(neighbor, gem(FIRE));
+    }
+    let state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, center, &Content).expect("a full fire ring powers fireball");
+    assert_eq!(plan.drains.len(), 6, "six distinct gems fund the six slots");
+}
+
+#[test]
+fn no_two_adjacent_tier6_spells_are_ever_both_castable() {
+    // The theorem swept over random lattices.
+    for seed in 0..64 {
+        let (spec, stats) = random_lattice(seed);
+        let state = LatticeState::new(&spec, &stats);
+        for (a, ka) in spec.cells() {
+            let CellKind::Spell { spell: sa } = ka else {
+                continue;
+            };
+            if sa != FIREBALL {
+                continue;
+            }
+            for (b, kb) in spec.cells() {
+                if b <= a || !a.is_adjacent(b) {
+                    continue;
+                }
+                let CellKind::Spell { spell: sb } = kb else {
+                    continue;
+                };
+                if sb != FIREBALL {
+                    continue;
+                }
+                let a_ok = castable(&spec, &state, a, &Content).is_ok();
+                let b_ok = castable(&spec, &state, b, &Content).is_ok();
+                assert!(
+                    !(a_ok && b_ok),
+                    "seed {seed}: adjacent tier-6 spells both castable at {a:?}/{b:?}"
+                );
+            }
+        }
+    }
+}
+
+// --- property 2: fusion chains die downstream -----------------------------
+
+#[test]
+fn disabling_a_deep_feeder_kills_the_whole_fusion_chain() {
+    // spell -> thunder-fusion -> {lightning-fusion, water}; lightning -> {light, fire}.
+    let spell = LatticeCoord::new(0, 0);
+    let thunder = LatticeCoord::new(1, 0);
+    let lightning = LatticeCoord::new(2, 0);
+    let water = LatticeCoord::new(1, -1);
+    let light = LatticeCoord::new(2, -1);
+    let fire = LatticeCoord::new(2, 1);
+
+    // The chain only means anything if the geometry is a real chain.
+    assert!(spell.is_adjacent(thunder));
+    assert!(thunder.is_adjacent(lightning));
+    assert!(thunder.is_adjacent(water));
+    assert!(lightning.is_adjacent(light));
+    assert!(lightning.is_adjacent(fire));
+
+    let spec = LatticeSpec::default()
+        .with(
+            spell,
+            CellKind::Spell {
+                spell: THUNDERSPELL,
+            },
+        )
+        .with(thunder, CellKind::Fusion { output: THUNDER })
+        .with(lightning, CellKind::Fusion { output: LIGHTNING })
+        .with(water, gem(WATER))
+        .with(light, gem(LIGHT))
+        .with(fire, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    assert!(
+        castable(&spec, &state, spell, &Content).is_ok(),
+        "the intact chain powers the spell"
+    );
+
+    // Disable the deepest feeder; the death must propagate all the way up.
+    let broken = apply_disables(&mut state, &[fire]);
+    assert!(broken.is_empty(), "no enchantment was involved");
+    assert_eq!(
+        castable(&spec, &state, spell, &Content),
+        Err(CastBlocked::Unsatisfiable),
+        "a dead leaf kills the fusion chain downstream"
+    );
+}
+
+// --- property 3: disabling a locked gem breaks its enchantment -------------
+
+#[test]
+fn disabling_a_locked_gem_breaks_its_enchantment_and_burns_the_mana() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(fire, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("the shield can be raised");
+    apply_cast(&mut state, &plan, &Content);
+    assert_eq!(state.enchantment_count(), 1);
+    assert_eq!(state.total_locked_mana(), 2);
+    assert!(state.is_locked(fire));
+
+    let broken = apply_disables(&mut state, &[fire]);
+    assert_eq!(broken.len(), 1, "the shield breaks");
+    let record = broken.into_iter().next().expect("one break");
+    assert_eq!(record.spell, SHIELD);
+    assert_eq!(record.burned_mana, 2, "the locked mana is consumed");
+    assert_eq!(record.trigger, fire);
+    assert_eq!(state.enchantment_count(), 0, "the enchantment is gone");
+    assert_eq!(state.total_locked_mana(), 0);
+}
+
+// --- property 4: serde round-trips are identity ---------------------------
+
+#[test]
+fn lattice_spec_round_trips_through_ron() {
+    let spec = LatticeSpec::default()
+        .with(LatticeCoord::new(0, 0), CellKind::Spell { spell: FIREBALL })
+        .with(LatticeCoord::new(1, 0), gem(FIRE))
+        .with(
+            LatticeCoord::new(0, 1),
+            CellKind::Fusion { output: LIGHTNING },
+        )
+        .with(LatticeCoord::new(-1, 0), CellKind::Blank);
+
+    let text = ron::ser::to_string(&spec).expect("a spec serializes");
+    let restored: LatticeSpec = ron::from_str(&text).expect("and deserializes");
+    assert_eq!(spec, restored);
+}
+
+#[test]
+fn random_specs_round_trip_through_ron() {
+    for seed in 0..64 {
+        let (spec, _) = random_lattice(seed);
+        let text = ron::ser::to_string(&spec).expect("a spec serializes");
+        let restored: LatticeSpec = ron::from_str(&text).expect("and deserializes");
+        assert_eq!(spec, restored, "seed {seed} did not round-trip");
+    }
+}
+
+// --- property 5: channel/cast conservation --------------------------------
+
+#[test]
+fn an_evocation_removes_exactly_its_plan_and_channel_refills_within_caps() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: EMBER })
+        .with(fire, gem(FIRE));
+
+    let stats = basic_stats();
+    let mut state = LatticeState::new(&spec, &stats);
+    let before = state.total_gem_mana();
+
+    let plan = castable(&spec, &state, spell, &Content).expect("ember can be cast");
+    let cost: u32 = plan.drains.values().map(|&mana| u32::from(mana)).sum();
+    apply_cast(&mut state, &plan, &Content);
+    assert_eq!(
+        before - state.total_gem_mana(),
+        cost,
+        "an evocation removes exactly the plan's mana"
+    );
+
+    // Channel refills toward capacity, never past it, and is deterministic.
+    let drained = state.total_gem_mana();
+    let mut twice = state.clone();
+    channel(&mut state, &spec, &stats);
+    let refilled = state.total_gem_mana();
+    assert_eq!(
+        refilled - drained,
+        cost,
+        "channel restores the throughput spent"
+    );
+    assert_eq!(
+        refilled, before,
+        "and no further — the gem is back at capacity"
+    );
+
+    channel(&mut twice, &spec, &stats);
+    channel(&mut twice, &spec, &stats);
+    assert_eq!(
+        twice, state,
+        "channelling is deterministic and idempotent at cap"
+    );
+}
+
+#[test]
+fn an_enchantment_ties_mana_up_and_a_break_consumes_it() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(fire, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let total_before = state.total_gem_mana() + state.total_locked_mana();
+
+    let plan = castable(&spec, &state, spell, &Content).expect("the shield can be raised");
+    apply_cast(&mut state, &plan, &Content);
+    assert_eq!(
+        state.total_gem_mana() + state.total_locked_mana(),
+        total_before,
+        "casting an enchantment ties mana up rather than spending it"
+    );
+
+    let locked = state.total_locked_mana();
+    apply_disables(&mut state, &[fire]);
+    assert_eq!(
+        state.total_gem_mana() + state.total_locked_mana(),
+        total_before - locked,
+        "a broken enchantment consumes its locked mana"
+    );
+}
+
+// --- targeted unit tests ---------------------------------------------------
+
+#[test]
+fn casting_a_non_spell_cell_is_not_a_spell() {
+    let coord = LatticeCoord::new(0, 0);
+    let spec = LatticeSpec::default().with(coord, gem(FIRE));
+    let state = LatticeState::new(&spec, &basic_stats());
+    assert_eq!(
+        castable(&spec, &state, coord, &Content),
+        Err(CastBlocked::NotASpell)
+    );
+    // An absent cell is likewise not a spell.
+    assert_eq!(
+        castable(&spec, &state, LatticeCoord::new(9, 9), &Content),
+        Err(CastBlocked::NotASpell)
+    );
+}
+
+#[test]
+fn a_disabled_spell_cell_cannot_cast() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: EMBER })
+        .with(fire, gem(FIRE));
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    apply_disables(&mut state, &[spell]);
+    assert_eq!(
+        castable(&spec, &state, spell, &Content),
+        Err(CastBlocked::SpellDisabled)
+    );
+}
+
+#[test]
+fn a_missing_element_is_unsatisfiable() {
+    let spell = LatticeCoord::new(0, 0);
+    let [neighbor, ..] = spell.neighbors();
+    // Ember needs fire; offer it water.
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: EMBER })
+        .with(neighbor, gem(WATER));
+    let state = LatticeState::new(&spec, &basic_stats());
+    assert_eq!(
+        castable(&spec, &state, spell, &Content),
+        Err(CastBlocked::Unsatisfiable)
+    );
+}
+
+#[test]
+fn defensive_enchantments_subtract_from_incoming_disables() {
+    // One active shield (defence 1): a fireball's 3 becomes 2, an ember's 1 becomes 0.
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(fire, gem(FIRE));
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("shield");
+    apply_cast(&mut state, &plan, &Content);
+
+    assert_eq!(resolve_incoming(&state, 3), 2);
+    assert_eq!(resolve_incoming(&state, 1), 0);
+    assert_eq!(resolve_incoming(&state, 0), 0);
+}
+
+#[test]
+fn burns_disable_one_hex_per_turn_and_expire() {
+    let spec = LatticeSpec::default();
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    state.add_burn(2);
+    state.add_burn(2);
+
+    assert_eq!(tick_burns(&mut state), 2, "two burns disable two hexes");
+    assert_eq!(tick_burns(&mut state), 2, "and again on the next turn");
+    assert_eq!(tick_burns(&mut state), 0, "then both have expired");
+    assert!(state.burns().is_empty());
+}
+
+#[test]
+fn a_new_state_starts_every_gem_full() {
+    let a = LatticeCoord::new(0, 0);
+    let b = LatticeCoord::new(1, 0);
+    let spec = LatticeSpec::default()
+        .with(a, gem(FIRE))
+        .with(b, gem(LIGHT));
+    let state = LatticeState::new(&spec, &basic_stats());
+    assert_eq!(state.mana(a), 3, "fire gem full to its attunement capacity");
+    assert_eq!(state.mana(b), 3);
+}
+
+#[test]
+fn matching_is_deterministic_and_prefers_the_lower_coordinate() {
+    // Ember needs one fire gem; two are adjacent. The lower coordinate must win,
+    // every time.
+    let spell = LatticeCoord::new(0, 0);
+    let [first, second, ..] = spell.neighbors();
+    let low = first.min(second);
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: EMBER })
+        .with(first, gem(FIRE))
+        .with(second, gem(FIRE));
+    let state = LatticeState::new(&spec, &basic_stats());
+
+    let plan = castable(&spec, &state, spell, &Content).expect("ember");
+    let again = castable(&spec, &state, spell, &Content).expect("ember");
+    assert_eq!(plan, again, "the same inputs give the same plan");
+    let (&picked, _) = plan.drains.iter().next().expect("one gem funds ember");
+    assert_eq!(picked, low, "the lower-coordinate gem is chosen");
+}
+
+#[test]
+fn enchant_ids_are_allocated_monotonically() {
+    // Two shields on two spell cells, each drawing from its own gem.
+    let s0 = LatticeCoord::new(0, 0);
+    let s1 = LatticeCoord::new(3, 0);
+    let [g0, ..] = s0.neighbors();
+    let [g1, ..] = s1.neighbors();
+    let spec = LatticeSpec::default()
+        .with(s0, CellKind::Spell { spell: SHIELD })
+        .with(g0, gem(FIRE))
+        .with(s1, CellKind::Spell { spell: SHIELD })
+        .with(g1, gem(FIRE));
+    let mut state = LatticeState::new(&spec, &basic_stats());
+
+    let p0 = castable(&spec, &state, s0, &Content).expect("first shield");
+    apply_cast(&mut state, &p0, &Content);
+    let p1 = castable(&spec, &state, s1, &Content).expect("second shield");
+    apply_cast(&mut state, &p1, &Content);
+
+    let ids: Vec<u32> = state.active_enchantments().map(|(id, _)| id.0).collect();
+    assert_eq!(ids, vec![0, 1], "ids come from a monotonic counter");
+}
+
+#[test]
+fn a_tier_zero_spell_casts_for_free() {
+    let spell = LatticeCoord::new(0, 0);
+    let spec = LatticeSpec::default().with(spell, CellKind::Spell { spell: FREE });
+    let state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("a free spell always casts");
+    assert!(plan.drains.is_empty(), "no gems are drawn");
+}
+
+#[test]
+fn channel_never_exceeds_capacity() {
+    // A full gem and a channel budget far past capacity: the gem must not overflow.
+    // (The conservation test covers refilling from below and stopping at the cap.)
+    let gem_coord = LatticeCoord::new(0, 0);
+    let spec = LatticeSpec::default().with(gem_coord, gem(FIRE));
+    let stats = LatticeStats::new(BTreeMap::from([(FIRE, 3)]), BTreeMap::from([(FIRE, 100)]));
+    let mut state = LatticeState::new(&spec, &stats);
+    channel(&mut state, &spec, &stats);
+    assert_eq!(state.mana(gem_coord), 3, "a full gem stays at capacity");
+}
+
+// --- randomised lattice generator -----------------------------------------
+
+fn random_lattice(seed: u64) -> (LatticeSpec, LatticeStats) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut spec = LatticeSpec::default();
+    for q in -2..=2 {
+        for r in -2..=2 {
+            let coord = LatticeCoord::new(q, r);
+            match rng.gen_range(0..6) {
+                0 => spec = spec.with(coord, gem(FIRE)),
+                1 => spec = spec.with(coord, gem(LIGHT)),
+                2 => spec = spec.with(coord, CellKind::Fusion { output: LIGHTNING }),
+                3 => spec = spec.with(coord, CellKind::Spell { spell: FIREBALL }),
+                4 => spec = spec.with(coord, CellKind::Blank),
+                _ => {}
+            }
+        }
+    }
+    let stats = LatticeStats::new(
+        BTreeMap::from([(FIRE, 3), (LIGHT, 3), (AIR, 3), (WATER, 3)]),
+        BTreeMap::from([(FIRE, 1)]),
+    );
+    (spec, stats)
+}

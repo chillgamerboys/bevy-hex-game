@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a ten-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -73,9 +73,17 @@ the tool.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
+
+**`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
+spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
+`App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
+design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
+`hex_assets` and the combat wiring consume it as the content and spawning land.
+See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -230,7 +238,7 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 316 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 381 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

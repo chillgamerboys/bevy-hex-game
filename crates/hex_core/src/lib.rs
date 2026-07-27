@@ -11,14 +11,18 @@
 
 pub mod app;
 pub mod config;
+pub mod elements;
 pub mod hex;
+pub mod lattice_ids;
 pub mod setup;
 pub mod terrain;
 pub mod traversal;
 pub mod voxel;
 
 pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, Turn};
+pub use elements::ElementId;
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};
+pub use lattice_ids::{EnchantId, LatticeCoord, SpellId};
 pub use setup::GameplaySetupFailure;
 pub use terrain::{
     CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,

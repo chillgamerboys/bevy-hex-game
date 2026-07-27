@@ -22,9 +22,14 @@ preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range.
 
-There are still **no abilities and no lattices**. Bodies are one hex wide; there is
-no footprint for anything larger, and units do not obstruct each other — so a route
-may be drawn straight through another piece.
+The **lattice engine now exists** as a pure crate (`hex_lattice`): casting
+(`castable` → a `CastPlan` or a blocked reason), applying casts, disables that break
+enchantments and burn their locked mana, channelling, and a property suite carrying
+the design's geometric theorems — all headless. But it is **not yet wired into units
+or combat**: nothing spawns with a lattice, and there is still no in-game casting or
+damage (that is the "lattices wired" work). Bodies are one hex wide; there is no
+footprint for anything larger, and units do not obstruct each other — so a route may
+be drawn straight through another piece.
 
 ## What is provisional
 
@@ -36,7 +41,7 @@ place** — they are meant to be replaced.
 |---|---|---|
 | **Initiative** | a number on a component, high to low, ties by entity index | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
-| **Damage** | none at all | Lattices. Damage disables lattice hexes, and there are no lattices |
+| **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
 | **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
 | **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
