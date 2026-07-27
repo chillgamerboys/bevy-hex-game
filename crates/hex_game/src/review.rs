@@ -13,8 +13,6 @@
 
 use std::env;
 use std::ffi::OsString;
-use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -30,6 +28,7 @@ use hex_core::{
 };
 use hex_world::{CameraMode, PanOrbitCamera};
 
+use crate::capture::{prepare_capture_path, write_png};
 use crate::scenarios::ScenarioToLoad;
 
 const SCENARIO_ENV: &str = "HEX_REVIEW_SCENARIO";
@@ -45,10 +44,6 @@ const CAPTURE_PHASE_TIMEOUT: Duration = Duration::from_secs(60);
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_VISIBLE_TILES: usize = 32;
 const MIN_VISIBLE_TILE_PERCENT: usize = 5;
-const VARIATION_GRID_COLUMNS: usize = 8;
-const VARIATION_GRID_ROWS: usize = 4;
-const MIN_VARIANT_PIXEL_PERCENT: usize = 5;
-const MIN_VARIED_REGIONS: usize = 8;
 
 /// Installs review automation only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -701,26 +696,9 @@ fn has_visible_tile_coverage(visible: usize, total: usize) -> bool {
         && visible.saturating_mul(100) >= total.saturating_mul(MIN_VISIBLE_TILE_PERCENT)
 }
 
-fn prepare_capture_path(path: &Path) -> std::io::Result<()> {
-    if path.file_name().is_none() {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "capture path must name a file",
-        ));
-    }
-    if let Some(parent) = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-    {
-        fs::create_dir_all(parent)?;
-    }
-    match fs::remove_file(temporary_capture_path(path)?) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
+/// Persists a review frame under review policy: the exact configured target
+/// size, and full visual coverage — a blank or near-uniform frame is a failed
+/// capture even though its PNG is preserved for inspection.
 fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
     if image.width() != CAPTURE_WIDTH || image.height() != CAPTURE_HEIGHT {
         return Err(format!(
@@ -729,30 +707,8 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
             image.height()
         ));
     }
-    let dynamic = image
-        .clone()
-        .try_into_dynamic()
-        .map_err(|error| format!("cannot convert renderer output: {error}"))?;
-    let rgb = dynamic.to_rgb8();
-    let has_coverage = has_visual_coverage(
-        rgb.as_raw(),
-        usize::try_from(rgb.width()).unwrap_or_default(),
-        usize::try_from(rgb.height()).unwrap_or_default(),
-    );
-
-    prepare_capture_path(path)
-        .map_err(|error| format!("cannot prepare staged screenshot output: {error}"))?;
-    let temporary = temporary_capture_path(path)
-        .map_err(|error| format!("cannot prepare staged screenshot output: {error}"))?;
-    if let Err(error) = rgb.save(&temporary) {
-        let _cleanup = fs::remove_file(&temporary);
-        return Err(format!("cannot write temporary PNG: {error}"));
-    }
-    if let Err(error) = install_capture(&temporary, path) {
-        let _cleanup = fs::remove_file(&temporary);
-        return Err(format!("cannot install PNG: {error}"));
-    }
-    if !has_coverage {
+    let stats = write_png(image, path)?;
+    if !stats.has_coverage {
         return Err(
             "renderer output lacks meaningful visual coverage; rejected PNG was preserved"
                 .to_owned(),
@@ -761,106 +717,14 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Installs a complete temporary PNG, including over an existing Windows file.
-///
-/// `std::fs::rename` replaces files on Unix but rejects an existing destination on
-/// Windows. Removing the old destination only after the new PNG is fully written
-/// keeps the capture path portable without exposing a partially encoded image.
-fn install_capture(temporary: &Path, path: &Path) -> std::io::Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::rename(temporary, path)
-}
-
-fn temporary_capture_path(path: &Path) -> std::io::Result<PathBuf> {
-    let Some(file_name) = path.file_name() else {
-        return Err(std::io::Error::new(
-            ErrorKind::InvalidInput,
-            "capture path must name a file",
-        ));
-    };
-    let mut temporary_name = OsString::from(".");
-    temporary_name.push(file_name);
-    temporary_name.push(format!(".{}.tmp.png", std::process::id()));
-    Ok(path.with_file_name(temporary_name))
-}
-
-fn has_visual_coverage(bytes: &[u8], width: usize, height: usize) -> bool {
-    let Some(pixel_count) = width.checked_mul(height) else {
-        return false;
-    };
-    if pixel_count == 0 || bytes.len() != pixel_count.saturating_mul(3) {
-        return false;
-    }
-
-    let region_count = VARIATION_GRID_COLUMNS.saturating_mul(VARIATION_GRID_ROWS);
-    let mut region_minimums = vec![[u8::MAX; 3]; region_count];
-    let mut region_maximums = vec![[u8::MIN; 3]; region_count];
-    let mut histogram = vec![0_usize; 16 * 16 * 16];
-    let mut brightest = u8::MIN;
-
-    for (index, pixel) in bytes.chunks_exact(3).enumerate() {
-        let &[red, green, blue] = pixel else {
-            return false;
-        };
-        brightest = brightest.max(red).max(green).max(blue);
-        let bin =
-            usize::from(red >> 4) * 16 * 16 + usize::from(green >> 4) * 16 + usize::from(blue >> 4);
-        let Some(count) = histogram.get_mut(bin) else {
-            return false;
-        };
-        *count = count.saturating_add(1);
-
-        let x = index % width;
-        let y = index / width;
-        let region_x = x.saturating_mul(VARIATION_GRID_COLUMNS) / width;
-        let region_y = y.saturating_mul(VARIATION_GRID_ROWS) / height;
-        let region = region_y
-            .saturating_mul(VARIATION_GRID_COLUMNS)
-            .saturating_add(region_x)
-            .min(region_count.saturating_sub(1));
-        let Some((minimums, maximums)) = region_minimums
-            .get_mut(region)
-            .zip(region_maximums.get_mut(region))
-        else {
-            return false;
-        };
-        for ((minimum, maximum), value) in minimums
-            .iter_mut()
-            .zip(maximums.iter_mut())
-            .zip([red, green, blue])
-        {
-            *minimum = (*minimum).min(value);
-            *maximum = (*maximum).max(value);
-        }
-    }
-
-    let dominant = histogram.into_iter().max().unwrap_or(pixel_count);
-    let variant_pixels = pixel_count.saturating_sub(dominant);
-    let varied_regions = region_minimums
-        .iter()
-        .zip(region_maximums.iter())
-        .filter(|(minimum, maximum)| {
-            minimum
-                .iter()
-                .zip(maximum.iter())
-                .any(|(low, high)| high.abs_diff(*low) > 12)
-        })
-        .count();
-
-    brightest > 8
-        && variant_pixels.saturating_mul(100)
-            >= pixel_count.saturating_mul(MIN_VARIANT_PIXEL_PERCENT)
-        && varied_regions >= MIN_VARIED_REGIONS
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use bevy::state::app::StatesPlugin;
     use hex_assets::{CubeCoord, ScenarioPlacement, ScenarioSettings};
+
+    use crate::capture::{has_visual_coverage, temporary_capture_path};
 
     use super::*;
 

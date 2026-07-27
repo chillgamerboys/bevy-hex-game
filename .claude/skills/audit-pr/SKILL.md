@@ -1,17 +1,21 @@
 ---
 name: audit-pr
-description: THE merge gate. Chains `audit-linear` (soft Linear-tie check) → `audit-diff` (pre-test lens walk; 8 code lenses, or the 4 docs lenses on no-Rust diffs) → `test-full` (fmt/clippy/tests/deny/doc/links + ship build) → `audit-silent-failures` (explicit log) → `update-docs` (mechanical doc fix). Stop on first failure. Writes a schema-v3 receipt at `/tmp/audit-pr-receipt-{PR}.json` on green AND failed runs. Requires a PR. The canonical "I'm ready to merge" command.
+description: THE merge gate. Chains `audit-linear` (soft Linear-tie check) → `audit-diff` (pre-test lens walk; 8 code lenses, or the 4 docs lenses on no-Rust diffs) → `test-full` (fmt/clippy/tests/deny/doc/links + ship build) → `visual-walk` (scripted capture walk, agent-read frames) → `audit-silent-failures` (explicit log) → `update-docs` (mechanical doc fix). Stop on first failure. Writes a schema-v3 receipt at `/tmp/audit-pr-receipt-{PR}.json` on green AND failed runs. Requires a PR. The canonical "I'm ready to merge" command.
 ---
 
 When invoked, follow these steps. Stop on first failure within any
 step. If a step blocks, surface the finding + skill name and do not
 proceed.
 
-**What this gate cannot do:** it cannot see the window. A green
-receipt means the mechanical checks passed — not that the game looks
-right. The visual walk stays the operator's, via the PR template's
-"I ran the game and looked at it" checkbox. That gap is deliberate and
-is why `main` moves only by promotion.
+**What this gate can and cannot see:** since `/visual-walk` (Step 2.5)
+it CAN see the window — the game photographs itself along a scripted
+walk and the agent reads every frame, so renders-nothing and
+renders-broken failures (blue window, black sky, missing panel, dead
+screen transition) are mechanical failures here, not surprises for a
+human. What it still cannot judge is motion and taste: whether the
+thing that renders correctly also looks *good*. That stays the
+operator's, via the PR template's "a human ran the game and looked at
+it" checkbox, and is why `main` moves only by promotion.
 
 ## Pre-flight: Require a PR
 
@@ -91,6 +95,27 @@ the suite expands; embedding them here would drift).
   report back. Do not run Step 3 — a silent-failures audit on a
   partially-broken state conflates failures.
 
+## Step 2.5 — `visual-walk` (the gate grows eyes)
+
+**Why here:** it needs the binary Step 2 just built, and its verdict
+should exist before the cheap textual steps wrap up.
+
+**What it does:** invokes the `/visual-walk` skill — builds with the
+`visual-walk` feature, drives the game through `walks/*.ron` (real
+button wiring, injected input), captures a PNG per scripted step, and
+the agent READS every frame. Two tiers: mechanical (stall, black
+frame, wrong/missing screen) and review (layout, overflow, contrast —
+listed for the human, never auto-blocking).
+
+**Decision:**
+- ✓ all frames ok → status `pass`, proceed to Step 3.
+- ⚠ review-tier findings only → status `warn`, proceed. Findings ride
+  the receipt into the merge report; the human judges them.
+- ✗ any mechanical failure → **STOP**, status `fail`. A game that
+  cannot walk its own screens is not merge-ready.
+- — no runtime surface in the diff → status `skipped`, proceed. Same
+  trigger rule as audit-diff's visual flag.
+
 ## Step 3 — `audit-silent-failures` (explicit log, ~5s)
 
 **Why explicit re-run:** `audit-diff` Step 1 already covered the
@@ -149,7 +174,8 @@ receipt at `/tmp/audit-pr-receipt-{PR_NUM}.json` using the
     "1_audit_diff":            {"status": "pass", "summary": "clean (3 files, 8 lenses)", "findings": []},
     "2_test_full":             {"status": "pass", "summary": "local green, ship build green, visual walk manual", "findings": []},
     "3_audit_silent_failures": {"status": "pass", "summary": "0 candidates", "findings": []},
-    "4_update_docs":           {"status": "pass", "summary": "no drift", "findings": []}
+    "4_update_docs":           {"status": "pass", "summary": "no drift", "findings": []},
+    "5_visual_walk":           {"status": "pass", "summary": "11 frames across 2 walks, 0 mechanical, 0 review findings", "findings": []}
   },
   "environment": {
     "is_conductor_workspace": true,
@@ -183,6 +209,11 @@ without re-running the audit:
 - `2_test_full`: `{suite, test, message}`
 - `3_audit_silent_failures`: `{pattern, file, line, snippet, classification}`
 - `4_update_docs`: `{file, before, after}`
+- `5_visual_walk`: `{step, png_path, check, message}` — `check` is
+  `mechanical` or `review`. The key is numbered 5 although the step
+  runs as 2.5: keys `0`–`4` predate it and are a read contract with
+  `/merge-pr`, so the new step takes the next free key rather than
+  renumbering the chain.
 
 `0_audit_linear` carries no findings array beyond `[]` — its result is
 a one-line summary.
@@ -221,12 +252,14 @@ of the receipt means `/merge-pr` STOPs — "no receipt" is a hard block.
 |---|---|
 | 0 audit-linear | ✓ HEX-N (state) / ⚠ no tie / ⚠ HEX-N (terminal state) |
 | 1 audit-diff | ✓ clean / ✗ N findings |
-| 2 test-full | ✓ all green (visual walk: manual) / ✗ failed at [step] |
+| 2 test-full | ✓ all green / ✗ failed at [step] |
+| 2.5 visual-walk | ✓ N frames ok / ⚠ N review findings / ✗ mechanical failure / — skipped (no runtime surface) |
 | 3 audit-silent-failures | ✓ 0 real / ✗ N findings |
 | 4 update-docs | ✓ current / ✓ N files updated (committed `<sha>`) |
-| 5 receipt | ✓ wrote `/tmp/audit-pr-receipt-<N>.json` (overall_status: green / failed) |
+| receipt | ✓ wrote `/tmp/audit-pr-receipt-<N>.json` (overall_status: green / failed) |
 
-If any of steps 1-4 is ✗, the PR is not merge-ready. The skill stops
+If any of steps 1-4 (or 2.5's mechanical tier) is ✗, the PR is not
+merge-ready. The skill stops
 at the first failure — subsequent rows are reported as `— (skipped,
 prior step failed)`. **Step 5 receipt is still written** (with
 `overall_status: failed` + the failing step's `status: fail` +

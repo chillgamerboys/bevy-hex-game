@@ -25,6 +25,8 @@ use bevy::render::RenderPlugin;
 use hex_assets::DisplaySettings;
 use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
 
+#[cfg(any(feature = "map-review", feature = "visual-walk"))]
+mod capture;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod menus;
@@ -32,6 +34,8 @@ mod menus;
 mod review;
 mod scenarios;
 mod screens;
+#[cfg(feature = "visual-walk")]
+mod walk;
 
 fn main() -> AppExit {
     App::new().add_plugins(AppPlugin).run()
@@ -121,6 +125,9 @@ impl Plugin for AppPlugin {
 
         #[cfg(feature = "map-review")]
         app.add_plugins(review::plugin);
+
+        #[cfg(feature = "visual-walk")]
+        app.add_plugins(walk::plugin);
 
         app.add_systems(Update, apply_display_settings);
 

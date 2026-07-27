@@ -73,6 +73,25 @@ visual-coverage check still leaves its PNG at the requested path and exits with 
 error, so the rejected output can be inspected. Map-review builds keep their console on
 Windows because these diagnostics are part of the tool.
 
+### Scripted visual walks
+
+The sibling default-off `visual-walk` feature drives the whole game through a RON
+step list — screens, button clicks by `Name`, keys, scenario launches — and
+photographs each step, so an agent can *look* at the frames (`/visual-walk` in the
+skill pipeline reads them; audit-pr runs it as Step 2.5):
+
+```sh
+HEX_WALK_SCRIPT=walks/menus.ron \
+HEX_WALK_OUT=.context/visual-walks/local \
+cargo run -p hex_game --features visual-walk
+```
+
+Exit code is the mechanical verdict: any stalled step or black frame fails the
+run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
+covers both scenario families and the pause overlay. The capture goes through an
+offscreen render target (the window surface is not readable on macOS/Metal), with
+every UI root pointed at the redirected camera.
+
 ## Workspace
 
 ```
@@ -234,7 +253,9 @@ Conventional Commits — `/release` computes the version bump from them.
 merge without a green receipt for the current HEAD.
 Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
 links) → `/test-full` (+ship build; the visual walk stays manual).
-Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`.
+Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
+`/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
+reads the frames, and the human walk still owns motion and taste).
 Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
 `/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
 tickets. Binding is encouraged, never required.

@@ -61,8 +61,12 @@ If the operator wants some other branch pair, they want `/create-pr`
 ## Step 1.5 — The played-and-looked-at gate (hard)
 
 **This is the gate. Do not skip it, and do not infer it from a green
-receipt.** `/audit-pr`'s receipt covers fmt, clippy, tests, deny, docs,
-links and the ship build — none of which can see the window.
+receipt — including a green `5_visual_walk`.** The agent's scripted
+walk photographs the screens and catches the renders-broken class, but
+stills are not play; this gate is about a human having *played* it.
+Before asking, pre-fill the operator's context: if a recent
+`/visual-walk` ran, surface its PNG paths and any review-tier findings
+so the human walk can start where the agent's eyes stopped.
 
 Ask the operator explicitly (via `AskUserQuestion`) whether a human has
 run the game from this `dev` and walked it:

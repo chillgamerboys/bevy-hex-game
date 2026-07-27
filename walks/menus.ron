@@ -1,0 +1,38 @@
+// The menu walk: title screen, the lattice demo's full interaction loop, and
+// the return trip. Run with:
+//   HEX_WALK_SCRIPT=walks/menus.ron HEX_WALK_OUT=.context/visual-walks/local \
+//   cargo run -p hex_game --features visual-walk
+//
+// Cast-button indexing follows spell-cell coordinate order (BTree order of the
+// demo anchors): 0 = Ember (0,0), 1 = Flamethrower (0,4), 2 = Metal Shield
+// (4,0), 3 = Fireball (4,4). "Demo Cell (5, 0)" is Metal Shield's first
+// funding gem, so striking it after casting the shield shatters the
+// enchantment on camera.
+[
+    AwaitScreen("Title"),
+    Settle(45),
+    Capture("01-title"),
+    Click(name: "Lattice Demo"),
+    AwaitScreen("LatticeDemo"),
+    Settle(45),
+    Capture("02-demo-fresh"),
+    Click(name: "Cast", index: 0),
+    Settle(15),
+    Capture("03-demo-after-ember"),
+    Click(name: "End Turn"),
+    Settle(15),
+    Capture("04-demo-after-end-turn"),
+    Click(name: "Cast", index: 2),
+    Settle(15),
+    Capture("05-demo-shield-locked"),
+    Click(name: "Demo Cell (5, 0)"),
+    Settle(15),
+    Capture("06-demo-shield-broken"),
+    Click(name: "Reset"),
+    Settle(15),
+    Capture("07-demo-reset"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+    Settle(30),
+    Capture("08-title-return"),
+]
