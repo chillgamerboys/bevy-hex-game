@@ -22,13 +22,13 @@ use hex_assets::{
 use std::collections::BTreeMap;
 
 use hex_core::{
-    ControlOwner, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
-    MapAnchorId, MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos,
-    TraversalProfile, Turn, UnitId,
+    CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
+    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause, Screen,
+    SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
-use crate::pathing::{reached_step_index, HexPathingLine};
+use crate::pathing::reached_step_index;
 use crate::selection::Selected;
 
 /// Tiles as units see them.
@@ -244,6 +244,9 @@ pub fn plugin(app: &mut App) {
         .init_resource::<UnitAllocator>()
         .init_resource::<UnitRegistry>()
         .init_resource::<Party>()
+        // The funnel's queue. Initialised here as well as by `hex_combat` so
+        // the click emitter works in an app composing either crate alone.
+        .init_resource::<CommandQueue>()
         // `Actors` runs after `Terrain`, where `hex_map` spawns the tiles this
         // system queries to find the surface to stand on. The set boundary also
         // provides the sync point that makes those tiles queryable at all —
@@ -275,29 +278,38 @@ fn despawn_units(
     party.members.clear();
 }
 
-/// Global picking observer: when any `HexTile` is clicked, animate the player over to
-/// that tile, one hex at a time along the route the search found.
+/// Global picking observer: when any `HexTile` is clicked, resolve the route and
+/// **emit** a move command for the applier to validate and start.
+///
+/// An emitter, not an actor: the observer's job is turning a click into intent —
+/// which piece, which surface, which route — and pushing it into the
+/// [`CommandQueue`]. Spending the turn's budget and starting the walk belong to
+/// the one applier in `hex_combat`, same as for the AI and any future input.
+/// The checks below are click-UX, not rules: they decide whether this click
+/// *means* anything, so an ordinary miss-click dies quietly here instead of as
+/// a warned-about invalid command.
 ///
 /// Only a [`Selected`] piece moves. With one player piece that piece is always the
 /// selection, so this changes nothing today — but it is what makes the click
 /// unambiguous once there is a party, and it ties the move to the same piece whose
 /// range and path are being drawn.
-///
-/// `PlayerSettings` is taken as an `Option` because observers are global and fire on
-/// every click, including clicks on menus, where settings-derived resources may be
-/// absent. A plain `Res<T>` panics there — Bevy validates system parameters *before*
-/// the body runs, so the "is this a tile?" check below never gets the chance to
-/// reject it.
 fn on_tile_clicked(
     event: On<Pointer<Click>>,
-    mut commands: Commands,
     tiles: TileQuery,
-    mut players: Query<
-        (Entity, &StandsOn, &Body, Option<&mut Turn>),
-        // Both filters are rules. `Transformation` covers the visible walk;
-        // `MovingTo` also covers the deferred landing frame after an animation has
-        // been removed but before its route has been reconciled. Accepting a click in
-        // that gap would route from a stale `StandsOn` and overwrite the arrival.
+    players: Query<
+        (
+            &UnitId,
+            Option<&ControlOwner>,
+            &StandsOn,
+            &Body,
+            Option<&Turn>,
+        ),
+        // Both filters are click-UX rules enforced with what this crate can
+        // see. `Transformation` covers the visible walk; `MovingTo` also covers
+        // the deferred landing frame after an animation has been removed but
+        // before its route has been reconciled. A click in that gap would route
+        // from a stale `StandsOn`. The applier's `Busy` gate is the
+        // authoritative copy of the same rule.
         (
             With<Player>,
             With<Selected>,
@@ -305,29 +317,29 @@ fn on_tile_clicked(
             Without<MovingTo>,
         ),
     >,
-    settings: Option<Res<PlayerSettings>>,
+    queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
 ) {
-    let (Some(settings), Some(table)) = (settings, table) else {
-        return;
-    };
-
-    // Paused means paused. `PausableSystems` gates *systems*, and this is a global
-    // observer — it is not in that set and never was, so a click landing behind the
-    // pause overlay would spend the turn and start a walk that then plays out the
-    // moment the game resumes.
-    if pause.is_some_and(|pause| pause.get().0) {
-        return;
-    }
-
     // Every resource here is an `Option`. Observers are global: this one fires on the
     // title screen, in menus, and before anything has loaded. Bevy validates system
     // parameters *before* the body runs, so a plain `Res<T>` panics in those states
     // no matter what the body checks — which is a crash this codebase has already
     // shipped once.
-    //
+    let (Some(mut queue), Some(table)) = (queue, table) else {
+        return;
+    };
+
+    // Paused means paused. `PausableSystems` gates *systems*, and this is a global
+    // observer — it is not in that set and never was. The applier is paused too, so
+    // an emitted command would not be *lost*, but it would sit in the queue and play
+    // out the moment the game resumes — a click through the pause overlay must mean
+    // nothing at all, not "something, later".
+    if pause.is_some_and(|pause| pause.get().0) {
+        return;
+    }
+
     // No mode at all means we are not in gameplay, so a click cannot be a move.
     let Some(mode) = mode else {
         return;
@@ -341,10 +353,18 @@ fn on_tile_clicked(
         return;
     };
 
-    for (entity, standing, body, turn) in players.iter_mut() {
+    for (unit, owner, standing, body, turn) in players.iter() {
         // In combat a click is only a move if it is this unit's turn. Out of combat
         // everything moves freely — that is the whole difference between the modes.
         if *mode.get() == Mode::Combat && turn.is_none() {
+            continue;
+        }
+
+        // Two clicks in one frame are one intent. The mid-walk filters above
+        // cannot catch the second one — the first command's animation lands
+        // only at the applier's sync point — so fold it here rather than let
+        // it reach the applier and die as a warned drop.
+        if queue.holds_command_for(*unit) {
             continue;
         }
 
@@ -366,23 +386,23 @@ fn on_tile_clicked(
         };
 
         // A route of N surfaces costs N-1 steps: the first entry is where the piece
-        // already stands.
+        // already stands. Too far for what is left of this turn means the click
+        // means nothing — refusing here rather than emitting keeps a long-range
+        // miss-click from being logged as an invalid command.
         let cost = u32::try_from(steps.len().saturating_sub(1)).unwrap_or(u32::MAX);
-        if let Some(mut turn) = turn {
+        if let Some(turn) = turn {
             if cost > turn.movement_left {
-                // Too far for what is left of this turn. Refusing outright rather
-                // than walking partway keeps the click meaning one thing.
                 continue;
             }
-            turn.movement_left -= cost;
         }
 
-        let animation: Transformation = HexPathingLine::new(&steps, settings.speed).into();
-        // `MovingTo`, not `StandsOn`. The piece has not gone anywhere yet — it has been
-        // told where to go, and reconciliation advances the position as each leg lands.
-        commands
-            .entity(entity)
-            .insert((animation, MovingTo::new(steps, settings.speed)));
+        queue.push(IssuedCommand {
+            seat: owner.copied().unwrap_or_default().0,
+            command: GameCommand::MoveAlong {
+                unit: *unit,
+                path: steps.iter().map(|step| step.pos).collect(),
+            },
+        });
     }
 }
 

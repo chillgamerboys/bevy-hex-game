@@ -24,13 +24,16 @@
 //!
 //! **No randomness**, which is not provisional — the design is explicit that
 //! uncertainty comes from hidden information rather than dice. Ties in initiative
-//! break by entity index, so the same units always produce the same order.
+//! break by stable [`UnitId`](hex_core::UnitId), so the same units always produce
+//! the same order.
 
 use bevy::prelude::*;
 use hex_core::AppSystems;
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
+/// The applier: the one place a command becomes a change to the sim.
+mod commands;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
@@ -54,8 +57,16 @@ pub use turns::{Initiative, TurnOrder};
 /// visible at the boundary.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum CombatSystems {
-    /// Decide and commit what a unit does with its turn.
+    /// Decide and emit what a unit does with its turn.
     Act,
+    /// Drain the command queue: validate, apply, start presentation.
+    ///
+    /// Its own phase rather than part of [`Self::Act`] so the set boundary
+    /// supplies the ordering *and* the sync point between deciding and
+    /// applying — the AI's emission is visible to the applier in the same
+    /// frame, and the applier's committed presentation is visible to
+    /// [`Self::Advance`].
+    Apply,
     /// Pass the turn on, once whoever holds it has finished.
     Advance,
 }
@@ -64,9 +75,13 @@ pub enum CombatSystems {
 pub fn plugin(app: &mut App) {
     app.configure_sets(
         Update,
-        (CombatSystems::Act, CombatSystems::Advance)
+        (
+            CombatSystems::Act,
+            CombatSystems::Apply,
+            CombatSystems::Advance,
+        )
             .chain()
             .in_set(AppSystems::Update),
     );
-    app.add_plugins((turns::plugin, ai::plugin));
+    app.add_plugins((turns::plugin, ai::plugin, commands::plugin));
 }

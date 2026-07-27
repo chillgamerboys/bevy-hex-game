@@ -101,5 +101,18 @@
                 enemy: Anchor("hostile_start"),
             ),
         ),
+        (
+            name: "Close Quarters",
+            blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
+            world: "config/world.ron",
+            units: (
+                // The Crossing's player spawn and its off-bridge neighbour on the
+                // same bank: adjacent, so combat begins on entry and the enemy's
+                // first turn is a strike rather than a march.
+                player: Fixed((x: 0, y: 4, z: -4)),
+
+                enemy: Fixed((x: 1, y: 4, z: -5)),
+            ),
+        ),
     ],
 )

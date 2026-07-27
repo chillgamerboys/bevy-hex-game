@@ -20,7 +20,11 @@ terrain. Movement is level-based over stacked surfaces, with body size decided b
 headroom and a breadth-first pathfinder that cannot collapse a stack. A movement
 preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
-targeting where height buys range.
+targeting where height buys range. Its tuning values are designer-facing knobs in
+`assets/config/combat.ron`, and every sim mutation flows through one **command
+funnel**: clicks, the end-turn key, and the AI emit `GameCommand`s into a queue,
+and a single applier in `hex_combat` validates each against seat, turn, reach, and
+budget before anything moves — which is what makes an input log a replay.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
