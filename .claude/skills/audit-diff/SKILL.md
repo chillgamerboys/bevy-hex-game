@@ -10,7 +10,11 @@ attention on design rather than typos and silent swallowing.
 ## Workflow
 
 1. **Read the diff scope.**
-   - `git diff origin/dev...HEAD --stat` — file-level overview.
+   - Resolve the diff base FIRST: `BASE=$(gh pr view --json
+     baseRefName -q .baseRefName 2>/dev/null || echo dev)` — a wave
+     PR audits against its wave branch, not `dev`. Every
+     `origin/dev...HEAD` below means `origin/$BASE...HEAD`.
+   - `git diff origin/$BASE...HEAD --stat` — file-level overview.
    - `gh pr view --json number,title,body 2>/dev/null` — stated scope.
      If no PR exists yet, `git log --oneline origin/dev...HEAD`.
    - For each changed file, read

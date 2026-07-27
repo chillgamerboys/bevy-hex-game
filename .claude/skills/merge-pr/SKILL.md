@@ -1,6 +1,6 @@
 ---
 name: merge-pr
-description: Finalize a PR after `/audit-pr` is green — strict schema-v3 receipt check with structured findings (no warn-but-proceed paths), cheap pre-flights (base branch, mergeable, worktree-free, branch pushed), then `gh pr merge --merge` (merge commits, never squash) + optional Linear state-sync to Done + `git fetch origin --prune`. Feature PRs merge into `dev` with `--delete-branch`; a `dev`→`main` promotion merges without deleting anything. The receipt is a hard merge contract; a `failed` overall_status STOPs the merge with the failing step names + exact findings.
+description: Finalize a PR after `/audit-pr` is green — strict schema-v3 receipt check with structured findings (no warn-but-proceed paths), cheap pre-flights (base branch, mergeable, worktree-free, branch pushed), then `gh pr merge --merge` (merge commits, never squash) + optional Linear state-sync to Done + `git fetch origin --prune`. Four merge classes by base/head: feature→dev and ticket→wave delete the head branch (into-wave merges skip the Done sync — tickets wait for the wave); a wave→dev landing requires the ticked human-walk box and batch-syncs only complete epics; a dev→main promotion deletes nothing. The receipt is a hard merge contract; a `failed` overall_status STOPs the merge with the failing step names + exact findings.
 ---
 
 When invoked, follow these steps. STOP on any pre-flight failure
@@ -127,23 +127,46 @@ State can change between audit and merge — these checks are fast
      Reopen with `gh pr reopen` or open a new PR."
 
 2. **Base branch → classify the merge.** Read `baseRefName` and
-   `headRefName` from the same JSON:
+   `headRefName` from the same JSON. **First matching case wins — the
+   order below is load-bearing** (a wave→dev landing also matches the
+   plain feature case; it must be classified as a landing):
 
+   - `baseRefName == "dev"` AND `headRefName` matches `wave/*` →
+     **wave landing** (the one walked merge): `--merge
+     --delete-branch` (the wave branch dies here — never `dev`), and
+     Step 4 becomes the **batch** state-sync: Done for every wave
+     ticket whose epic is COMPLETE; partially-delivered epics stay In
+     Review (wave 1's HEX-6 precedent). Pre-flight extra: the PR's
+     human-walk checkbox must be ticked — a wave landing without the
+     walk is exactly what the model forbids.
    - `baseRefName == "dev"` → **feature merge** (the normal path):
      `--merge --delete-branch` (Step 2) + single-ticket state-sync to
      Done (Step 4).
+   - `baseRefName` matches `wave/*` → **into-wave merge** (a ticket
+     PR joining its wave): `--merge --delete-branch`, and **SKIP**
+     the state-sync — the ticket stays In Review until the wave
+     lands. **Watch Linear's GitHub integration**: it auto-closes a
+     ticket the moment its linked PR merges; after an into-wave merge,
+     verify the ticket state and revert an auto-close by hand.
+     Pre-flight extra: `gh pr list --base <headRefName>` must be
+     empty before `--delete-branch` — GitHub CLOSES (not retargets)
+     any open PR whose base branch is API-deleted, and a closed PR
+     cannot be retargeted or reopened onto a dead base; the recovery
+     is a successor PR.
    - `baseRefName == "main"` AND `headRefName == "dev"` →
      **promotion merge** (opened by `/promote`): `--merge` with **no**
      `--delete-branch`, and **SKIP** the state-sync (Step 4). Tickets
-     already reached Done when their PRs landed on `dev`.
+     already reached Done when their waves landed on `dev`.
    - Otherwise → STOP:
 
    ```
    ✗ PR #<N> targets `<baseRefName>` from `<headRefName>`.
-     Everything targets `dev`; `main` moves only by promoting `dev`.
+     Everything lands on `dev` (directly or through a wave);
+     `main` moves only by promoting `dev`.
 
-     Fix: retarget via `gh pr edit <N> --base dev`, then re-invoke
-     /merge-pr. For the deliberate dev→main hop, use /promote.
+     Fix: retarget via `gh pr edit <N> --base <dev-or-wave>`, then
+     re-invoke /merge-pr. For the deliberate dev→main hop, use
+     /promote.
    ```
 
    Cheapest check in the chain (already in the JSON step 1 fetched).

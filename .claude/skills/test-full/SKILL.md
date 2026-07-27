@@ -10,7 +10,8 @@ When invoked, run this sequence. STOP on first failure.
 If the diff is doc-only:
 
 ```bash
-CHANGED=$(git diff --name-only origin/dev...HEAD)
+BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || echo dev)
+CHANGED=$(git diff --name-only "origin/${BASE}...HEAD")
 if printf '%s\n' "$CHANGED" | grep -vqE '\.md$|^docs/|^README|^CHANGELOG|^\.claude/'; then
     # Has non-doc changes; proceed.
     :

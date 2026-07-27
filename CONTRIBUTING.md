@@ -135,6 +135,27 @@ gh pr create --base dev
 tidied up afterwards — never delete it. Feature branches are deleted once merged;
 `dev` is not.
 
+### Waves: how grouped gameplay work reaches `dev`
+
+Gameplay tickets are delivered in **waves**: a short-lived `wave/N-<name>` branch
+off `dev` collects the wave's ticket PRs in dependency order, the integrated
+result gets a manual walk, fixes land on the wave, and **one** walked merge takes
+the whole wave to `dev` — then the wave branch is deleted. This keeps
+half-verified gameplay work off `dev` while map work churns there.
+
+```
+feat/ticket-a ─PR─► wave/2-command-flow ─one walked PR─► dev ─promotion─► main
+feat/ticket-b ─PR─►        │
+```
+
+Rules that came from running wave 1: ticket PRs into a wave merge on a green
+audit (the walk happens at the wave level, not per PR); a wave lands only after
+a human has walked its build; tickets whose epic is only partially delivered
+stay **In Review** across waves (watch Linear's GitHub integration — it
+auto-closes tickets when their PR merges and must be reverted by hand); retarget
+any stacked child PR *before* deleting its parent branch; wave branches die
+after their one merge — `dev` never does.
+
 `main` moves only by merging `dev` into it, as a deliberate promotion after someone
 has actually played the game. That gap exists for a specific reason: **CI cannot see
 anything.** It will happily pass a black sky, a hairline gap between every tile, or a

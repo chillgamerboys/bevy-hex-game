@@ -1,12 +1,18 @@
 ---
 name: create-pr
-description: Open a PR against `dev` — push branch if needed, derive title from first-commit subject, auto-populate this repo's PR template (What-and-why / Changes / Checks / Boundaries / Changelog with mechanical sections filled and prose TODOs marked), `gh pr create --base dev`, then chain `/update-linear` to bind a Linear ticket if one applies. Binding is encouraged, never required. Pairs with `/audit-pr` (gate) and `/merge-pr` (finalize). Closes the front of the PR-lifecycle workflow.
+description: Open a PR against `dev` (or a `wave/N-*` integration branch when the work belongs to a wave) — push branch if needed, derive title from first-commit subject, auto-populate this repo's PR template (What-and-why / Changes / Checks / Boundaries / Changelog with mechanical sections filled and prose TODOs marked), `gh pr create --base <dev-or-wave>`, then chain `/update-linear` to bind a Linear ticket if one applies. Binding is encouraged, never required. Pairs with `/audit-pr` (gate) and `/merge-pr` (finalize). Closes the front of the PR-lifecycle workflow.
 ---
 
 When invoked, follow these steps. Pre-flight (Step 0) is hard: STOP
 on any failure. Body generation (Step 3) is mechanical. The
 `/update-linear` chain (Step 5) is best-effort — an untied PR is
 legitimate here, so a bind failure is reported, not fatal.
+
+**Resolve the base first**: `BASE=${BASE_ARG:-dev}` — a wave-bound PR
+passes its `wave/N-*` branch in the invocation. Every `origin/dev`
+in the steps below means `origin/${BASE}` (ahead-count, title
+derivation, diff metrics all measure against the branch the PR will
+actually target).
 
 ## Step 0 — Pre-flight (5 cheap checks, <2s combined)
 
@@ -199,8 +205,9 @@ tie is made.
 ## Step 4 — `gh pr create`
 
 ```bash
+BASE="${BASE_ARG:-dev}"   # `--base wave/N-*` when the work belongs to a wave
 gh pr create \
-    --base dev \
+    --base "$BASE" \
     --title "$TITLE" \
     --body-file "/tmp/pr-body-${BRANCH//\//-}.md"
 ```
@@ -212,10 +219,15 @@ PR_NUM=$(gh pr view --json number --jq .number)
 PR_URL=$(gh pr view --json url --jq .url)
 ```
 
-The explicit `--base dev` is load-bearing. **Everything targets
-`dev`; nothing is merged straight to `main`.** It also defends against
-GitHub picking a parent feature branch as the default base when the
-local branch was forked from one.
+The explicit `--base` is load-bearing. **Everything lands on `dev`;
+nothing is merged straight to `main`** — but gameplay-ticket work
+grouped into a wave targets its `wave/N-*` integration branch, and the
+wave reaches `dev` in one walked merge (see CONTRIBUTING.md's wave
+section). Accept a base via the invocation ("create-pr onto
+wave/2-command-flow"); default `dev`. An explicit base also defends
+against GitHub picking a parent feature branch as the default when the
+local branch was forked from one. Valid bases are `dev` and `wave/*`
+only — anything else, STOP and ask.
 
 If `gh pr create` fails (auth, no-changes-to-PR, branch protection),
 surface verbatim and STOP. The branch is pushed but no PR is open —

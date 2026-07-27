@@ -213,17 +213,24 @@ screen.
 
 ## Branch & PR workflow
 
-**Everything targets `dev`. Nothing is merged straight to `main`.**
+**Everything lands on `dev`. Nothing is merged straight to `main`.**
 
 ```
 feat/whatever  ──PR──►  dev  ──PR──►  main
+feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
-cleaned up. Open every PR against it:
+cleaned up. Standalone work PRs straight onto it; **grouped gameplay-ticket work
+goes through a short-lived `wave/N-*` branch** — ticket PRs merge into the wave on
+green audits, a human walks the integrated build once, and the whole wave lands on
+`dev` in one merge, after which the wave branch is deleted (never `dev`). Partially
+delivered epics stay In Review across waves; see CONTRIBUTING.md's wave section
+for the full rules.
 
 ```sh
-gh pr create --base dev
+gh pr create --base dev          # standalone work
+gh pr create --base wave/N-name  # a ticket PR joining its wave
 ```
 
 `main` only ever moves by merging `dev` into it, as a deliberate promotion once the
