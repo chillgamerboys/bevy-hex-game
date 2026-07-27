@@ -32,15 +32,15 @@ use std::collections::{BTreeMap, HashMap};
 use hex_assets::GameAssets;
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
-    InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen,
-    SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos,
-    MAX_HEADROOM,
+    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
+    HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, ResolvedMapSeed,
+    Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady,
+    TilePos, MAX_HEADROOM,
 };
 use hex_map::{
     CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
     LinkedIslandsSettings, MapSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, TacticalSettings,
+    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings,
     TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
 };
 
@@ -279,7 +279,7 @@ fn clearing_a_tagged_surface_prunes_its_exact_membership() {
 }
 
 #[test]
-fn terrain_edits_prune_stale_interior_floor_and_roof_metadata() {
+fn terrain_edits_prune_stale_interior_floor_and_roof_voxel_metadata() {
     let mut app = test_app();
     enter_gameplay(&mut app);
     let target = {
@@ -295,7 +295,7 @@ fn terrain_edits_prune_stale_interior_floor_and_roof_metadata() {
     let region = InteriorRegionId(4);
     let mut interiors = InteriorRegions::new();
     interiors.insert_surface(target, region);
-    interiors.insert_occluder(target, region);
+    interiors.insert_roof_voxel(target, region);
     app.insert_resource(interiors);
 
     app.world_mut()
@@ -305,7 +305,136 @@ fn terrain_edits_prune_stale_interior_floor_and_roof_metadata() {
 
     let interiors = app.world().resource::<InteriorRegions>();
     assert_eq!(interiors.get(target), None);
-    assert_eq!(interiors.occluder(target), None);
+    assert_eq!(interiors.roof_region(target), None);
+}
+
+fn diggable_run(app: &App, minimum_levels: Level) -> Option<(HexCoord, SubstanceRun)> {
+    let world = app.world();
+    let table = world.resource::<SubstanceTable>();
+    let map = world.resource::<VoxelMap>();
+    map.columns().find_map(|(coord, column)| {
+        hex_map::runs(column)
+            .into_iter()
+            .find(|run| table.is_diggable(run.substance) && run.levels() >= minimum_levels)
+            .map(|run| (coord, run))
+    })
+}
+
+fn install_roof_metadata(
+    app: &mut App,
+    coord: HexCoord,
+    run: SubstanceRun,
+    region: InteriorRegionId,
+) {
+    let mut interiors = InteriorRegions::new();
+    for level in run.bottom..run.top {
+        interiors.insert_roof_voxel(TilePos::new(coord, level), region);
+    }
+    app.insert_resource(interiors);
+}
+
+#[test]
+fn splitting_a_roof_reprojects_cutaway_onto_both_remaining_runs() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let (coord, roof) =
+        diggable_run(&app, 3).expect("the authored map should contain a tall diggable run");
+    let region = InteriorRegionId(8);
+    install_roof_metadata(&mut app, coord, roof, region);
+    let split_level = roof.bottom + roof.levels() / 2;
+
+    app.world_mut().write_message(TerrainEdit::Clear {
+        pos: TilePos::new(coord, split_level),
+    });
+    app.update();
+    app.update();
+
+    let interiors = app.world().resource::<InteriorRegions>();
+    assert_eq!(
+        interiors.roof_region(TilePos::new(coord, split_level)),
+        None
+    );
+    assert_eq!(
+        interiors.roof_region(TilePos::new(coord, split_level - 1)),
+        Some(region)
+    );
+    assert_eq!(
+        interiors.roof_region(TilePos::new(coord, roof.top - 1)),
+        Some(region)
+    );
+
+    let world = app.world_mut();
+    let mut tiles = world.query::<(&HexCoord, &TilePos, Option<&CutawayOccluder>)>();
+    let projected: HashMap<TilePos, Option<InteriorRegionId>> = tiles
+        .iter(world)
+        .filter(|(tile_coord, _, _)| **tile_coord == coord)
+        .map(|(_, position, cutaway)| (*position, cutaway.map(|tag| tag.0)))
+        .collect();
+    assert_eq!(
+        projected.get(&TilePos::new(coord, split_level - 1)),
+        Some(&Some(region)),
+        "the lower roof fragment lost its cutaway projection"
+    );
+    assert_eq!(
+        projected.get(&TilePos::new(coord, roof.top - 1)),
+        Some(&Some(region)),
+        "the upper roof fragment lost its cutaway projection"
+    );
+}
+
+#[test]
+fn replacing_roof_material_does_not_transfer_its_cutaway_tag() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    let (coord, roof) =
+        diggable_run(&app, 2).expect("the authored map should contain a tall diggable run");
+    let region = InteriorRegionId(9);
+    install_roof_metadata(&mut app, coord, roof, region);
+    let replaced = TilePos::new(coord, roof.top - 1);
+    let replacement = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("metal")
+        .expect("the test substance table should contain metal");
+    assert_ne!(replacement, roof.substance);
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: replaced,
+        substance: replacement,
+    });
+    app.update();
+    app.update();
+
+    let interiors = app.world().resource::<InteriorRegions>();
+    assert_eq!(interiors.roof_region(replaced), None);
+    assert_eq!(
+        interiors.roof_region(TilePos::new(coord, roof.top - 2)),
+        Some(region)
+    );
+
+    let world = app.world_mut();
+    let mut tiles = world.query::<(&HexCoord, &TilePos, &SubstanceId, Option<&CutawayOccluder>)>();
+    let replacement_run = tiles
+        .iter(world)
+        .find(|(tile_coord, position, _, _)| **tile_coord == coord && **position == replaced)
+        .expect("the replacement material should render as its own run");
+    assert_eq!(*replacement_run.2, replacement);
+    assert_eq!(
+        replacement_run.3, None,
+        "replacement material inherited a stale cutaway tag"
+    );
+
+    let remaining_roof = TilePos::new(coord, roof.top - 2);
+    let original_run = tiles
+        .iter(world)
+        .find(|(tile_coord, position, _, _)| **tile_coord == coord && **position == remaining_roof)
+        .expect("the original roof material should remain rendered");
+    assert_eq!(*original_run.2, roof.substance);
+    assert_eq!(
+        original_run.3.map(|tag| tag.0),
+        Some(region),
+        "the remaining roof run lost its cutaway tag"
+    );
 }
 
 #[test]

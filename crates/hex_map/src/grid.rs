@@ -25,7 +25,7 @@ use crate::procedural;
 use crate::procedural_v2;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
-use crate::voxel::{runs, VoxelMap};
+use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::GenerationReport;
 
 /// Registers world construction and tile spawning.
@@ -217,7 +217,8 @@ fn build_grid(
 
     let mut tiles = Vec::new();
     for (coord, column) in map.columns() {
-        for run in runs(column) {
+        for projected in projected_runs(coord, column, interiors) {
+            let run = projected.run;
             let material = palette_materials.get_or_create(run.substance, table, materials);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
@@ -247,7 +248,7 @@ fn build_grid(
                 position,
                 headroom,
             ));
-            if let Some(region) = interiors.and_then(|interiors| interiors.occluder(position)) {
+            if let Some(region) = projected.cutaway {
                 tile.insert(CutawayOccluder(region));
             }
             tiles.push(tile.id());
@@ -262,6 +263,62 @@ fn build_grid(
             HexGrid,
         ))
         .add_children(&tiles);
+}
+
+/// One material run split further wherever exact cutaway membership changes.
+///
+/// Rendered runs are disposable projections. Keeping cutaway ownership on exact
+/// voxels lets this rebuild both fragments after digging through a roof and prevents
+/// a replacement material from inheriting the old run's component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProjectedRun {
+    run: SubstanceRun,
+    cutaway: Option<InteriorRegionId>,
+}
+
+fn projected_runs(
+    coord: HexCoord,
+    column: &Column,
+    interiors: Option<&InteriorRegions>,
+) -> Vec<ProjectedRun> {
+    let material_runs = runs(column);
+    let Some(interiors) = interiors.filter(|interiors| interiors.has_roof_voxels()) else {
+        return material_runs
+            .into_iter()
+            .map(|run| ProjectedRun { run, cutaway: None })
+            .collect();
+    };
+
+    let mut projected = Vec::new();
+    for material_run in material_runs {
+        let mut bottom = material_run.bottom;
+        let mut cutaway = interiors.roof_region(TilePos::new(coord, bottom));
+        for level in material_run.bottom.saturating_add(1)..material_run.top {
+            let next = interiors.roof_region(TilePos::new(coord, level));
+            if next == cutaway {
+                continue;
+            }
+            projected.push(ProjectedRun {
+                run: SubstanceRun {
+                    bottom,
+                    top: level,
+                    substance: material_run.substance,
+                },
+                cutaway,
+            });
+            bottom = level;
+            cutaway = next;
+        }
+        projected.push(ProjectedRun {
+            run: SubstanceRun {
+                bottom,
+                top: material_run.top,
+                substance: material_run.substance,
+            },
+            cutaway,
+        });
+    }
+    projected
 }
 
 /// World-space extent of a run of levels.
@@ -321,7 +378,15 @@ fn apply_terrain_edits(
 ) {
     let mut changed = false;
     for edit in edits.read() {
-        changed |= apply_terrain_edit(&mut map, &table, edit);
+        if apply_terrain_edit(&mut map, &table, edit) {
+            changed = true;
+            if let Some(interiors) = interiors.as_deref_mut() {
+                // A replacement is new material, not part of the authored roof even
+                // when it remains solid. Removing only this voxel keeps both original
+                // fragments available for exact re-projection.
+                interiors.remove_roof_voxel(edit.pos());
+            }
+        }
     }
     if !changed {
         return;
@@ -346,13 +411,7 @@ fn apply_terrain_edits(
                 column.headroom_above(position.level.saturating_add(1)),
             )
         });
-        interiors.retain_occluders(|position, _| {
-            map.column(position.coord).is_some_and(|column| {
-                runs(column).into_iter().any(|run| {
-                    run.top.saturating_sub(1) == position.level && table.is_solid(run.substance)
-                })
-            })
-        });
+        interiors.retain_roof_voxels(|position, _| table.is_solid(map.get(position)));
     }
 
     for entity in &grids {
@@ -388,4 +447,69 @@ fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &Terrain
 
     map.set(pos, replacement);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_runs_split_at_every_exact_roof_boundary() {
+        let coord = HexCoord::ORIGIN;
+        let stone = SubstanceId(1);
+        let column = Column::filled(stone, 6);
+        let lower = InteriorRegionId(2);
+        let upper = InteriorRegionId(7);
+        let mut interiors = InteriorRegions::new();
+        for level in 1..3 {
+            interiors.insert_roof_voxel(TilePos::new(coord, level), lower);
+        }
+        interiors.insert_roof_voxel(TilePos::new(coord, 4), upper);
+
+        assert_eq!(
+            projected_runs(coord, &column, Some(&interiors)),
+            vec![
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 0,
+                        top: 1,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 1,
+                        top: 3,
+                        substance: stone,
+                    },
+                    cutaway: Some(lower),
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 3,
+                        top: 4,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 4,
+                        top: 5,
+                        substance: stone,
+                    },
+                    cutaway: Some(upper),
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 5,
+                        top: 6,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+            ]
+        );
+    }
 }

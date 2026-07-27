@@ -110,29 +110,30 @@ impl FromIterator<(MapAnchorId, TilePos)> for MapAnchors {
 
 /// Stable identity of one generated interior network.
 ///
-/// The number is deterministic only within one map. Exact floor and roof-run
+/// The number is deterministic only within one map. Exact floor and roof-voxel
 /// memberships live in [`InteriorRegions`].
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InteriorRegionId(pub u32);
 
-/// Marks one rendered terrain run as a roof that an interior view may cut away.
+/// Marks one rendered terrain run segment as a roof an interior view may cut away.
 ///
 /// This component is a projection for live presentation queries. The exact positional
-/// source of truth remains [`InteriorRegions`], so rebuilding terrain entities cannot
-/// change which generated run the metadata names.
+/// source of truth remains the roof voxels in [`InteriorRegions`], so rebuilding or
+/// splitting terrain runs cannot change which generated material the metadata names.
 #[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct CutawayOccluder(pub InteriorRegionId);
 
-/// Exact floor and roof-run memberships for generated interior networks.
+/// Exact floor and roof-voxel memberships for generated interior networks.
 ///
 /// Both collections use [`TilePos`] because caves may exist beneath another standable
 /// surface in the same column. Interior floors determine when an actor is inside or
-/// entering a region; roof runs identify the opaque geometry presentation may hide.
+/// entering a region. Roof voxels are the persistent source from which `hex_map`
+/// projects cutaway components onto its transient rendered runs.
 #[derive(Resource, Debug, Default, Clone)]
 pub struct InteriorRegions {
     by_surface: HashMap<TilePos, InteriorRegionId>,
-    occluders: HashMap<TilePos, InteriorRegionId>,
+    by_roof_voxel: HashMap<TilePos, InteriorRegionId>,
 }
 
 impl InteriorRegions {
@@ -151,13 +152,18 @@ impl InteriorRegions {
         self.by_surface.insert(pos, region)
     }
 
-    /// Adds or replaces one exact cutaway roof run.
-    pub fn insert_occluder(
+    /// Adds or replaces one exact voxel of authored cutaway roof.
+    pub fn insert_roof_voxel(
         &mut self,
         pos: TilePos,
         region: InteriorRegionId,
     ) -> Option<InteriorRegionId> {
-        self.occluders.insert(pos, region)
+        self.by_roof_voxel.insert(pos, region)
+    }
+
+    /// Removes one exact voxel from the authored cutaway roof.
+    pub fn remove_roof_voxel(&mut self, pos: TilePos) -> Option<InteriorRegionId> {
+        self.by_roof_voxel.remove(&pos)
     }
 
     /// Region containing an exact interior floor.
@@ -166,10 +172,10 @@ impl InteriorRegions {
         self.by_surface.get(&pos).copied()
     }
 
-    /// Region whose opaque roof is represented by the exact run at `pos`.
+    /// Region whose authored opaque roof contains the exact voxel at `pos`.
     #[must_use]
-    pub fn occluder(&self, pos: TilePos) -> Option<InteriorRegionId> {
-        self.occluders.get(&pos).copied()
+    pub fn roof_region(&self, pos: TilePos) -> Option<InteriorRegionId> {
+        self.by_roof_voxel.get(&pos).copied()
     }
 
     /// Every exact interior floor and its region, in unspecified order.
@@ -179,9 +185,9 @@ impl InteriorRegions {
             .map(|(position, region)| (*position, *region))
     }
 
-    /// Every exact cutaway roof run and its region, in unspecified order.
-    pub fn occluders(&self) -> impl Iterator<Item = (TilePos, InteriorRegionId)> + '_ {
-        self.occluders
+    /// Every exact cutaway roof voxel and its region, in unspecified order.
+    pub fn roof_voxels(&self) -> impl Iterator<Item = (TilePos, InteriorRegionId)> + '_ {
+        self.by_roof_voxel
             .iter()
             .map(|(position, region)| (*position, *region))
     }
@@ -192,16 +198,22 @@ impl InteriorRegions {
             .retain(|position, region| keep(*position, *region));
     }
 
-    /// Keeps only cutaway roof runs accepted by `keep`.
-    pub fn retain_occluders(&mut self, mut keep: impl FnMut(TilePos, InteriorRegionId) -> bool) {
-        self.occluders
+    /// Keeps only cutaway roof voxels accepted by `keep`.
+    pub fn retain_roof_voxels(&mut self, mut keep: impl FnMut(TilePos, InteriorRegionId) -> bool) {
+        self.by_roof_voxel
             .retain(|position, region| keep(*position, *region));
     }
 
-    /// Whether the active map has no interior floors or cutaway roof runs.
+    /// Whether any exact cutaway roof voxels are present.
+    #[must_use]
+    pub fn has_roof_voxels(&self) -> bool {
+        !self.by_roof_voxel.is_empty()
+    }
+
+    /// Whether the active map has no interior floors or cutaway roof voxels.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_surface.is_empty() && self.occluders.is_empty()
+        self.by_surface.is_empty() && self.by_roof_voxel.is_empty()
     }
 }
 
@@ -389,23 +401,34 @@ mod tests {
     }
 
     #[test]
-    fn interior_metadata_distinguishes_floors_and_roof_runs() {
+    fn interior_metadata_distinguishes_floors_and_exact_roof_voxels() {
         let floor = TilePos::new(HexCoord::ORIGIN, 6);
-        let roof = TilePos::new(HexCoord::ORIGIN, 16);
+        let roof_bottom = TilePos::new(HexCoord::ORIGIN, 14);
+        let roof_middle = TilePos::new(HexCoord::ORIGIN, 15);
+        let roof_top = TilePos::new(HexCoord::ORIGIN, 16);
         let region = InteriorRegionId(3);
         let mut interiors = InteriorRegions::new();
 
         assert_eq!(interiors.insert_surface(floor, region), None);
-        assert_eq!(interiors.insert_occluder(roof, region), None);
+        for roof in [roof_bottom, roof_middle, roof_top] {
+            assert_eq!(interiors.insert_roof_voxel(roof, region), None);
+        }
         assert_eq!(interiors.get(floor), Some(region));
-        assert_eq!(interiors.get(roof), None);
-        assert_eq!(interiors.occluder(roof), Some(region));
-        assert_eq!(interiors.occluder(floor), None);
+        assert_eq!(interiors.get(roof_top), None);
+        assert_eq!(interiors.roof_region(roof_bottom), Some(region));
+        assert_eq!(interiors.roof_region(roof_middle), Some(region));
+        assert_eq!(interiors.roof_region(roof_top), Some(region));
+        assert_eq!(interiors.roof_region(floor), None);
+        assert_eq!(interiors.roof_voxels().count(), 3);
+        assert!(interiors.has_roof_voxels());
 
         interiors.retain_surfaces(|position, _| position != floor);
-        interiors.retain_occluders(|position, _| position != roof);
+        assert_eq!(interiors.remove_roof_voxel(roof_middle), Some(region));
+        interiors.retain_roof_voxels(|position, _| position != roof_top);
         assert_eq!(interiors.get(floor), None);
-        assert_eq!(interiors.occluder(roof), None);
+        assert_eq!(interiors.roof_region(roof_bottom), Some(region));
+        assert_eq!(interiors.roof_region(roof_middle), None);
+        assert_eq!(interiors.roof_region(roof_top), None);
     }
 
     #[test]

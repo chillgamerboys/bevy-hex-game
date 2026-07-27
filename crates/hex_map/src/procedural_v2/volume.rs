@@ -558,8 +558,10 @@ pub(crate) fn voxelize(
                 continue;
             };
             if let Some(region) = mass.cutaway_for {
-                let run_top = TilePos::new(*coord, mass.levels.top.saturating_sub(1));
-                let _previous = interiors.insert_occluder(run_top, region);
+                for level in mass.levels.bottom..mass.levels.top {
+                    let _previous =
+                        interiors.insert_roof_voxel(TilePos::new(*coord, level), region);
+                }
             }
         }
     }
@@ -1029,14 +1031,16 @@ mod tests {
             .expect("the valid semantic volume should materialize");
         let region = InteriorRegionId(3);
         let floor = TilePos::new(HexCoord::ORIGIN, 4);
-        let roof = TilePos::new(HexCoord::ORIGIN, 9);
+        let roof_bottom = TilePos::new(HexCoord::ORIGIN, 8);
+        let roof_top = TilePos::new(HexCoord::ORIGIN, 9);
 
         assert_eq!(voxelized.interiors.get(floor), Some(region));
-        assert_eq!(voxelized.interiors.occluder(roof), Some(region));
-        assert_eq!(voxelized.interiors.get(roof), None);
-        assert_eq!(voxelized.interiors.occluder(floor), None);
+        assert_eq!(voxelized.interiors.roof_region(roof_bottom), Some(region));
+        assert_eq!(voxelized.interiors.roof_region(roof_top), Some(region));
+        assert_eq!(voxelized.interiors.get(roof_top), None);
+        assert_eq!(voxelized.interiors.roof_region(floor), None);
         assert_eq!(voxelized.interiors.surfaces().count(), 1);
-        assert_eq!(voxelized.interiors.occluders().count(), 1);
+        assert_eq!(voxelized.interiors.roof_voxels().count(), 2);
     }
 
     #[test]
