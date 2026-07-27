@@ -57,12 +57,16 @@ pub(crate) struct CavesMetadata {
     surface_heights: BTreeMap<HexCoord, Level>,
     surface_materials: BTreeMap<HexCoord, SolidMaterialRole>,
     chamber_centres: Vec<HexCoord>,
+    chamber_floor_levels: Vec<Level>,
     chamber_footprints: Vec<BTreeSet<HexCoord>>,
     tree_edges: Vec<(usize, usize)>,
+    extra_edges: Vec<(usize, usize)>,
     corridor_routes: Vec<CaveRoute>,
     entrance_ramp: CaveRoute,
     covered_cells: BTreeSet<HexCoord>,
     chamber_cells: BTreeSet<HexCoord>,
+    floor_levels: BTreeMap<HexCoord, Level>,
+    clearances: BTreeMap<HexCoord, Level>,
     roof_bottoms: BTreeMap<HexCoord, Level>,
     deepest_chamber: HexCoord,
 }
@@ -76,6 +80,10 @@ pub(crate) struct CavesMetrics {
     minimum_roof_thickness: Level,
     entrance_steps: u32,
     cave_coverage_percent: u32,
+    floor_relief: Level,
+    clearance_relief: Level,
+    surface_relief: Level,
+    extra_links: u8,
 }
 
 impl ReportMetrics for CavesMetrics {
@@ -119,7 +127,7 @@ impl V2Recipe for CavesRecipe {
     type Settings = CavesSettings;
     type Metadata = CavesMetadata;
     type Metrics = CavesMetrics;
-    type Score = (u8, Level, u32, u32, u32, u8);
+    type Score = (u8, Level, u32, u32, u32, u32, u32, u32, u8, u8);
 
     fn construct(
         &self,
@@ -155,12 +163,31 @@ impl V2Recipe for CavesRecipe {
         metrics: &Self::Metrics,
         candidate: u8,
     ) -> Self::Score {
+        let complexity = settings.chamber_count.saturating_sub(8);
+        let target_branch_nodes = if complexity == 0 {
+            2
+        } else {
+            3_u32.saturating_add(u32::from(complexity / 3))
+        };
+        let target_coverage = 18_u32.saturating_add(u32::from(complexity).saturating_mul(3));
         (
             metrics.chamber_count.abs_diff(settings.chamber_count),
             Level::try_from(metrics.minimum_roof_thickness.abs_diff(3)).unwrap_or(Level::MAX),
-            u32::from(metrics.branch_nodes).abs_diff(2),
-            metrics.cave_coverage_percent.abs_diff(18),
+            u32::from(metrics.branch_nodes).abs_diff(target_branch_nodes),
+            metrics.cave_coverage_percent.abs_diff(target_coverage),
             metrics.tactical.environment_signature_percent.abs_diff(25),
+            metrics
+                .floor_relief
+                .abs_diff(extended_floor_relief(settings)),
+            metrics
+                .clearance_relief
+                .abs_diff(extended_clearance_extra(settings).saturating_add(1)),
+            metrics
+                .surface_relief
+                .abs_diff(extended_surface_relief(settings)),
+            metrics
+                .extra_links
+                .abs_diff(extended_extra_link_count(settings)),
             candidate,
         )
     }
@@ -203,6 +230,9 @@ fn construct_plan(
     let entrance_ramp = entrance_ramp(radius, orientation, settings)?;
     let (chamber_centres, tree_edges) =
         chamber_tree(radius, orientation, settings, context, fallback)?;
+    let chamber_floor_levels =
+        chamber_floor_levels(settings, &chamber_centres, &tree_edges, context, fallback)?;
+    let extra_edges = extra_edges(settings, &chamber_centres, &tree_edges, context, fallback)?;
 
     let mut corridor_routes = Vec::new();
     let ramp_end = entrance_ramp
@@ -217,7 +247,7 @@ fn construct_plan(
         ramp_end,
         settings.cave_floor_level,
     )?);
-    for (parent, child) in &tree_edges {
+    for (parent, child) in tree_edges.iter().chain(&extra_edges) {
         let (Some(start), Some(end)) = (
             chamber_centres.get(*parent).copied(),
             chamber_centres.get(*child).copied(),
@@ -226,19 +256,31 @@ fn construct_plan(
                 "cave tree edge references a missing chamber",
             ));
         };
+        let (Some(start_level), Some(end_level)) = (
+            chamber_floor_levels.get(*parent).copied(),
+            chamber_floor_levels.get(*child).copied(),
+        ) else {
+            return Err(CandidateAttemptError::rejected(
+                "cave edge references a missing chamber floor",
+            ));
+        };
         corridor_routes.push(paired_route(
             context.grid_radius,
             start,
             end,
-            settings.cave_floor_level,
+            start_level,
+            end_level,
+            settings.chamber_count > 8,
         )?);
     }
 
     let mut chamber_footprints: Vec<_> = chamber_centres
         .iter()
-        .map(|centre| {
+        .enumerate()
+        .map(|(index, centre)| {
+            let footprint_radius = u32::from(settings.chamber_count > 8 && index == 0);
             centre
-                .within_radius(1)
+                .within_radius(footprint_radius.saturating_add(1))
                 .into_iter()
                 .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= context.grid_radius)
                 .collect::<BTreeSet<_>>()
@@ -287,6 +329,13 @@ fn construct_plan(
         )
         .collect();
 
+    let floor_levels = reconcile_floor_levels(
+        settings,
+        &chamber_footprints,
+        &chamber_floor_levels,
+        &mut corridor_routes,
+        &entrance_ramp,
+    )?;
     let ramp_levels: BTreeMap<_, _> = entrance_ramp
         .rows
         .iter()
@@ -299,8 +348,25 @@ fn construct_plan(
         .iter()
         .flat_map(|footprint| footprint.iter().copied())
         .collect();
+    let clearances = cave_clearances(
+        settings,
+        context,
+        fallback,
+        &corridor_routes,
+        &chamber_footprints,
+        deepest_index,
+        &covered_cells,
+    );
 
-    let surface_heights = surface_heights(context, settings, orientation, &entrance_ramp)?;
+    let surface_heights = surface_heights(
+        context,
+        settings,
+        orientation,
+        &entrance_ramp,
+        &chamber_centres,
+        &floor_levels,
+        &clearances,
+    )?;
     let mut surface_materials = BTreeMap::new();
     let mut roof_bottoms = BTreeMap::new();
     let mut columns = BTreeMap::new();
@@ -333,21 +399,19 @@ fn construct_plan(
                 ),
             );
         } else if covered_cells.contains(coord) {
-            let clearance = if chamber_cells.contains(coord) {
-                CHAMBER_CLEARANCE
-            } else {
-                CORRIDOR_CLEARANCE
-            };
-            let roof_bottom = settings
-                .cave_floor_level
-                .saturating_add(1)
-                .saturating_add(clearance);
+            let floor_level = floor_levels.get(coord).copied().ok_or_else(|| {
+                CandidateAttemptError::rejected("an excavated cave cell has no floor level")
+            })?;
+            let clearance = clearances.get(coord).copied().ok_or_else(|| {
+                CandidateAttemptError::rejected("an excavated cave cell has no clearance")
+            })?;
+            let roof_bottom = floor_level.saturating_add(1).saturating_add(clearance);
             roof_bottoms.insert(*coord, roof_bottom);
             columns.insert(
                 *coord,
-                covered_column(settings.cave_floor_level, roof_bottom, *surface_level),
+                covered_column(floor_level, roof_bottom, *surface_level),
             );
-            let floor = TilePos::new(*coord, settings.cave_floor_level);
+            let floor = TilePos::new(*coord, floor_level);
             surfaces.insert(
                 floor,
                 SurfaceMetadata {
@@ -365,7 +429,7 @@ fn construct_plan(
             floors.insert(floor);
             clear_air.insert(
                 *coord,
-                LevelInterval::new(settings.cave_floor_level.saturating_add(1), roof_bottom),
+                LevelInterval::new(floor_level.saturating_add(1), roof_bottom),
             );
         } else {
             columns.insert(*coord, rocky_column(*surface_level, surface_material));
@@ -385,10 +449,20 @@ fn construct_plan(
         .and_then(|row| row.first())
         .copied()
         .ok_or_else(|| CandidateAttemptError::rejected("cave entrance has no landing"))?;
-    let hostile_position = TilePos::new(deepest_chamber, settings.cave_floor_level);
+    let hostile_position = TilePos::new(
+        deepest_chamber,
+        floor_levels
+            .get(&deepest_chamber)
+            .copied()
+            .unwrap_or(settings.cave_floor_level),
+    );
+    let conflict_coord = chamber_centres.first().copied().unwrap_or(HexCoord::ORIGIN);
     let conflict_position = TilePos::new(
-        chamber_centres.first().copied().unwrap_or(HexCoord::ORIGIN),
-        settings.cave_floor_level,
+        conflict_coord,
+        floor_levels
+            .get(&conflict_coord)
+            .copied()
+            .unwrap_or(settings.cave_floor_level),
     );
     let anchors = BTreeMap::from([
         (PARTY_START.to_owned(), party_position),
@@ -425,12 +499,16 @@ fn construct_plan(
             surface_heights,
             surface_materials,
             chamber_centres,
+            chamber_floor_levels,
             chamber_footprints,
             tree_edges,
+            extra_edges,
             corridor_routes,
             entrance_ramp,
             covered_cells,
             chamber_cells,
+            floor_levels,
+            clearances,
             roof_bottoms,
             deepest_chamber,
         },
@@ -496,6 +574,10 @@ fn chamber_tree(
     context: CandidateContext,
     fallback: bool,
 ) -> Result<(Vec<HexCoord>, Vec<(usize, usize)>), CandidateAttemptError> {
+    if settings.chamber_count > 8 {
+        return extended_chamber_tree(radius, orientation, settings);
+    }
+
     let outer = (radius / 2).max(8).min(radius.saturating_sub(2));
     let inner = (outer / 2).max(3);
     let root = from_local(0, 0, orientation);
@@ -555,11 +637,333 @@ fn chamber_tree(
     Ok((centres, edges))
 }
 
+fn extended_chamber_tree(
+    radius: i32,
+    orientation: u8,
+    settings: &CavesSettings,
+) -> Result<(Vec<HexCoord>, Vec<(usize, usize)>), CandidateAttemptError> {
+    if !(9..=12).contains(&settings.chamber_count) {
+        return Err(CandidateAttemptError::rejected(
+            "unsupported expanded cave chamber count",
+        ));
+    }
+
+    // The authored normalized slots keep the minimum-radius fallback reliable while
+    // scaling the network across larger maps. Rotation still comes from the candidate
+    // stream, so the template has six deterministic presentations.
+    let slots = [
+        (0, 0),
+        (-4, 4),
+        (4, 0),
+        (0, 7),
+        (-9, 9),
+        (-5, 9),
+        (0, 10),
+        (5, 5),
+        (9, 0),
+        (-9, 5),
+        (9, -5),
+        (5, -9),
+    ];
+    let edges = [
+        (0, 1),
+        (0, 2),
+        (0, 3),
+        (1, 4),
+        (1, 5),
+        (3, 6),
+        (3, 7),
+        (2, 8),
+        (1, 9),
+        (2, 10),
+        (2, 11),
+    ];
+    let count = usize::from(settings.chamber_count);
+    let centres: Vec<_> = slots
+        .into_iter()
+        .take(count)
+        .map(|(x, y)| {
+            from_local(
+                scale_extended_coord(x, radius),
+                scale_extended_coord(y, radius),
+                orientation,
+            )
+        })
+        .collect();
+    let tree_edges: Vec<_> = edges
+        .into_iter()
+        .filter(|(_parent, child)| *child < count)
+        .collect();
+    if centres.len() != count
+        || tree_edges.len() != count.saturating_sub(1)
+        || centres
+            .iter()
+            .any(|centre| HexCoord::ORIGIN.distance(*centre) > radius.unsigned_abs())
+    {
+        return Err(CandidateAttemptError::rejected(
+            "expanded cave template escaped its map or tree",
+        ));
+    }
+    Ok((centres, tree_edges))
+}
+
+fn scale_extended_coord(value: i32, radius: i32) -> i32 {
+    value.saturating_mul(radius) / 12
+}
+
+fn extended_floor_relief(settings: &CavesSettings) -> Level {
+    i32::from(settings.chamber_count.saturating_sub(8).min(2))
+}
+
+fn extended_clearance_extra(settings: &CavesSettings) -> Level {
+    i32::from(settings.chamber_count.saturating_sub(8).min(3))
+}
+
+fn extended_surface_relief(settings: &CavesSettings) -> Level {
+    if settings.chamber_count <= 8 {
+        2
+    } else {
+        i32::from(settings.chamber_count.saturating_sub(6).min(5))
+    }
+}
+
+const fn extended_extra_link_count(settings: &CavesSettings) -> u8 {
+    settings.chamber_count.saturating_sub(8) / 2
+}
+
+fn chamber_floor_levels(
+    settings: &CavesSettings,
+    centres: &[HexCoord],
+    _tree_edges: &[(usize, usize)],
+    context: CandidateContext,
+    fallback: bool,
+) -> Result<Vec<Level>, CandidateAttemptError> {
+    let relief = extended_floor_relief(settings);
+    let mut levels = vec![settings.cave_floor_level; centres.len()];
+    if relief == 0 {
+        return Ok(levels);
+    }
+
+    let stream = context.streams.stage("caves.extended.floors");
+    for (index, level) in levels.iter_mut().enumerate().skip(1) {
+        let offset = if index <= 3 {
+            1.min(relief)
+        } else if fallback {
+            Level::try_from(index).unwrap_or(Level::MAX) % relief.saturating_add(1)
+        } else {
+            Level::try_from(
+                stream.sample(u64::try_from(index).unwrap_or(u64::MAX))
+                    % u64::try_from(relief.saturating_add(1))
+                        .unwrap_or(u64::MAX)
+                        .max(1),
+            )
+            .unwrap_or_default()
+        };
+        *level = settings.cave_floor_level.saturating_add(offset);
+    }
+    let Some(last) = levels.last_mut() else {
+        return Err(CandidateAttemptError::rejected(
+            "expanded cave has no chamber floors",
+        ));
+    };
+    *last = settings.cave_floor_level.saturating_add(relief);
+    Ok(levels)
+}
+
+fn extra_edges(
+    settings: &CavesSettings,
+    centres: &[HexCoord],
+    tree_edges: &[(usize, usize)],
+    context: CandidateContext,
+    fallback: bool,
+) -> Result<Vec<(usize, usize)>, CandidateAttemptError> {
+    let requested = usize::from(extended_extra_link_count(settings));
+    if requested == 0 {
+        return Ok(Vec::new());
+    }
+
+    let count = centres.len();
+    let mut eligible: Vec<_> = [
+        (4_usize, 5_usize),
+        (6, 7),
+        (7, 8),
+        (4, 9),
+        (8, 10),
+        (10, 11),
+    ]
+    .into_iter()
+    .filter(|(first, second)| {
+        *first < count
+            && *second < count
+            && !tree_edges.iter().any(|edge| {
+                let normalized = (edge.0.min(edge.1), edge.0.max(edge.1));
+                normalized == (*first.min(second), *first.max(second))
+            })
+    })
+    .collect();
+    if eligible.len() < requested {
+        return Err(CandidateAttemptError::rejected(
+            "expanded cave has too few eligible extra links",
+        ));
+    }
+    let offset = if fallback {
+        0
+    } else {
+        usize::try_from(
+            context.streams.stage("caves.extended.links").sample(0)
+                % u64::try_from(eligible.len()).unwrap_or(u64::MAX).max(1),
+        )
+        .unwrap_or_default()
+    };
+    eligible.rotate_left(offset);
+    eligible.truncate(requested);
+    eligible.sort_unstable();
+    Ok(eligible)
+}
+
+fn reconcile_floor_levels(
+    settings: &CavesSettings,
+    footprints: &[BTreeSet<HexCoord>],
+    chamber_levels: &[Level],
+    routes: &mut [CaveRoute],
+    entrance: &CaveRoute,
+) -> Result<BTreeMap<HexCoord, Level>, CandidateAttemptError> {
+    let mut floors = BTreeMap::new();
+    for (footprint, level) in footprints.iter().zip(chamber_levels) {
+        for coord in footprint {
+            if floors.insert(*coord, *level).is_some() {
+                return Err(CandidateAttemptError::rejected(
+                    "expanded cave chamber footprints overlap",
+                ));
+            }
+        }
+    }
+
+    for route in routes.iter_mut() {
+        for row in &mut route.rows {
+            let existing: BTreeSet<_> = row
+                .iter()
+                .filter_map(|position| floors.get(&position.coord).copied())
+                .collect();
+            if existing.len() > 1 {
+                return Err(CandidateAttemptError::rejected(
+                    "a two-wide cave row intersects incompatible floor terraces",
+                ));
+            }
+            let level = existing.first().copied().unwrap_or_else(|| {
+                row.first()
+                    .map_or(settings.cave_floor_level, |pos| pos.level)
+            });
+            for position in row {
+                position.level = level;
+                floors.entry(position.coord).or_insert(level);
+            }
+        }
+    }
+    for (route_index, route) in routes.iter_mut().enumerate() {
+        for position in route.rows.iter_mut().flatten() {
+            if let Some(level) = floors.get(&position.coord).copied() {
+                position.level = level;
+            }
+        }
+        if !valid_sloped_route(route) {
+            return Err(CandidateAttemptError::rejected(format!(
+                "cave floor reconciliation made route {route_index} unwalkable"
+            )));
+        }
+    }
+
+    for coord in entrance.coords() {
+        floors.remove(&coord);
+    }
+    if settings.chamber_count <= 8
+        && floors
+            .values()
+            .any(|level| *level != settings.cave_floor_level)
+    {
+        return Err(CandidateAttemptError::rejected(
+            "legacy cave floor levels changed",
+        ));
+    }
+    Ok(floors)
+}
+
+fn cave_clearances(
+    settings: &CavesSettings,
+    context: CandidateContext,
+    fallback: bool,
+    routes: &[CaveRoute],
+    footprints: &[BTreeSet<HexCoord>],
+    deepest_index: usize,
+    covered: &BTreeSet<HexCoord>,
+) -> BTreeMap<HexCoord, Level> {
+    let mut clearances: BTreeMap<_, _> = covered
+        .iter()
+        .map(|coord| (*coord, CORRIDOR_CLEARANCE))
+        .collect();
+    if settings.chamber_count > 8 {
+        let phase = if fallback {
+            0
+        } else {
+            context
+                .streams
+                .stage("caves.extended.corridor_heights")
+                .sample(0)
+                % 2
+        };
+        for (index, route) in routes.iter().enumerate().skip(1) {
+            let clearance = CORRIDOR_CLEARANCE.saturating_add(
+                if (u64::try_from(index).unwrap_or(u64::MAX) + phase) % 2 != 0 {
+                    1
+                } else {
+                    0
+                },
+            );
+            for coord in route.coords() {
+                if let Some(existing) = clearances.get_mut(&coord) {
+                    *existing = (*existing).max(clearance);
+                }
+            }
+        }
+    }
+
+    let extra = extended_clearance_extra(settings);
+    let stream = context.streams.stage("caves.extended.chamber_heights");
+    for (index, footprint) in footprints.iter().enumerate() {
+        let clearance = if extra == 0 || index == 0 {
+            CHAMBER_CLEARANCE
+        } else if index == deepest_index {
+            CHAMBER_CLEARANCE.saturating_add(extra)
+        } else {
+            let sampled = if fallback {
+                Level::try_from(index).unwrap_or(Level::MAX) % extra.saturating_add(1)
+            } else {
+                Level::try_from(
+                    stream.sample(u64::try_from(index).unwrap_or(u64::MAX))
+                        % u64::try_from(extra.saturating_add(1))
+                            .unwrap_or(u64::MAX)
+                            .max(1),
+                )
+                .unwrap_or_default()
+            };
+            CHAMBER_CLEARANCE.saturating_add(sampled)
+        };
+        for coord in footprint {
+            if let Some(existing) = clearances.get_mut(coord) {
+                *existing = clearance;
+            }
+        }
+    }
+    clearances
+}
+
 fn paired_route(
     grid_radius: u32,
     start: HexCoord,
     end: HexCoord,
-    floor_level: Level,
+    start_level: Level,
+    end_level: Level,
+    require_advancing_lane: bool,
 ) -> Result<CaveRoute, CandidateAttemptError> {
     let centerline = start.line_between(end);
     let centerline_cells: BTreeSet<_> = centerline.iter().copied().collect();
@@ -577,7 +981,10 @@ fn paired_route(
                 None => Some(None),
                 Some(previous) => previous
                     .keys()
-                    .find(|before| **before == candidate || before.distance(candidate) == 1)
+                    .find(|before| {
+                        before.distance(candidate) == 1
+                            || (!require_advancing_lane && **before == candidate)
+                    })
                     .copied()
                     .map(Some),
             };
@@ -612,17 +1019,32 @@ fn paired_route(
         ));
     }
     second_reversed.reverse();
+    let transitions = centerline.len().saturating_sub(1);
     let rows = centerline
         .into_iter()
         .zip(second_reversed)
-        .map(|(first, second)| {
-            [
-                TilePos::new(first, floor_level),
-                TilePos::new(second, floor_level),
-            ]
+        .enumerate()
+        .map(|(index, (first, second))| {
+            let level = interpolated_level(start_level, end_level, index, transitions);
+            [TilePos::new(first, level), TilePos::new(second, level)]
         })
         .collect();
     Ok(CaveRoute { rows })
+}
+
+fn interpolated_level(start: Level, end: Level, index: usize, transitions: usize) -> Level {
+    if transitions == 0 || start == end {
+        return start;
+    }
+    let span = start.abs_diff(end);
+    let progressed = span.saturating_mul(u32::try_from(index).unwrap_or(u32::MAX))
+        / u32::try_from(transitions).unwrap_or(u32::MAX).max(1);
+    let progressed = Level::try_from(progressed).unwrap_or(Level::MAX);
+    if end > start {
+        start.saturating_add(progressed)
+    } else {
+        start.saturating_sub(progressed)
+    }
 }
 
 fn coordinate_distances(start: HexCoord, allowed: &BTreeSet<HexCoord>) -> BTreeMap<HexCoord, u32> {
@@ -645,14 +1067,12 @@ fn surface_heights(
     settings: &CavesSettings,
     orientation: u8,
     entrance: &CaveRoute,
+    chamber_centres: &[HexCoord],
+    floor_levels: &BTreeMap<HexCoord, Level>,
+    clearances: &BTreeMap<HexCoord, Level>,
 ) -> Result<BTreeMap<HexCoord, Level>, CandidateAttemptError> {
     let radius = i32::try_from(context.grid_radius)
         .map_err(|_out_of_range| CandidateAttemptError::rejected("cave radius is too large"))?;
-    let rise_cap = 17_i32.saturating_sub(settings.surface_level).min(2);
-    let mound_centres = [
-        from_local(-radius / 3, 0, orientation),
-        from_local(radius / 3, -radius / 3, orientation),
-    ];
     let landing: Vec<_> = entrance
         .rows
         .first()
@@ -660,13 +1080,100 @@ fn surface_heights(
         .flatten()
         .map(|position| position.coord)
         .collect();
+    if settings.chamber_count <= 8 {
+        let rise_cap = 17_i32.saturating_sub(settings.surface_level).min(2);
+        let mound_centres = [
+            from_local(-radius / 3, 0, orientation),
+            from_local(radius / 3, -radius / 3, orientation),
+        ];
+        let mut heights = BTreeMap::new();
+        for coord in HexCoord::ORIGIN.within_radius(context.grid_radius) {
+            let rise = mound_centres
+                .iter()
+                .map(|centre| {
+                    rise_cap
+                        .saturating_sub_unsigned(centre.distance(coord) / 3)
+                        .max(0)
+                })
+                .max()
+                .unwrap_or_default();
+            let mut height = settings.surface_level.saturating_add(rise);
+            let landing_distance = landing
+                .iter()
+                .map(|landing| landing.distance(coord))
+                .min()
+                .unwrap_or_default();
+            height = height.min(
+                settings
+                    .surface_level
+                    .saturating_add_unsigned(landing_distance.min(2)),
+            );
+            heights.insert(coord, height);
+        }
+        return Ok(heights);
+    }
+
+    let relief = extended_surface_relief(settings);
+    let stream = context.streams.stage("caves.extended.surface");
+    let feature_count = usize::from(settings.chamber_count.saturating_sub(5).min(6));
+    let mut feature_centres: Vec<_> = chamber_centres.iter().copied().enumerate().collect();
+    feature_centres.sort_by_key(|(index, centre)| {
+        (
+            stream.sample(u64::try_from(*index).unwrap_or(u64::MAX)),
+            *centre,
+        )
+    });
+    feature_centres.truncate(feature_count);
+    if let Some(farthest) = chamber_centres.iter().copied().max_by_key(|centre| {
+        landing
+            .iter()
+            .map(|landing| landing.distance(*centre))
+            .min()
+            .unwrap_or_default()
+    }) {
+        if let Some(feature) = feature_centres
+            .iter_mut()
+            .find(|(_index, centre)| *centre == farthest)
+        {
+            feature.0 = usize::MAX;
+        } else {
+            if let Some(last) = feature_centres.last_mut() {
+                *last = (usize::MAX, farthest);
+            }
+        }
+        feature_centres.sort_by_key(|(index, centre)| (*index, *centre));
+    }
+
     let mut heights = BTreeMap::new();
     for coord in HexCoord::ORIGIN.within_radius(context.grid_radius) {
-        let rise = mound_centres
+        let rise = feature_centres
             .iter()
-            .map(|centre| {
-                rise_cap
-                    .saturating_sub_unsigned(centre.distance(coord) / 3)
+            .enumerate()
+            .map(|(feature, (index, centre))| {
+                let peak = if *index == usize::MAX {
+                    relief
+                } else {
+                    let variable = relief.saturating_sub(1).max(1);
+                    2_i32
+                        .saturating_add(
+                            Level::try_from(
+                                stream.sample(
+                                    u64::try_from(*index)
+                                        .unwrap_or(u64::MAX)
+                                        .saturating_add(100),
+                                ) % u64::try_from(variable).unwrap_or(1).max(1),
+                            )
+                            .unwrap_or_default(),
+                        )
+                        .min(relief)
+                };
+                let width = 2_u32.saturating_add(
+                    u32::try_from(
+                        stream.sample(u64::try_from(feature).unwrap_or(u64::MAX) + 200) % 2,
+                    )
+                    .unwrap_or_default(),
+                );
+                peak.saturating_sub_unsigned(centre.distance(coord) / width)
                     .max(0)
             })
             .max()
@@ -680,9 +1187,80 @@ fn surface_heights(
         height = height.min(
             settings
                 .surface_level
-                .saturating_add_unsigned(landing_distance.min(2)),
+                .saturating_add_unsigned(landing_distance),
         );
         heights.insert(coord, height);
+    }
+
+    let max_surface = settings.surface_level.saturating_add(relief);
+    let landing_distances: BTreeMap<_, _> = heights
+        .keys()
+        .copied()
+        .map(|coord| {
+            let distance = landing
+                .iter()
+                .map(|landing| landing.distance(coord))
+                .min()
+                .unwrap_or_default();
+            (coord, distance)
+        })
+        .collect();
+    let mut frontier = VecDeque::new();
+    for (coord, floor) in floor_levels {
+        let Some(clearance) = clearances.get(coord).copied() else {
+            return Err(CandidateAttemptError::rejected(
+                "a cave floor has no surface-clearance contract",
+            ));
+        };
+        let required = floor.saturating_add(clearance).saturating_add(3);
+        let landing_cap = landing_distances
+            .get(coord)
+            .copied()
+            .map_or(max_surface, |distance| {
+                settings.surface_level.saturating_add_unsigned(distance)
+            });
+        if required > max_surface || required > landing_cap {
+            return Err(CandidateAttemptError::rejected(
+                "expanded cave roof cannot fit below its surface relief",
+            ));
+        }
+        let Some(height) = heights.get_mut(coord) else {
+            return Err(CandidateAttemptError::rejected(
+                "expanded cave floor escaped the surface",
+            ));
+        };
+        if *height < required {
+            *height = required;
+            frontier.push_back(*coord);
+        }
+    }
+
+    while let Some(coord) = frontier.pop_front() {
+        let Some(height) = heights.get(&coord).copied() else {
+            continue;
+        };
+        let needed = height.saturating_sub(1);
+        for neighbor in coord.neighbors() {
+            let Some(neighbor_height) = heights.get_mut(&neighbor) else {
+                continue;
+            };
+            if *neighbor_height >= needed {
+                continue;
+            }
+            let landing_cap = landing_distances
+                .get(&neighbor)
+                .copied()
+                .map_or(max_surface, |distance| {
+                    settings.surface_level.saturating_add_unsigned(distance)
+                });
+            if needed > max_surface || needed > landing_cap {
+                return Err(CandidateAttemptError::rejected(
+                    "expanded cave roof projection blocks the entrance landing",
+                ));
+            }
+            *neighbor_height = needed;
+            frontier.push_back(neighbor);
+        }
     }
     Ok(heights)
 }
@@ -809,13 +1387,24 @@ fn validate_plan(
         .copied()
         .max()
         .unwrap_or(settings.surface_level);
-    if min_surface < 14
-        || max_surface > 17
-        || min_surface < settings.surface_level
-        || max_surface.saturating_sub(min_surface) > 2
-    {
+    let expected_surface_relief = extended_surface_relief(settings);
+    let invalid_surface = if settings.chamber_count <= 8 {
+        min_surface < 14
+            || max_surface > 17
+            || min_surface < settings.surface_level
+            || max_surface.saturating_sub(min_surface) > 2
+    } else {
+        min_surface != settings.surface_level
+            || max_surface
+                > settings
+                    .surface_level
+                    .saturating_add(expected_surface_relief)
+            || max_surface.saturating_sub(min_surface) != expected_surface_relief
+    };
+    if invalid_surface {
         issues.push(format!(
-            "rocky cave surface is {min_surface}..={max_surface}; expected a modest level 14..=17 surface"
+            "rocky cave surface is {min_surface}..={max_surface}; expected relief {expected_surface_relief} from level {}",
+            settings.surface_level
         ));
     }
     if metadata.surface_heights.len() != plan.volume.columns.len()
@@ -877,6 +1466,41 @@ fn validate_plan(
         &metadata.tree_edges,
         &mut issues,
     );
+    validate_extra_edges(
+        metadata.chamber_centres.len(),
+        &metadata.tree_edges,
+        &metadata.extra_edges,
+        extended_extra_link_count(settings),
+        &mut issues,
+    );
+    if metadata.chamber_floor_levels.len() != metadata.chamber_centres.len()
+        || metadata
+            .chamber_centres
+            .iter()
+            .zip(&metadata.chamber_floor_levels)
+            .any(|(centre, level)| metadata.floor_levels.get(centre).copied() != Some(*level))
+    {
+        issues.push("cave chamber floor metadata is incomplete or stale".to_owned());
+    }
+    let min_floor = metadata
+        .floor_levels
+        .values()
+        .copied()
+        .min()
+        .unwrap_or(settings.cave_floor_level);
+    let max_floor = metadata
+        .floor_levels
+        .values()
+        .copied()
+        .max()
+        .unwrap_or(settings.cave_floor_level);
+    if min_floor != settings.cave_floor_level
+        || max_floor.saturating_sub(min_floor) != extended_floor_relief(settings)
+    {
+        issues.push(format!(
+            "cave floor range {min_floor}..={max_floor} does not match its derived relief"
+        ));
+    }
 
     if !valid_ramp(
         &metadata.entrance_ramp,
@@ -897,12 +1521,29 @@ fn validate_plan(
     if actual_edge != expected_edge {
         issues.push("cave entrance does not begin at its oriented map edge".to_owned());
     }
+    let expected_routes = 1_usize
+        .saturating_add(metadata.tree_edges.len())
+        .saturating_add(metadata.extra_edges.len());
+    if metadata.corridor_routes.len() != expected_routes
+        || metadata.corridor_routes.iter().any(|route| {
+            if settings.chamber_count <= 8 {
+                !valid_flat_route(route, settings.cave_floor_level)
+            } else {
+                !valid_sloped_route(route)
+            }
+        })
+    {
+        issues.push(
+            "a cave corridor is not a contiguous two-wide flat route or valid sloped route"
+                .to_owned(),
+        );
+    }
     if metadata
         .corridor_routes
         .iter()
-        .any(|route| !valid_flat_route(route, settings.cave_floor_level))
+        .any(|route| !route_admits_walker(route, &plan.volume))
     {
-        issues.push("a cave corridor is not a contiguous two-wide flat route".to_owned());
+        issues.push("a cave corridor lacks walker clearance across a transition".to_owned());
     }
     let ramp_cells = metadata.entrance_ramp.coords();
     if metadata.corridor_routes.iter().any(|route| {
@@ -915,10 +1556,18 @@ fn validate_plan(
     }
 
     let expected_floors: BTreeSet<_> = metadata
-        .covered_cells
+        .floor_levels
         .iter()
-        .map(|coord| TilePos::new(*coord, settings.cave_floor_level))
+        .map(|(coord, level)| TilePos::new(*coord, *level))
         .collect();
+    if metadata.floor_levels.len() != metadata.covered_cells.len()
+        || metadata
+            .floor_levels
+            .keys()
+            .any(|coord| !metadata.covered_cells.contains(coord))
+    {
+        issues.push("cave floor metadata does not exactly match covered cells".to_owned());
+    }
     let expected_entrances: BTreeSet<_> = metadata
         .entrance_ramp
         .rows
@@ -949,19 +1598,40 @@ fn validate_plan(
 
     let mut minimum_roof_thickness = Level::MAX;
     for coord in &metadata.covered_cells {
-        let clearance = if metadata.chamber_cells.contains(coord) {
+        let Some(floor_level) = metadata.floor_levels.get(coord).copied() else {
+            issues.push(format!("cave cell {coord:?} has no exact floor level"));
+            break;
+        };
+        let Some(clearance) = metadata.clearances.get(coord).copied() else {
+            issues.push(format!("cave cell {coord:?} has no exact clearance"));
+            break;
+        };
+        let minimum_clearance = if metadata.chamber_cells.contains(coord) {
             CHAMBER_CLEARANCE
         } else {
             CORRIDOR_CLEARANCE
         };
-        let expected_bottom = settings
-            .cave_floor_level
-            .saturating_add(1)
-            .saturating_add(clearance);
+        let maximum_clearance =
+            minimum_clearance.saturating_add(if metadata.chamber_cells.contains(coord) {
+                extended_clearance_extra(settings)
+            } else {
+                if settings.chamber_count > 8 {
+                    1
+                } else {
+                    0
+                }
+            });
+        if !(minimum_clearance..=maximum_clearance).contains(&clearance) {
+            issues.push(format!(
+                "cave cell {coord:?} clearance {clearance} is outside its derived range"
+            ));
+            break;
+        }
+        let expected_bottom = floor_level.saturating_add(1).saturating_add(clearance);
         if metadata.roof_bottoms.get(coord).copied() != Some(expected_bottom)
             || interior.clear_air.get(coord).copied()
                 != Some(LevelInterval::new(
-                    settings.cave_floor_level.saturating_add(1),
+                    floor_level.saturating_add(1),
                     expected_bottom,
                 ))
         {
@@ -984,7 +1654,7 @@ fn validate_plan(
         }
         if !valid_covered_column(
             plan.volume.columns.get(coord),
-            settings.cave_floor_level,
+            floor_level,
             expected_bottom,
             surface,
         ) {
@@ -1002,6 +1672,14 @@ fn validate_plan(
     {
         issues.push("cave roof metadata does not exactly match covered cells".to_owned());
     }
+    if metadata.clearances.len() != metadata.covered_cells.len()
+        || metadata
+            .clearances
+            .keys()
+            .any(|coord| !metadata.covered_cells.contains(coord))
+    {
+        issues.push("cave clearance metadata does not exactly match covered cells".to_owned());
+    }
 
     let surfaces_by_coord = surfaces_by_coord(&plan.volume.surfaces);
     for (coord, surface_level) in &metadata.surface_heights {
@@ -1016,8 +1694,13 @@ fn validate_plan(
         {
             BTreeSet::from([TilePos::new(*coord, ramp_level)])
         } else if metadata.covered_cells.contains(coord) {
+            let floor_level = metadata
+                .floor_levels
+                .get(coord)
+                .copied()
+                .unwrap_or(settings.cave_floor_level);
             BTreeSet::from([
-                TilePos::new(*coord, settings.cave_floor_level),
+                TilePos::new(*coord, floor_level),
                 TilePos::new(*coord, *surface_level),
             ])
         } else {
@@ -1068,7 +1751,11 @@ fn validate_plan(
         .copied();
     let expected_hostile = Some(TilePos::new(
         metadata.deepest_chamber,
-        settings.cave_floor_level,
+        metadata
+            .floor_levels
+            .get(&metadata.deepest_chamber)
+            .copied()
+            .unwrap_or(settings.cave_floor_level),
     ));
     if party != expected_party || plan.volume.anchors.get(CAVE_ENTRANCE).copied() != expected_party
     {
@@ -1154,6 +1841,18 @@ fn validate_plan(
             .max(1);
     let entrance_steps =
         u32::try_from(metadata.entrance_ramp.rows.len().saturating_sub(1)).unwrap_or(u32::MAX);
+    let minimum_clearance = metadata
+        .clearances
+        .values()
+        .copied()
+        .min()
+        .unwrap_or(CORRIDOR_CLEARANCE);
+    let maximum_clearance = metadata
+        .clearances
+        .values()
+        .copied()
+        .max()
+        .unwrap_or(CHAMBER_CLEARANCE);
     let spawn_height_difference = party
         .zip(hostile)
         .map(|(party, hostile)| {
@@ -1179,6 +1878,10 @@ fn validate_plan(
         minimum_roof_thickness,
         entrance_steps,
         cave_coverage_percent,
+        floor_relief: max_floor.saturating_sub(min_floor),
+        clearance_relief: maximum_clearance.saturating_sub(minimum_clearance),
+        surface_relief: max_surface.saturating_sub(min_surface),
+        extra_links: u8::try_from(metadata.extra_edges.len()).unwrap_or(u8::MAX),
     };
     RecipeValidation::valid(metrics)
 }
@@ -1229,6 +1932,31 @@ fn validate_tree(chamber_count: usize, edges: &[(usize, usize)], issues: &mut Ve
     branch_nodes
 }
 
+fn validate_extra_edges(
+    chamber_count: usize,
+    tree_edges: &[(usize, usize)],
+    extra_edges: &[(usize, usize)],
+    expected_count: u8,
+    issues: &mut Vec<String>,
+) {
+    let tree: BTreeSet<_> = tree_edges
+        .iter()
+        .map(|(first, second)| ((*first).min(*second), (*first).max(*second)))
+        .collect();
+    let mut unique = BTreeSet::new();
+    let valid = extra_edges.iter().all(|(first, second)| {
+        let edge = ((*first).min(*second), (*first).max(*second));
+        *first < chamber_count
+            && *second < chamber_count
+            && first != second
+            && !tree.contains(&edge)
+            && unique.insert(edge)
+    });
+    if !valid || extra_edges.len() != usize::from(expected_count) {
+        issues.push("cave extra-link metadata is invalid or stale".to_owned());
+    }
+}
+
 fn valid_ramp(route: &CaveRoute, top: Level, bottom: Level) -> bool {
     let first = route.rows.first().and_then(|row| row.first());
     let last = route.rows.last().and_then(|row| row.first());
@@ -1248,18 +1976,44 @@ fn valid_ramp(route: &CaveRoute, top: Level, bottom: Level) -> bool {
 }
 
 fn valid_flat_route(route: &CaveRoute, floor: Level) -> bool {
+    valid_sloped_route(route)
+        && route
+            .rows
+            .iter()
+            .flatten()
+            .all(|position| position.level == floor)
+}
+
+fn valid_sloped_route(route: &CaveRoute) -> bool {
     !route.rows.is_empty()
         && route.rows.iter().all(|row| {
             matches!(row, [first, second]
-                if first.coord.distance(second.coord) == 1
-                    && first.level == floor
-                    && second.level == floor)
+                if first.coord.distance(second.coord) == 1 && first.level == second.level)
         })
         && route.rows.windows(2).all(|pair| {
             matches!(pair, [before, after]
                 if before[0].coord.distance(after[0].coord) == 1
-                    && before[1].coord.distance(after[1].coord) <= 1)
+                    && before[1].coord.distance(after[1].coord) <= 1
+                    && before[0].level.abs_diff(after[0].level) <= 1
+                    && before[1].level.abs_diff(after[1].level) <= 1)
         })
+}
+
+fn route_admits_walker(route: &CaveRoute, volume: &TerrainVolumePlan) -> bool {
+    let endpoint = |position: TilePos| {
+        volume.columns.get(&position.coord).map(|column| {
+            TraversalEndpoint::new(position, true, semantic_headroom(column, position))
+        })
+    };
+    route.rows.windows(2).all(|pair| {
+        matches!(pair, [before, after]
+            if endpoint(before[0]).zip(endpoint(after[0])).is_some_and(|(from, to)|
+                TraversalProfile::WALKER.admits_transition(from, to)
+                    && TraversalProfile::WALKER.admits_transition(to, from))
+                && endpoint(before[1]).zip(endpoint(after[1])).is_some_and(|(from, to)|
+                    TraversalProfile::WALKER.admits_transition(from, to)
+                        && TraversalProfile::WALKER.admits_transition(to, from)))
+    })
 }
 
 fn valid_covered_column(
@@ -1499,7 +2253,7 @@ mod tests {
 
     #[test]
     fn shipped_caves_are_deterministic_connected_and_exactly_tagged() {
-        let settings = settings(15, 8, 7);
+        let settings = settings(15, 7, 7);
         let first = build(12, 0.4, &settings, CAVE_SEED, &palette(), &is_solid)
             .expect("the shipped Caves seed should generate");
         let second = build(12, 0.4, &settings, CAVE_SEED, &palette(), &is_solid)
@@ -1507,6 +2261,8 @@ mod tests {
 
         assert_eq!(first.map_fingerprint, second.map_fingerprint);
         assert_eq!(first.selected_candidate, second.selected_candidate);
+        assert_eq!(first.selected_candidate, Some(2));
+        assert_eq!(first.map_fingerprint, 6_154_715_023_132_200_237);
         assert_eq!(first.map.len(), 469);
         assert_eq!(first.candidates_evaluated, 8);
         assert!(!first.used_fallback);
@@ -1515,13 +2271,105 @@ mod tests {
         assert!(first.interiors.has_roof_voxels());
         assert_eq!(first.metadata.chamber_centres.len(), 7);
         assert_eq!(first.metrics.chamber_count, 7);
-        assert_eq!(first.metrics.minimum_roof_thickness, 3);
-        assert_eq!(first.metrics.entrance_steps, 7);
+        assert_eq!(first.metrics.minimum_roof_thickness, 4);
+        assert_eq!(first.metrics.entrance_steps, 8);
         assert!(first.metrics.covered_floors > 0);
         assert!(first.anchors.get(&PARTY_START.into()).is_some());
         assert!(first.anchors.get(&HOSTILE_START.into()).is_some());
         assert!(first.anchors.get(&CAVE_ENTRANCE.into()).is_some());
         assert!(first.anchors.get(&DEEP_CHAMBER.into()).is_some());
+    }
+
+    #[test]
+    fn expanded_cave_options_add_exact_vertical_and_topological_variety() {
+        let options = [
+            (16, 7, 9, 1, 2, 3, 0),
+            (16, 6, 10, 2, 3, 4, 1),
+            (17, 6, 12, 2, 4, 5, 2),
+        ];
+        for (
+            surface,
+            floor,
+            chamber_count,
+            floor_relief,
+            clearance_relief,
+            surface_relief,
+            extra_links,
+        ) in options
+        {
+            let generated = build(
+                12,
+                0.4,
+                &settings(surface, floor, chamber_count),
+                CAVE_SEED,
+                &palette(),
+                &is_solid,
+            )
+            .unwrap_or_else(|error| {
+                panic!("the {chamber_count}-chamber visual option should generate: {error}")
+            });
+
+            assert!(!generated.used_fallback);
+            assert_eq!(
+                generated.metadata.chamber_centres.len(),
+                usize::from(chamber_count)
+            );
+            assert_eq!(generated.metrics.floor_relief, floor_relief);
+            assert_eq!(generated.metrics.clearance_relief, clearance_relief);
+            assert_eq!(generated.metrics.surface_relief, surface_relief);
+            assert_eq!(generated.metrics.extra_links, extra_links);
+            assert_ne!(
+                generated.metrics.tactical.critical_route_steps,
+                u32::MAX,
+                "the entrance must reach the generated deep anchor"
+            );
+
+            let exact_floor_levels: BTreeSet<_> =
+                generated.metadata.floor_levels.values().copied().collect();
+            let exact_clearances: BTreeSet<_> =
+                generated.metadata.clearances.values().copied().collect();
+            assert!(exact_floor_levels.len() >= 2);
+            assert!(exact_clearances.len() >= 3);
+
+            for route in &generated.metadata.corridor_routes {
+                assert!(valid_sloped_route(route));
+                for position in route.rows.iter().flatten() {
+                    if !generated.metadata.covered_cells.contains(&position.coord) {
+                        continue;
+                    }
+                    let exact_floor = generated
+                        .metadata
+                        .floor_levels
+                        .get(&position.coord)
+                        .copied()
+                        .expect("every covered route cell should publish its exact floor");
+                    assert_eq!(position.level, exact_floor);
+                    assert_eq!(generated.interiors.get(*position), Some(INTERIOR));
+
+                    let roof_bottom = generated
+                        .metadata
+                        .roof_bottoms
+                        .get(&position.coord)
+                        .copied()
+                        .expect("every covered route should publish a roof bottom");
+                    let surface = generated
+                        .metadata
+                        .surface_heights
+                        .get(&position.coord)
+                        .copied()
+                        .expect("every covered route should remain under the surface");
+                    for level in roof_bottom..=surface {
+                        assert_eq!(
+                            generated
+                                .interiors
+                                .roof_region(TilePos::new(position.coord, level)),
+                            Some(INTERIOR),
+                            "every solid roof voxel over a new route must remain cutaway-tagged"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1586,34 +2434,34 @@ mod tests {
     #[test]
     fn canonical_fallback_is_valid_and_deterministic() {
         let recipe = CavesRecipe { level_height: 0.4 };
-        let settings = cave_settings(15, 8, 7);
-        let first = recipe
-            .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
-            .expect("the canonical cave fallback should construct");
-        let second = recipe
-            .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
-            .expect("the repeated cave fallback should construct");
+        for settings in [cave_settings(15, 8, 7), cave_settings(17, 6, 12)] {
+            let first = recipe
+                .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
+                .expect("the canonical cave fallback should construct");
+            let second = recipe
+                .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
+                .expect("the repeated cave fallback should construct");
 
-        first
-            .volume
-            .validate()
-            .expect("the canonical cave fallback volume should validate");
-        assert!(matches!(
-            validate_plan(&settings, &first),
-            RecipeValidation::Valid(_)
-        ));
-        assert_eq!(first.volume.columns, second.volume.columns);
-        assert_eq!(first.volume.surfaces, second.volume.surfaces);
-        assert_eq!(first.volume.anchors, second.volume.anchors);
-        assert_eq!(first.volume.interiors, second.volume.interiors);
-        assert_eq!(
-            first.metadata.surface_heights,
-            second.metadata.surface_heights
-        );
-        assert_eq!(
-            first.metadata.chamber_centres,
-            second.metadata.chamber_centres
-        );
+            first
+                .volume
+                .validate()
+                .expect("the canonical cave fallback volume should validate");
+            if let RecipeValidation::Invalid(issues) = validate_plan(&settings, &first) {
+                panic!("canonical cave fallback should validate: {issues:?}");
+            }
+            assert_eq!(first.volume.columns, second.volume.columns);
+            assert_eq!(first.volume.surfaces, second.volume.surfaces);
+            assert_eq!(first.volume.anchors, second.volume.anchors);
+            assert_eq!(first.volume.interiors, second.volume.interiors);
+            assert_eq!(
+                first.metadata.surface_heights,
+                second.metadata.surface_heights
+            );
+            assert_eq!(
+                first.metadata.chamber_centres,
+                second.metadata.chamber_centres
+            );
+        }
     }
 
     #[test]
