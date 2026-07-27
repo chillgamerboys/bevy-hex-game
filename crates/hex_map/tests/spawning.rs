@@ -38,11 +38,11 @@ use hex_core::{
     TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
 };
 use hex_map::{
-    CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings, LandformSettings,
-    LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings, MountainsSettings,
-    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
-    ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings, TerrainSettings,
-    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
+    CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
+    LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
+    MountainsSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
+    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings,
+    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -261,6 +261,24 @@ fn v2_mountains_app() -> App {
     app
 }
 
+fn v2_caves_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
+            environment: V2EnvironmentSettings::Rocky,
+            recipe: V2RecipeSettings::Caves(CavesSettings {
+                surface_level: 15,
+                cave_floor_level: 7,
+                chamber_count: 7,
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(736_283_041));
+    app
+}
+
 #[test]
 fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
     let mut app = procedural_app();
@@ -451,6 +469,84 @@ fn v2_mountains_publishes_route_anchors_and_geometry_derived_view() {
             .iter()
             .all(|(position, _)| !map.get(position).is_air()),
         "a summit region named an air surface"
+    );
+}
+
+#[test]
+fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
+    let mut app = v2_caves_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
+    assert!(
+        app.world().resource::<SpecialMovementRegions>().is_empty(),
+        "the critical cave network should remain ordinarily walkable"
+    );
+
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.seed, 736_283_041);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(!report.used_fallback, "{:?}", report.notes);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "cave_entrance",
+        "deep_chamber",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing Caves anchor {name}"
+        );
+    }
+
+    let interiors = app.world().resource::<InteriorRegions>();
+    let floors: Vec<_> = interiors.surfaces().collect();
+    let roofs: Vec<_> = interiors.roof_voxels().collect();
+    assert!(
+        !floors.is_empty(),
+        "Caves published no exact interior floors"
+    );
+    assert!(
+        !roofs.is_empty(),
+        "Caves published no exact cutaway roof voxels"
+    );
+
+    let map = app.world().resource::<VoxelMap>();
+    let table = app.world().resource::<SubstanceTable>();
+    assert!(floors.iter().all(|(position, _region)| {
+        map.column(position.coord).is_some_and(|column| {
+            table.is_solid(map.get(*position))
+                && column.headroom_above(position.level.saturating_add(1)).0 >= 2
+        })
+    }));
+    assert!(
+        roofs
+            .iter()
+            .all(|(position, _region)| table.is_solid(map.get(*position))),
+        "cutaway metadata named a non-solid roof voxel"
+    );
+
+    let projected_cutaways = app
+        .world_mut()
+        .query_filtered::<Entity, With<CutawayOccluder>>()
+        .iter(app.world())
+        .count();
+    assert!(
+        projected_cutaways > 0,
+        "exact roof voxels did not project onto rendered runs"
     );
 }
 
@@ -1534,6 +1630,101 @@ fn v2_mountains_teardown_and_reentry_preserve_generated_state() {
         .collect();
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_regions, first_regions);
+}
+
+#[test]
+fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
+    let mut app = v2_caves_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    let first_tile_count = tile_count(&mut app);
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let first_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let first_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+
+    assert!(!first_floors.is_empty());
+    assert!(!first_roofs.is_empty());
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.valid_candidates,
+        first_report.valid_candidates
+    );
+    assert_eq!(second_report.repair_actions, first_report.repair_actions);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let second_roofs: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_floors, first_floors);
+    assert_eq!(second_roofs, first_roofs);
 }
 
 #[test]

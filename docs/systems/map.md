@@ -163,6 +163,13 @@ summit components that are actually disconnected under the shared walker predica
 are published as special-movement terrain, while the generated view looks across the
 ridge so both routes remain legible.
 
+Caves keeps a playable rocky surface above one rooted underground network. A two-wide
+open entrance descends one level per row to six through eight chambers joined by
+two-wide critical corridors. Corridor floors retain three clear levels, chambers
+retain four, and cutaway roofs remain at least three solid levels thick. The party
+anchor names the surface entrance while the hostile anchor names the deepest main
+chamber; both are validated on the same exact walker graph as live movement.
+
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
 non-standable and may associate it with an interior. Anchors also name exact

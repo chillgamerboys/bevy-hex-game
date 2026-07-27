@@ -1382,7 +1382,13 @@ mod tests {
 
     #[test]
     fn every_procedural_probe_loads_terrain_anchors_and_actors() {
-        for scenario_name in ["Frozen Hills", "Volcanic Hills", "Sky Islands", "Mountains"] {
+        for scenario_name in [
+            "Frozen Hills",
+            "Volcanic Hills",
+            "Sky Islands",
+            "Mountains",
+            "Caves",
+        ] {
             let scenario = library()
                 .scenarios
                 .into_iter()
@@ -1426,10 +1432,10 @@ mod tests {
                     "{scenario_name} omitted {required}"
                 );
             }
-            let recipe_anchors: &[&str] = if scenario_name == "Mountains" {
-                &["conflict_center", "high_pass", "low_bypass"]
-            } else {
-                &["conflict_center", "bridge", "alternate_crossing"]
+            let recipe_anchors: &[&str] = match scenario_name {
+                "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
+                "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
+                _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
                 assert!(
@@ -1448,6 +1454,22 @@ mod tests {
                     special_regions.is_empty(),
                     "{scenario_name} introduced an unexpected optional region"
                 ),
+            }
+            let interiors = app.world().resource::<InteriorRegions>();
+            if scenario_name == "Caves" {
+                assert!(
+                    interiors.surfaces().next().is_some(),
+                    "Caves dropped its exact interior floors"
+                );
+                assert!(
+                    interiors.roof_voxels().next().is_some(),
+                    "Caves dropped its exact cutaway roofs"
+                );
+            } else {
+                assert!(
+                    interiors.is_empty(),
+                    "{scenario_name} introduced unexpected interior metadata"
+                );
             }
             assert!(standing_pos::<Player>(&mut app).is_some());
             assert!(standing_pos::<Enemy>(&mut app).is_some());

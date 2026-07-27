@@ -111,5 +111,15 @@
                 enemy: Anchor("hostile_start"),
             ),
         ),
+        (
+            name: "Caves",
+            blurb: "A rocky surface opening into a branching network of full-height underground passages.",
+            world: "config/worlds/procedural-caves.ron",
+            generation_seed: Some(736283041),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
     ],
 )

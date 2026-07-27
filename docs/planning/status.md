@@ -19,6 +19,8 @@ place units on by name, and architecture probes for frozen, volcanic, and sky-is
 terrain. The sky-island probe now preserves a complete playable Hills map below a
 separate flight-gated upper network. The Mountains probe adds sharp frozen ridges,
 deliberate cliffs, and a high-pass/low-bypass route pair without introducing a river.
+The Caves probe adds a playable rocky surface above a two-wide entrance and a
+height-validated underground chamber network with exact opaque cutaway roofs.
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
 reachable set and the route before a click commits to either.

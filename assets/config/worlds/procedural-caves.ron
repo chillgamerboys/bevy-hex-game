@@ -1,0 +1,14 @@
+// A rocky surface above one ordinary-walkable underground chamber network.
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 2,
+        environment: Rocky,
+        recipe: Caves((
+            surface_level: 15,
+            cave_floor_level: 7,
+            chamber_count: 7,
+        )),
+    )),
+)

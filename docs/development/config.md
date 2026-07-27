@@ -185,10 +185,28 @@ It publishes a two-wide elevated saddle and a separated low-valley bypass, with 
 river or crossing structures. Inaccessible summit components are exact
 special-movement regions; naturally walkable peaks remain ordinary terrain.
 
-`Caves` is the remaining reserved V2 recipe. Selecting it currently reports a setup
-failure rather than publishing partial terrain. Recipe and environment combinations
-are validated together: Mountains requires `Frozen`, Caves requires `Rocky`, and
-invalid combinations leave the previous valid hot-reloaded settings active.
+`Caves` carves one ordinary-walkable underground network beneath a modest rocky
+surface:
+
+```ron
+terrain: Procedural((
+    generator_version: 2,
+    environment: Rocky,
+    recipe: Caves((
+        surface_level: 15,
+        cave_floor_level: 7,
+        chamber_count: 7,
+    )),
+)),
+```
+
+It publishes a two-wide descending entrance, a rooted network of six to eight
+chambers, three clear levels in critical corridors, four in chambers, and at least
+three solid roof levels. Exact floor, entrance, and cutaway-roof memberships remain
+keyed by `TilePos`, so the underground floor cannot be confused with the surface
+above it. Recipe and environment combinations are validated together: Mountains
+requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave the
+previous valid hot-reloaded settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
