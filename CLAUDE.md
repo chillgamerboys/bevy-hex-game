@@ -238,20 +238,19 @@ works.
 lives in [docs/planning/status.md](docs/planning/status.md)** — the one doc allowed
 to be out of date. Everything else under `docs/` describes contracts.
 
-## Known gaps
+## Constraints on how you write here
 
-- **`bevy_lint` is wired but unusable** — supports Bevy 0.18 at most. Adopting it
-  later costs no source changes.
-- **Bevy features untrimmed.** Still `default-features = true`. The `3d` collection
-  would cut compile time and binary size but risks silently dropping capability.
 - **Lints are strict, deliberately.** `#[allow]` is banned — use
   `#[expect(lint, reason = "…")]`. `unwrap`, `panic!`, slice indexing, `dbg!`,
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Animation is still `Box<dyn Transformer>`**, which is why `Transformation`
-  can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
-  rewritten when gameplay lands.
-- **Headless integration tests** live in `crates/hex_map/tests/` and
-  `crates/hex_units/tests/`. They cannot see anything visual — a black sky or a
-  mistransformed tile still needs a human looking at the window.
+- **Headless integration tests** live in `crates/hex_map/tests/`,
+  `crates/hex_units/tests/` and `crates/hex_combat/tests/`. They cannot see anything
+  visual — a black sky or a mistransformed tile still needs a human looking at the
+  window.
+
+**Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
+features untrimmed, animation still `Box<dyn Transformer>` — are recorded in
+[docs/planning/status.md](docs/planning/status.md) with the rest of the status, so
+there is one copy to keep current rather than three.

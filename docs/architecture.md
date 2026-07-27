@@ -191,6 +191,9 @@ Each screen tags what it spawns with `DespawnOnExit(Screen::X)`, and one generic
 system clears them on exit. Teardown is not a per-screen checklist somebody
 forgets to update.
 
+> **Presentation lives next door.** How the sky is actually drawn — the dome, the
+> shader, and the four non-obvious choices inside it — is
+> [systems/sky.md](systems/sky.md).
 
 ## States
 
@@ -274,6 +277,12 @@ This also explains frame rates varying between 60 and 120 across runs with no co
 change: ProMotion adapts on its own, and none of it was ours to control. The
 setting is real on Windows and Linux.
 
+## When it fails silently
+
+Several failure modes here produce no log output at all, and a clean log is not
+evidence that a change worked. The list of symptoms and their causes is
+[development/troubleshooting.md](development/troubleshooting.md); the habit it
+asks for is looking at the window.
 
 ## Testing
 
@@ -315,3 +324,8 @@ runs, varying headroom — or it will report a safety it does not provide.
 **These are headless.** A black sky, a wrong colour, or a mesh at the wrong scale
 still only show up by looking at the window.
 
+## What is not done yet
+
+Engine and toolchain gaps — `bevy_lint`, Bevy feature trimming, the animation
+rewrite — live with the rest of the status in
+[planning/status.md](planning/status.md), which is the one doc allowed to lag.

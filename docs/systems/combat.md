@@ -152,4 +152,3 @@ see [architecture.md](../architecture.md#ownership-cuts-both-ways) for why a des
 inside this crate is settled by its owner. If it turns out to play badly, the thing to
 change is this rule, not the reading of it: both readings were defensible and the
 argument is recorded on PR #46 rather than lost.
-

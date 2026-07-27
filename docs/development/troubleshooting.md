@@ -31,7 +31,7 @@ the line and the column; the usual cause is a missing comma.
 This is deliberate. The game refuses to start without one valid value for every
 setting, because a default that silently diverges from what someone wrote is worse
 than a stall. Once a valid value exists, a failed hot reload keeps it and reports the
-error instead.
+error instead — fix the file and save it again.
 
 **It returned to the title screen with a notice.** Terrain generation or actor
 spawning failed after loading succeeded — the reason is on screen and in the log.

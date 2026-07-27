@@ -89,13 +89,24 @@ When invoked, follow these steps:
 6. **Drift checks.**
 
    **Index completeness** — every tracked doc under `docs/` has a row
-   in `docs/README.md`, and every path the index names exists:
+   in `docs/README.md`'s index table, and every path that table names
+   exists. Scope the search to the table, not the whole file: several
+   docs are also linked from the "Start here" section, and matching
+   those would hide a row deleted from the index itself.
 
    ```bash
-   # Docs present but missing from the index
-   for f in $(git ls-files 'docs/**/*.md' 'docs/*.md' | grep -v '^docs/README.md$'); do
-       grep -q "(${f#docs/})" docs/README.md || echo "UNINDEXED: $f"
+   TABLE=$(sed -n '/^## The index/,/^## /p' docs/README.md)
+
+   # Docs present but missing from the index table
+   for f in $(git ls-files 'docs/*.md' | grep -v '^docs/README.md$'); do
+       printf '%s\n' "$TABLE" | grep -q "(${f#docs/})" || echo "UNINDEXED: $f"
    done
+
+   # Rows naming a file that no longer exists
+   printf '%s\n' "$TABLE" | grep -oE '\(([a-z0-9/._-]+\.md)\)' | tr -d '()' | sort -u \
+       | while read -r rel; do
+           [ -e "docs/$rel" ] || echo "INDEXED BUT MISSING: docs/$rel"
+       done
    ```
 
    A miss is reported, not auto-fixed: a new doc needs an audience and
