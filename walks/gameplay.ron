@@ -24,4 +24,20 @@
     Settle(10),
     Key("Backspace"),
     AwaitScreen("Title"),
+    // Close Quarters spawns the pieces within engagement range, so this leg
+    // photographs the combat loop through the command funnel: the fight is
+    // already on in the first frame, SPACE ends the player's turn as an
+    // emitted command, and the enemy answers with its own — a strike, since
+    // it spawns adjacent.
+    Settle(30),
+    StartScenario(name: "Close Quarters"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("13-close-quarters-combat"),
+    Key("Space"),
+    Settle(90),
+    Capture("14-close-quarters-enemy-turn"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
 ]

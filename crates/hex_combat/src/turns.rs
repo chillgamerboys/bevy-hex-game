@@ -13,19 +13,32 @@
 //! margin is not decoration: without it a unit sitting exactly on the boundary would
 //! toggle in and out of combat every frame it drifted a hair either way.
 //!
-//! # Turns wait for animation
+//! # Turns wait for presentation
 //!
-//! A turn cannot end while the acting unit still carries a
-//! [`Transformation`](hex_anim::Transformation) — the component's *removal* is the
-//! signal that a move finished. Advancing on the input frame instead would cut the
-//! piece off mid-stride and leave it standing between two hexes.
+//! A turn cannot end while the acting unit is still [`Busy`](hex_core::Busy) —
+//! the marker the command applier maintains for as long as a walk or swing is
+//! in flight. Advancing on the input frame instead would cut the piece off
+//! mid-stride and leave it standing between two hexes.
+//!
+//! # Ending a turn is a command
+//!
+//! The end-turn key does not touch the order. It emits an end-turn
+//! [`GameCommand`](hex_core::GameCommand) into the
+//! [`CommandQueue`](hex_core::CommandQueue) like every other intent, the
+//! applier yields the unit's remaining budget, and `advance_turn` passes the
+//! turn once the unit is spent and still. One consequence is deliberate:
+//! pressing the key while the piece is still walking now registers — the yield
+//! applies at once and the turn passes when the walk lands, instead of the
+//! press being silently lost to the animation.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use hex_anim::Transformation;
 use hex_assets::CombatSettings;
-use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn, UnitId};
+use hex_core::{
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
+    PausableSystems, Screen, TilePos, Turn, UnitId,
+};
 use hex_units::{
     either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
     UnitRegistry,
@@ -134,10 +147,21 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            advance_turn
-                .in_set(crate::CombatSystems::Advance)
-                .in_set(PausableSystems)
-                .run_if(in_state(Mode::Combat)),
+            (
+                end_turn_on_space
+                    .in_set(AppSystems::RecordInput)
+                    // Redundant in the shipped app, where `RecordInput` already
+                    // precedes `Update` — but that chain is configured by the
+                    // binary, and a test app composing only this crate must not
+                    // have the press race the drain.
+                    .before(crate::CombatSystems::Apply)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
+                advance_turn
+                    .in_set(crate::CombatSystems::Advance)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
+            ),
         )
         .add_systems(OnExit(Screen::Gameplay), reset);
 }
@@ -322,19 +346,50 @@ fn end_combat(
     info!("combat ends");
 }
 
+/// Emits an end-turn command when the player presses the key.
+///
+/// The seat is read off the current unit itself, so the applier's ownership
+/// check passes for exactly the units this session commands. Deliberately no
+/// faction filter: the key skips whoever is acting, enemy turns included —
+/// today's debug affordance, and the funnel is where it will grow teeth when
+/// seats become real.
+fn end_turn_on_space(
+    keys: Res<ButtonInput<KeyCode>>,
+    turn_order: Res<TurnOrder>,
+    registry: Res<UnitRegistry>,
+    owners: Query<&ControlOwner>,
+    mut queue: ResMut<CommandQueue>,
+) {
+    if !keys.just_pressed(KeyCode::Space) {
+        return;
+    }
+    let Some(current) = turn_order.current() else {
+        return;
+    };
+    let seat = registry
+        .entity_of(current)
+        .and_then(|entity| owners.get(entity).ok())
+        .copied()
+        .unwrap_or_default()
+        .0;
+    queue.push(IssuedCommand {
+        seat,
+        command: GameCommand::EndTurn { unit: current },
+    });
+}
+
 /// Passes the turn on when the acting unit is done.
 ///
-/// A unit is done when it has taken its action and spent its movement, or when the
-/// player presses the end-turn key. Either way it must not still be moving: the
-/// absence of a [`Transformation`] is what "finished moving" means, and advancing
-/// before then strands the piece between two hexes.
+/// A unit is done when it has taken its action and spent its movement — which
+/// is also the state an applied end-turn command leaves it in. Either way it
+/// must not still be [`Busy`]: the marker's removal is what "finished" means,
+/// and advancing before then strands the piece between two hexes.
 fn advance_turn(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
     mut turn_order: ResMut<TurnOrder>,
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
-    acting: Query<(Entity, &Turn, Has<Transformation>)>,
+    acting: Query<(Entity, &Turn, Has<Busy>)>,
 ) {
     let Some(current) = turn_order.current() else {
         return;
@@ -342,16 +397,15 @@ fn advance_turn(
     let Some(current_entity) = registry.entity_of(current) else {
         return;
     };
-    let Ok((entity, turn, is_moving)) = acting.get(current_entity) else {
+    let Ok((entity, turn, is_busy)) = acting.get(current_entity) else {
         return;
     };
 
-    if is_moving {
+    if is_busy {
         return;
     }
 
-    let spent = turn.acted && turn.movement_left == 0;
-    if !spent && !keys.just_pressed(KeyCode::Space) {
+    if !(turn.acted && turn.movement_left == 0) {
         return;
     }
 

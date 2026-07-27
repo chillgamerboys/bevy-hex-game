@@ -5,8 +5,8 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, HexCoord, PlayerSeat, SimSeeds, SubstanceId, TerrainEdit, TilePos,
-    TraversalProfile, Turn, UnitId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, PlayerSeat, SimSeeds, SubstanceId,
+    TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -69,6 +69,20 @@ fn wire_formats_are_pinned() {
     let owner = ControlOwner(PlayerSeat(0));
     let json = serde_json::to_string(&owner).expect("serialize");
     assert_eq!(json, "0", "ControlOwner must serialize as its bare seat");
+
+    // A replay log line: the funnel's whole input, as a save would store it.
+    let issued = IssuedCommand {
+        seat: PlayerSeat(0),
+        command: GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: vec![TilePos::new(HexCoord::from_axial(0, 0), 1)],
+        },
+    };
+    let json = serde_json::to_string(&issued).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"seat":0,"command":{"MoveAlong":{"unit":1,"path":[{"coord":{"q":0,"r":0},"level":1}]}}}"#
+    );
 }
 
 #[test]
@@ -119,4 +133,32 @@ fn sim_seeds_round_trip() {
 fn control_owner_round_trips() {
     assert_round_trips!(ControlOwner(PlayerSeat(3)));
     assert_round_trips!(PlayerSeat(u8::MAX));
+}
+
+#[test]
+fn issued_commands_round_trip() {
+    let unit = UnitId(3);
+    let commands = [
+        GameCommand::MoveAlong {
+            unit,
+            path: vec![
+                TilePos::new(HexCoord::ORIGIN, 1),
+                TilePos::new(HexCoord::from_axial(1, 0), 1),
+            ],
+        },
+        GameCommand::Strike {
+            unit,
+            target: UnitId(9),
+        },
+        GameCommand::EndTurn { unit },
+        GameCommand::Cast { unit },
+        GameCommand::Channel { unit },
+        GameCommand::ChooseDisables { unit },
+    ];
+    for command in commands {
+        assert_round_trips!(IssuedCommand {
+            seat: PlayerSeat(1),
+            command,
+        });
+    }
 }
