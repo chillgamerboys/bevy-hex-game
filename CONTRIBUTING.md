@@ -12,7 +12,7 @@ compiler on first build. Install the dependency auditor once with
 `cargo install cargo-deny --locked`. A cold build takes 10–20 minutes. Linux also
 needs the system packages in the README appendix; macOS and Windows do not.
 
-Only changing values in `assets/config/`? You want [docs/CONTENT.md](docs/CONTENT.md)
+Only changing values in `assets/config/`? You want [docs/development/config.md](docs/development/config.md)
 instead; none of this applies.
 
 ## Before opening a PR
@@ -57,23 +57,37 @@ render as a plain blue screen, a sky shader that fails to load renders a black s
 and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
 If your change touches rendering, movement, or state transitions, walk it: splash
-→ title → **ENTER** → gameplay, orbit, click a tile, **ESC** to pause, **BACKSPACE**
-to return to the title, **ENTER** again to rebuild the world.
+→ title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
+**BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
 
 ## Where code goes
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full reasoning. The short
+See [docs/architecture.md](docs/architecture.md) for the full reasoning. The short
 version:
 
-| Adding | Goes in |
-|---|---|
-| Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` |
-| Voxels, terrain, tile spawning, map settings | `hex_map` |
-| Asset loading, shared settings | `hex_assets` |
-| Sky and camera | `hex_world` |
-| Rules: input, movement, interaction | `hex_units` |
-| A debug tool | `hex_dev` |
-| A screen or menu | `hex_game` |
+| Adding | Goes in | Owner |
+|---|---|---|
+| Hex math, voxel positions, substances, shared types, states, ordering sets | `hex_core` | gameplay |
+| The lattice rules engine: gems, fusions, spells, mana, disables, enchantments | `hex_lattice` | gameplay |
+| Voxels, terrain, tile spawning, map settings | `hex_map` | world |
+| Generic asset loading; domain schema/settings modules | `hex_assets` | loader infra gameplay; each schema and its content follow the domain owner |
+| Sky, camera, presentation cutaways | `hex_world` | world |
+| Rules: input, movement, interaction | `hex_units` | gameplay |
+| Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
+| A debug tool | `hex_dev` | gameplay |
+| A screen or menu | `hex_game` | shared |
+
+The two roles are defined in
+[docs/architecture.md](docs/architecture.md#ownership-cuts-both-ways). What crosses
+between them is [docs/contracts.md](docs/contracts.md); what each is still asking of
+the other is [docs/planning/boundary.md](docs/planning/boundary.md).
+
+Ownership inside `hex_assets` follows the concern, not the directory. The gameplay
+owner maintains generic loader traits, load tracking, and cross-domain reference
+machinery. A world, perception, or gameplay owner may edit its own schema module,
+validation, settings resource, content, and routine loader registration. Such a PR
+does not need another owner merely because the schema lives in `hex_assets`; it does
+need that review if it changes generic loader behavior or a cross-domain contract.
 
 **`hex_map`, `hex_world` and `hex_units` may not depend on each other.** If you
 need something in more than one, it belongs in `hex_core`. Cargo will stop you either
@@ -134,6 +148,27 @@ gh pr create --base dev
 tidied up afterwards — never delete it. Feature branches are deleted once merged;
 `dev` is not.
 
+### Waves: how grouped gameplay work reaches `dev`
+
+Gameplay tickets are delivered in **waves**: a short-lived `wave/N-<name>` branch
+off `dev` collects the wave's ticket PRs in dependency order, the integrated
+result gets a manual walk, fixes land on the wave, and **one** walked merge takes
+the whole wave to `dev` — then the wave branch is deleted. This keeps
+half-verified gameplay work off `dev` while map work churns there.
+
+```
+feat/ticket-a ─PR─► wave/2-command-flow ─one walked PR─► dev ─promotion─► main
+feat/ticket-b ─PR─►        │
+```
+
+Rules that came from running wave 1: ticket PRs into a wave merge on a green
+audit (the walk happens at the wave level, not per PR); a wave lands only after
+a human has walked its build; tickets whose epic is only partially delivered
+stay **In Review** across waves (watch Linear's GitHub integration — it
+auto-closes tickets when their PR merges and must be reverted by hand); retarget
+any stacked child PR *before* deleting its parent branch; wave branches die
+after their one merge — `dev` never does.
+
 `main` moves only by merging `dev` into it, as a deliberate promotion after someone
 has actually played the game. That gap exists for a specific reason: **CI cannot see
 anything.** It will happily pass a black sky, a hairline gap between every tile, or a
@@ -157,3 +192,25 @@ because someone lost an hour to the thing they describe.
 
 Merge with merge commits (`gh pr merge N --merge`), not squash, so per-PR history
 is preserved.
+
+### Long-running cross-owner work starts with contracts
+
+A program that will span map and gameplay ownership starts with a small PR containing
+documentation, shared `hex_core` vocabulary, ordering sets, and headless contract
+tests. It must not change runtime behavior. Merge that PR before branching the
+implementation lanes so both owners compile against one boundary.
+
+After the contract lands:
+
+- world PRs may change world-owned crates plus world/perception schema modules,
+  settings, and content in `hex_assets`, but do not edit `hex_units` or
+  `hex_combat`;
+- gameplay and perception PRs consume published shared facts and do not import
+  `hex_map` internals;
+- changes to movement, AI, targeting, engagement, or command validation land as
+  isolated adapter PRs reviewed by that crate's owner;
+- a necessary shared-type change lands in its own commit or PR before code on both
+  sides depends on it.
+
+Rebase each implementation branch onto updated `dev` after a contract change. Do not
+resolve ownership conflicts by folding both sides into one large feature PR.

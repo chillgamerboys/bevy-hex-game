@@ -7,6 +7,7 @@
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 use bevy_state::prelude::*;
+use serde::{Deserialize, Serialize};
 
 /// The screen the player is currently looking at.
 ///
@@ -23,6 +24,12 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Interactive sandbox for the lattice ruleset, reached from the title menu.
+    ///
+    /// Exists so the magic rules — casting, fusions, mana, disables,
+    /// enchantments — have a manual-verification surface before they are wired
+    /// into real combat (HEX-12). Slated for gating or removal before release.
+    LatticeDemo,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.
@@ -69,7 +76,9 @@ pub enum Mode {
 /// and `hex_units` has to refuse a move when it is not yours. That is the same
 /// situation `Headroom` is in, and it gets the same answer — the shared fact goes in
 /// the crate both sides already depend on.
-#[derive(Component, Reflect, Debug, Default, Clone, Copy)]
+#[derive(
+    Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
 #[reflect(Component)]
 pub struct Turn {
     /// Hexes of movement still available this turn.
@@ -88,12 +97,14 @@ pub struct PausableSystems;
 
 /// Ordering for world construction on entering [`Screen::Gameplay`].
 ///
-/// Building a world has a dependency chain — resources, then the terrain, then the
-/// things standing on the terrain — and each step lives in a different crate.
-/// `hex_map` builds the map; `hex_units` spawns the player onto it. Systems added
-/// to the same `OnEnter` schedule otherwise run in **unspecified order**, and
-/// `.chain()` cannot express ordering across a crate boundary because neither crate
-/// can see the other's systems.
+/// Building a world has a dependency chain — resources, terrain, the things standing
+/// on the terrain, presentation derived from that complete geometry, then final
+/// contract checks — and each step lives in a different crate. `hex_map` validates and
+/// builds the map, `hex_units` spawns the player onto it, future perception derives
+/// what those actors can observe, and `hex_world` frames the result. Systems added to
+/// the same `OnEnter` schedule otherwise run in **unspecified order**, and `.chain()`
+/// cannot express ordering across a crate boundary because no leaf crate can see all
+/// the others' systems.
 ///
 /// Bevy inserts a sync point between ordered sets, which matters here beyond mere
 /// ordering: entities spawned through `Commands` in one set are not queryable until
@@ -111,6 +122,23 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
+    /// Derive illumination and initial faction knowledge from terrain and actors.
+    ///
+    /// This phase is reserved for the future perception owner. Keeping it in the
+    /// setup contract now lets presentation depend on published knowledge without
+    /// changing cross-crate ordering later.
+    Perception,
+    /// Apply presentation that depends on the completed terrain and its actors.
+    ///
+    /// Generated camera framing belongs here so a view hint cannot race terrain
+    /// generation, and future actor-aware framing sees commands flushed by
+    /// [`Self::Perception`].
+    View,
+    /// Verify that terrain and required actors were published successfully.
+    ///
+    /// This terminal phase sees commands flushed by [`Self::View`], so setup
+    /// failures can return to a visible screen instead of leaving an empty world.
+    Finalize,
 }
 
 /// Shared cross-crate phases for systems in `Update`.

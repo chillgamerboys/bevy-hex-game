@@ -15,13 +15,18 @@ use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexGrid, HexSpan, HexTile, Level, Screen, SubstanceId,
-    TerrainEdit, TilePos, MAX_HEADROOM,
+    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
+    HexTile, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
+    ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady,
+    TilePos, TraversalProfile,
 };
 
-use crate::settings::MapSettings;
-use crate::terrain::{build_map, TerrainPalette};
-use crate::voxel::{runs, Column, VoxelMap};
+use crate::procedural;
+use crate::procedural_v2;
+use crate::settings::{MapSettings, TerrainSettings};
+use crate::terrain::{build_non_procedural_map, TerrainPalette};
+use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
+use crate::GenerationReport;
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -32,6 +37,10 @@ pub fn plugin(app: &mut App) {
         .register_type::<SubstanceId>()
         .register_type::<TilePos>()
         .register_type::<Headroom>()
+        .register_type::<InteriorRegionId>()
+        .register_type::<CutawayOccluder>()
+        .register_type::<TerrainReady>()
+        .register_type::<GenerationReport>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -42,18 +51,139 @@ pub fn plugin(app: &mut App) {
         )
         .add_systems(
             OnEnter(Screen::Gameplay),
-            spawn_grid.in_set(GameplaySetup::Terrain),
+            spawn_grid
+                .in_set(GameplaySetup::Terrain)
+                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(
             Update,
-            apply_terrain_edits.run_if(in_state(Screen::Gameplay)),
+            apply_terrain_edits
+                .run_if(in_state(Screen::Gameplay))
+                .run_if(resource_exists::<TerrainReady>),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }
 
-fn generate_world(mut commands: Commands, settings: Res<MapSettings>, table: Res<SubstanceTable>) {
-    let palette = TerrainPalette::from_table(&table);
-    commands.insert_resource(build_map(&settings, &palette));
+fn generate_world(
+    mut commands: Commands,
+    settings: Res<MapSettings>,
+    table: Res<SubstanceTable>,
+    resolved_seed: Option<Res<ResolvedMapSeed>>,
+) {
+    commands.remove_resource::<GameplaySetupFailure>();
+    commands.remove_resource::<TerrainReady>();
+    commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<MapViewHint>();
+    let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
+        Ok(palette) => palette,
+        Err(error) => {
+            error!("cannot build terrain: {error}");
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The selected terrain cannot be built: {error}"
+            )));
+            return;
+        }
+    };
+
+    let TerrainSettings::Procedural(procedural_settings) = &settings.terrain else {
+        let Some(map) = build_non_procedural_map(&settings, &palette) else {
+            error!("non-procedural terrain did not produce an authored map");
+            commands.insert_resource(GameplaySetupFailure::new(
+                "The selected authored terrain did not produce a map.",
+            ));
+            return;
+        };
+        commands.insert_resource(map);
+        commands.insert_resource(MapAnchors::new());
+        commands.insert_resource(SpecialMovementRegions::new());
+        commands.insert_resource(InteriorRegions::new());
+        commands.insert_resource(TerrainReady);
+        return;
+    };
+
+    let Some(seed) = resolved_seed else {
+        error!("procedural terrain requires a resolved scenario seed");
+        commands.insert_resource(GameplaySetupFailure::new(
+            "The selected procedural terrain has no resolved generation seed.",
+        ));
+        return;
+    };
+    match procedural_settings {
+        crate::settings::ProceduralSettings::V1(v1) => {
+            let generated = procedural::build(
+                settings.grid_radius,
+                v1,
+                seed.0,
+                &palette,
+                TraversalProfile::WALKER,
+                &|substance| table.is_solid(substance),
+            );
+            let anchors: MapAnchors = generated
+                .anchors
+                .iter()
+                .map(|(name, pos)| (MapAnchorId::from(name), pos))
+                .collect();
+            if generated.validated {
+                info!(
+                    "generated procedural map seed={} candidate={:?} fingerprint={} in {}us",
+                    generated.report.seed,
+                    generated.report.selected_candidate,
+                    generated.report.map_fingerprint,
+                    generated.report.elapsed_micros
+                );
+                commands.insert_resource(generated.special_regions);
+                commands.insert_resource(InteriorRegions::new());
+                commands.insert_resource(TerrainReady);
+            } else {
+                error!(
+                    "procedural map and canonical fallback failed validation: {:?}",
+                    generated.report.notes
+                );
+                commands.insert_resource(GameplaySetupFailure::new(
+                    "Procedural generation and its canonical fallback both failed validation.",
+                ));
+            }
+            commands.insert_resource(generated.map);
+            commands.insert_resource(anchors);
+            commands.insert_resource(generated.report);
+        }
+        crate::settings::ProceduralSettings::V2(v2) => {
+            let generated = match procedural_v2::build(
+                settings.grid_radius,
+                settings.level_height,
+                v2,
+                seed.0,
+                &palette,
+                &|substance| table.is_solid(substance),
+            ) {
+                Ok(generated) => generated,
+                Err(error) => {
+                    error!("cannot build procedural V2 terrain: {error}");
+                    commands.insert_resource(GameplaySetupFailure::new(format!(
+                        "The selected procedural terrain cannot be built: {error}."
+                    )));
+                    return;
+                }
+            };
+            info!(
+                "generated procedural V2 map seed={} candidate={:?} fingerprint={} in {}us",
+                generated.report.seed,
+                generated.report.selected_candidate,
+                generated.report.map_fingerprint,
+                generated.report.elapsed_micros
+            );
+            commands.insert_resource(generated.map);
+            commands.insert_resource(generated.anchors);
+            commands.insert_resource(generated.special_regions);
+            commands.insert_resource(generated.interiors);
+            commands.insert_resource(generated.view_hint);
+            commands.insert_resource(generated.report);
+            commands.insert_resource(TerrainReady);
+        }
+    }
 }
 
 fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
@@ -61,6 +191,12 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<VoxelMap>();
+    commands.remove_resource::<MapAnchors>();
+    commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<MapViewHint>();
+    commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<TerrainReady>();
 }
 
 /// Spawns one entity per contiguous run of substance.
@@ -76,6 +212,7 @@ fn spawn_grid(
     map: Res<VoxelMap>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    interiors: Option<Res<InteriorRegions>>,
 ) {
     build_grid(
         &mut commands,
@@ -84,6 +221,7 @@ fn spawn_grid(
         &map,
         &table,
         &settings,
+        interiors.as_deref(),
     );
 }
 
@@ -96,48 +234,48 @@ fn build_grid(
     map: &VoxelMap,
     table: &SubstanceTable,
     settings: &MapSettings,
+    interiors: Option<&InteriorRegions>,
 ) {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
 
     let mut tiles = Vec::new();
     for (coord, column) in map.columns() {
-        for run in runs(column) {
+        for projected in projected_runs(coord, column, interiors) {
+            let run = projected.run;
             let material = palette_materials.get_or_create(run.substance, table, materials);
             let span = span_for(run.bottom, run.top, settings.level_height);
 
             // Only the map can measure this: a run knows its own extent but nothing
             // about what is stacked on it. Zero means buried, and nothing can stand
             // on a buried run however solid it is.
-            let headroom = headroom_above(column, run.top);
-
-            tiles.push(
-                commands
-                    .spawn((
-                        Mesh3d(mesh.clone()),
-                        MeshMaterial3d(material),
-                        Transform {
-                            translation: coord.to_world(span.centre()),
-                            scale: Vec3::new(1., span.height(), 1.),
-                            ..default()
-                        },
-                        Name::new("HexTile"),
-                        HexTile,
-                        coord,
-                        span,
-                        run.substance,
-                        // The run's topmost material voxel. Gameplay combines this
-                        // position with the substance's `solid` flag before treating
-                        // it as footing. Tagging the base instead would force
-                        // gameplay to know the level height to work the surface out,
-                        // putting a dependency on the map straight back into
-                        // movement. Voxels inside the run are addressed by `TilePos`,
-                        // not by this entity.
-                        TilePos::new(coord, run.top - 1),
-                        Headroom(headroom),
-                    ))
-                    .id(),
-            );
+            let headroom = column.headroom_above(run.top);
+            // The run's topmost material voxel. Gameplay combines this position with
+            // the substance's `solid` flag before treating it as footing. Tagging the
+            // base instead would force gameplay to know the level height to work the
+            // surface out, putting a dependency on the map straight back into movement.
+            // Voxels inside the run are addressed by `TilePos`, not by this entity.
+            let position = TilePos::new(coord, run.top - 1);
+            let mut tile = commands.spawn((
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material),
+                Transform {
+                    translation: coord.to_world(span.centre()),
+                    scale: Vec3::new(1., span.height(), 1.),
+                    ..default()
+                },
+                Name::new("HexTile"),
+                HexTile,
+                coord,
+                span,
+                run.substance,
+                position,
+                headroom,
+            ));
+            if let Some(region) = projected.cutaway {
+                tile.insert(CutawayOccluder(region));
+            }
+            tiles.push(tile.id());
         }
     }
 
@@ -151,21 +289,60 @@ fn build_grid(
         .add_children(&tiles);
 }
 
-/// Clear voxels starting at `from`, saturating at [`MAX_HEADROOM`].
+/// One material run split further wherever exact cutaway membership changes.
 ///
-/// `from` is a run's exclusive `top`, so it names the voxel directly above the run's
-/// topmost material voxel: the first place a body standing here would need air. A
-/// non-air voxel there means the run is buried and the answer is zero.
-///
-/// Saturating matters: above a column's top the air is unbounded, so counting to the
-/// first non-air voxel would never terminate. [`Column::get`] returns air for anything
-/// out of range, which is what makes this loop safe without bounds checks.
-fn headroom_above(column: &Column, from: Level) -> Level {
-    (0..MAX_HEADROOM)
-        .take_while(|offset| column.get(from + offset).is_air())
-        .count()
-        .try_into()
-        .unwrap_or(MAX_HEADROOM)
+/// Rendered runs are disposable projections. Keeping cutaway ownership on exact
+/// voxels lets this rebuild both fragments after digging through a roof and prevents
+/// a replacement material from inheriting the old run's component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProjectedRun {
+    run: SubstanceRun,
+    cutaway: Option<InteriorRegionId>,
+}
+
+fn projected_runs(
+    coord: HexCoord,
+    column: &Column,
+    interiors: Option<&InteriorRegions>,
+) -> Vec<ProjectedRun> {
+    let material_runs = runs(column);
+    let Some(interiors) = interiors.filter(|interiors| interiors.has_roof_voxels()) else {
+        return material_runs
+            .into_iter()
+            .map(|run| ProjectedRun { run, cutaway: None })
+            .collect();
+    };
+
+    let mut projected = Vec::new();
+    for material_run in material_runs {
+        let mut bottom = material_run.bottom;
+        let mut cutaway = interiors.roof_region(TilePos::new(coord, bottom));
+        for level in material_run.bottom.saturating_add(1)..material_run.top {
+            let next = interiors.roof_region(TilePos::new(coord, level));
+            if next == cutaway {
+                continue;
+            }
+            projected.push(ProjectedRun {
+                run: SubstanceRun {
+                    bottom,
+                    top: level,
+                    substance: material_run.substance,
+                },
+                cutaway,
+            });
+            bottom = level;
+            cutaway = next;
+        }
+        projected.push(ProjectedRun {
+            run: SubstanceRun {
+                bottom,
+                top: material_run.top,
+                substance: material_run.substance,
+            },
+            cutaway,
+        });
+    }
+    projected
 }
 
 /// World-space extent of a run of levels.
@@ -220,13 +397,45 @@ fn apply_terrain_edits(
     mut materials: ResMut<Assets<StandardMaterial>>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    mut special_regions: ResMut<SpecialMovementRegions>,
+    mut interiors: Option<ResMut<InteriorRegions>>,
 ) {
     let mut changed = false;
     for edit in edits.read() {
-        changed |= apply_terrain_edit(&mut map, &table, edit);
+        if apply_terrain_edit(&mut map, &table, edit) {
+            changed = true;
+            if let Some(interiors) = interiors.as_deref_mut() {
+                // A replacement is new material, not part of the authored roof even
+                // when it remains solid. Removing only this voxel keeps both original
+                // fragments available for exact re-projection.
+                interiors.remove_roof_voxel(edit.pos());
+            }
+        }
     }
     if !changed {
         return;
+    }
+
+    special_regions.retain(|position, _| {
+        let Some(column) = map.column(position.coord) else {
+            return false;
+        };
+        TraversalProfile::WALKER.admits_surface(
+            table.is_solid(column.get(position.level)),
+            column.headroom_above(position.level.saturating_add(1)),
+        )
+    });
+    if let Some(interiors) = interiors.as_deref_mut() {
+        interiors.retain_surfaces(|position, _| {
+            let Some(column) = map.column(position.coord) else {
+                return false;
+            };
+            TraversalProfile::WALKER.admits_surface(
+                table.is_solid(column.get(position.level)),
+                column.headroom_above(position.level.saturating_add(1)),
+            )
+        });
+        interiors.retain_roof_voxels(|position, _| table.is_solid(map.get(position)));
     }
 
     for entity in &grids {
@@ -239,6 +448,7 @@ fn apply_terrain_edits(
         &map,
         &table,
         &settings,
+        interiors.as_deref(),
     );
 }
 
@@ -261,4 +471,69 @@ fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &Terrain
 
     map.set(pos, replacement);
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_runs_split_at_every_exact_roof_boundary() {
+        let coord = HexCoord::ORIGIN;
+        let stone = SubstanceId(1);
+        let column = Column::filled(stone, 6);
+        let lower = InteriorRegionId(2);
+        let upper = InteriorRegionId(7);
+        let mut interiors = InteriorRegions::new();
+        for level in 1..3 {
+            interiors.insert_roof_voxel(TilePos::new(coord, level), lower);
+        }
+        interiors.insert_roof_voxel(TilePos::new(coord, 4), upper);
+
+        assert_eq!(
+            projected_runs(coord, &column, Some(&interiors)),
+            vec![
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 0,
+                        top: 1,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 1,
+                        top: 3,
+                        substance: stone,
+                    },
+                    cutaway: Some(lower),
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 3,
+                        top: 4,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 4,
+                        top: 5,
+                        substance: stone,
+                    },
+                    cutaway: Some(upper),
+                },
+                ProjectedRun {
+                    run: SubstanceRun {
+                        bottom: 5,
+                        top: 6,
+                        substance: stone,
+                    },
+                    cutaway: None,
+                },
+            ]
+        );
+    }
 }

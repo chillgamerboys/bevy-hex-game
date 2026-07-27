@@ -27,7 +27,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use hex_core::{HexCoord, Level, SubstanceId, TilePos};
+use hex_core::{Headroom, HexCoord, Level, SubstanceId, TilePos, MAX_HEADROOM};
 
 /// One vertical stack of voxels, from the bedrock floor upward.
 ///
@@ -126,6 +126,22 @@ impl Column {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = SubstanceId> + '_ {
         self.voxels.iter().copied()
     }
+
+    /// Clear voxels starting at `from`, saturated at [`MAX_HEADROOM`].
+    ///
+    /// A surface passes the exclusive level above its topmost material voxel. A
+    /// non-air voxel there means the surface is buried and has zero headroom.
+    /// Saturation gives open sky a finite representation even though out-of-range
+    /// levels read as air.
+    #[must_use]
+    pub fn headroom_above(&self, from: Level) -> Headroom {
+        let levels = (0..MAX_HEADROOM)
+            .take_while(|offset| self.get(from.saturating_add(*offset)).is_air())
+            .count()
+            .try_into()
+            .unwrap_or(MAX_HEADROOM);
+        Headroom(levels)
+    }
 }
 
 /// The world, as voxels.
@@ -134,7 +150,7 @@ impl Column {
 /// it. Terrain reaches the rest of the game as entities carrying
 /// [`HexTile`](hex_core::HexTile), [`HexCoord`], [`TilePos`],
 /// [`HexSpan`](hex_core::HexSpan), [`SubstanceId`] and
-/// [`Headroom`](hex_core::Headroom), so storage can be replaced without exposing it
+/// [`Headroom`], so storage can be replaced without exposing it
 /// outside this crate.
 #[derive(Resource, Debug, Default)]
 pub struct VoxelMap {
@@ -388,6 +404,18 @@ mod tests {
         };
         assert_eq!(platform.bottom, 8);
         assert_eq!(platform.top, 10);
+    }
+
+    #[test]
+    fn headroom_handles_buried_surfaces_crawlspaces_and_open_sky() {
+        let mut column = Column::filled(STONE, 8);
+        column.set(3, SubstanceId::AIR);
+        column.set(4, SubstanceId::AIR);
+
+        assert_eq!(column.headroom_above(2), Headroom(0));
+        assert_eq!(column.headroom_above(3), Headroom(2));
+        assert_eq!(column.headroom_above(4), Headroom(1));
+        assert_eq!(column.headroom_above(8), Headroom(MAX_HEADROOM));
     }
 
     #[test]

@@ -32,8 +32,8 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
 use hex_combat::Initiative;
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Level, Mode, Screen, SubstanceId, TilePos, Turn,
-    MAX_HEADROOM,
+    Headroom, HexCoord, HexSpan, HexTile, Level, Mode, Screen, SubstanceId, TilePos,
+    TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_units::{Body, Faction, Standing, StandsOn};
 
@@ -63,13 +63,14 @@ fn test_app() -> App {
     let mut app = App::new();
     app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
     app.init_state::<Screen>();
+    // The shipped combat.ron values; production loads the file instead.
+    app.insert_resource(hex_assets::CombatSettings::default());
     app.add_sub_state::<Mode>();
     app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
         color: (1.0, 0.2, 0.2),
-        levels_tall: 2,
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     app.add_plugins(hex_combat::plugin);
@@ -83,8 +84,9 @@ fn test_app() -> App {
 
 /// Ground everywhere, plus a bridge deck over one line of it.
 ///
-/// The deck is eight levels up — far beyond `MAX_STEP`, so nothing can walk between
-/// the two surfaces and any connection a test observes is a bug rather than a route.
+/// The deck is eight levels up — far beyond the ordinary walker profile, so nothing
+/// can walk between the two surfaces and any connection a test observes is a bug
+/// rather than a route.
 fn spawn_terrain(mut commands: Commands) {
     for coord in HexCoord::ORIGIN.within_radius(10) {
         commands.spawn((
@@ -140,6 +142,16 @@ fn substance_table() -> SubstanceTable {
 }
 
 fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, level: Level) -> Entity {
+    spawn_unit_with_profile(app, faction, coord, level, TraversalProfile::WALKER)
+}
+
+fn spawn_unit_with_profile(
+    app: &mut App,
+    faction: Faction,
+    coord: HexCoord,
+    level: Level,
+    profile: TraversalProfile,
+) -> Entity {
     let standing = Standing {
         pos: TilePos::new(coord, level),
         span: span_at(level),
@@ -147,7 +159,7 @@ fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, level: Level) ->
     let mut unit = app.world_mut().spawn((
         faction,
         StandsOn(standing),
-        Body { levels_tall: 2 },
+        Body::new(profile),
         Initiative(10),
         Transform::from_translation(standing.world_position()),
     ));
@@ -157,6 +169,17 @@ fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, level: Level) ->
         unit.insert(hex_units::Player);
     }
     unit.id()
+}
+
+fn spawn_surface(app: &mut App, coord: HexCoord, level: Level, headroom: Level) {
+    app.world_mut().spawn((
+        HexTile,
+        coord,
+        TilePos::new(coord, level),
+        span_at(level),
+        STONE,
+        Headroom(headroom),
+    ));
 }
 
 fn enter_gameplay(app: &mut App) {
@@ -233,6 +256,74 @@ fn height_does_not_lengthen_a_punch() {
     );
 }
 
+/// A profile that may descend farther than it climbs still has symmetric melee reach.
+///
+/// Checking only attacker-to-target movement would let this enemy punch eight levels
+/// down while the same two surfaces fail in the other direction. Melee is a shared
+/// boundary between the units, not a directional movement benefit.
+#[test]
+fn asymmetric_drop_does_not_grant_downhill_melee() {
+    let mut app = test_app();
+    let player_coord = HexCoord::new_cubic(1, 0, -1);
+    let player = spawn_unit(&mut app, Faction::Player, player_coord, GROUND_LEVEL);
+    let hostile = spawn_unit_with_profile(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::ORIGIN,
+        DECK_LEVEL,
+        TraversalProfile {
+            levels_tall: 2,
+            max_climb: 1,
+            max_drop: DECK_LEVEL - GROUND_LEVEL,
+        },
+    );
+    app.world_mut().entity_mut(hostile).insert(Initiative(20));
+    enter_gameplay(&mut app);
+    assert_eq!(
+        mode(&mut app),
+        Mode::Combat,
+        "setup failed — no fight, so melee was never evaluated"
+    );
+    app.update();
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "a long-drop profile granted a one-sided downhill melee attack"
+    );
+}
+
+/// Melee uses the same complete transition boundary as walking. Each unit can fit at
+/// its endpoint here, but the one-level ramp leaves only one shared clear level beneath
+/// the lower ceiling, so neither can swing through the lintel.
+#[test]
+fn low_lintel_does_not_admit_melee_between_standable_rooms() {
+    let mut app = test_app();
+    let low_coord = HexCoord::new_cubic(7, -7, 0);
+    let high_coord = HexCoord::new_cubic(8, -8, 0);
+    let low_level = 4;
+    let high_level = 5;
+    spawn_surface(&mut app, low_coord, low_level, 2);
+    spawn_surface(&mut app, high_coord, high_level, 2);
+
+    let player = spawn_unit(&mut app, Faction::Player, low_coord, low_level);
+    let hostile = spawn_unit(&mut app, Faction::Hostile, high_coord, high_level);
+    app.world_mut().entity_mut(hostile).insert(Initiative(20));
+    enter_gameplay(&mut app);
+    assert_eq!(
+        mode(&mut app),
+        Mode::Combat,
+        "adjacent units should enter combat before melee is evaluated"
+    );
+    app.update();
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the enemy attacked through a one-level lateral aperture"
+    );
+}
+
 /// Standing above someone lengthens what a *ranged* thing can do, and only downhill.
 ///
 /// Checked directly against the targeting rule rather than through combat, because the
@@ -244,11 +335,11 @@ fn height_lengthens_range_downhill_only() {
     let ground = TilePos::new(HexCoord::new_cubic(5, -5, 0), GROUND_LEVEL);
 
     assert!(
-        hex_units::in_reach(deck, ground, 4),
+        hex_units::in_reach(deck, ground, 4, 5),
         "eight levels up should buy the fifth hex"
     );
     assert!(
-        !hex_units::in_reach(ground, deck, 4),
+        !hex_units::in_reach(ground, deck, 4, 5),
         "the unit below should gain nothing from the same gap"
     );
 }
@@ -270,8 +361,8 @@ fn flat_ground_engages_at_the_same_range_as_ever() {
 /// Standing high starts a fight from further off than standing level does.
 ///
 /// The only behaviour the new engagement rule actually changes, and therefore the only
-/// world-level test that fails against the old one. Five hexes is outside
-/// `ENGAGE_RANGE`; eight levels of height buys the fifth hex and the fight starts.
+/// world-level test that fails against the old one. Five hexes is outside the shipped
+/// `engage_range`; eight levels of height buys the fifth hex and the fight starts.
 #[test]
 fn height_engages_from_further_away() {
     let high = HexCoord::new_cubic(5, 0, -5);
@@ -293,7 +384,7 @@ fn height_engages_from_further_away() {
 
 /// An enemy that cannot reach its target does not stall the turn order.
 ///
-/// The stalemate named in `GAMEPLAY_LOOP.md`: a melee-only unit separated by terrain it
+/// The stalemate named in `docs/planning/status.md`: a melee-only unit separated by terrain it
 /// cannot cross has nothing useful to do. It must still **end its turn**, or the fight
 /// hangs and the player cannot even walk away from it.
 #[test]
@@ -311,5 +402,45 @@ fn an_unreachable_target_does_not_hang_the_fight() {
     assert!(
         held.is_none_or(|turn| turn.acted),
         "an enemy with nothing it can do must still finish its turn"
+    );
+}
+
+/// A nearer coordinate is not a better target when no terrain route reaches its
+/// surface.
+///
+/// The deck target is only one hex away horizontally but eight levels above the
+/// enemy. A second player is three hexes away on connected ground. Ranking by map
+/// distance alone burns the turn staring at the deck; ranking planned routes moves
+/// toward the ground target.
+#[test]
+fn a_routable_foe_beats_a_nearer_unreachable_one() {
+    let mut app = test_app();
+    let enemy = spawn_unit(&mut app, Faction::Hostile, HexCoord::ORIGIN, GROUND_LEVEL);
+    app.world_mut().entity_mut(enemy).insert(Initiative(20));
+    spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, 0, -1),
+        DECK_LEVEL,
+    );
+    let reachable = HexCoord::new_cubic(3, 0, -3);
+    spawn_unit(&mut app, Faction::Player, reachable, GROUND_LEVEL);
+    enter_gameplay(&mut app);
+
+    let moving = app
+        .world()
+        .get::<hex_units::MovingTo>(enemy)
+        .expect("the enemy should approach the foe connected by ground");
+    let destination = moving
+        .path
+        .last()
+        .expect("an approach contains its starting surface and at least one step")
+        .pos;
+
+    assert_eq!(destination.level, GROUND_LEVEL);
+    assert_eq!(
+        destination.coord.distance(reachable),
+        1,
+        "the enemy did not stop adjacent to the routable target"
     );
 }

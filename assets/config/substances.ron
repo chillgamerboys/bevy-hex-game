@@ -59,6 +59,34 @@
             diggable: true,
         ),
 
+        // Procedural-environment materials. Their behaviour is intentionally simple
+        // until temperature, slipping, and hazards exist.
+        "snow": (
+            color: (0.82, 0.88, 0.92),
+            solid: true,
+            diggable: true,
+        ),
+
+        "ice": (
+            color: (0.42, 0.72, 0.88),
+            solid: true,
+            diggable: true,
+        ),
+
+        "basalt": (
+            color: (0.20, 0.22, 0.24),
+            solid: true,
+            diggable: true,
+        ),
+
+        // Lava is an opaque, non-solid voxel for now. Damage and emissive rendering
+        // need gameplay and material contracts that do not exist yet.
+        "lava": (
+            color: (0.90, 0.20, 0.04),
+            solid: false,
+            diggable: true,
+        ),
+
         // The floor of the world. Not diggable, so nothing can tunnel out the
         // bottom of the map.
         "bedrock": (

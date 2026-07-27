@@ -16,8 +16,9 @@
 //!
 //! # Height buys range
 //!
-//! > A caster gains **one extra hex of range for every
-//! > [`LEVELS_PER_BONUS_RANGE`] levels** it stands above its target.
+//! > A caster gains **one extra hex of range for every `levels_per_bonus`
+//! > levels** it stands above its target — the value comes from
+//! > `combat.ron`'s `levels_per_bonus_range` knob, threaded by the caller.
 //!
 //! Horizontal separation is measured on the hex grid and is unaffected by elevation:
 //! climbing does not move you sideways. Height enters only as the bonus.
@@ -25,9 +26,9 @@
 //! # Reach is not the same as range
 //!
 //! Melee does **not** use this. An attacker five levels up should not acquire a
-//! two-hex punch, so swinging at something stays
-//! [`TilePos::is_within_step_of`](hex_core::TilePos::is_within_step_of) — adjacent
-//! column, within one level. Two rules on purpose: a spell has *range* and gains from
+//! two-hex punch, so swinging requires the active
+//! [`TraversalProfile`](hex_core::TraversalProfile) to admit the adjacent-surface step
+//! in both directions. Two rules on purpose: a spell has *range* and gains from
 //! elevation; a fist has *reach* and does not.
 //!
 //! # What this becomes
@@ -36,34 +37,33 @@
 //! lattice's business. This is the geometry an ability will ask about once there is
 //! one, and engagement is simply its first caller.
 
-use hex_core::{Level, TilePos};
-
-/// Levels of height that buy one extra hex of range.
-///
-/// Provisional, like the engagement thresholds it feeds — see
-/// `docs/GAMEPLAY_LOOP.md`. Five is coarse enough that ordinary terracing does
-/// nothing and only a deliberate climb pays, which is the intent: high ground should
-/// be somewhere you went, not somewhere you happened to be standing.
-pub const LEVELS_PER_BONUS_RANGE: Level = 5;
+use hex_core::TilePos;
 
 /// Extra hexes of range a caster at `from` gets for standing above `to`.
 ///
-/// Zero when level with the target or below it. **There is no penalty for being
-/// lower** — the low unit simply does not get the bonus, which is not the same thing
+/// `levels_per_bonus` is `combat.ron`'s `levels_per_bonus_range` knob — this
+/// module stays pure geometry and the caller threads the policy. Zero when
+/// level with the target or below it. **There is no penalty for being lower**
+/// — the low unit simply does not get the bonus, which is not the same thing
 /// and keeps the rule to one direction.
 #[must_use]
-pub fn high_ground_bonus(from: TilePos, to: TilePos) -> u32 {
+pub fn high_ground_bonus(from: TilePos, to: TilePos, levels_per_bonus: u32) -> u32 {
+    // Validation rejects a zero knob; the guard keeps the function total.
+    if levels_per_bonus == 0 {
+        return 0;
+    }
     // `level_step_to` is positive when `to` is *higher*, so the height advantage is
     // its negation. Clamped at zero rather than allowed to go negative: being below
     // costs nothing.
-    let levels_above = (-from.level_step_to(to)).max(0);
-    u32::try_from(levels_above / LEVELS_PER_BONUS_RANGE).unwrap_or(0)
+    let levels_above = u32::try_from((-from.level_step_to(to)).max(0)).unwrap_or(0);
+    levels_above / levels_per_bonus
 }
 
 /// Whether a caster at `from` can reach `to` with an ability of range `base`.
 #[must_use]
-pub fn in_reach(from: TilePos, to: TilePos, base: u32) -> bool {
-    from.coord.distance(to.coord) <= base.saturating_add(high_ground_bonus(from, to))
+pub fn in_reach(from: TilePos, to: TilePos, base: u32, levels_per_bonus: u32) -> bool {
+    from.coord.distance(to.coord)
+        <= base.saturating_add(high_ground_bonus(from, to, levels_per_bonus))
 }
 
 /// Whether **either** of two units can reach the other at `base` range.
@@ -72,14 +72,14 @@ pub fn in_reach(from: TilePos, to: TilePos, base: u32) -> bool {
 /// in a fight. Because the bonus only ever helps whichever unit is higher, this is not
 /// two tests — the higher one always has the longer reach, so it decides.
 #[must_use]
-pub fn either_in_reach(a: TilePos, b: TilePos, base: u32) -> bool {
-    in_reach(a, b, base) || in_reach(b, a, base)
+pub fn either_in_reach(a: TilePos, b: TilePos, base: u32, levels_per_bonus: u32) -> bool {
+    in_reach(a, b, base, levels_per_bonus) || in_reach(b, a, base, levels_per_bonus)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hex_core::HexCoord;
+    use hex_core::{HexCoord, Level};
 
     fn at(x: i32, y: i32, z: i32, level: Level) -> TilePos {
         TilePos::new(HexCoord::new_cubic(x, y, z), level)
@@ -92,8 +92,8 @@ mod tests {
     #[test]
     fn level_ground_reaches_exactly_its_range() {
         let caster = at(0, 0, 0, 4);
-        assert!(in_reach(caster, at(4, -4, 0, 4), 4));
-        assert!(!in_reach(caster, at(5, -5, 0, 4), 4));
+        assert!(in_reach(caster, at(4, -4, 0, 4), 4, 5));
+        assert!(!in_reach(caster, at(5, -5, 0, 4), 4, 5));
     }
 
     /// Five levels of height is worth one hex.
@@ -102,10 +102,13 @@ mod tests {
         let high = at(0, 0, 0, 9);
         let low = at(5, -5, 0, 4);
         assert!(
-            !in_reach(at(0, 0, 0, 4), low, 4),
+            !in_reach(at(0, 0, 0, 4), low, 4, 5),
             "the same shot from level ground should fall short"
         );
-        assert!(in_reach(high, low, 4), "five levels up should buy the hex");
+        assert!(
+            in_reach(high, low, 4, 5),
+            "five levels up should buy the hex"
+        );
     }
 
     /// And the unit underneath gains nothing from it.
@@ -117,24 +120,24 @@ mod tests {
     fn the_low_ground_gains_nothing() {
         let high = at(0, 0, 0, 9);
         let low = at(5, -5, 0, 4);
-        assert!(in_reach(high, low, 4), "downhill reaches");
-        assert!(!in_reach(low, high, 4), "uphill does not reach back");
+        assert!(in_reach(high, low, 4, 5), "downhill reaches");
+        assert!(!in_reach(low, high, 4, 5), "uphill does not reach back");
     }
 
     /// Ordinary terracing is not high ground.
     #[test]
     fn a_single_step_up_is_not_an_advantage() {
-        assert_eq!(high_ground_bonus(at(0, 0, 0, 5), at(1, -1, 0, 4)), 0);
+        assert_eq!(high_ground_bonus(at(0, 0, 0, 5), at(1, -1, 0, 4), 5), 0);
     }
 
     /// The bonus accumulates in whole hexes, not fractions of one.
     #[test]
     fn height_pays_in_whole_hexes() {
         let target = at(0, 0, 0, 0);
-        assert_eq!(high_ground_bonus(at(0, 0, 0, 4), target), 0);
-        assert_eq!(high_ground_bonus(at(0, 0, 0, 5), target), 1);
-        assert_eq!(high_ground_bonus(at(0, 0, 0, 9), target), 1);
-        assert_eq!(high_ground_bonus(at(0, 0, 0, 10), target), 2);
+        assert_eq!(high_ground_bonus(at(0, 0, 0, 4), target, 5), 0);
+        assert_eq!(high_ground_bonus(at(0, 0, 0, 5), target, 5), 1);
+        assert_eq!(high_ground_bonus(at(0, 0, 0, 9), target, 5), 1);
+        assert_eq!(high_ground_bonus(at(0, 0, 0, 10), target, 5), 2);
     }
 
     /// A fight needs only one side able to act.
@@ -143,7 +146,7 @@ mod tests {
         let high = at(0, 0, 0, 9);
         let low = at(5, -5, 0, 4);
         assert!(
-            either_in_reach(low, high, 4),
+            either_in_reach(low, high, 4, 5),
             "being shot at is being in a fight"
         );
     }
@@ -158,7 +161,7 @@ mod tests {
     fn a_bridge_is_above_the_ground_not_away_from_it() {
         let deck = at(0, 0, 0, 16);
         let below = at(0, 0, 0, 1);
-        assert!(in_reach(deck, below, 1));
-        assert!(either_in_reach(below, deck, 1));
+        assert!(in_reach(deck, below, 1, 5));
+        assert!(either_in_reach(below, deck, 1, 5));
     }
 }

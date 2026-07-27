@@ -17,8 +17,10 @@
 //! Tile entities are spawned carrying [`HexTile`](hex_core::HexTile),
 //! [`HexCoord`](hex_core::HexCoord), a surface [`TilePos`](hex_core::TilePos),
 //! [`HexSpan`](hex_core::HexSpan), [`SubstanceId`](hex_core::SubstanceId), and
-//! [`Headroom`](hex_core::Headroom). `hex_units` queries those components off the
-//! entities. It never reads [`HeightMap`] or any other type defined here.
+//! [`Headroom`](hex_core::Headroom). Exact optional-region memberships are published
+//! separately through [`SpecialMovementRegions`](hex_core::SpecialMovementRegions).
+//! `hex_units` queries the tile components off the entities. It never reads
+//! [`HeightMap`] or any other type defined here.
 //!
 //! The practical consequence: **how terrain is generated and stored is entirely
 //! internal.** Replace the generator or key the map differently — as long as tile
@@ -38,6 +40,9 @@ use bevy::prelude::*;
 pub mod generator;
 /// Turning generated terrain into tile entities.
 pub mod grid;
+/// Versioned semantic-first procedural map generation and diagnostics.
+mod procedural;
+mod procedural_v2;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
 /// Pure construction of complete voxel maps from terrain presets.
@@ -46,9 +51,14 @@ mod terrain;
 pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
+pub use procedural::{GenerationReport, TacticalMetrics};
 pub use settings::{
-    BridgeSettings, CubeCoord, MapSettings, MountainSettings, PerlinSettings, PerlinStepSettings,
-    RiverSettings, ShowcaseSettings, TerrainSettings,
+    BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
+    EnvironmentSettings, HillsSettings, LandformSettings, LayeredSkyIslandsSettings,
+    LinkedIslandsSettings, MapSettings, MountainSettings, MountainsSettings, PerlinSettings,
+    PerlinStepSettings, ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings,
+    RiverSettings, ShowcaseSettings, SkyIslandsSettings, TacticalSettings, TerrainSettings,
+    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

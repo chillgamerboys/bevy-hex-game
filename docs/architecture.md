@@ -7,6 +7,8 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_units → hex_perception → hex_combat  (planned)
+hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 ```
@@ -19,17 +21,19 @@ That matters more here than in most projects, because a good deal of the code wi
 be written by AI agents. An agent that *can* import across a boundary eventually
 will, and no amount of documentation prevents it. A compiler error does.
 
-| Crate | Holds | Depends on |
-|---|---|---|
-| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets | Bevy sub-crates only — no renderer |
-| `hex_assets` | Asset handles, load tracking, RON settings and their loader | `hex_core` |
-| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` |
-| `hex_world` | Sky and camera | `hex_core`, `hex_assets` |
-| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` |
-| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` |
-| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` |
-| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above |
+| Crate | Holds | Depends on | Owner |
+|---|---|---|---|
+| `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
+| `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
+| `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
+| `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
+| `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
+| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` | gameplay |
+| `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
+| `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
+| `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 
 ### `hex_map` is a leaf, on purpose
 
@@ -42,10 +46,55 @@ components the map publishes, so a wrong `TilePos`, `HexSpan` or `Headroom` can 
 break movement or presentation. Cargo protects the dependency graph; tests and visual
 review protect the component contract.
 
+### `hex_lattice` is the rules engine, built like `hex_core`
+
+The lattice — the game's core system: gems holding element mana, fusions combining
+them, spells powered by adjacency, damage that disables hexes rather than subtracting
+hit points — is a pure, headless, deterministic, serializable rules crate, built like
+`hex_core`: Bevy sub-crates only, no `App`, no plugin, no renderer, so its property
+suite (the geometric theorems: two tier-6 spells can never be adjacent, fusion chains
+die downstream, a disabled locked gem breaks its enchantment, serde round-trips are
+identity) runs headless in milliseconds. Every field is an integer and every
+container a `BTreeMap`/`BTreeSet`, so determinism is a property of the types. It
+settles none of [the design's open questions](design/game.md#open-questions) —
+initiative, action economy, fight length, the functional-death threshold — it exposes
+primitives and leaves the policy to the crates above it.
+
+Its designed seat is `hex_core → hex_lattice → hex_assets`: `hex_assets` implements
+the engine's content lookup traits over `elements.ron`/`spells.ron`, and gameplay
+reads the engine through it. Today it depends only on `hex_core`, and nothing in the
+workspace depends on it yet — the `hex_assets` edge lands with the elements/spells
+content, and the combat wiring (spawning units with lattices, casting through the
+command funnel, the defender-chooses decision flow) lands after that. Like the map,
+it is one person's, and its contract is the types it exposes.
+
 ### Ownership cuts both ways
 
-The map is one person's; **`hex_units` and `hex_combat` are the other's**. The split is
-not only about compile times — it is about who gets to decide.
+Two roles, named so the arrangement survives a change of people:
+
+| Role | Owns |
+|---|---|
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
+| **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
+
+`hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
+whoever needs a change makes it. `scenario.rs` and `scenarios.ron` sit in the same
+shared middle, flagged to the other side when a change touches their domain.
+
+`hex_assets` is split by concern rather than guarded as one person's directory.
+Generic mechanisms — loader traits, load tracking, common registration patterns, and
+cross-domain reference infrastructure — remain gameplay-owned. A domain's schema
+types, validation, settings resources, and matching RON content belong to that
+domain's owner. The world owner may therefore add or change world/perception schemas
+and perform their routine exports and registration without waiting on a permanent
+loader gate. A change to the generic loading mechanism or to a cross-domain contract
+still requires the owning review; placing domain code in `hex_assets` does not waive
+the crate graph or the contract-first process.
+
+Where the two meet is [contracts.md](contracts.md); what each is still asking of the
+other is [planning/boundary.md](planning/boundary.md).
+
+The split is not only about compile times — it is about who gets to decide.
 
 Review across that line is welcome and has caught real bugs in both directions. But a
 comment on a *design* question inside somebody else's crate is an argument, not a veto:
@@ -56,7 +105,7 @@ work neither person is responsible for.
 That has already happened once and is worth knowing about, because the code now
 deliberately does **not** do what a blocking review comment asked. Engagement keeps two
 units at one coordinate in the same fight however tall the column between them — see
-[GAMEPLAY_LOOP.md](GAMEPLAY_LOOP.md#the-high-ground) for the reasoning. The reviewer
+[systems/combat.md](systems/combat.md#the-high-ground) for the reasoning. The reviewer
 read it as a collapsed stack; it is the high ground working. Both readings are
 defensible, and the deciding vote went to the crate's owner rather than to whoever
 commented last.
@@ -75,9 +124,14 @@ extent but knows nothing about what is stacked on it, so gameplay cannot tell a 
 from the inside of a column — let alone whether a body fits in the space above one.
 
 Writing goes the other way, through the `TerrainEdit` message — gameplay cannot call
-into the map, so a spell that digs or builds requests it and the map applies it.
+into the map, so a spell that digs or builds requests it and the map applies it. The
+planned second write path, `TerrainImpact`, keeps the same direction and hands the map
+even more authority: gameplay announces which voxels an elemental effect reaches, and
+the map decides what each material does about it ([systems/casting.md](systems/casting.md)).
 
-See [MAP_MODEL.md](MAP_MODEL.md) for the voxel model itself.
+See [systems/map.md](systems/map.md) for the voxel model itself. V3's private
+semantic plan and its exact published projections are specified in
+[systems/world-generation-v3.md](systems/world-generation-v3.md).
 
 `hex_units`'s integration tests spawn their own stand-in terrain, which is the
 clearest available demonstration that the separation is real.
@@ -93,6 +147,15 @@ the split, `player.rs` imported from three foreign modules to do its one job.
 Anything they share goes in `hex_core`. That is why `HexTile`, `HexGrid` and
 `HexSpan` — which look like presentation concerns — live there: gameplay has to
 query tiles without depending on how they are generated or drawn.
+
+The planned `hex_perception` crate follows the same rule. It may depend on
+`hex_units` to observe unit positions, but it cannot expose map internals back to
+units. `hex_units` reads only the `LocalMapKnowledge` projection in `hex_core`;
+`hex_combat` may depend on the richer perception API for detection, targeting, and
+last-known-position behavior. A lighting-profile adapter publishes the core
+`ExteriorIllumination` projection before perception runs; it does not expose
+`hex_world` renderer state to perception. Physical lights and rendered fog are
+presentation. Neither is the authoritative gameplay visibility calculation.
 
 ## Positions are voxels, not coordinates
 
@@ -161,7 +224,14 @@ sets make the ordering that crosses crate boundaries explicit:
   state transitions and self-contained UI/presentation systems may run outside them.
 - **`PausableSystems`** — gates gameplay work such as movement animation behind
   `Pause(false)`.
-- **`GameplaySetup`** — `Resources → Terrain → Actors`, for `OnEnter(Screen::Gameplay)`.
+- **`GameplaySetup`** — `Resources → Terrain → Actors → Perception → View →
+  Finalize`, for `OnEnter(Screen::Gameplay)`. `Perception` derives initial knowledge
+  only after terrain and actors are queryable; `View` applies generated framing and
+  presentation only after that projection exists.
+- **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
+  ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
+  `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
+  phase is the cross-owner hand-off from authored lighting, not a renderer query.
 
 `GameplaySetup` exists because of two bugs worth not repeating.
 
@@ -190,54 +260,9 @@ Each screen tags what it spawns with `DespawnOnExit(Screen::X)`, and one generic
 system clears them on exit. Teardown is not a per-screen checklist somebody
 forgets to update.
 
-### The sky is a shader on a camera-following dome
-
-The sky is neither a cubemap nor Bevy's `Atmosphere`. It is a custom `Material`
-(`hex_world::sky_material::SkyMaterial`) whose fragment shader
-(`assets/shaders/sky.wgsl`) computes a colour per pixel from the view direction: a
-vertical horizon→zenith gradient with static hexagonal clouds.
-
-It renders on the inside of a large inverted sphere — the *sky dome* — spawned at
-`Startup` beside the camera. `SkyMaterial::specialize` sets `cull_mode = None` so
-the dome draws from within, and `follow_camera` pins the dome's translation to the
-camera every frame. Because the camera stays permanently at the dome's centre, the
-sky depends only on view *orientation*: clouds stay fixed on the celestial dome
-while panning and re-orient only while orbiting. The dome radius (500) is inside the
-camera's far plane and well outside the terrain and max zoom, and it is a
-`NotShadowCaster` — a 500-unit sphere would otherwise shadow the whole map.
-
-Choices worth knowing:
-
-- **Custom shader over `Atmosphere`.** Bevy 0.19's first-party atmospheric
-  scattering draws a physically-accurate clear sky but cannot draw clouds, and it
-  forces `hdr` + tonemapping on the camera, which would recolour the *entire* scene.
-  A dome shader keeps the change contained to the sky.
-- **Azimuthal-equidistant cloud projection.** Cloud cells are placed by the angle
-  *away from the zenith*, so a hex keeps the same angular size straight up as it does
-  near the horizon. The obvious `dir.xz / dir.y` (gnomonic) projection stretches
-  cells toward infinity near the horizon — it renders, and looks wrong, with no
-  error in the log.
-- **The lower hemisphere is mirrored onto the upper one** (`acos(abs(dir.y))`). The
-  projection has a second singularity at straight *down*, where cells smear into long
-  radial streaks. That sounds ignorable and is not: the gameplay camera looks down at
-  the map, so most of the sky on screen is *below* the horizon — the broken region is
-  the one you actually see. Sky-only screenshots aimed up or level never show it, which
-  is exactly how it shipped unnoticed the first time.
-- **The cloud field is a density, not a per-cell mask.** Each pixel sums a soft bump
-  from its hex cell *and its six neighbours*, then thresholds; that is what lets
-  adjacent clouds merge with no seam (a single-cell mask left a visible gap because
-  the fill stopped short of the shared edge). `cloud_roundness` blends the cell shape
-  hexagon→disc, and an fbm built on the shader's one `hash21` breaks the edges up.
-- **Anti-aliasing is analytic.** The cloud edge is a `smoothstep` whose width comes
-  from `fwidth()` of the density, so it stays ~1px crisp at any zoom or view angle.
-  This matters because MSAA (Bevy's default 4x) only smooths *geometry* edges, not a
-  colour discontinuity computed inside the fragment shader, and there is no
-  post-process AA in the project — a fixed-width edge shimmered and read as
-  low-resolution.
-
-Colours and cloud parameters come from `LightingSettings` and are pushed into the
-material by `apply_sky_material` on load and on every hot reload — see
-[CONTENT.md](CONTENT.md) for the knobs.
+> **Presentation lives next door.** How the sky is actually drawn — the dome, the
+> shader, and the four non-obvious choices inside it — is
+> [systems/sky.md](systems/sky.md).
 
 ## States
 
@@ -275,7 +300,7 @@ the chance to reject it.
 ## Settings
 
 Tunable values live in `assets/config/*.ron` and are editable without Rust. See
-[CONTENT.md](CONTENT.md).
+[development/config.md](development/config.md).
 
 On initial load, settings resources are **absent** until their file parses rather
 than falling back to a default. A default that silently diverges from what someone
@@ -295,9 +320,9 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron` | Immediate |
+| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
-| At spawn | `world.ron`, `substances.ron`, `player.ron` size/colour/`levels_tall` | Next `OnEnter(Screen::Gameplay)` |
+| At spawn | `world.ron`, `substances.ron`, `player.ron` scale/colour | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
 values every frame, but the sun and ambient were only applied on
@@ -321,20 +346,12 @@ This also explains frame rates varying between 60 and 120 across runs with no co
 change: ProMotion adapts on its own, and none of it was ours to control. The
 setting is real on Windows and Linux.
 
-## Things that fail silently
+## When it fails silently
 
-Several failure modes here produce no log output at all. A clean log is not
-evidence that a change worked — **look at the window**.
-
-| Symptom | Cause |
-|---|---|
-| Plain blue window | Assets not found. Bevy fell back to `ClearColor` with no meshes. Check `BEVY_ASSET_ROOT` in `.cargo/config.toml` |
-| Black sky | The sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
-| Clouds smeared into streaks | A sky-projection singularity. Check the mirroring in `sky.wgsl`, and verify from the *gameplay* camera — it looks down, so it sees the half of the sky that a level screenshot never shows |
-| Terrain looks flat and washed out | Fill light competing with the sun. The terrain has no texture, so shadows are the only thing giving it shape; see `lighting.ron` |
-| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
-| Movement looks wrong | A speed unit conversion. Speeds are world units per **second** |
-| Game appears frozen | It is paused. The overlay exists precisely because this was indistinguishable from a hang |
+Several failure modes here produce no log output at all, and a clean log is not
+evidence that a change worked. The list of symptoms and their causes is
+[development/troubleshooting.md](development/troubleshooting.md); the habit it
+asks for is looking at the window.
 
 ## Testing
 
@@ -376,14 +393,8 @@ runs, varying headroom — or it will report a safety it does not provide.
 **These are headless.** A black sky, a wrong colour, or a mesh at the wrong scale
 still only show up by looking at the window.
 
-## Not yet done
+## What is not done yet
 
-- **`bevy_lint`** is wired (`cfg(bevy_lint)` is declared, the `register_tool`
-  attribute is in place) but unusable: it supports Bevy 0.18 at most, and this is
-  0.19. Adopting it later costs no source changes.
-- **Bevy feature trimming.** `default-features = true` still. The `3d` collection
-  would cut compile time and binary size but risks silently dropping capability.
-- **The animation system** is still `Box<dyn Transformer>` trait objects, which is
-  why `Transformation` cannot derive `Reflect` and is invisible in the inspector.
-  It works and is correctly frame-timed; it is the most likely thing to be
-  rewritten when real gameplay lands.
+Engine and toolchain gaps — `bevy_lint`, Bevy feature trimming, the animation
+rewrite — live with the rest of the status in
+[planning/status.md](planning/status.md), which is the one doc allowed to lag.

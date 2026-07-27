@@ -10,10 +10,14 @@ bevy = { workspace = true }
 hex_assets = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
+hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 hex_map = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
+# Only for the visual-walk feature's RON step scripts.
+ron = { version = "0.12.2", optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Only for the tests that open each scenario's world file and check it parses.
@@ -26,6 +30,13 @@ default = []
 # Development tooling: world inspector, debug overlays, and live asset reload so
 # editing a file under assets/config/ takes effect without restarting.
 dev = ["dep:hex_dev", "bevy/file_watcher"]
+# Deterministic procedural-map launch and renderer capture automation. Kept
+# separate from `dev` so review packs exercise an otherwise release-shaped build.
+map-review = []
+# Scripted visual walk: drive the screens from a RON step list and photograph
+# each one, so an agent or a human can review the frames. Same release-shaped
+# philosophy as map-review.
+visual-walk = ["dep:ron", "dep:serde"]
 
 [lints]
 workspace = true

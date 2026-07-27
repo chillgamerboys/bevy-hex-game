@@ -1,10 +1,12 @@
-# The gameplay loop
+# Combat
 
-What is built, what is a placeholder, and which unresolved design question each
-placeholder is standing in for.
+The turn loop as it is built: the two tempos, what a turn costs, how a move is
+committed, and what elevation buys.
 
-Read [DESIGN.md](DESIGN.md) for the game this is heading toward. **Most of it does not
-exist yet**, and the gap is deliberate rather than a backlog.
+Read [the design](../design/game.md) for the game this is heading toward — **most of
+it does not exist yet**, and the gap is deliberate rather than a backlog. Which of
+the numbers here are placeholders, and what each is waiting for, is
+[planning/status.md](../planning/status.md).
 
 ## Two modes, one map
 
@@ -68,36 +70,6 @@ Both tints come out of **one** search per selection, not one per hovered tile:
 costs something is rebuilding `Footing`, which reads every tile entity on the map — so
 that happens when the selection or its position changes, never when the cursor moves.
 
-## What is provisional
-
-Everything in this table is a guess standing in for a decision that
-[DESIGN.md](DESIGN.md) explicitly has not taken. **Do not tune these into place** —
-they are meant to be replaced.
-
-| Thing | Now | What it is waiting for |
-|---|---|---|
-| **Initiative** | a number on a component, high to low, ties by entity index | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
-| **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
-| **Damage** | none at all | Lattices. Damage disables lattice hexes, and there are no lattices |
-| **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
-| **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
-| **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
-| **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
-
-**No randomness** is *not* provisional. The design is explicit that uncertainty comes
-from hidden information rather than dice, so the turn order is deterministic: ties
-break by entity index, and the same units always produce the same order.
-
-### Why there is no damage
-
-Damage disables hexes in a lattice. With no lattices, any damage model would be a
-second system invented to be thrown away — and worse, it would fix numbers the design
-has deliberately left open (how many hexes a spell disables, how long a fight runs,
-whether functional death arrives before zero).
-
-An attack is currently an animation and a log line. That is enough to see a turn pass,
-which is what the loop needed to exist at all.
-
 ## Vocabulary
 
 **Lattice**, not "core". The design notes call a character's hex grid their core;
@@ -127,9 +99,9 @@ independent of each other still holds.
 
 ## Trying it out
 
-`assets/config/scenario.ron` places the player and the enemy. Move them onto whatever
-part of a map is worth testing and press `BACKSPACE` then `ENTER` to rebuild. See
-[CONTENT.md](CONTENT.md).
+Each entry in `assets/config/scenarios.ron` places its player and enemy. Move them onto
+whatever part of that scenario's map is worth testing, press `BACKSPACE`, then click
+the scenario to rebuild. See [development/config.md](../development/config.md).
 
 ## Where a unit is, and where it is going
 
@@ -149,9 +121,10 @@ ambushed halfway should leave you where the ambush happened, not deliver you som
 chosen before anyone knew there was a fight.
 
 The route is kept as the whole path rather than just its endpoint precisely so that
-interruption has somewhere real to put the piece. It cannot be recovered from the
-animation: `HexPathingLine` keeps only world positions, and its legs stop lining up
-with a per-step clock as soon as a route climbs.
+logical position can advance at each completed leg and interruption has somewhere real
+to put the piece. `HexPathingLine` and `MovingTo` share cumulative, world-space leg
+durations, so climbs take their actual 3D travel time while every waypoint still maps
+back to its surface.
 
 ## The high ground
 
@@ -166,35 +139,16 @@ because being shot at without being able to shoot back is still a fight.
 
 **Melee is exempt.** A spell has *range* and gains from height; a fist has *reach* and
 does not, or an attacker five levels up would acquire a two-hex punch. Swinging stays
-`TilePos::is_within_step_of` — adjacent column, within one level, the same rule
-movement uses.
+an adjacent-surface step that the attacker's `TraversalProfile` admits in both
+directions. Requiring both directions keeps melee symmetric even if a future profile
+can drop farther than it climbs.
 
 **Two units at one coordinate are not far apart**, however tall the column between
 them. Horizontal separation is genuinely zero and someone directly overhead can act on
 you. The stacking rule governs where you can *walk*; it does not make people invisible.
 
 That last one was raised in review as a collapsed stack and kept anyway, deliberately —
-see [ARCHITECTURE.md](ARCHITECTURE.md#ownership-cuts-both-ways) for why a design call
+see [architecture.md](../architecture.md#ownership-cuts-both-ways) for why a design call
 inside this crate is settled by its owner. If it turns out to play badly, the thing to
 change is this rule, not the reading of it: both readings were defensible and the
 argument is recorded on PR #46 rather than lost.
-
-## Not built, and not next
-
-Everything in [DESIGN.md](DESIGN.md)'s open questions, plus:
-
-- **Terrain that costs something to cross.** `Reach` charges one per step, so the
-  shortest route is the one taken and breadth-first order is enough to find it. Mud,
-  ice or a climb would each need a priority queue, and none of them are designed.
-- **Units obstructing each other.** Two units can occupy the same surface, and the
-  pathfinder will happily route one straight through another. An occupancy map over
-  unit positions would fix both and lives entirely in `hex_combat`.
-- **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
-  stays in the fight forever: `approach` finds no route, so it spends its turn doing
-  nothing, every round. Height makes this easier to fall into, since a fight now starts
-  from further away when one side is above the other. Nothing is stuck — the player can
-  still walk out past the disengage margin — but the enemy should give up rather than
-  wait to be left. That is the rout threshold `DESIGN.md` names and the enemy-behaviour
-  row above is waiting on.
-- **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
-  body may straddle a one-level step has not been decided.

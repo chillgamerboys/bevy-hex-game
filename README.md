@@ -35,7 +35,7 @@ Two things worth knowing:
 | `SPACE` | End your turn, in combat |
 | `ESC` | Pause (or quit, on the title screen) |
 | `BACKSPACE` | Return to the title screen |
-| `ENTER` | Start the game, from the title screen |
+| Click a scenario | Start it from the title screen |
 
 ## Diagnostics
 
@@ -52,7 +52,7 @@ If `device_type` ever reads `Cpu`, you're on a software rasteriser, and any fram
 ## Project layout
 
 A cargo workspace. Cargo enforces the dependency direction, so a module cannot
-reach across a boundary it should not — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+reach across a boundary it should not — see [docs/architecture.md](docs/architecture.md)
 for the reasoning.
 
 ```
@@ -65,7 +65,7 @@ crates/
   hex_dev/        # world inspector (dev feature only)
   hex_game/       # the binary: app setup, screens, menus
 assets/
-  config/         # designer-editable settings -- see docs/CONTENT.md
+  config/         # designer-editable settings -- see docs/development/config.md
   meshes/         # hex.glb, pieces.glb
   shaders/        # sky.wgsl -- the procedural sky
   textures/       # sprites/
@@ -77,11 +77,11 @@ Start with the row that describes you.
 
 | I want to… | Read |
 |---|---|
-| Change how the game looks or feels, without code | [docs/CONTENT.md](docs/CONTENT.md) |
-| Work on the map, and I'm new here | [docs/ONBOARDING.md](docs/ONBOARDING.md) |
+| Change how the game looks or feels, without code | [docs/development/config.md](docs/development/config.md) |
+| Work on the map, and I'm new here | [docs/development/onboarding.md](docs/development/onboarding.md) |
 | Work on the map, and I'm an AI agent | [crates/hex_map/CLAUDE.md](crates/hex_map/CLAUDE.md) |
-| Understand how the map works | [docs/MAP_MODEL.md](docs/MAP_MODEL.md) |
-| Understand why the project is shaped this way | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Understand how the map works | [docs/systems/map.md](docs/systems/map.md) |
+| Understand why the project is shaped this way | [docs/architecture.md](docs/architecture.md) |
 | Contribute code anywhere | [CONTRIBUTING.md](CONTRIBUTING.md) |
 
 ## Contributing, in one line

@@ -11,23 +11,33 @@ use hex_assets::{GameAssets, SettingsRegistry, SubstanceFile, SubstanceTable};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
+use crate::menus::widgets::UiAssets;
+use crate::scenarios::ScenarioContractStatus;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Loading), spawn_loading);
     app.add_systems(
         PostUpdate,
-        enter_gameplay_when_ready.run_if(in_state(Screen::Loading)),
+        (
+            crate::scenarios::validate_loaded_scenario,
+            enter_gameplay_when_ready,
+        )
+            .chain()
+            .run_if(in_state(Screen::Loading)),
     );
     app.add_systems(OnExit(Screen::Loading), despawn_screen(Screen::Loading));
 }
 
-fn spawn_loading(mut commands: Commands) {
+fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn(screen_root(Screen::Loading, "Loading Screen"))
         .with_children(|parent| {
             parent.spawn((
                 Text::new("loading..."),
-                TextFont::from_font_size(28.0),
+                TextFont {
+                    font: assets.body.clone().into(),
+                    ..TextFont::from_font_size(24.0)
+                },
                 TextColor(Color::srgb(0.8, 0.8, 0.8)),
             ));
         });
@@ -50,6 +60,7 @@ fn enter_gameplay_when_ready(
     settings: Res<SettingsRegistry>,
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
+    scenario_contract: Option<Res<ScenarioContractStatus>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -57,7 +68,15 @@ fn enter_gameplay_when_ready(
         .is_some_and(|file| !file.is_changed())
         && substances.is_some();
 
-    if assets.is_ready(&asset_server) && settings.all_loaded() && substances_are_current {
+    let scenario_is_valid = scenario_contract
+        .as_deref()
+        .is_some_and(|status| *status == ScenarioContractStatus::Ready);
+
+    if assets.is_ready(&asset_server)
+        && settings.all_loaded()
+        && substances_are_current
+        && scenario_is_valid
+    {
         next.set(Screen::Gameplay);
     }
 }
@@ -100,11 +119,17 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
         app.insert_state(Screen::Loading);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
         app.init_resource::<SettingsRegistry>();
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
         });
+        app.insert_resource(ScenarioContractStatus::Ready);
         app.insert_resource(original);
         plugin(&mut app);
 

@@ -2,8 +2,9 @@
 //!
 //! # The shape of a round
 //!
-//! Combat begins when a hostile comes within engaging distance of the party — see
-//! [`CombatSettings`](crate::turns::CombatSettings). A [`TurnOrder`] is built from
+//! Combat begins when a hostile comes within engaging distance of the party — the
+//! thresholds come from `assets/config/combat.ron`
+//! ([`CombatSettings`](hex_assets::CombatSettings)). A [`TurnOrder`] is built from
 //! everyone present, sorted by [`Initiative`],
 //! and the first unit gets a [`Turn`]. Ending a turn hands the [`Turn`] to the next
 //! unit; running off the end wraps to the front and the round number goes up.
@@ -12,35 +13,36 @@
 //! margin is not decoration: without it a unit sitting exactly on the boundary would
 //! toggle in and out of combat every frame it drifted a hair either way.
 //!
-//! # Turns wait for animation
+//! # Turns wait for presentation
 //!
-//! A turn cannot end while the acting unit still carries a
-//! [`Transformation`](hex_anim::Transformation) — the component's *removal* is the
-//! signal that a move finished. Advancing on the input frame instead would cut the
-//! piece off mid-stride and leave it standing between two hexes.
+//! A turn cannot end while the acting unit is still [`Busy`](hex_core::Busy) —
+//! the marker the command applier maintains for as long as a walk or swing is
+//! in flight. Advancing on the input frame instead would cut the piece off
+//! mid-stride and leave it standing between two hexes.
+//!
+//! # Ending a turn is a command
+//!
+//! The end-turn key does not touch the order. It emits an end-turn
+//! [`GameCommand`](hex_core::GameCommand) into the
+//! [`CommandQueue`](hex_core::CommandQueue) like every other intent, the
+//! applier yields the unit's remaining budget, and `advance_turn` passes the
+//! turn once the unit is spent and still. One consequence is deliberate:
+//! pressing the key while the piece is still walking now registers — the yield
+//! applies at once and the turn passes when the walk lands, instead of the
+//! press being silently lost to the animation.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-use hex_anim::Transformation;
-use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn};
-use hex_units::{either_in_reach, Faction, StandsOn};
-
-/// How far apart two units can be and still start a fight, and related knobs.
-///
-/// Not loaded from RON yet — these are the crudest possible defaults and exist to be
-/// argued with. When they earn their place they belong in `assets/config/combat.ron`
-/// alongside the rest of the designer-facing settings.
-pub struct CombatSettings;
-
-impl CombatSettings {
-    /// Hexes between a hostile and the party that start a fight.
-    pub const ENGAGE_RANGE: u32 = 4;
-
-    /// Extra hexes a hostile must retreat beyond [`Self::ENGAGE_RANGE`] before combat
-    /// ends. Prevents a unit on the boundary flipping in and out every frame.
-    pub const DISENGAGE_MARGIN: u32 = 2;
-}
+use hex_assets::CombatSettings;
+use hex_core::{
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
+    PausableSystems, Screen, TilePos, Turn, UnitId,
+};
+use hex_units::{
+    either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
+    UnitRegistry,
+};
 
 /// Where a unit sits in the turn order. Higher acts first.
 ///
@@ -56,20 +58,20 @@ impl CombatSettings {
 #[reflect(Component)]
 pub struct Initiative(pub u32);
 
-impl Default for Initiative {
-    fn default() -> Self {
-        Self(10)
-    }
-}
-
 /// The running order, and where in it we are.
 ///
 /// Rebuilt whenever combat starts. Cleared when it ends, so its emptiness is the
 /// authoritative answer to "are we fighting" and cannot drift from [`Mode`].
+///
+/// Keyed by stable [`UnitId`], never [`Entity`]: entity indices are recycled
+/// and differ across runs and saves, so an order stored as entities silently
+/// reshuffles — exactly the randomness-by-another-name the design rules out.
+/// Systems that need the actual entity resolve through
+/// [`UnitRegistry`].
 #[derive(Resource, Debug, Default)]
 pub struct TurnOrder {
     /// Units in the order they act.
-    order: Vec<Entity>,
+    order: Vec<UnitId>,
     /// Index into [`Self::order`] of the unit currently acting.
     current: usize,
     /// How many full rounds have elapsed. Purely for display.
@@ -79,13 +81,13 @@ pub struct TurnOrder {
 impl TurnOrder {
     /// The unit currently acting, if there is one.
     #[must_use]
-    pub fn current(&self) -> Option<Entity> {
+    pub fn current(&self) -> Option<UnitId> {
         self.order.get(self.current).copied()
     }
 
     /// Everyone in the fight, in order.
     #[must_use]
-    pub fn order(&self) -> &[Entity] {
+    pub fn order(&self) -> &[UnitId] {
         &self.order
     }
 
@@ -97,8 +99,8 @@ impl TurnOrder {
 
     /// Where a unit sits in the order, counting from zero.
     #[must_use]
-    pub fn position_of(&self, entity: Entity) -> Option<usize> {
-        self.order.iter().position(|e| *e == entity)
+    pub fn position_of(&self, unit: UnitId) -> Option<usize> {
+        self.order.iter().position(|u| *u == unit)
     }
 
     /// Moves to the next unit, wrapping and counting a round.
@@ -120,19 +122,16 @@ impl TurnOrder {
     }
 }
 
-/// Hexes a unit may move on its turn.
-///
-/// Provisional. The design's current preference is one or two hexes of free movement
-/// plus one action, which keeps big spells feeling categorical while stopping the map
-/// from being scenery. Four is generous enough to make terrain worth looking at while
-/// the map is the thing being tested.
-const MOVEMENT_PER_TURN: u32 = 4;
-
 /// Registers the loop.
 pub fn plugin(app: &mut App) {
     app.register_type::<Initiative>()
         .register_type::<Turn>()
         .init_resource::<TurnOrder>()
+        // Idempotent alongside hex_units' own init: combat resolves the order
+        // through these, so they must exist even in a test app that composes
+        // only the combat half.
+        .init_resource::<UnitAllocator>()
+        .init_resource::<UnitRegistry>()
         .add_systems(OnEnter(Mode::Combat), begin_combat)
         .add_systems(OnExit(Mode::Combat), end_combat)
         // Both are pausable. A fight starting or a turn passing while the player is
@@ -143,14 +142,26 @@ pub fn plugin(app: &mut App) {
             engagement
                 .in_set(AppSystems::Update)
                 .in_set(PausableSystems)
+                .after(hex_units::MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(
             Update,
-            advance_turn
-                .in_set(crate::CombatSystems::Advance)
-                .in_set(PausableSystems)
-                .run_if(in_state(Mode::Combat)),
+            (
+                end_turn_on_space
+                    .in_set(AppSystems::RecordInput)
+                    // Redundant in the shipped app, where `RecordInput` already
+                    // precedes `Update` — but that chain is configured by the
+                    // binary, and a test app composing only this crate must not
+                    // have the press race the drain.
+                    .before(crate::CombatSystems::Apply)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
+                advance_turn
+                    .in_set(crate::CombatSystems::Advance)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
+            ),
         )
         .add_systems(OnExit(Screen::Gameplay), reset);
 }
@@ -173,16 +184,28 @@ fn reset(mut order: ResMut<TurnOrder>) {
 /// about. [`either_in_reach`] takes that range; the hysteresis is the same two
 /// thresholds asked separately rather than one distance compared twice.
 fn engagement(
+    mut commands: Commands,
     mode: Res<State<Mode>>,
     mut next: ResMut<NextState<Mode>>,
-    units: Query<(&Faction, &StandsOn)>,
+    units: Query<(Entity, &Faction, &StandsOn)>,
+    crossings: Option<Res<MovementCrossings>>,
+    settings: Res<CombatSettings>,
 ) {
-    let engage = CombatSettings::ENGAGE_RANGE;
-    let disengage = engage + CombatSettings::DISENGAGE_MARGIN;
+    let engage = settings.engage_range;
+    let disengage = engage + settings.disengage_margin;
+    let levels_per_bonus = settings.levels_per_bonus_range;
 
     match mode.get() {
         Mode::Exploring => {
-            if any_hostile_in_reach(&units, engage) == Some(true) {
+            if let Some((entity, stopped)) = crossings.as_deref().and_then(|crossings| {
+                first_hostile_crossing(&units, crossings, engage, levels_per_bonus)
+            }) {
+                // The rendered transform may already have crossed several more legs.
+                // Preserve the first engaging waypoint until combat-entry movement
+                // reconciliation can snap the unit back to it.
+                commands.entity(entity).insert(StopMovingAt::new(stopped));
+                next.set(Mode::Combat);
+            } else if any_hostile_in_reach(&units, engage, levels_per_bonus) == Some(true) {
                 next.set(Mode::Combat);
             }
         }
@@ -190,7 +213,7 @@ fn engagement(
         // side is gone entirely. That is a different thing from "far apart", and
         // collapsing them would leave combat running with nobody to fight.
         Mode::Combat => {
-            if any_hostile_in_reach(&units, disengage) != Some(true) {
+            if any_hostile_in_reach(&units, disengage, levels_per_bonus) != Some(true) {
                 next.set(Mode::Exploring);
             }
         }
@@ -206,49 +229,104 @@ fn engagement(
 /// put a unit on a bridge and one on the ground beneath it zero hexes apart — true
 /// horizontally, and exactly why the answer has to come from a reach rule that knows
 /// what height is worth rather than from raw separation.
-fn any_hostile_in_reach(units: &Query<(&Faction, &StandsOn)>, range: u32) -> Option<bool> {
+fn any_hostile_in_reach(
+    units: &Query<(Entity, &Faction, &StandsOn)>,
+    range: u32,
+    levels_per_bonus: u32,
+) -> Option<bool> {
     let mut by_faction: HashMap<Faction, Vec<TilePos>> = HashMap::default();
-    for (faction, standing) in units.iter() {
+    for (_, faction, standing) in units.iter() {
         by_faction.entry(*faction).or_default().push(standing.0.pos);
     }
 
     let mine = by_faction.get(&Faction::Player)?;
     let theirs = by_faction.get(&Faction::Hostile)?;
 
-    Some(
-        mine.iter()
-            .any(|a| theirs.iter().any(|b| either_in_reach(*a, *b, range))),
-    )
+    Some(mine.iter().any(|a| {
+        theirs
+            .iter()
+            .any(|b| either_in_reach(*a, *b, range, levels_per_bonus))
+    }))
+}
+
+/// The first completed waypoint this frame that came within hostile reach.
+///
+/// Reconciliation records every crossed waypoint in route order. Sampling only the
+/// final [`StandsOn`] would miss a fast unit that entered and left the engagement
+/// radius during one frame.
+fn first_hostile_crossing(
+    units: &Query<(Entity, &Faction, &StandsOn)>,
+    crossings: &MovementCrossings,
+    range: u32,
+    levels_per_bonus: u32,
+) -> Option<(Entity, Standing)> {
+    for (moving_entity, crossed) in crossings.iter() {
+        let Ok((_, moving_faction, _)) = units.get(moving_entity) else {
+            continue;
+        };
+        let entered_reach = units.iter().any(|(entity, faction, standing)| {
+            entity != moving_entity
+                && moving_faction.is_hostile_to(*faction)
+                && either_in_reach(crossed.pos, standing.0.pos, range, levels_per_bonus)
+        });
+        if entered_reach {
+            return Some((moving_entity, crossed));
+        }
+    }
+    None
 }
 
 /// Builds the order and hands the first unit its turn.
 fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&Initiative>), With<Faction>>,
+    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), With<Faction>>,
+    mut allocator: ResMut<UnitAllocator>,
+    mut registry: ResMut<UnitRegistry>,
+    settings: Res<CombatSettings>,
 ) {
-    // `Option`, so a unit without an explicit initiative still joins the fight.
-    // Requiring the component would make the whole order silently empty — every unit
+    // `Option` on both components, so a unit missing one still joins the fight.
+    // Requiring them would make the whole order silently empty — every unit
     // filtered out, combat starting with nobody in it and no error anywhere.
-    let mut combatants: Vec<(Entity, Initiative)> = units
+    // A unit without a `UnitId` (hand-spawned in a test, or a future spawn path
+    // that forgot) is registered here rather than dropped.
+    let mut combatants: Vec<(UnitId, Entity, Initiative)> = units
         .iter()
-        .map(|(entity, initiative)| (entity, initiative.copied().unwrap_or_default()))
+        .map(|(entity, unit, initiative)| {
+            let unit = unit.copied().unwrap_or_else(|| {
+                // Dealing here re-admits query iteration order into id order —
+                // the exact nondeterminism this system exists to remove — so
+                // the breach must be observable, never silent.
+                warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
+                let id = allocator.allocate();
+                commands.entity(entity).insert(id);
+                id
+            });
+            // Upsert unconditionally: a unit carrying an id the registry has
+            // not seen (a test's explicit id, a future load path) must still
+            // resolve, or its turn silently never advances.
+            registry.register(unit, entity);
+            let fallback = Initiative(settings.default_initiative);
+            (unit, entity, initiative.copied().unwrap_or(fallback))
+        })
         .collect();
 
-    // Highest initiative first. Ties break on entity index rather than being left to
-    // query order, so the same units always produce the same order — the design rules
-    // out randomness in resolution, and an order that shuffles between runs would be
-    // randomness by another name.
-    combatants.sort_by(|(a_entity, a_init), (b_entity, b_init)| {
-        b_init.cmp(a_init).then(a_entity.cmp(b_entity))
+    // Highest initiative first. Ties break on the stable `UnitId` rather than
+    // being left to query order or entity index — the design rules out
+    // randomness in resolution, entity indices are not stable across runs or
+    // saves, and an order that shuffles between runs would be randomness by
+    // another name.
+    combatants.sort_by(|(a_unit, _, a_init), (b_unit, _, b_init)| {
+        b_init.cmp(a_init).then(a_unit.cmp(b_unit))
     });
 
     turn_order.clear();
-    turn_order.order = combatants.into_iter().map(|(entity, _)| entity).collect();
+    let first_entity = combatants.first().map(|&(_, entity, _)| entity);
+    turn_order.order = combatants.into_iter().map(|(unit, _, _)| unit).collect();
 
-    if let Some(first) = turn_order.current() {
+    if let Some(first) = first_entity {
         commands.entity(first).insert(Turn {
-            movement_left: MOVEMENT_PER_TURN,
+            movement_left: settings.movement_per_turn,
             acted: false,
         });
     }
@@ -268,39 +346,77 @@ fn end_combat(
     info!("combat ends");
 }
 
+/// Emits an end-turn command when the player presses the key.
+///
+/// The seat is read off the current unit itself, so the applier's ownership
+/// check passes for exactly the units this session commands. Deliberately no
+/// faction filter: the key skips whoever is acting, enemy turns included —
+/// today's debug affordance, and the funnel is where it will grow teeth when
+/// seats become real.
+fn end_turn_on_space(
+    keys: Res<ButtonInput<KeyCode>>,
+    turn_order: Res<TurnOrder>,
+    registry: Res<UnitRegistry>,
+    owners: Query<&ControlOwner>,
+    mut queue: ResMut<CommandQueue>,
+) {
+    if !keys.just_pressed(KeyCode::Space) {
+        return;
+    }
+    let Some(current) = turn_order.current() else {
+        return;
+    };
+    let seat = registry
+        .entity_of(current)
+        .and_then(|entity| owners.get(entity).ok())
+        .copied()
+        .unwrap_or_default()
+        .0;
+    queue.push(IssuedCommand {
+        seat,
+        command: GameCommand::EndTurn { unit: current },
+    });
+}
+
 /// Passes the turn on when the acting unit is done.
 ///
-/// A unit is done when it has taken its action and spent its movement, or when the
-/// player presses the end-turn key. Either way it must not still be moving: the
-/// absence of a [`Transformation`] is what "finished moving" means, and advancing
-/// before then strands the piece between two hexes.
+/// A unit is done when it has taken its action and spent its movement — which
+/// is also the state an applied end-turn command leaves it in. Either way it
+/// must not still be [`Busy`]: the marker's removal is what "finished" means,
+/// and advancing before then strands the piece between two hexes.
 fn advance_turn(
     mut commands: Commands,
-    keys: Res<ButtonInput<KeyCode>>,
     mut turn_order: ResMut<TurnOrder>,
-    acting: Query<(Entity, &Turn, Has<Transformation>)>,
+    registry: Res<UnitRegistry>,
+    settings: Res<CombatSettings>,
+    acting: Query<(Entity, &Turn, Has<Busy>)>,
 ) {
     let Some(current) = turn_order.current() else {
         return;
     };
-    let Ok((entity, turn, is_moving)) = acting.get(current) else {
+    let Some(current_entity) = registry.entity_of(current) else {
+        return;
+    };
+    let Ok((entity, turn, is_busy)) = acting.get(current_entity) else {
         return;
     };
 
-    if is_moving {
+    if is_busy {
         return;
     }
 
-    let spent = turn.acted && turn.movement_left == 0;
-    if !spent && !keys.just_pressed(KeyCode::Space) {
+    if !(turn.acted && turn.movement_left == 0) {
         return;
     }
 
     commands.entity(entity).remove::<Turn>();
     turn_order.advance();
-    if let Some(next) = turn_order.current() {
+    if let Some(next) = turn_order
+        .current()
+        .and_then(|unit| registry.entity_of(unit))
+    {
         commands.entity(next).insert(Turn {
-            movement_left: MOVEMENT_PER_TURN,
+            movement_left: settings.movement_per_turn,
             acted: false,
         });
     }
@@ -310,9 +426,9 @@ fn advance_turn(
 mod tests {
     use super::*;
 
-    fn order_of(entities: &[Entity]) -> TurnOrder {
+    fn order_of(units: &[UnitId]) -> TurnOrder {
         TurnOrder {
-            order: entities.to_vec(),
+            order: units.to_vec(),
             current: 0,
             round: 0,
         }
@@ -327,22 +443,18 @@ mod tests {
 
     #[test]
     fn advancing_moves_to_the_next_unit() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let mut order = order_of(&[a, b]);
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
 
-        assert_eq!(order.current(), Some(a));
+        assert_eq!(order.current(), Some(UnitId(1)));
         order.advance();
-        assert_eq!(order.current(), Some(b));
+        assert_eq!(order.current(), Some(UnitId(2)));
     }
 
     /// Running off the end wraps and counts a round, rather than leaving nobody
     /// acting — which would stall the fight with no way to recover.
     #[test]
     fn the_order_wraps_and_counts_a_round() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let mut order = order_of(&[a, b]);
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
 
         assert_eq!(order.round, 0);
         order.advance();
@@ -350,7 +462,7 @@ mod tests {
 
         assert_eq!(
             order.current(),
-            Some(a),
+            Some(UnitId(1)),
             "the order should wrap to the front"
         );
         assert_eq!(order.round, 1, "a full cycle is one round");
@@ -368,8 +480,7 @@ mod tests {
 
     #[test]
     fn clearing_forgets_the_round_count() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let mut order = order_of(&[a]);
+        let mut order = order_of(&[UnitId(1)]);
         order.advance();
         assert_eq!(order.round, 1);
 
@@ -380,14 +491,9 @@ mod tests {
 
     #[test]
     fn position_of_finds_a_unit_in_the_order() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let order = order_of(&[a, b]);
+        let order = order_of(&[UnitId(1), UnitId(2)]);
 
-        assert_eq!(order.position_of(b), Some(1));
-        assert_eq!(
-            order.position_of(Entity::from_raw_u32(9).expect("a valid entity id")),
-            None
-        );
+        assert_eq!(order.position_of(UnitId(2)), Some(1));
+        assert_eq!(order.position_of(UnitId(9)), None);
     }
 }

@@ -18,7 +18,7 @@
 //!
 //! (The design notes call that grid a "core". It is called a **lattice** in this
 //! codebase, because `hex_core` is already a crate and the collision would be
-//! permanent. See `docs/GAMEPLAY_LOOP.md`.)
+//! permanent. See `docs/systems/combat.md`.)
 
 use bevy::prelude::*;
 
@@ -33,13 +33,15 @@ pub mod targeting;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
 
-pub use movement::{route, Body, Footing, Reach, Standing, MAX_STEP};
+pub use movement::{route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing};
 pub use pathing::HexPathingLine;
 pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,
 };
-pub use targeting::{either_in_reach, high_ground_bonus, in_reach, LEVELS_PER_BONUS_RANGE};
-pub use units::{Enemy, Faction, MovingTo, Player, StandsOn};
+pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
+pub use units::{
+    Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
+};
 
 /// Adds every unit system.
 ///

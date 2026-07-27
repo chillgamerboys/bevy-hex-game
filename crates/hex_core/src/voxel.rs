@@ -29,6 +29,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::HexCoord;
 
@@ -42,7 +43,21 @@ pub type Level = i32;
 /// Identity of a single voxel: which hex, and how far up.
 ///
 /// See the [module documentation](self) for why this rather than an [`Entity`].
-#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Component,
+    Reflect,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
 #[reflect(Component)]
 pub struct TilePos {
     /// Which hex column.
@@ -138,18 +153,6 @@ impl TilePos {
     pub const fn level_step_to(self, other: Self) -> Level {
         other.level - self.level
     }
-
-    /// Whether `other` can be reached in one step, ignoring what either voxel is made
-    /// of.
-    ///
-    /// Purely geometric: adjacent column, and no more than `max_step` levels of
-    /// climb or drop. Whether the destination is solid enough to stand on, whether
-    /// the mover has the movement left, and which abilities ignore this entirely are
-    /// all questions for `hex_units`.
-    #[must_use]
-    pub fn is_within_step_of(self, other: Self, max_step: Level) -> bool {
-        self.coord.distance(other.coord) == 1 && self.level_step_to(other).abs() <= max_step
-    }
 }
 
 /// What a voxel is made of.
@@ -158,7 +161,21 @@ impl TilePos {
 /// `assets/config/substances.ron` rather than to this crate. Terrain generation still
 /// has to select that substance before it appears in a generated world. The table
 /// mapping ids to names and properties is loaded by `hex_assets`.
-#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Component,
+    Reflect,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
 #[reflect(Component)]
 pub struct SubstanceId(pub u16);
 
@@ -190,7 +207,7 @@ impl SubstanceId {
 /// Reading terrain does not go through here: gameplay queries entities marked
 /// [`HexTile`](crate::HexTile) for their [`TilePos`], [`HexSpan`](crate::HexSpan),
 /// [`SubstanceId`] and [`Headroom`].
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
+#[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerrainEdit {
     /// Replace the voxel at `pos` with `substance`, unless its current substance is
     /// non-diggable.
@@ -264,48 +281,6 @@ mod tests {
 
         assert_eq!(low.level_step_to(high), 3);
         assert_eq!(high.level_step_to(low), -3);
-    }
-
-    /// With a limit of one level, a gentle ramp is walkable and a cliff is not.
-    #[test]
-    fn one_level_steps_are_reachable_and_two_are_not() {
-        let [east, ..] = TilePos::new(HexCoord::ORIGIN, 4).neighbours();
-
-        let from = TilePos::new(HexCoord::ORIGIN, 4);
-        assert!(from.is_within_step_of(east, 1), "level ground is reachable");
-        assert!(
-            from.is_within_step_of(east.above(), 1),
-            "a one-level climb is reachable"
-        );
-        assert!(
-            from.is_within_step_of(east.below(), 1),
-            "a one-level drop is reachable"
-        );
-        assert!(
-            !from.is_within_step_of(east.above().above(), 1),
-            "a two-level climb is a cliff"
-        );
-    }
-
-    /// Reachability is horizontal adjacency *and* a small step. A voxel directly
-    /// overhead fails the first test even though it passes the second.
-    #[test]
-    fn a_voxel_directly_above_is_never_reachable() {
-        let pos = TilePos::new(HexCoord::ORIGIN, 4);
-        assert!(!pos.is_within_step_of(pos.above(), 1));
-        assert!(!pos.is_within_step_of(pos.below(), 1));
-        assert!(
-            !pos.is_within_step_of(pos, 1),
-            "nor is standing still a step"
-        );
-    }
-
-    /// Distant columns are not reachable however similar their heights.
-    #[test]
-    fn far_columns_are_not_reachable() {
-        let here = TilePos::new(HexCoord::ORIGIN, 0);
-        let far = TilePos::new(HexCoord::new_cubic(4, -4, 0), 0);
-        assert!(!here.is_within_step_of(far, 1));
     }
 
     #[test]

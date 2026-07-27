@@ -18,7 +18,7 @@
 //! `hex_game` that opens every world file a scenario names.
 
 use bevy::prelude::*;
-use serde::Deserialize;
+use serde::{de::Error as _, Deserialize, Deserializer};
 
 use crate::settings::ScenarioSettings;
 
@@ -53,6 +53,18 @@ pub struct Scenario {
     /// which way the shadows fall.
     #[serde(default = "shipped_lighting")]
     pub lighting: String,
+    /// Reproducible terrain seed for a generated world.
+    ///
+    /// Authored scenarios omit this. The title screen can replace a configured seed
+    /// for the current process, but never writes that replacement back to this asset.
+    #[serde(default)]
+    pub generation_seed: Option<u64>,
+    /// Optional time of day at which this scenario starts, in `[0, 24)`.
+    ///
+    /// Only cyclic lighting profiles accept an override. That cross-asset contract is
+    /// checked after both this scenario and its lighting file have loaded.
+    #[serde(default, deserialize_with = "deserialize_optional_hour")]
+    pub starting_time_hours: Option<f32>,
     /// Where the units start.
     pub units: ScenarioSettings,
 }
@@ -62,16 +74,25 @@ fn shipped_lighting() -> String {
     "config/lighting.ron".to_owned()
 }
 
-/// Which scenario the title screen is offering to start.
-///
-/// Survives leaving gameplay, so returning to the title screen shows the last choice
-/// still selected rather than resetting to the top of the list.
-#[derive(Resource, Reflect, Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[reflect(Resource)]
-pub struct SelectedScenario(pub usize);
+fn deserialize_optional_hour<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hours = Option::<f32>::deserialize(deserializer)?;
+    if hours.is_some_and(|hours| !hours.is_finite() || !(0.0..24.0).contains(&hours)) {
+        return Err(D::Error::custom(
+            "starting_time_hours must be finite and in [0, 24)",
+        ));
+    }
+    Ok(hours)
+}
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
+    use crate::ScenarioPlacement;
+
     use super::*;
 
     /// The shipped file parses, and says enough to build a menu from.
@@ -107,5 +128,83 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two scenarios share a name");
+    }
+
+    #[test]
+    fn starting_time_must_be_a_finite_hour_in_the_day() {
+        let scenario = |hours: &str| {
+            format!(
+                r#"(
+                    name: "Time",
+                    blurb: "Time validation.",
+                    world: "config/world.ron",
+                    starting_time_hours: {hours},
+                    units: (
+                        player: Fixed((x: 0, y: 0, z: 0)),
+                        enemy: Fixed((x: 1, y: -1, z: 0)),
+                    ),
+                )"#
+            )
+        };
+
+        for valid in ["None", "Some(0.0)", "Some(12.5)", "Some(23.999)"] {
+            assert!(
+                ron::from_str::<Scenario>(&scenario(valid)).is_ok(),
+                "{valid} should be a valid starting time"
+            );
+        }
+        for invalid in ["Some(-0.1)", "Some(24.0)", "Some(inf)", "Some(NaN)"] {
+            let error = ron::from_str::<Scenario>(&scenario(invalid))
+                .expect_err("an invalid starting time should be rejected")
+                .to_string();
+            assert!(
+                error.contains("starting_time_hours"),
+                "unexpected error for {invalid}: {error}"
+            );
+        }
+    }
+
+    /// Generated scenarios own distinct reproducible seeds and use the stable anchors
+    /// promised by the procedural generator.
+    #[test]
+    fn procedural_scenarios_use_distinct_seeds_and_spawn_anchors() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenarios should parse");
+        let generated: Vec<&Scenario> = library
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.generation_seed.is_some())
+            .collect();
+
+        assert_eq!(
+            generated.len(),
+            6,
+            "the scenario library should include all six generated maps"
+        );
+        let seeds: HashSet<u64> = generated
+            .iter()
+            .filter_map(|scenario| scenario.generation_seed)
+            .collect();
+        assert_eq!(
+            seeds.len(),
+            generated.len(),
+            "generated scenarios should not start on the same configured seed"
+        );
+
+        for scenario in generated {
+            assert_eq!(
+                scenario.units.player,
+                ScenarioPlacement::Anchor("party_start".to_owned()),
+                "scenario {:?} does not use the party anchor",
+                scenario.name
+            );
+            assert_eq!(
+                scenario.units.enemy,
+                ScenarioPlacement::Anchor("hostile_start".to_owned()),
+                "scenario {:?} does not use the hostile anchor",
+                scenario.name
+            );
+        }
     }
 }

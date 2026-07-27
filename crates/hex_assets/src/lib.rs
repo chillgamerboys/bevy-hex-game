@@ -15,19 +15,30 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+pub mod content_index;
+pub mod elements;
 pub mod loader;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
+pub mod spells;
 pub mod substances;
 
+pub use content_index::{ContentError, ContentIndex};
+pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
-pub use scenario::{Scenario, ScenarioLibrary, SelectedScenario};
+pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
-    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
-    PlayerSettings, PresentModeSetting, Rgb, ScenarioSettings,
+    to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
+    ChannellingTrickle, CombatSettings, CubeCoord, DisplaySettings, InitiativePolicy,
+    LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
+    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy, ScenarioPlacement, ScenarioSettings,
+};
+pub use spells::{
+    CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
+    TargetingSpec,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -42,14 +53,23 @@ pub fn plugin(app: &mut App) {
     app.add_systems(PreStartup, load_assets);
 
     app.register_type::<CameraSettings>()
+        .register_type::<CombatSettings>()
         .register_type::<LightingSettings>()
+        .register_type::<LightingProfile>()
+        .register_type::<CelestialCycleSettings>()
+        .register_type::<LightingKeyframe>()
+        .register_type::<CelestialBody>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
+        .register_type::<ScenarioPlacement>()
         .register_type::<ScenarioSettings>()
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(elements::plugin);
+    app.add_plugins(spells::plugin);
+    app.add_plugins(content_index::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //
@@ -62,6 +82,7 @@ pub fn plugin(app: &mut App) {
     // `apply_settings_choice` against one resource, and hold the loading screen open
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
+        .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)

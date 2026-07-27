@@ -31,7 +31,9 @@ use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
-use hex_core::{GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn};
+use hex_core::{
+    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn,
+};
 
 use crate::movement::{Body, Footing, Reach, Standing};
 use crate::units::{Faction, Player, StandsOn, TileQuery};
@@ -152,6 +154,7 @@ struct MovementPreview {
 /// Registers selection, the ring, and the movement overlays.
 pub fn plugin(app: &mut App) {
     app.register_type::<Selected>()
+        .register_type::<CameraFocusTarget>()
         .register_type::<RangeOverlay>()
         .register_type::<PathOverlay>()
         .init_resource::<HoveredSurface>()
@@ -169,10 +172,16 @@ pub fn plugin(app: &mut App) {
         .add_systems(Update, track_terrain_changes)
         .add_systems(
             Update,
-            (select_a_player, reconcile_rings, redraw_overlays)
+            (
+                select_a_player,
+                reconcile_camera_focus_target,
+                reconcile_rings,
+                redraw_overlays,
+            )
                 .chain()
                 .in_set(PausableSystems)
-                .after(track_terrain_changes),
+                .after(track_terrain_changes)
+                .after(crate::movement::MovementSystems::Reconcile),
         )
         // Observers are global and fire in every state, including the title screen.
         // These two touch only `HoveredSurface`, which is initialised at startup and
@@ -280,6 +289,34 @@ fn select_a_player(
         return;
     };
     commands.entity(player).insert(Selected);
+}
+
+/// Projects the authoritative unit selection into the shared camera vocabulary.
+///
+/// Reconciliation handles selection changes regardless of which future interaction
+/// caused them and removes stale targets rather than leaving the camera attached to a
+/// unit the interface is no longer controlling.
+fn reconcile_camera_focus_target(
+    mut commands: Commands,
+    selected: Query<(Entity, &StandsOn), With<Selected>>,
+    focused: Query<(Entity, &CameraFocusTarget)>,
+) {
+    for (entity, _) in &focused {
+        if selected.get(entity).is_err() {
+            commands.entity(entity).remove::<CameraFocusTarget>();
+        }
+    }
+
+    for (entity, standing) in &selected {
+        let wanted = CameraFocusTarget::new(standing.0.pos);
+        let needs_update = match focused.get(entity) {
+            Ok((_, current)) => *current != wanted,
+            Err(_) => true,
+        };
+        if needs_update {
+            commands.entity(entity).insert(wanted);
+        }
+    }
 }
 
 /// Puts a ring at the feet of the unit the interface is currently about.
@@ -524,4 +561,112 @@ fn clear_overlays(
     }
     *preview = MovementPreview::default();
     hovered.0 = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hex_core::{HexCoord, HexSpan};
+
+    fn standing_at(position: TilePos) -> StandsOn {
+        StandsOn(Standing {
+            pos: position,
+            span: HexSpan::new(0.0, 1.0),
+        })
+    }
+
+    #[test]
+    fn camera_focus_target_tracks_selection_and_exact_surface_changes() {
+        let mut app = App::new();
+        app.add_systems(Update, reconcile_camera_focus_target);
+
+        let first_surface = TilePos::new(HexCoord::from_axial(2, -1), 7);
+        let second_surface = TilePos::new(HexCoord::from_axial(-3, 2), 4);
+        let first = app
+            .world_mut()
+            .spawn((Selected, standing_at(first_surface)))
+            .id();
+        let second = app
+            .world_mut()
+            .spawn((
+                CameraFocusTarget::new(TilePos::ORIGIN),
+                standing_at(second_surface),
+            ))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .entity(first)
+                .get::<CameraFocusTarget>()
+                .map(|target| target.surface),
+            Some(first_surface),
+            "the selected unit should publish its exact surface"
+        );
+        assert!(
+            !app.world().entity(second).contains::<CameraFocusTarget>(),
+            "a target without selection should be removed"
+        );
+
+        app.world_mut().entity_mut(first).remove::<Selected>();
+        app.world_mut().entity_mut(second).insert(Selected);
+        app.update();
+
+        assert!(
+            !app.world().entity(first).contains::<CameraFocusTarget>(),
+            "the old selection should stop being the camera target"
+        );
+        assert!(
+            app.world().entity(second).contains::<CameraFocusTarget>(),
+            "the new selection should become the camera target"
+        );
+        assert_eq!(
+            app.world()
+                .entity(second)
+                .get::<CameraFocusTarget>()
+                .map(|target| target.surface),
+            Some(second_surface)
+        );
+
+        let moved_surface = TilePos::new(HexCoord::from_axial(-2, 2), 5);
+        app.world_mut()
+            .entity_mut(second)
+            .get_mut::<StandsOn>()
+            .expect("the selected fixture should be standing")
+            .0 = standing_at(moved_surface).0;
+        app.update();
+
+        assert_eq!(
+            app.world()
+                .entity(second)
+                .get::<CameraFocusTarget>()
+                .map(|target| target.surface),
+            Some(moved_surface),
+            "the focus projection should follow logical movement without reselection"
+        );
+    }
+
+    #[test]
+    fn automatic_selection_publishes_focus_in_the_same_update() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            (select_a_player, reconcile_camera_focus_target).chain(),
+        );
+        let surface = TilePos::new(HexCoord::from_axial(1, -1), 3);
+        let player = app.world_mut().spawn((Player, standing_at(surface))).id();
+
+        app.update();
+
+        assert!(app.world().entity(player).contains::<Selected>());
+        assert_eq!(
+            app.world()
+                .entity(player)
+                .get::<CameraFocusTarget>()
+                .map(|target| target.surface),
+            Some(surface),
+            "the chained reconciliation should observe deferred selection commands"
+        );
+    }
 }

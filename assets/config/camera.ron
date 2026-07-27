@@ -1,8 +1,17 @@
 // How the camera moves.
 (
     // Reapplied whenever gameplay starts so the complete radius-12 map is visible.
-    gameplay_eye: (0.0, 44.0, 38.0),
+    gameplay_eye: (0.0, 48.0, 42.0),
     gameplay_focus: (0.0, 6.0, 0.0),
+
+    // Close third-person view around the selected character.
+    character_focus_height: 0.4,
+    character_radius: 7.0,
+    // Fraction from level with the horizon (0.0) to straight down (1.0).
+    character_pitch: 0.3,
+    // The close view can approach the horizon to inspect terrain above the unit.
+    character_min_pitch: 0.05,
+    character_max_pitch: 0.95,
 
     // WASD pan speed. Scaled by how far out you are zoomed, so panning feels the
     // same at every distance.
@@ -11,13 +20,13 @@
     // when fully zoomed in.
     pan_speed_offset: 10.0,
 
-    // Tilt limits, 0.0 (level with the horizon) to 1.0 (straight down).
+    // Map-view tilt limits, 0.0 (level with the horizon) to 1.0 (straight down).
     min_pitch: 0.25,
     max_pitch: 0.95,
 
     // Zoom limits, in world units.
     min_zoom: 5.0,
-    max_zoom: 60.0,
+    max_zoom: 70.0,
 
     // Fraction of the current distance covered per scroll notch.
     zoom_sensitivity: 0.2,

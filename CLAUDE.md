@@ -1,8 +1,8 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a ten-crate cargo workspace.
 
-Read **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** first — it explains the crate
+Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
 summary.
 
@@ -32,16 +32,112 @@ because in a workspace `CARGO_MANIFEST_DIR` is the *binary crate's* directory �
 without it the game looks in `crates/hex_game/assets/`, finds nothing, and renders
 a plain blue window with only `Path not found` in the log.
 
+### Deterministic map review builds
+
+`hex_game/src/review.rs` owns the exact-scenario launch and renderer-capture hooks.
+They compile only with the default-off `map-review` feature, so the shipped release
+binary ignores every `HEX_REVIEW_*` environment variable. The feature is separate
+from `dev`: review packs exercise a release-shaped build without the inspector.
+
+Launch one exact configured scenario seed for manual play:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+cargo run --release -p hex_game --features map-review
+```
+
+This bypasses only the title-screen click. Loading, validation, terrain spawning, and
+actor spawning still use the production path. Omit `HEX_REVIEW_SEED` to use the
+scenario's configured seed; an override is valid only when that scenario declares
+`generation_seed`.
+
+Add a PNG path and camera view for a deterministic 1920x1080 renderer capture:
+
+```sh
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_SEED=1592598566 \
+HEX_REVIEW_TIME=18.5 \
+HEX_REVIEW_CAMERA=character \
+HEX_REVIEW_CAPTURE=".context/procedural-maps/iteration-01/hero-default.png" \
+HEX_REVIEW_VIEW=default \
+cargo run --release -p hex_game --features map-review
+```
+
+`HEX_REVIEW_VIEW` accepts `default`, `rotated`, or `top-down` and requires
+`HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
+`map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
+`[0, 24)` and can be used with or without a capture, but the selected scenario must use
+cyclic lighting. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to an exact
+generated anchor before framing and requires a capture. `HEX_REVIEW_CUTAWAY=full`
+exposes the selected cave interior for a review overview while ordinary gameplay keeps
+its local six-hex opening; it also requires a capture. The process exits after
+persisting the PNG. A frame that fails the visual-coverage check still leaves its PNG
+at the requested path and exits with an error, so the rejected output can be inspected.
+Map-review builds keep their console on Windows because these diagnostics are part of
+the tool.
+
+### Scripted visual walks
+
+The sibling default-off `visual-walk` feature drives the whole game through a RON
+step list — screens, button clicks by `Name`, keys, scenario launches — and
+photographs each step, so an agent can *look* at the frames (`/visual-walk` in the
+skill pipeline reads them; audit-pr runs it as Step 2.5):
+
+```sh
+HEX_WALK_SCRIPT=walks/menus.ron \
+HEX_WALK_OUT=.context/visual-walks/local \
+cargo run -p hex_game --features visual-walk
+```
+
+Exit code is the mechanical verdict: any stalled step or black frame fails the
+run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
+covers both scenario families and the pause overlay. The capture goes through an
+offscreen render target (the window surface is not readable on macOS/Metal), with
+every UI root pointed at the redirected camera.
+
 ## Workspace
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_units → hex_perception → hex_combat  (planned)
+hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
 
+**`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
+spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
+`App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
+design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
+`hex_assets` and the combat wiring consume it as the content and spawning land.
+See `crates/hex_lattice`.
+
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
+
+The planned **`hex_perception`** crate owns authoritative illumination, faction sight,
+and map knowledge. It may depend on `hex_units` to observe unit positions.
+`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`,
+while `hex_combat` may consume the richer perception API. Neither gameplay crate may
+import map-generator internals.
+
+**Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
+`hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
+content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
+`hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is
+shared. Every fact that crosses between them, and whether it is live, agreed, reserved,
+or still an ask, is `docs/contracts.md`; the open asks are
+`docs/planning/boundary.md`.
+
+`hex_assets` ownership follows the concern, not the directory. Generic loader traits,
+load tracking, registration patterns, and cross-domain reference machinery stay with
+the gameplay owner. A domain owner may change its own schema types, validation,
+settings resources, content, and routine registration without a permanent loader
+bottleneck. Generic loader behavior and cross-domain contracts still require their
+owner's review; crate boundaries do not change.
 
 **`hex_map` is a leaf** — nothing depends on it but the binary. It is owned by one
 person, and the map reaches the rest of the game only through `HexTile`, `HexCoord`,
@@ -53,7 +149,7 @@ malformed components can still break gameplay at runtime.
 and a review comment on a *design* question inside someone else's crate is an argument
 rather than a veto — the owner decides, writes down why, and moves. Contract bugs and
 broken boundaries are the exception and should block. See
-`docs/ARCHITECTURE.md#ownership-cuts-both-ways`.
+`docs/architecture.md#ownership-cuts-both-ways`.
 
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
@@ -67,11 +163,17 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors`) orders
-  `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
-  set — `.chain()` cannot express it, and a local chain that looks correct will race.
-  The set boundary also supplies a sync point: `Commands`-spawned entities are not
-  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made.
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Perception → View → Finalize`)
+  orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a
+  shared set — `.chain()` cannot express it, and a local chain that looks correct
+  will race. The set boundary also supplies a sync point: `Commands`-spawned entities
+  are not queryable until the queue is applied, so `Actors` sees the tiles `Terrain`
+  made, `Perception` sees the actors, `View` sees the completed projection, and
+  `Finalize` sees the required actors.
+- **`PerceptionSystems`** (`PublishAmbient → ResolveIllumination →
+  ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
+  perception and later updates. Authored lighting publishes
+  `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.
@@ -80,12 +182,12 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **A tile entity is a run of voxels, not one voxel**, and its `TilePos` is the run's
   topmost material voxel. Its substance determines whether that position is solid
   footing. Interior voxels have no entity, which is why targeting is positional. See
-  `docs/MAP_MODEL.md`.
+  `docs/systems/map.md`.
 - **A surface needs room above it.** Every tile carries `Headroom` — clear voxels above
-  it, 0 when buried inside a column — and a `Body` may stand only where headroom is at
-  least its `levels_tall` (2 for the player). Only the map can measure this, so it
-  publishes it; gameplay cannot derive it from spans. `height` is reserved for terrain,
-  which is why a body is `levels_tall`.
+  it, 0 when buried inside a column — and a `Body` may stand only where headroom admits
+  its traversal profile. The canonical walker is exactly 2 levels tall and may climb
+  or drop 1. Only the map can measure headroom, so it publishes it; gameplay cannot
+  derive it from spans.
 - **Screens tag entities with `DespawnOnExit(Screen::X)`**; one generic system
   clears them.
 - **Speeds are world units per second**, driven by `Res<Time>`, never `SystemTime`.
@@ -127,15 +229,15 @@ and `Component`, and every query names concrete components.
 ## Traps
 
 Several failure modes produce **no log output**. A clean log is not evidence a
-change worked — look at the window.
+change worked — look at the window. The sharpest three:
 
-| Symptom | Cause |
-|---|---|
-| Plain blue window | Assets not found (see "Always run through cargo") |
-| Black sky | Sky shader failed to load, or the dome was culled — check `shaders/sky.wgsl` and that `SkyMaterial::specialize` sets `cull_mode = None` |
-| Clouds smeared into streaks | Sky-projection singularity. Check from the *gameplay* camera: it looks down, so it sees the half of the sky a level screenshot never shows |
-| Stuck on "loading…" during initial startup | A RON settings file failed to parse |
-| Appears frozen | It's paused. The overlay exists because this was indistinguishable from a hang |
+- **Plain blue window** — assets not found (see "Always run through cargo").
+- **Black sky** — the sky shader failed to load, or the dome was culled.
+- **Appears frozen** — it is paused. The overlay exists because this was
+  indistinguishable from a hang.
+
+Full list, including the map-specific ones:
+[docs/development/troubleshooting.md](docs/development/troubleshooting.md).
 
 **Observers are global.** They fire in every state. One touching a gameplay-only
 resource must take `Option<Res<T>>` — Bevy validates parameters *before* the body
@@ -144,17 +246,24 @@ screen.
 
 ## Branch & PR workflow
 
-**Everything targets `dev`. Nothing is merged straight to `main`.**
+**Everything lands on `dev`. Nothing is merged straight to `main`.**
 
 ```
 feat/whatever  ──PR──►  dev  ──PR──►  main
+feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
-cleaned up. Open every PR against it:
+cleaned up. Standalone work PRs straight onto it; **grouped gameplay-ticket work
+goes through a short-lived `wave/N-*` branch** — ticket PRs merge into the wave on
+green audits, a human walks the integrated build once, and the whole wave lands on
+`dev` in one merge, after which the wave branch is deleted (never `dev`). Partially
+delivered epics stay In Review across waves; see CONTRIBUTING.md's wave section
+for the full rules.
 
 ```sh
-gh pr create --base dev
+gh pr create --base dev          # standalone work
+gh pr create --base wave/N-name  # a ticket PR joining its wave
 ```
 
 `main` only ever moves by merging `dev` into it, as a deliberate promotion once the
@@ -172,38 +281,49 @@ allowed to be wrong.
   Rust-affecting PRs into `dev` as well as into `main`. Markdown-only changes skip
   the Rust jobs.
 
+### Skill pipeline
+
+The PR lifecycle is driven by skills in `.claude/skills/`:
+`/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
+`/promote` for the deliberate dev→main hop, which gates on a human having
+played the build; `/release` to bump `[workspace.package] version` and tag
+`vX.Y.Z` (the tag triggers the release build). Commit subjects follow
+Conventional Commits — `/release` computes the version bump from them.
+`/audit-pr` writes `/tmp/audit-pr-receipt-<PR>.json`; `/merge-pr` refuses to
+merge without a green receipt for the current HEAD.
+Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
+links) → `/test-full` (+ship build; the visual walk stays manual).
+Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
+`/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
+reads the frames, and the human walk still owns motion and taste).
+Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
+`/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
+tickets. Binding is encouraged, never required.
+
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and more than 180 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 534 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
-Structurally complete as a skeleton: workspace boundaries, CI, linting, dependency
-auditing, a state machine, a RON content pipeline, a voxel map with substances and
-destruction, level-based movement, body size via headroom, a turn order with two
-tempos, a breadth-first pathfinder over stacked surfaces, a movement preview that draws
-the reachable set and the route before a click commits to either, and surface-aware
-targeting where height buys range.
+**What is built, what is a placeholder, and what each placeholder is waiting for
+lives in [docs/planning/status.md](docs/planning/status.md)** — the one doc allowed
+to be out of date. Everything else under `docs/` describes contracts.
 
-There are still no abilities and no lattices. Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other — so a route may
-be drawn straight through another piece.
+## Constraints on how you write here
 
-## Known gaps
-
-- **`bevy_lint` is wired but unusable** — supports Bevy 0.18 at most. Adopting it
-  later costs no source changes.
-- **Bevy features untrimmed.** Still `default-features = true`. The `3d` collection
-  would cut compile time and binary size but risks silently dropping capability.
 - **Lints are strict, deliberately.** `#[allow]` is banned — use
   `#[expect(lint, reason = "…")]`. `unwrap`, `panic!`, slice indexing, `dbg!`,
   `println!`, float `==` and undocumented public items are all denied. Tests may
   unwrap, expect, panic, debug and print; slice indexing and the other restrictions
   remain denied.
-- **Animation is still `Box<dyn Transformer>`**, which is why `Transformation`
-  can't derive `Reflect` and is invisible in the inspector. Most likely thing to be
-  rewritten when gameplay lands.
-- **Headless integration tests** live in `crates/hex_map/tests/` and
-  `crates/hex_units/tests/`. They cannot see anything visual — a black sky or a
-  mistransformed tile still needs a human looking at the window.
+- **Headless integration tests** live in `crates/hex_map/tests/`,
+  `crates/hex_units/tests/` and `crates/hex_combat/tests/`. They cannot see anything
+  visual — a black sky or a mistransformed tile still needs a human looking at the
+  window.
+
+**Gaps in the engine and the toolchain** — `bevy_lint` unusable at 0.19, Bevy
+features untrimmed, animation still `Box<dyn Transformer>` — are recorded in
+[docs/planning/status.md](docs/planning/status.md) with the rest of the status, so
+there is one copy to keep current rather than three.

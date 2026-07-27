@@ -21,14 +21,16 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
-use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioSettings};
+use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
-    GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, Mode, Pause, Screen, SubstanceId, TilePos,
-    Turn, MAX_HEADROOM,
+    CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan,
+    HexTile, MapAnchorId, MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos,
+    TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_units::{
-    Enemy, Faction, HoveredSurface, MovingTo, PathOverlay, Player, RangeOverlay, StandsOn, UnitRing,
+    Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
+    Party, PathOverlay, Player, RangeOverlay, StandsOn, UnitRegistry, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -37,12 +39,14 @@ const GROUND: f32 = 2.0;
 /// The level of that ground's surface.
 const GROUND_LEVEL: hex_core::Level = 1;
 
-/// The one solid substance the fake terrain is made of. Id 1, since sorted names put
-/// `air` at 0 and `stone` next.
-const STONE: SubstanceId = SubstanceId(1);
+/// Non-solid lava sorts first after air in the fixture's substance table.
+const LAVA: SubstanceId = SubstanceId(1);
 
-/// Not solid, but a real voxel all the same — id 2, after `air` and `stone`.
-const WATER: SubstanceId = SubstanceId(2);
+/// The one solid substance the fake terrain is made of.
+const STONE: SubstanceId = SubstanceId(2);
+
+/// Non-solid water sorts after stone.
+const WATER: SubstanceId = SubstanceId(3);
 
 /// A coordinate whose surface run is water rather than stone.
 ///
@@ -52,6 +56,9 @@ const WATER: SubstanceId = SubstanceId(2);
 /// answer, and that test caught it. Fixtures stay out of each other's way here for the
 /// same reason `CRAWLSPACE` does.
 const POOL: HexCoord = HexCoord::new_cubic(0, 3, -3);
+
+/// A second non-solid hazard used to keep live volcanic movement in parity.
+const LAVA_POOL: HexCoord = HexCoord::new_cubic(3, 0, -3);
 
 /// How tall the test player is, matching what the game ships.
 const BODY_LEVELS: hex_core::Level = 2;
@@ -97,6 +104,9 @@ fn test_app() -> App {
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Perception,
+            GameplaySetup::View,
+            GameplaySetup::Finalize,
         )
             .chain(),
     );
@@ -119,15 +129,14 @@ fn test_app() -> App {
         scale: 0.25,
         speed: 5.0,
         color: (1.0, 0.2, 0.2),
-        levels_tall: BODY_LEVELS,
     });
     app.insert_resource(ScenarioSettings {
-        player: CubeCoord { x: 0, y: 0, z: 0 },
-        enemy: CubeCoord {
+        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
             x: ENEMY_START.x(),
             y: ENEMY_START.y(),
             z: ENEMY_START.z(),
-        },
+        }),
     });
 
     app.add_plugins(hex_units::plugin);
@@ -176,10 +185,17 @@ fn spawn_fake_terrain(mut commands: Commands) {
             coord,
             TilePos::new(coord, GROUND_LEVEL),
             HexSpan::new(GROUND - 1.0, GROUND),
-            if coord == POOL { WATER } else { STONE },
+            if coord == POOL {
+                WATER
+            } else if coord == LAVA_POOL {
+                LAVA
+            } else {
+                STONE
+            },
             Headroom(headroom),
         ));
     }
+    commands.insert_resource(TerrainReady);
 }
 
 /// A substance table with one solid substance, matching `STONE`.
@@ -191,6 +207,14 @@ fn substance_table() -> SubstanceTable {
             color: (0.0, 0.0, 0.0),
             solid: false,
             diggable: false,
+        },
+    );
+    substances.insert(
+        "lava".to_owned(),
+        Substance {
+            color: (0.9, 0.2, 0.05),
+            solid: false,
+            diggable: true,
         },
     );
     substances.insert(
@@ -246,6 +270,45 @@ fn enter_gameplay(app: &mut App) {
     app.update();
 }
 
+/// Starts the walk the click emitted, exactly as `hex_combat`'s applier would.
+///
+/// The observer is an emitter: a click resolves a route and pushes a command,
+/// and the one applier — in `hex_combat`, across a boundary this crate cannot
+/// see — grounds the path and starts the animation. These tests exercise the
+/// movement mechanics *behind* that applier, so this helper plays its part,
+/// the same way `remove::<Transformation>()` plays the animation driver's.
+/// The full click-to-walk pipeline is covered by `hex_combat`'s funnel tests.
+///
+/// Returns [`None`] when no move was emitted or it cannot be grounded — only
+/// the `#[test]` itself may unwrap.
+fn commit_move(app: &mut App) -> Option<()> {
+    let issued = app.world_mut().resource_mut::<CommandQueue>().pop()?;
+    let GameCommand::MoveAlong { unit, path } = issued.command else {
+        return None;
+    };
+    let entity = app.world().resource::<UnitRegistry>().entity_of(unit)?;
+    let speed = app.world().resource::<PlayerSettings>().speed;
+    let body = *app.world().get::<Body>(entity)?;
+
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+    let steps = {
+        let world = app.world();
+        let footing =
+            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body);
+        path.iter()
+            .map(|pos| footing.at(*pos))
+            .collect::<Option<Vec<_>>>()?
+    };
+
+    let animation: Transformation = HexPathingLine::new(&steps, speed).into();
+    app.world_mut()
+        .entity_mut(entity)
+        .insert((animation, MovingTo::new(steps, speed)));
+    Some(())
+}
+
 /// Regression test for the sunken player.
 ///
 /// The player must stand *on* the surface, not at the world origin. Getting this
@@ -267,6 +330,28 @@ fn the_player_spawns_on_the_surface() {
         (transform.translation.y - GROUND).abs() < 1e-4,
         "player is at y={} but the ground is at {GROUND}",
         transform.translation.y
+    );
+}
+
+/// Map validation and live movement both use the canonical walker.
+#[test]
+fn gameplay_units_use_the_canonical_walker() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    assert_eq!(TraversalProfile::WALKER.levels_tall, 2);
+    assert_eq!(TraversalProfile::WALKER.max_climb, 1);
+    assert_eq!(TraversalProfile::WALKER.max_drop, 1);
+
+    let mut bodies = app.world_mut().query_filtered::<&Body, With<Player>>();
+    let body = bodies
+        .iter(app.world())
+        .next()
+        .expect("the spawned player should carry a body");
+    assert_eq!(
+        body.traversal_profile(),
+        TraversalProfile::WALKER,
+        "live movement did not use the profile used by map validation"
     );
 }
 
@@ -345,14 +430,27 @@ fn clicking_a_tile_moves_the_player() {
 
     let window = app.world_mut().spawn(Window::default()).id();
     click(&mut app, target, window);
-    app.update();
 
+    // The click emitted intent, nothing more: the piece has not moved and no
+    // route is committed until the applier speaks.
     let player = single::<With<Player>>(&mut app).expect("a player should exist");
     assert_eq!(
         standing_of(&mut app).map(|s| s.pos.coord),
         Some(HexCoord::ORIGIN),
-        "the click committed a route; the piece has not walked it yet"
+        "a click alone must not move the piece"
     );
+    assert!(
+        app.world().get::<MovingTo>(player).is_none(),
+        "the observer must emit a command, not commit a route itself"
+    );
+    assert_eq!(
+        app.world().resource::<CommandQueue>().len(),
+        1,
+        "one click on a routable tile is exactly one move command"
+    );
+
+    commit_move(&mut app).expect("the emitted move should ground and start");
+    app.update();
     assert!(
         app.world().get::<MovingTo>(player).is_some(),
         "the committed route should be recorded while the walk runs"
@@ -376,6 +474,102 @@ fn clicking_a_tile_moves_the_player() {
     assert!(
         app.world().get::<MovingTo>(player).is_none(),
         "an arrived piece should no longer be carrying a route"
+    );
+}
+
+/// The real animation driver and movement reconciliation agree on the landing frame.
+///
+/// The unit test above removes `Transformation` directly to isolate reconciliation.
+/// This one drives the engine clock instead, covering the deferred removal and the
+/// ordering edge between the two systems end to end.
+#[test]
+fn a_finished_animation_automatically_commits_its_destination() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::from_millis(100),
+    ));
+    enter_gameplay(&mut app);
+
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    let target =
+        surface_at(&mut app, destination).expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
+
+    for _ in 0..20 {
+        app.update();
+        let player = single::<With<Player>>(&mut app).expect("a player should exist");
+        if app.world().get::<MovingTo>(player).is_none() {
+            break;
+        }
+    }
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the route animation did not finish"
+    );
+    assert!(
+        app.world().get::<MovingTo>(player).is_none(),
+        "the finished route was not reconciled"
+    );
+    assert_eq!(
+        standing_of(&mut app).map(|standing| standing.pos.coord),
+        Some(destination)
+    );
+}
+
+#[derive(Resource, Default)]
+struct StandingChangeCount(usize);
+
+fn count_player_standing_changes(
+    changed: Query<(), (With<Player>, Changed<StandsOn>)>,
+    mut count: ResMut<StandingChangeCount>,
+) {
+    count.0 += changed.iter().count();
+}
+
+/// A logical position changes only when the walk completes another whole leg.
+///
+/// Reassigning the same `StandsOn` on every animation tick makes Bevy's change
+/// detection report movement while the piece is still between the same two waypoints.
+#[test]
+fn an_unfinished_leg_does_not_mark_stands_on_changed() {
+    let mut app = test_app();
+    app.init_resource::<StandingChangeCount>();
+    app.add_systems(
+        Update,
+        count_player_standing_changes.after(MovementSystems::Reconcile),
+    );
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        core::time::Duration::from_millis(100),
+    ));
+    enter_gameplay(&mut app);
+    app.world_mut().resource_mut::<StandingChangeCount>().0 = 0;
+
+    let target = surface_at(&mut app, HexCoord::new_cubic(2, -2, 0))
+        .expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
+
+    // The first driven frame anchors at zero; the next three active ticks are still
+    // short of one 1.73-unit leg at five world units per second.
+    for _ in 0..4 {
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<StandingChangeCount>().0,
+        0,
+        "StandsOn changed before a whole route leg completed"
+    );
+
+    app.update();
+    assert_eq!(
+        app.world().resource::<StandingChangeCount>().0,
+        1,
+        "completing the first route leg should publish exactly one logical change"
     );
 }
 
@@ -555,9 +749,9 @@ fn the_enemy_spawns_where_the_scenario_says() {
 fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
     let mut app = test_app();
     app.insert_resource(ScenarioSettings {
-        player: CubeCoord { x: 0, y: 0, z: 0 },
+        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
         // 1 + 1 + 1 is not 0, so this is not a hex.
-        enemy: CubeCoord { x: 1, y: 1, z: 1 },
+        enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: 1, z: 1 }),
     });
     enter_gameplay(&mut app);
 
@@ -573,6 +767,104 @@ fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
         HexCoord::ORIGIN,
         "an impossible coordinate should fall back to the centre"
     );
+}
+
+/// Generated placement is a contract with the active map. A missing anchor must not
+/// quietly put the unit at the origin, where it could make an invalid map appear to
+/// have loaded correctly.
+#[test]
+fn a_missing_generated_anchor_fails_required_actor_setup() {
+    let mut app = test_app();
+    app.insert_resource(ScenarioSettings {
+        player: ScenarioPlacement::Anchor("missing_party_start".to_owned()),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
+            x: ENEMY_START.x(),
+            y: ENEMY_START.y(),
+            z: ENEMY_START.z(),
+        }),
+    });
+    enter_gameplay(&mut app);
+
+    assert!(
+        single::<With<Player>>(&mut app).is_none(),
+        "a missing anchor must not fall back to an arbitrary surface"
+    );
+    assert!(
+        single::<With<Enemy>>(&mut app).is_none(),
+        "actor setup should stop after a required placement fails"
+    );
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("missing_party_start"));
+}
+
+const DECK_ANCHOR: &str = "test_deck";
+const DECK_COORD: HexCoord = HexCoord::new_cubic(3, -3, 0);
+const DECK_LEVEL: hex_core::Level = 6;
+
+fn spawn_anchored_deck(mut commands: Commands) {
+    commands.spawn((
+        HexTile,
+        DECK_COORD,
+        TilePos::new(DECK_COORD, DECK_LEVEL),
+        HexSpan::new(6.0, 7.0),
+        STONE,
+        Headroom(MAX_HEADROOM),
+    ));
+    let mut anchors = MapAnchors::new();
+    let _previous = anchors.insert(
+        MapAnchorId::from(DECK_ANCHOR),
+        TilePos::new(DECK_COORD, DECK_LEVEL),
+    );
+    commands.insert_resource(anchors);
+}
+
+/// An anchor names a `TilePos`, not merely a coordinate. On a stacked column the
+/// generated placement must stay on the published deck rather than choosing the
+/// ordinary ground underneath it.
+#[test]
+fn a_generated_anchor_uses_its_exact_surface() {
+    let mut app = test_app();
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        spawn_anchored_deck.in_set(GameplaySetup::Terrain),
+    );
+    app.insert_resource(ScenarioSettings {
+        player: ScenarioPlacement::Anchor(DECK_ANCHOR.to_owned()),
+        enemy: ScenarioPlacement::Fixed(CubeCoord {
+            x: ENEMY_START.x(),
+            y: ENEMY_START.y(),
+            z: ENEMY_START.z(),
+        }),
+    });
+    enter_gameplay(&mut app);
+
+    let standing = standing_of(&mut app).expect("the anchored player should spawn");
+    assert_eq!(standing.pos, TilePos::new(DECK_COORD, DECK_LEVEL));
+}
+
+fn remove_terrain_ready(mut commands: Commands) {
+    commands.remove_resource::<TerrainReady>();
+}
+
+/// Failed terrain setup leaves `TerrainReady` absent. Actors are gated on that marker
+/// rather than accepting the tile entities a failed or partial generator may have
+/// emitted before it stopped.
+#[test]
+fn units_do_not_spawn_until_terrain_is_ready() {
+    let mut app = test_app();
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        remove_terrain_ready
+            .after(spawn_fake_terrain)
+            .in_set(GameplaySetup::Terrain),
+    );
+    enter_gameplay(&mut app);
+
+    assert!(single::<With<Player>>(&mut app).is_none());
+    assert!(single::<With<Enemy>>(&mut app).is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -871,6 +1163,23 @@ fn water_is_drawn_but_is_not_footing() {
     );
 }
 
+#[test]
+fn lava_is_drawn_but_is_not_footing() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let mut tinted = app
+        .world_mut()
+        .query_filtered::<&TilePos, With<RangeOverlay>>();
+    let reachable: Vec<TilePos> = tinted.iter(app.world()).copied().collect();
+
+    assert!(
+        !reachable.iter().any(|pos| pos.coord == LAVA_POOL),
+        "lava was offered as somewhere to walk to"
+    );
+}
+
 /// And a click on it does nothing, rather than walking the piece onto the water.
 ///
 /// The tint and the click have to agree. A tile lit as reachable that then refuses —
@@ -940,15 +1249,15 @@ fn movement_left(app: &mut App) -> Option<u32> {
         .map(|turn| turn.movement_left)
 }
 
-/// A second click while the piece is still walking is ignored, not charged.
+/// A second click while the piece is still walking emits nothing at all.
 ///
-/// `StandsOn` names the *committed destination* from the moment a move starts, so an
-/// unguarded second click routes from where the piece is going rather than where it
-/// is, queues a second animation over the first, and bills `movement_left` twice for
-/// one turn. Two clicks two hexes away would leave a four-hex budget empty having
-/// moved two.
+/// An unguarded second click would route from a stale `StandsOn` and queue a
+/// second move on top of the one still playing. The observer's mid-walk
+/// suppression kills it at the source; the applier's `Busy` gate is the
+/// authoritative copy of the same rule, and double-billing specifically is
+/// covered by `hex_combat`'s funnel tests where the budget actually lives.
 #[test]
-fn a_second_click_while_moving_is_not_charged_again() {
+fn a_second_click_while_moving_emits_nothing() {
     let mut app = test_app();
     enter_gameplay(&mut app);
     take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
@@ -958,24 +1267,69 @@ fn a_second_click_while_moving_is_not_charged_again() {
     let window = app.world_mut().spawn(Window::default()).id();
 
     click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
     app.update();
-    let after_first = movement_left(&mut app);
-    assert_eq!(after_first, Some(2), "two hexes should cost two");
 
     // **A different tile**, and that detail is the test. Clicking the same one again
-    // routes from the destination to itself for a cost of zero, so the bill is
-    // unchanged whether or not the guard exists and the test proves nothing. The
-    // double charge only appears when the second click has somewhere new to go.
+    // routes from the destination to itself for a cost of zero, so nothing would be
+    // emitted whether or not the guard exists and the test proves nothing. The
+    // double emission only appears when the second click has somewhere new to go.
     let elsewhere = surface_at(&mut app, HexCoord::new_cubic(2, 0, -2))
         .expect("the fake terrain covers this coordinate");
     click(&mut app, elsewhere, window);
+
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "a click during a walk was emitted as a second command"
+    );
+}
+
+/// The route remains busy until its logical landing has been reconciled.
+///
+/// `Transformation` is removed through deferred commands when the visual animation
+/// finishes. Before movement reconciliation runs, `MovingTo` still exists and
+/// `StandsOn` still names the preceding whole step. A click in that narrow window
+/// must emit nothing — a command routed from the stale position would overwrite
+/// the pending arrival the moment the applier committed it.
+#[test]
+fn a_click_between_animation_finish_and_arrival_is_ignored() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 4).expect("a player should exist during gameplay");
+
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    let target =
+        surface_at(&mut app, destination).expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
+    app.update();
+
+    let player = single::<With<Player>>(&mut app).expect("a player should exist");
+    assert!(app.world().get::<MovingTo>(player).is_some());
+
+    // Exactly the state left after the animation driver's deferred removal is
+    // applied and before movement reconciliation consumes the route.
+    app.world_mut()
+        .entity_mut(player)
+        .remove::<Transformation>();
+    let elsewhere = surface_at(&mut app, HexCoord::new_cubic(2, 0, -2))
+        .expect("the fake terrain covers this coordinate");
+    click(&mut app, elsewhere, window);
+
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "the landing-frame click was emitted as a command"
+    );
     app.update();
 
     assert_eq!(
-        movement_left(&mut app),
-        after_first,
-        "the second click was billed to a turn that had already paid"
+        standing_of(&mut app).map(|standing| standing.pos.coord),
+        Some(destination),
+        "the pending arrival should land untouched"
     );
+    assert!(app.world().get::<MovingTo>(player).is_none());
+    assert!(app.world().get::<Transformation>(player).is_none());
 }
 
 /// A click that lands while paused does nothing at all.
@@ -1086,6 +1440,7 @@ fn a_fight_stops_the_walk_where_it_started() {
     let target = surface_at(&mut app, destination).expect("the fixture covers this coordinate");
     let window = app.world_mut().spawn(Window::default()).id();
     click(&mut app, target, window);
+    commit_move(&mut app).expect("the emitted move should ground and start");
     app.update();
 
     let player = single::<With<Player>>(&mut app).expect("a player should exist");
@@ -1123,4 +1478,71 @@ fn a_fight_stops_the_walk_where_it_started() {
         TilePos::new(destination, GROUND_LEVEL),
         "the piece was delivered to a destination chosen before the fight existed"
     );
+}
+
+/// Stable ids are dealt in scenario spawn order — player first — recorded in
+/// the registry and the party, and reset with the session so the same launch
+/// always deals the same ids. That determinism is what lets a save or replay
+/// name units without caring which entities they landed on this run.
+#[test]
+fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
+    use hex_core::UnitId;
+
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let ids = |app: &mut App| {
+        let mut players = app
+            .world_mut()
+            .query_filtered::<(Entity, &UnitId), With<Player>>();
+        let (player_entity, player_id) = players
+            .single(app.world())
+            .map(|(entity, id)| (entity, *id))
+            .expect("one player with an id");
+        let mut enemies = app.world_mut().query_filtered::<&UnitId, With<Enemy>>();
+        let enemy_id = *enemies.single(app.world()).expect("one enemy with an id");
+        (player_entity, player_id, enemy_id)
+    };
+
+    let (player_entity, player_id, enemy_id) = ids(&mut app);
+    assert_eq!(player_id, UnitId(0), "the player spawns first");
+    assert_eq!(enemy_id, UnitId(1), "the enemy spawns second");
+
+    let registry = app.world().resource::<UnitRegistry>();
+    assert_eq!(registry.entity_of(player_id), Some(player_entity));
+    assert_eq!(registry.id_of(player_entity), Some(player_id));
+    assert_eq!(
+        app.world()
+            .entity(player_entity)
+            .get::<hex_core::ControlOwner>(),
+        Some(&hex_core::ControlOwner::default()),
+        "spawned units carry the seat-0 ownership marker"
+    );
+    assert_eq!(
+        app.world().resource::<Party>().members,
+        vec![player_id],
+        "only player-faction units enrol in the party"
+    );
+
+    // Leaving tears identity down; re-entering deals the same ids again.
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(app.world().resource::<Party>().members.is_empty());
+    assert_eq!(
+        app.world().resource::<UnitRegistry>().entity_of(UnitId(0)),
+        None,
+        "the registry must not outlive its units"
+    );
+
+    enter_gameplay(&mut app);
+    let (_, player_again, enemy_again) = ids(&mut app);
+    assert_eq!(
+        player_again,
+        UnitId(0),
+        "a fresh session re-deals from zero"
+    );
+    assert_eq!(enemy_again, UnitId(1));
 }

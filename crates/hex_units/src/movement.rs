@@ -2,11 +2,13 @@
 //!
 //! # The rules
 //!
-//! > A body may **stand** on a surface when its substance is solid and its
-//! > [`Headroom`](hex_core::Headroom) is at least the body's [`Body::levels_tall`].
+//! > A body may **stand** on a surface when its shared
+//! > [`TraversalProfile`](hex_core::TraversalProfile) admits the substance and
+//! > [`Headroom`](hex_core::Headroom).
 //!
-//! > A **step** is legal when the destination is an adjacent surface a body can stand
-//! > on, and its surface is within [`MAX_STEP`] levels.
+//! > A **step** is legal when both endpoints are adjacent standable surfaces, the
+//! > profile admits the climb or drop, and their clear volumes share a body-high
+//! > lateral aperture.
 //!
 //! Surfaces stacked in one column are never adjacent, so a piece on a bridge
 //! cannot drop to the ground beneath it. Getting down means a ramp of adjacent
@@ -38,66 +40,113 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    AppSystems, Headroom, HexCoord, HexSpan, Level, Mode, PausableSystems, SubstanceId, TilePos,
+    AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
+    TraversalEndpoint, TraversalProfile, UnitId,
 };
+
+/// Ordering for systems that consume a unit's logical position.
+#[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum MovementSystems {
+    /// Reconcile [`StandsOn`](crate::StandsOn) with completed animation legs.
+    Reconcile,
+}
+
+/// Every whole waypoint crossed during the latest movement reconciliation.
+///
+/// A single frame may finish several animation legs. Consumers that care whether a
+/// route passed through an intermediate position must inspect this resource after
+/// [`MovementSystems::Reconcile`] instead of sampling only the final
+/// [`StandsOn`](crate::StandsOn).
+///
+/// Iteration order is a sim input — "the first crossing within hostile reach"
+/// decides which unit combat freezes — so it must not inherit query iteration
+/// order. Entries sort by the crossing unit's stable [`UnitId`] (unregistered
+/// units last), and the stable sort keeps each unit's waypoints in route order.
+#[derive(Resource, Debug, Default)]
+pub struct MovementCrossings(Vec<(Option<UnitId>, Entity, Standing)>);
+
+impl MovementCrossings {
+    /// Crossed waypoints, deterministically ordered across units and in route
+    /// order within one.
+    pub fn iter(&self) -> impl Iterator<Item = (Entity, Standing)> + '_ {
+        self.0
+            .iter()
+            .map(|&(_, entity, standing)| (entity, standing))
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    pub(crate) fn push(&mut self, unit: Option<UnitId>, entity: Entity, standing: Standing) {
+        self.0.push((unit, entity, standing));
+    }
+
+    /// Orders entries by stable id; the stable sort preserves route order.
+    pub(crate) fn sort_deterministic(&mut self) {
+        // `is_none` first so unregistered units genuinely sort last —
+        // `Option`'s own ordering would put `None` first.
+        self.0.sort_by_key(|&(unit, _, _)| (unit.is_none(), unit));
+    }
+}
 
 /// Registers the movement types.
 ///
-/// This module has no systems — it is rules, not behaviour. The plugin exists so
-/// [`Body`] is registered beside where it is defined. It was previously registered by
-/// the player's plugin, which meant a type declared in one file was announced by
-/// another; moving either would have silently dropped it from the inspector.
+/// [`Body`] is registered beside where it is defined, and route reconciliation lives
+/// here because every kind of unit needs its logical position kept aligned with the
+/// animation.
 pub fn plugin(app: &mut App) {
-    app.register_type::<Body>();
+    app.register_type::<Body>()
+        .init_resource::<MovementCrossings>();
 
     // Where a unit *is*, kept true as it walks. Separated from `units::plugin`, which
-    // also reads `scenario.ron` and spawns pieces: anything that needs positions to
-    // stay honest — `hex_combat`, and its tests — wants this half without that one.
+    // also reads the active scenario placements and spawns pieces: anything that needs
+    // positions to stay honest — `hex_combat`, and its tests — wants this half without
+    // that one.
     app.add_systems(
         Update,
-        crate::units::arrive
+        crate::units::reconcile_movement
+            .in_set(MovementSystems::Reconcile)
             .in_set(AppSystems::Update)
-            .in_set(PausableSystems),
+            .in_set(PausableSystems)
+            .after(hex_anim::AnimationSystems::Drive),
     );
     // Committing to a long walk and then being ambushed halfway should leave the piece
     // where the ambush happened.
     app.add_systems(OnEnter(Mode::Combat), crate::units::halt_on_combat);
 }
 
-/// How many levels a piece may climb or drop in one step.
-///
-/// One, by design: a step is a step. Anything steeper is a cliff and has to be walked
-/// around, or bypassed with an ability.
-pub const MAX_STEP: Level = 1;
-
 /// How much room a thing takes up, and therefore where it fits.
 ///
-/// A struct rather than a bare [`Level`] on purpose. Bodies come in configurations —
-/// the obvious next one is a **footprint**, a set of coordinate offsets for something
-/// wider than a single hex — and adding that field here changes [`Body::admits`] and
-/// nothing else. No call site passes the parts separately, so none of them move.
+/// A struct rather than a bare [`hex_core::Level`] on purpose. Bodies can eventually gain a
+/// footprint or a non-walking movement profile without changing every system that
+/// carries one.
 ///
 /// A footprint is deliberately not built yet. It is pure gameplay, invisible to the
 /// map, and it first needs a decision this codebase has not taken: whether a wide body
 /// may straddle a one-level step, or must have every hex of its footprint level.
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[reflect(Component)]
 pub struct Body {
-    /// How many levels tall, and so how much clear space it needs overhead.
-    pub levels_tall: Level,
+    /// Exact movement and occupancy rules used by this body.
+    pub profile: TraversalProfile,
 }
 
 impl Body {
-    /// Whether this body fits in the space above a surface.
-    ///
-    /// The single place the size rule lives, and where a footprint check would join
-    /// it. Everything else asks this rather than comparing levels itself.
+    /// Creates a body governed by one traversal profile.
     #[must_use]
-    pub const fn admits(self, headroom: Headroom) -> bool {
-        headroom.0 >= self.levels_tall
+    pub const fn new(profile: TraversalProfile) -> Self {
+        Self { profile }
+    }
+
+    /// The traversal rules this body uses.
+    #[must_use]
+    pub const fn traversal_profile(self) -> TraversalProfile {
+        self.profile
     }
 }
 
@@ -129,9 +178,11 @@ impl Standing {
 /// gameplay independent of how terrain is stored. `hex_map` can be rewritten
 /// wholesale as long as tiles carry a [`TilePos`], a [`HexSpan`], a [`SubstanceId`]
 /// and a [`Headroom`].
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Footing {
+    profile: TraversalProfile,
     by_pos: HashMap<TilePos, Standing>,
+    headroom_by_pos: HashMap<TilePos, Headroom>,
     /// Surfaces at each coordinate, so one can be found without knowing which
     /// level its top happens to be at.
     surfaces: HashMap<HexCoord, Vec<Standing>>,
@@ -161,10 +212,16 @@ impl Footing {
         table: &SubstanceTable,
         body: Body,
     ) -> Self {
-        let mut footing = Self::default();
+        let profile = body.traversal_profile();
+        let mut footing = Self {
+            profile,
+            by_pos: HashMap::default(),
+            headroom_by_pos: HashMap::default(),
+            surfaces: HashMap::default(),
+        };
 
         for (pos, span, substance, headroom) in tiles {
-            if !table.is_solid(*substance) || !body.admits(*headroom) {
+            if !profile.admits_surface(table.is_solid(*substance), *headroom) {
                 continue;
             }
             // This run passed the solid-substance check, and its `TilePos` is already
@@ -176,6 +233,7 @@ impl Footing {
                 span: *span,
             };
             footing.by_pos.insert(standing.pos, standing);
+            footing.headroom_by_pos.insert(standing.pos, *headroom);
             footing
                 .surfaces
                 .entry(pos.coord)
@@ -190,6 +248,25 @@ impl Footing {
     #[must_use]
     pub fn at(&self, pos: TilePos) -> Option<Standing> {
         self.by_pos.get(&pos).copied()
+    }
+
+    /// Whether this footing's exact traversal profile admits one positional step.
+    ///
+    /// Combat uses this for adjacent melee reach as well as movement using it for
+    /// routes, so a profile cannot validate one elevation rule and attack with
+    /// another.
+    #[must_use]
+    pub fn admits_step(&self, from: TilePos, to: TilePos) -> bool {
+        let (Some(from_headroom), Some(to_headroom)) = (
+            self.headroom_by_pos.get(&from),
+            self.headroom_by_pos.get(&to),
+        ) else {
+            return false;
+        };
+        self.profile.admits_transition(
+            TraversalEndpoint::new(from, true, *from_headroom),
+            TraversalEndpoint::new(to, true, *to_headroom),
+        )
     }
 
     /// Every standable surface at a coordinate, lowest first.
@@ -227,7 +304,7 @@ impl Footing {
         let mut candidates: Vec<Standing> = self
             .at_coord(coord)
             .iter()
-            .filter(|candidate| from.pos.is_within_step_of(candidate.pos, MAX_STEP))
+            .filter(|candidate| self.admits_step(from.pos, candidate.pos))
             .copied()
             .collect();
         candidates.sort_by_key(|c| (from.pos.level_step_to(c.pos).abs(), c.pos.level));
@@ -386,7 +463,7 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
 mod tests {
     use super::*;
     use hex_assets::{Substance, SubstanceFile};
-    use hex_core::MAX_HEADROOM;
+    use hex_core::{Level, MAX_HEADROOM};
 
     const STONE: SubstanceId = SubstanceId(1);
 
@@ -413,7 +490,7 @@ mod tests {
 
     /// A body of the size the game actually ships, for tests about stepping rather
     /// than about size.
-    const NORMAL: Body = Body { levels_tall: 2 };
+    const NORMAL: Body = Body::new(TraversalProfile::WALKER);
 
     /// A one-level column under open sky.
     ///
@@ -494,12 +571,12 @@ mod tests {
         );
     }
 
-    /// A two-level step is a cliff. This is the whole point of `MAX_STEP`.
+    /// A two-level step exceeds the ordinary walker's climb limit.
     #[test]
     fn a_cliff_blocks_the_route() {
         let a = HexCoord::ORIGIN;
         let [b, ..] = a.neighbors();
-        let footing = footing_from(&[tile(a, 2), tile(b, 5)]);
+        let footing = footing_from(&[tile(a, 2), tile(b, 4)]);
 
         let Some(from) = footing.ground(a) else {
             unreachable!("a has ground")
@@ -510,8 +587,96 @@ mod tests {
 
         assert!(
             route(from, to, &footing).is_none(),
-            "a three-level climb should be refused"
+            "a two-level climb should be refused"
         );
+    }
+
+    /// Procedural validation calls the core predicate directly while live movement
+    /// reaches it through `Body` and `Footing`. The boundary answers must be identical
+    /// or a generated map can validate and still refuse the player.
+    #[test]
+    fn live_headroom_matches_the_shared_profile() {
+        let low = HexCoord::ORIGIN;
+        let [exact, ..] = low.neighbors();
+        let tiles = [roofed(low, 4, 1), roofed(exact, 4, 2)];
+        let footing = footing_from(&tiles);
+        let profile = NORMAL.traversal_profile();
+
+        assert_eq!(
+            footing.ground(low).is_some(),
+            profile.admits_surface(true, Headroom(1))
+        );
+        assert_eq!(
+            footing.ground(exact).is_some(),
+            profile.admits_surface(true, Headroom(2))
+        );
+        assert!(footing.ground(low).is_none());
+        assert!(footing.ground(exact).is_some());
+    }
+
+    /// The same parity check for complete transitions: one level with shared clearance
+    /// belongs to the live graph and two levels does not, exactly as the shared
+    /// predicate reports.
+    #[test]
+    fn live_steps_match_the_shared_profile() {
+        let from_coord = HexCoord::ORIGIN;
+        let [one_coord, two_coord, ..] = from_coord.neighbors();
+        let tiles = [tile(from_coord, 4), tile(one_coord, 5), tile(two_coord, 6)];
+        let footing = footing_from(&tiles);
+        let from = footing
+            .ground(from_coord)
+            .expect("the start is ordinary ground");
+        let profile = NORMAL.traversal_profile();
+        let one = TilePos::new(one_coord, 5);
+        let two = TilePos::new(two_coord, 6);
+
+        assert_eq!(
+            footing.step_from(from, one_coord).is_some(),
+            profile.admits_transition(
+                TraversalEndpoint::new(from.pos, true, Headroom(MAX_HEADROOM)),
+                TraversalEndpoint::new(one, true, Headroom(MAX_HEADROOM)),
+            )
+        );
+        assert_eq!(
+            footing.step_from(from, two_coord).is_some(),
+            profile.admits_transition(
+                TraversalEndpoint::new(from.pos, true, Headroom(MAX_HEADROOM)),
+                TraversalEndpoint::new(two, true, Headroom(MAX_HEADROOM)),
+            )
+        );
+        assert!(footing.step_from(from, one_coord).is_some());
+        assert!(footing.step_from(from, two_coord).is_none());
+    }
+
+    /// Two rooms can each fit the walker while the boundary between them cannot. On a
+    /// one-level ramp, two clear levels above each endpoint overlap by only one level;
+    /// the lower room needs one extra clear voxel to provide a full lateral aperture.
+    #[test]
+    fn a_low_lintel_blocks_an_individually_standable_ramp() {
+        let low_coord = HexCoord::ORIGIN;
+        let [high_coord, ..] = low_coord.neighbors();
+        let low = roofed(low_coord, 4, 2);
+        let high = roofed(high_coord, 5, 2);
+        let footing = footing_from(&[low, high]);
+        let from = footing.ground(low_coord).expect("the lower room fits");
+        let to = footing.ground(high_coord).expect("the higher room fits");
+
+        assert!(route(from, to, &footing).is_none());
+        assert!(route(to, from, &footing).is_none());
+    }
+
+    #[test]
+    fn a_one_level_underground_ramp_with_shared_aperture_is_walkable() {
+        let low_coord = HexCoord::ORIGIN;
+        let [high_coord, ..] = low_coord.neighbors();
+        let low = roofed(low_coord, 4, 3);
+        let high = roofed(high_coord, 5, 2);
+        let footing = footing_from(&[low, high]);
+        let from = footing.ground(low_coord).expect("the lower room fits");
+        let to = footing.ground(high_coord).expect("the higher room fits");
+
+        assert!(route(from, to, &footing).is_some());
+        assert!(route(to, from, &footing).is_some());
     }
 
     /// A budget is a hard edge: everything within it is reachable, nothing beyond is.
@@ -780,13 +945,19 @@ mod tests {
         let tiles = [roofed(coord, 1, 1)];
 
         assert!(
-            footing_for(&tiles, Body { levels_tall: 1 })
-                .ground(coord)
-                .is_some(),
+            footing_for(
+                &tiles,
+                Body::new(TraversalProfile {
+                    levels_tall: 1,
+                    ..TraversalProfile::WALKER
+                }),
+            )
+            .ground(coord)
+            .is_some(),
             "one level of clearance is enough for a one-level body"
         );
         assert!(
-            footing_for(&tiles, Body { levels_tall: 2 })
+            footing_for(&tiles, Body::new(TraversalProfile::WALKER))
                 .ground(coord)
                 .is_none(),
             "a two-level body does not fit under a one-voxel ceiling"
@@ -811,7 +982,10 @@ mod tests {
             })
             .collect();
 
-        let short = Body { levels_tall: 1 };
+        let short = Body::new(TraversalProfile {
+            levels_tall: 1,
+            ..TraversalProfile::WALKER
+        });
         let short_footing = footing_for(&tiles, short);
         let (Some(from), Some(to)) = (
             short_footing.ground(HexCoord::ORIGIN),
@@ -824,7 +998,7 @@ mod tests {
             "a one-level body fits through the tunnel"
         );
 
-        let tall_footing = footing_for(&tiles, Body { levels_tall: 2 });
+        let tall_footing = footing_for(&tiles, Body::new(TraversalProfile::WALKER));
         let (Some(from), Some(to)) = (
             tall_footing.ground(HexCoord::ORIGIN),
             tall_footing.ground(HexCoord::new_cubic(3, -3, 0)),
