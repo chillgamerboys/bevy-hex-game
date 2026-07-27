@@ -84,6 +84,10 @@ impl<'de> Deserialize<'de> for MapSettings {
 }
 
 /// Available terrain presets.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Bevy 0.19 reflection cannot derive these designer settings through Box"
+)]
 #[derive(Reflect, Debug, Clone, PartialEq, Deserialize)]
 pub enum TerrainSettings {
     /// The deterministic valley, river, bridge, and mountain test map.
@@ -100,6 +104,10 @@ pub enum TerrainSettings {
 /// recipe payload instead of allowing landform/tactical combinations which cannot
 /// be generated. V3 composes one or seven independently specified patches behind a
 /// separate wire contract.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Bevy 0.19 reflection cannot derive these designer settings through Box"
+)]
 #[derive(Reflect, Debug, Clone, PartialEq)]
 pub enum ProceduralSettings {
     /// The frozen landform/environment/tactical generator.
@@ -312,6 +320,10 @@ pub struct ProceduralV3Settings {
 }
 
 /// Designer-facing V3 world layouts.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Bevy 0.19 reflection cannot derive these designer settings through Box"
+)]
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub enum V3LayoutSettings {
     /// One recipe over one connected footprint.
