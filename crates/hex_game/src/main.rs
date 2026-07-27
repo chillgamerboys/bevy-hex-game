@@ -22,7 +22,7 @@ use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
 use hex_assets::DisplaySettings;
-use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, Screen};
+use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, PerceptionSystems, Screen};
 
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
@@ -147,22 +147,47 @@ impl Plugin for AppPlugin {
         // sub-state of `Screen::Gameplay`, so it does not exist in menus and this
         // condition is false there too.
         app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
+        app.configure_sets(
+            Update,
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(AppSystems::Update),
+        );
 
-        // World construction is split across crates — `hex_map` builds the terrain,
-        // `hex_units` spawns the player onto it — and systems in the same
-        // `OnEnter` schedule otherwise run in unspecified order. Chaining also gives
-        // each step a sync point, so entities spawned by one set are queryable by
-        // the next.
+        // World construction is split across crates — `hex_map` builds terrain,
+        // `hex_units` spawns actors, future perception publishes initial knowledge,
+        // and `hex_world` frames the result. Systems in the same `OnEnter` schedule
+        // otherwise run in unspecified order. Chaining also gives each step a sync
+        // point, so entities spawned by one set are queryable by the next.
         app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Perception,
                 GameplaySetup::View,
                 GameplaySetup::Finalize,
             )
                 .chain(),
+        );
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(GameplaySetup::Perception),
         );
 
         app.add_plugins((

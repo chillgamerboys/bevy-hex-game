@@ -72,6 +72,7 @@ fn test_app() -> App {
             GameplaySetup::Resources,
             GameplaySetup::Terrain,
             GameplaySetup::Actors,
+            GameplaySetup::Perception,
             GameplaySetup::View,
             GameplaySetup::Finalize,
         )
