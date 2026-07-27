@@ -9,6 +9,13 @@
     reason = "the foundation is consumed by the sequential V2 recipe PRs"
 )]
 mod recipe;
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the V2 seed API is consumed by the sequential recipe PRs"
+    )
+)]
 mod seed;
 #[expect(
     dead_code,
@@ -97,6 +104,13 @@ pub(crate) fn ensure_recipe_available(
 /// This deliberately uses a V2-specific domain and includes the version number.
 /// Equivalent Hills parameters therefore remain output-compatible with V1 without
 /// making their settings/report identity ambiguous.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the fingerprint is published once the first V2 recipe lands"
+    )
+)]
 pub(crate) fn settings_fingerprint(grid_radius: u32, settings: &ProceduralV2Settings) -> u64 {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"procedural-v2-settings");
@@ -135,6 +149,13 @@ pub(crate) fn settings_fingerprint(grid_radius: u32, settings: &ProceduralV2Sett
     seed::fingerprint(&bytes)
 }
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the fingerprint is published once the first V2 recipe lands"
+    )
+)]
 fn append_hills_settings(bytes: &mut Vec<u8>, hills: &V2HillsSettings) {
     bytes.extend_from_slice(&hills.valley_level.to_le_bytes());
     bytes.extend_from_slice(&hills.max_relief.to_le_bytes());
@@ -143,10 +164,64 @@ fn append_hills_settings(bytes: &mut Vec<u8>, hills: &V2HillsSettings) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use crate::settings::{
-        ProceduralV2Settings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+        CavesSettings, LayeredSkyIslandsSettings, MountainsSettings, ProceduralV2Settings,
+        V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
     };
+
+    type SettingsFactory = fn() -> ProceduralV2Settings;
+    type SettingsMutation = fn(&mut ProceduralV2Settings);
+
+    fn hills_settings() -> ProceduralV2Settings {
+        ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::Hills(V2HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+        }
+    }
+
+    fn layered_sky_islands_settings() -> ProceduralV2Settings {
+        ProceduralV2Settings {
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            recipe: V2RecipeSettings::LayeredSkyIslands(LayeredSkyIslandsSettings {
+                ground: V2HillsSettings {
+                    valley_level: 15,
+                    max_relief: 8,
+                    hills_per_bank: 3,
+                },
+                min_clearance: 8,
+                upper_coverage_percent: 20,
+            }),
+        }
+    }
+
+    fn mountains_settings() -> ProceduralV2Settings {
+        ProceduralV2Settings {
+            environment: V2EnvironmentSettings::Frozen,
+            recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief: 15,
+                peak_count: 4,
+            }),
+        }
+    }
+
+    fn caves_settings() -> ProceduralV2Settings {
+        ProceduralV2Settings {
+            environment: V2EnvironmentSettings::Rocky,
+            recipe: V2RecipeSettings::Caves(CavesSettings {
+                surface_level: 15,
+                cave_floor_level: 7,
+                chamber_count: 7,
+            }),
+        }
+    }
 
     #[test]
     fn unfinished_recipe_returns_an_error_instead_of_an_empty_plan() {
@@ -167,14 +242,7 @@ mod tests {
 
     #[test]
     fn v2_settings_fingerprint_is_deterministic_and_version_distinct() {
-        let settings = ProceduralV2Settings {
-            environment: V2EnvironmentSettings::TemperateGrassland,
-            recipe: V2RecipeSettings::Hills(V2HillsSettings {
-                valley_level: 15,
-                max_relief: 8,
-                hills_per_bank: 3,
-            }),
-        };
+        let settings = hills_settings();
         let fingerprint = settings_fingerprint(12, &settings);
 
         assert_eq!(
@@ -187,12 +255,177 @@ mod tests {
             "equivalent V1 and V2 settings need distinct report identities"
         );
         assert_ne!(settings_fingerprint(20, &settings), fingerprint);
+    }
 
-        let mut changed = settings.clone();
-        let V2RecipeSettings::Hills(hills) = &mut changed.recipe else {
-            unreachable!("the fixture is Hills");
-        };
-        hills.max_relief = 7;
-        assert_ne!(settings_fingerprint(12, &changed), fingerprint);
+    #[test]
+    fn v2_settings_fingerprint_covers_environment_and_recipe_identity() {
+        let mut environment_fingerprints = BTreeSet::new();
+        for environment in [
+            V2EnvironmentSettings::TemperateGrassland,
+            V2EnvironmentSettings::Frozen,
+            V2EnvironmentSettings::Volcanic,
+            V2EnvironmentSettings::Rocky,
+        ] {
+            let mut settings = hills_settings();
+            settings.environment = environment;
+            assert!(
+                environment_fingerprints.insert(settings_fingerprint(12, &settings)),
+                "environment {environment:?} did not change the fingerprint"
+            );
+        }
+
+        // Equal raw payloads make the first three variants specifically exercise
+        // their recipe discriminants rather than merely differing parameter bytes.
+        let recipes = [
+            V2RecipeSettings::Hills(V2HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            }),
+            V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief: 8,
+                peak_count: 3,
+            }),
+            V2RecipeSettings::Caves(CavesSettings {
+                surface_level: 15,
+                cave_floor_level: 8,
+                chamber_count: 3,
+            }),
+            layered_sky_islands_settings().recipe,
+        ];
+        let mut recipe_fingerprints = BTreeSet::new();
+        for recipe in recipes {
+            let settings = ProceduralV2Settings {
+                environment: V2EnvironmentSettings::TemperateGrassland,
+                recipe,
+            };
+            assert!(
+                recipe_fingerprints.insert(settings_fingerprint(12, &settings)),
+                "recipe {:?} did not change the fingerprint",
+                settings.recipe
+            );
+        }
+    }
+
+    #[test]
+    fn v2_settings_fingerprint_covers_every_recipe_field() {
+        let cases: &[(&str, SettingsFactory, SettingsMutation)] = &[
+            ("Hills.valley_level", hills_settings, |settings| {
+                let V2RecipeSettings::Hills(hills) = &mut settings.recipe else {
+                    unreachable!("fixture must be Hills");
+                };
+                hills.valley_level = 14;
+            }),
+            ("Hills.max_relief", hills_settings, |settings| {
+                let V2RecipeSettings::Hills(hills) = &mut settings.recipe else {
+                    unreachable!("fixture must be Hills");
+                };
+                hills.max_relief = 7;
+            }),
+            ("Hills.hills_per_bank", hills_settings, |settings| {
+                let V2RecipeSettings::Hills(hills) = &mut settings.recipe else {
+                    unreachable!("fixture must be Hills");
+                };
+                hills.hills_per_bank = 4;
+            }),
+            (
+                "LayeredSkyIslands.ground.valley_level",
+                layered_sky_islands_settings,
+                |settings| {
+                    let V2RecipeSettings::LayeredSkyIslands(islands) = &mut settings.recipe else {
+                        unreachable!("fixture must be LayeredSkyIslands");
+                    };
+                    islands.ground.valley_level = 14;
+                },
+            ),
+            (
+                "LayeredSkyIslands.ground.max_relief",
+                layered_sky_islands_settings,
+                |settings| {
+                    let V2RecipeSettings::LayeredSkyIslands(islands) = &mut settings.recipe else {
+                        unreachable!("fixture must be LayeredSkyIslands");
+                    };
+                    islands.ground.max_relief = 7;
+                },
+            ),
+            (
+                "LayeredSkyIslands.ground.hills_per_bank",
+                layered_sky_islands_settings,
+                |settings| {
+                    let V2RecipeSettings::LayeredSkyIslands(islands) = &mut settings.recipe else {
+                        unreachable!("fixture must be LayeredSkyIslands");
+                    };
+                    islands.ground.hills_per_bank = 4;
+                },
+            ),
+            (
+                "LayeredSkyIslands.min_clearance",
+                layered_sky_islands_settings,
+                |settings| {
+                    let V2RecipeSettings::LayeredSkyIslands(islands) = &mut settings.recipe else {
+                        unreachable!("fixture must be LayeredSkyIslands");
+                    };
+                    islands.min_clearance = 9;
+                },
+            ),
+            (
+                "LayeredSkyIslands.upper_coverage_percent",
+                layered_sky_islands_settings,
+                |settings| {
+                    let V2RecipeSettings::LayeredSkyIslands(islands) = &mut settings.recipe else {
+                        unreachable!("fixture must be LayeredSkyIslands");
+                    };
+                    islands.upper_coverage_percent = 21;
+                },
+            ),
+            ("Mountains.base_level", mountains_settings, |settings| {
+                let V2RecipeSettings::Mountains(mountains) = &mut settings.recipe else {
+                    unreachable!("fixture must be Mountains");
+                };
+                mountains.base_level = 16;
+            }),
+            ("Mountains.relief", mountains_settings, |settings| {
+                let V2RecipeSettings::Mountains(mountains) = &mut settings.recipe else {
+                    unreachable!("fixture must be Mountains");
+                };
+                mountains.relief = 14;
+            }),
+            ("Mountains.peak_count", mountains_settings, |settings| {
+                let V2RecipeSettings::Mountains(mountains) = &mut settings.recipe else {
+                    unreachable!("fixture must be Mountains");
+                };
+                mountains.peak_count = 5;
+            }),
+            ("Caves.surface_level", caves_settings, |settings| {
+                let V2RecipeSettings::Caves(caves) = &mut settings.recipe else {
+                    unreachable!("fixture must be Caves");
+                };
+                caves.surface_level = 16;
+            }),
+            ("Caves.cave_floor_level", caves_settings, |settings| {
+                let V2RecipeSettings::Caves(caves) = &mut settings.recipe else {
+                    unreachable!("fixture must be Caves");
+                };
+                caves.cave_floor_level = 8;
+            }),
+            ("Caves.chamber_count", caves_settings, |settings| {
+                let V2RecipeSettings::Caves(caves) = &mut settings.recipe else {
+                    unreachable!("fixture must be Caves");
+                };
+                caves.chamber_count = 8;
+            }),
+        ];
+
+        for (field, factory, mutate) in cases {
+            let baseline = factory();
+            let mut changed = baseline.clone();
+            mutate(&mut changed);
+            assert_ne!(
+                settings_fingerprint(12, &baseline),
+                settings_fingerprint(12, &changed),
+                "changing {field} must change the fingerprint"
+            );
+        }
     }
 }
