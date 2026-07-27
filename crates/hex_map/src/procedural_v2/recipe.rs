@@ -41,17 +41,43 @@ impl CandidateContext {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FallbackContext {
     pub(crate) grid_radius: u32,
-    pub(crate) seed: u64,
-    pub(crate) streams: SeedStreams,
 }
 
 impl FallbackContext {
     #[must_use]
-    fn new(grid_radius: u32, seed: u64) -> Self {
+    const fn new(grid_radius: u32) -> Self {
+        Self { grid_radius }
+    }
+}
+
+/// Origin of a semantic plan being validated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ValidationProvenance {
+    Candidate(u8),
+    Fallback,
+}
+
+/// Stable non-random inputs available to recipe validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ValidationContext {
+    pub(crate) grid_radius: u32,
+    pub(crate) provenance: ValidationProvenance,
+}
+
+impl ValidationContext {
+    #[must_use]
+    const fn candidate(grid_radius: u32, candidate: u8) -> Self {
         Self {
             grid_radius,
-            seed,
-            streams: SeedStreams::new(seed, 0),
+            provenance: ValidationProvenance::Candidate(candidate),
+        }
+    }
+
+    #[must_use]
+    const fn fallback(grid_radius: u32) -> Self {
+        Self {
+            grid_radius,
+            provenance: ValidationProvenance::Fallback,
         }
     }
 }
@@ -63,25 +89,41 @@ pub(crate) struct RecipePlan<M> {
     pub(crate) metadata: M,
 }
 
+/// An expected candidate rejection or an error that must stop generation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CandidateAttemptError {
+    Rejected(Vec<String>),
+    Fatal(V2GenerationError),
+}
+
+impl CandidateAttemptError {
+    #[must_use]
+    pub(crate) fn rejected(issue: impl Into<String>) -> Self {
+        Self::Rejected(vec![issue.into()])
+    }
+
+    #[must_use]
+    pub(crate) const fn fatal(error: V2GenerationError) -> Self {
+        Self::Fatal(error)
+    }
+}
+
 /// Result of one recipe-specific validation pass.
 #[derive(Debug, Clone)]
-pub(crate) struct RecipeValidation<M> {
-    pub(crate) issues: Vec<String>,
-    pub(crate) metrics: M,
+pub(crate) enum RecipeValidation<M> {
+    Valid(M),
+    Invalid(Vec<String>),
 }
 
 impl<M> RecipeValidation<M> {
     #[must_use]
     pub(crate) fn valid(metrics: M) -> Self {
-        Self {
-            issues: Vec::new(),
-            metrics,
-        }
+        Self::Valid(metrics)
     }
 
     #[must_use]
-    pub(crate) fn invalid(metrics: M, issues: Vec<String>) -> Self {
-        Self { issues, metrics }
+    pub(crate) fn invalid(issues: Vec<String>) -> Self {
+        Self::Invalid(issues)
     }
 }
 
@@ -107,11 +149,11 @@ pub(crate) trait V2Recipe {
         &self,
         context: CandidateContext,
         settings: &Self::Settings,
-    ) -> Result<RecipePlan<Self::Metadata>, V2GenerationError>;
+    ) -> Result<RecipePlan<Self::Metadata>, CandidateAttemptError>;
 
     fn validate(
         &self,
-        context: CandidateContext,
+        context: ValidationContext,
         settings: &Self::Settings,
         plan: &RecipePlan<Self::Metadata>,
     ) -> RecipeValidation<Self::Metrics>;
@@ -123,7 +165,7 @@ pub(crate) trait V2Recipe {
         plan: &mut RecipePlan<Self::Metadata>,
         round: u8,
         issues: &[String],
-    ) -> Result<RepairOutcome, V2GenerationError>;
+    ) -> Result<RepairOutcome, CandidateAttemptError>;
 
     fn score(
         &self,
@@ -300,29 +342,39 @@ where
         let context = CandidateContext::new(grid_radius, seed, candidate);
         let mut plan = match recipe.construct(context, settings) {
             Ok(plan) => plan,
-            Err(error) => {
+            Err(CandidateAttemptError::Rejected(issues)) => {
                 rejected_notes.push(format!(
-                    "candidate {candidate}: construction failed: {error}"
+                    "candidate {candidate}: construction rejected: {}",
+                    describe_issues(&issues)
                 ));
                 continue;
+            }
+            Err(CandidateAttemptError::Fatal(source)) => {
+                return Err(V2GenerationError::FatalCandidateConstruction {
+                    candidate,
+                    source: Box::new(source),
+                });
             }
         };
         let (validation, repair_actions) =
             validate_and_repair(recipe, settings, context, &mut plan)?;
-        if validation.issues.is_empty() {
-            let score = recipe.score(settings, &validation.metrics, candidate);
-            valid.push(ValidCandidate {
-                plan,
-                metrics: validation.metrics,
-                candidate,
-                repair_actions,
-                score,
-            });
-        } else {
-            rejected_notes.push(format!(
-                "candidate {candidate}: {}",
-                validation.issues.join("; ")
-            ));
+        match validation {
+            RecipeValidation::Valid(metrics) => {
+                let score = recipe.score(settings, &metrics, candidate);
+                valid.push(ValidCandidate {
+                    plan,
+                    metrics,
+                    candidate,
+                    repair_actions,
+                    score,
+                });
+            }
+            RecipeValidation::Invalid(issues) => {
+                rejected_notes.push(format!(
+                    "candidate {candidate}: {}",
+                    describe_issues(&issues)
+                ));
+            }
         }
     }
 
@@ -340,26 +392,29 @@ where
             valid_candidates,
             repair_actions: selected.repair_actions,
             used_fallback: false,
-            notes: Vec::new(),
+            notes: rejected_notes,
         });
     }
 
-    let fallback_context = FallbackContext::new(grid_radius, seed);
+    let fallback_context = FallbackContext::new(grid_radius);
     let fallback = recipe.canonical_fallback(fallback_context, settings)?;
     let validation = validate_plan(
         recipe,
         settings,
-        CandidateContext::new(grid_radius, seed, 0),
+        ValidationContext::fallback(grid_radius),
         &fallback,
-    );
-    if !validation.issues.is_empty() {
-        return Err(V2GenerationError::InvalidFallback(validation.issues));
-    }
+    )?;
+    let metrics = match validation {
+        RecipeValidation::Valid(metrics) => metrics,
+        RecipeValidation::Invalid(issues) => {
+            return Err(V2GenerationError::InvalidFallback(issues));
+        }
+    };
     rejected_notes.push("all random candidates failed; canonical fallback selected".to_owned());
 
     Ok(RecipeSelection {
         plan: fallback,
-        metrics: validation.metrics,
+        metrics,
         selected_candidate: None,
         candidates_evaluated: CANDIDATE_COUNT,
         valid_candidates: 0,
@@ -379,16 +434,32 @@ where
     R: V2Recipe,
 {
     let mut repair_actions = Vec::new();
-    let mut validation = validate_plan(recipe, settings, context, plan);
+    let validation_context = ValidationContext::candidate(context.grid_radius, context.candidate);
+    let mut validation = validate_plan(recipe, settings, validation_context, plan)?;
     for round in 0..MAX_REPAIR_ROUNDS {
-        if validation.issues.is_empty() {
+        let RecipeValidation::Invalid(issues) = &validation else {
             break;
+        };
+        match recipe.repair(context, settings, plan, round, issues.as_slice()) {
+            Ok(RepairOutcome::Changed(action)) => repair_actions.push(action),
+            Ok(RepairOutcome::NoChange) => break,
+            Err(CandidateAttemptError::Rejected(reasons)) => {
+                let mut issues = issues.clone();
+                issues.push(format!(
+                    "repair round {round} rejected candidate: {}",
+                    describe_issues(&reasons)
+                ));
+                return Ok((RecipeValidation::Invalid(issues), repair_actions));
+            }
+            Err(CandidateAttemptError::Fatal(source)) => {
+                return Err(V2GenerationError::FatalCandidateRepair {
+                    candidate: context.candidate,
+                    round,
+                    source: Box::new(source),
+                });
+            }
         }
-        match recipe.repair(context, settings, plan, round, validation.issues.as_slice())? {
-            RepairOutcome::Changed(action) => repair_actions.push(action),
-            RepairOutcome::NoChange => break,
-        }
-        validation = validate_plan(recipe, settings, context, plan);
+        validation = validate_plan(recipe, settings, validation_context, plan)?;
     }
     Ok((validation, repair_actions))
 }
@@ -396,28 +467,30 @@ where
 fn validate_plan<R>(
     recipe: &R,
     settings: &R::Settings,
-    context: CandidateContext,
+    context: ValidationContext,
     plan: &RecipePlan<R::Metadata>,
-) -> RecipeValidation<R::Metrics>
+) -> Result<RecipeValidation<R::Metrics>, V2GenerationError>
 where
     R: V2Recipe,
 {
-    let mut recipe_validation = recipe.validate(context, settings, plan);
-    if let Err(error) = plan.volume.validate() {
-        match error {
-            V2GenerationError::InvalidVolume(mut issues) => {
-                issues.append(&mut recipe_validation.issues);
-                recipe_validation.issues = issues;
-            }
-            other => recipe_validation.issues.insert(0, other.to_string()),
-        }
+    match plan.volume.validate() {
+        Ok(()) => Ok(recipe.validate(context, settings, plan)),
+        Err(V2GenerationError::InvalidVolume(issues)) => Ok(RecipeValidation::Invalid(issues)),
+        Err(other) => Err(other),
     }
-    recipe_validation
+}
+
+fn describe_issues(issues: &[String]) -> String {
+    if issues.is_empty() {
+        "rejected without a reason".to_owned()
+    } else {
+        issues.join("; ")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
     use std::collections::BTreeMap;
 
     use hex_core::{HexCoord, InteriorRegionId, MapViewHint, TilePos};
@@ -429,13 +502,20 @@ mod tests {
     };
     use crate::terrain::TerrainPalette;
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Default, Clone, Copy)]
     struct MockSettings {
         force_fallback: bool,
         invalid_fallback: bool,
+        invalid_fallback_volume: bool,
+        rejected_construction: Option<u8>,
+        rejected_repair: Option<(u8, u8)>,
+        fatal_construction: Option<u8>,
+        fatal_repair: Option<(u8, u8)>,
+        no_change: Option<u8>,
+        equal_scores: bool,
     }
 
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     struct MockMetadata {
         candidate: u8,
         repairs: u8,
@@ -446,6 +526,7 @@ mod tests {
     struct MockRecipe {
         constructions: Cell<u8>,
         repairs: Cell<u8>,
+        validations: RefCell<Vec<ValidationProvenance>>,
     }
 
     impl V2Recipe for MockRecipe {
@@ -457,10 +538,20 @@ mod tests {
         fn construct(
             &self,
             context: CandidateContext,
-            _settings: &Self::Settings,
-        ) -> Result<RecipePlan<Self::Metadata>, V2GenerationError> {
+            settings: &Self::Settings,
+        ) -> Result<RecipePlan<Self::Metadata>, CandidateAttemptError> {
             self.constructions
                 .set(self.constructions.get().saturating_add(1));
+            if settings.rejected_construction == Some(context.candidate) {
+                return Err(CandidateAttemptError::rejected(
+                    "candidate-specific construction constraint",
+                ));
+            }
+            if settings.fatal_construction == Some(context.candidate) {
+                return Err(CandidateAttemptError::fatal(
+                    V2GenerationError::MaterialContract("construction exploded".to_owned()),
+                ));
+            }
             Ok(mock_plan(
                 context.grid_radius,
                 MockMetadata {
@@ -473,12 +564,15 @@ mod tests {
 
         fn validate(
             &self,
-            _context: CandidateContext,
+            context: ValidationContext,
             settings: &Self::Settings,
             plan: &RecipePlan<Self::Metadata>,
         ) -> RecipeValidation<Self::Metrics> {
+            self.validations.borrow_mut().push(context.provenance);
             let required_repairs = if settings.force_fallback {
                 u8::MAX
+            } else if settings.equal_scores {
+                0
             } else if plan.metadata.candidate == 0 {
                 5
             } else if plan.metadata.candidate == 1 {
@@ -486,14 +580,11 @@ mod tests {
             } else {
                 0
             };
-            if plan.metadata.fallback && settings.invalid_fallback {
-                return RecipeValidation::invalid(0, vec!["fallback topology failed".to_owned()]);
+            if context.provenance == ValidationProvenance::Fallback && settings.invalid_fallback {
+                return RecipeValidation::invalid(vec!["fallback topology failed".to_owned()]);
             }
             if plan.metadata.repairs < required_repairs && !plan.metadata.fallback {
-                RecipeValidation::invalid(
-                    plan.metadata.candidate,
-                    vec!["candidate needs repair".to_owned()],
-                )
+                RecipeValidation::invalid(vec!["candidate needs repair".to_owned()])
             } else {
                 RecipeValidation::valid(plan.metadata.candidate)
             }
@@ -501,39 +592,60 @@ mod tests {
 
         fn repair(
             &self,
-            _context: CandidateContext,
-            _settings: &Self::Settings,
+            context: CandidateContext,
+            settings: &Self::Settings,
             plan: &mut RecipePlan<Self::Metadata>,
             round: u8,
             _issues: &[String],
-        ) -> Result<RepairOutcome, V2GenerationError> {
+        ) -> Result<RepairOutcome, CandidateAttemptError> {
             self.repairs.set(self.repairs.get().saturating_add(1));
+            if settings.rejected_repair == Some((context.candidate, round)) {
+                return Err(CandidateAttemptError::rejected(
+                    "candidate-specific repair constraint",
+                ));
+            }
+            if settings.fatal_repair == Some((context.candidate, round)) {
+                return Err(CandidateAttemptError::fatal(
+                    V2GenerationError::MaterialContract("repair exploded".to_owned()),
+                ));
+            }
+            if settings.no_change == Some(context.candidate) {
+                return Ok(RepairOutcome::NoChange);
+            }
             plan.metadata.repairs = plan.metadata.repairs.saturating_add(1);
             Ok(RepairOutcome::Changed(format!("repair round {round}")))
         }
 
         fn score(
             &self,
-            _settings: &Self::Settings,
+            settings: &Self::Settings,
             _metrics: &Self::Metrics,
             candidate: u8,
         ) -> Self::Score {
-            ((candidate > 1).into(), candidate)
+            if settings.equal_scores {
+                (0, 0)
+            } else {
+                ((candidate > 1).into(), candidate)
+            }
         }
 
         fn canonical_fallback(
             &self,
             context: FallbackContext,
-            _settings: &Self::Settings,
+            settings: &Self::Settings,
         ) -> Result<RecipePlan<Self::Metadata>, V2GenerationError> {
-            Ok(mock_plan(
+            let mut plan = mock_plan(
                 context.grid_radius,
                 MockMetadata {
                     candidate: 0,
                     repairs: 0,
                     fallback: true,
                 },
-            ))
+            );
+            if settings.invalid_fallback_volume {
+                plan.volume.columns.remove(&HexCoord::ORIGIN);
+            }
+            Ok(plan)
         }
     }
 
@@ -597,16 +709,8 @@ mod tests {
     #[test]
     fn evaluates_exactly_eight_candidates_and_caps_each_repair_sequence() {
         let recipe = MockRecipe::default();
-        let selection = run_recipe(
-            &recipe,
-            &MockSettings {
-                force_fallback: false,
-                invalid_fallback: false,
-            },
-            12,
-            77,
-        )
-        .expect("at least one deterministic candidate should pass");
+        let selection = run_recipe(&recipe, &MockSettings::default(), 12, 77)
+            .expect("at least one deterministic candidate should pass");
 
         assert_eq!(recipe.constructions.get(), CANDIDATE_COUNT);
         assert_eq!(selection.candidates_evaluated, CANDIDATE_COUNT);
@@ -619,13 +723,147 @@ mod tests {
     }
 
     #[test]
+    fn fatal_construction_stops_generation_with_candidate_context() {
+        let recipe = MockRecipe::default();
+        let error = run_recipe(
+            &recipe,
+            &MockSettings {
+                fatal_construction: Some(3),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect_err("a fatal construction error must stop the complete runner");
+
+        assert_eq!(
+            error,
+            V2GenerationError::FatalCandidateConstruction {
+                candidate: 3,
+                source: Box::new(V2GenerationError::MaterialContract(
+                    "construction exploded".to_owned()
+                )),
+            }
+        );
+        assert_eq!(
+            recipe.constructions.get(),
+            4,
+            "later candidates must not hide a fatal construction error"
+        );
+    }
+
+    #[test]
+    fn fatal_repair_stops_generation_with_candidate_and_round_context() {
+        let recipe = MockRecipe::default();
+        let error = run_recipe(
+            &recipe,
+            &MockSettings {
+                fatal_repair: Some((0, 2)),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect_err("a fatal repair error must stop the complete runner");
+
+        assert_eq!(
+            error,
+            V2GenerationError::FatalCandidateRepair {
+                candidate: 0,
+                round: 2,
+                source: Box::new(V2GenerationError::MaterialContract(
+                    "repair exploded".to_owned()
+                )),
+            }
+        );
+        assert_eq!(
+            recipe.constructions.get(),
+            1,
+            "later candidates must not hide a fatal repair error"
+        );
+    }
+
+    #[test]
+    fn explicit_candidate_rejections_are_diagnostic_and_do_not_abort() {
+        let selection = run_recipe(
+            &MockRecipe::default(),
+            &MockSettings {
+                rejected_construction: Some(0),
+                rejected_repair: Some((1, 0)),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect("explicitly rejected candidates should not abort later attempts");
+
+        assert_eq!(selection.selected_candidate, Some(2));
+        assert!(selection.notes.iter().any(|note| {
+            note.contains("candidate 0")
+                && note.contains("construction rejected")
+                && note.contains("candidate-specific construction constraint")
+        }));
+        assert!(selection.notes.iter().any(|note| {
+            note.contains("candidate 1")
+                && note.contains("repair round 0 rejected candidate")
+                && note.contains("candidate-specific repair constraint")
+        }));
+    }
+
+    #[test]
+    fn no_change_stops_repairing_only_the_current_candidate() {
+        let recipe = MockRecipe::default();
+        let selection = run_recipe(
+            &recipe,
+            &MockSettings {
+                no_change: Some(1),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect("later candidates should remain available after NoChange");
+
+        assert_eq!(selection.selected_candidate, Some(2));
+        assert_eq!(
+            recipe.repairs.get(),
+            MAX_REPAIR_ROUNDS + 1,
+            "candidate 1 should stop after its first NoChange"
+        );
+        assert!(selection
+            .notes
+            .iter()
+            .any(|note| note.contains("candidate 1: candidate needs repair")));
+    }
+
+    #[test]
+    fn equal_scores_choose_the_lowest_candidate_deterministically() {
+        for seed in [0, 1, u64::MAX] {
+            let selection = run_recipe(
+                &MockRecipe::default(),
+                &MockSettings {
+                    equal_scores: true,
+                    ..MockSettings::default()
+                },
+                12,
+                seed,
+            )
+            .expect("all equal-score candidates should be valid");
+
+            assert_eq!(selection.valid_candidates, CANDIDATE_COUNT);
+            assert_eq!(selection.selected_candidate, Some(0));
+            assert_eq!(selection.plan.metadata.candidate, 0);
+        }
+    }
+
+    #[test]
     fn all_failed_candidates_use_a_separately_validated_fallback() {
         let recipe = MockRecipe::default();
         let selection = run_recipe(
             &recipe,
             &MockSettings {
                 force_fallback: true,
-                invalid_fallback: false,
+                ..MockSettings::default()
             },
             12,
             88,
@@ -640,6 +878,11 @@ mod tests {
             recipe.repairs.get(),
             CANDIDATE_COUNT.saturating_mul(MAX_REPAIR_ROUNDS)
         );
+        assert_eq!(
+            recipe.validations.borrow().last(),
+            Some(&ValidationProvenance::Fallback),
+            "fallback validation must not masquerade as candidate 0"
+        );
     }
 
     #[test]
@@ -649,6 +892,7 @@ mod tests {
             &MockSettings {
                 force_fallback: true,
                 invalid_fallback: true,
+                ..MockSettings::default()
             },
             12,
             99,
@@ -662,17 +906,57 @@ mod tests {
     }
 
     #[test]
-    fn materialization_publishes_exact_plan_outputs_and_preserves_v1_identity() {
-        let selection = run_recipe(
-            &MockRecipe::default(),
+    fn common_volume_failure_rejects_fallback_before_recipe_validation() {
+        let recipe = MockRecipe::default();
+        let error = run_recipe(
+            &recipe,
             &MockSettings {
-                force_fallback: false,
-                invalid_fallback: false,
+                force_fallback: true,
+                invalid_fallback_volume: true,
+                ..MockSettings::default()
             },
             12,
-            77,
+            99,
         )
-        .expect("the mock runner should select a valid plan");
+        .expect_err("a malformed canonical fallback must never publish");
+
+        assert!(matches!(&error, V2GenerationError::InvalidFallback(_)));
+        assert!(
+            error.to_string().contains("volume footprint"),
+            "the common volume issue should be preserved: {error}"
+        );
+        assert!(
+            !recipe
+                .validations
+                .borrow()
+                .contains(&ValidationProvenance::Fallback),
+            "recipe validation must not derive metrics from a common-invalid volume"
+        );
+    }
+
+    #[test]
+    fn canonical_fallback_output_does_not_depend_on_the_requested_seed() {
+        let settings = MockSettings {
+            force_fallback: true,
+            ..MockSettings::default()
+        };
+        let first = run_recipe(&MockRecipe::default(), &settings, 12, 11)
+            .expect("the first fallback should pass");
+        let second = run_recipe(&MockRecipe::default(), &settings, 12, 98_765)
+            .expect("the second fallback should pass");
+        assert_eq!(first.plan.metadata, second.plan.metadata);
+
+        let first = materialize_selection(first, &palette(), &test_is_solid)
+            .expect("the first fallback should materialize");
+        let second = materialize_selection(second, &palette(), &test_is_solid)
+            .expect("the second fallback should materialize");
+        assert_eq!(first.map_fingerprint, second.map_fingerprint);
+    }
+
+    #[test]
+    fn materialization_publishes_exact_plan_outputs_and_preserves_v1_identity() {
+        let selection = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+            .expect("the mock runner should select a valid plan");
         let expected_surface = TilePos::new(HexCoord::ORIGIN, 4);
         let materialized = materialize_selection(selection, &palette(), &test_is_solid)
             .expect("the selected plan should materialize");
@@ -705,16 +989,8 @@ mod tests {
 
     #[test]
     fn materialized_fingerprint_orders_and_includes_exact_interior_semantics() {
-        let selection = run_recipe(
-            &MockRecipe::default(),
-            &MockSettings {
-                force_fallback: false,
-                invalid_fallback: false,
-            },
-            12,
-            77,
-        )
-        .expect("the mock runner should select a valid plan");
+        let selection = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+            .expect("the mock runner should select a valid plan");
         let materialized = materialize_selection(selection, &palette(), &test_is_solid)
             .expect("the selected plan should materialize");
         let first_floor = TilePos::new(HexCoord::ORIGIN, 4);

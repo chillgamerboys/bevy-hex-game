@@ -52,6 +52,14 @@ pub(crate) enum V2GenerationError {
         )
     )]
     MaterialContract(String),
+    /// Candidate construction encountered an error that cannot be treated as rejection.
+    FatalCandidateConstruction { candidate: u8, source: Box<Self> },
+    /// A bounded repair encountered an error that must stop the complete generation run.
+    FatalCandidateRepair {
+        candidate: u8,
+        round: u8,
+        source: Box<Self>,
+    },
     /// A canonical fallback failed the same hard contracts as ordinary candidates.
     InvalidFallback(Vec<String>),
 }
@@ -70,6 +78,23 @@ impl fmt::Display for V2GenerationError {
                 )
             }
             Self::MaterialContract(reason) => formatter.write_str(reason),
+            Self::FatalCandidateConstruction { candidate, source } => {
+                write!(
+                    formatter,
+                    "procedural V2 candidate {candidate} construction failed fatally: {source}"
+                )
+            }
+            Self::FatalCandidateRepair {
+                candidate,
+                round,
+                source,
+            } => {
+                write!(
+                    formatter,
+                    "procedural V2 candidate {candidate} repair round {round} failed fatally: \
+                     {source}"
+                )
+            }
             Self::InvalidFallback(issues) => {
                 write!(
                     formatter,
@@ -81,7 +106,18 @@ impl fmt::Display for V2GenerationError {
     }
 }
 
-impl std::error::Error for V2GenerationError {}
+impl std::error::Error for V2GenerationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::FatalCandidateConstruction { source, .. }
+            | Self::FatalCandidateRepair { source, .. } => Some(source),
+            Self::RecipeUnavailable(_)
+            | Self::InvalidVolume(_)
+            | Self::MaterialContract(_)
+            | Self::InvalidFallback(_) => None,
+        }
+    }
+}
 
 /// Controlled dispatch point used until each sequential recipe PR lands.
 ///
