@@ -55,6 +55,12 @@ pub struct GenerationReport {
     pub used_fallback: bool,
     /// Stable hash of settings that affect generated output.
     pub settings_fingerprint: u64,
+    /// Stable hash of the selected semantic plan before voxel materialization.
+    ///
+    /// V1 and V2 predate this diagnostic and publish `None`. V3 always publishes a
+    /// separate plan identity so semantic drift cannot hide behind an unchanged
+    /// rendered voxel map.
+    pub semantic_plan_fingerprint: Option<u64>,
     /// Stable hash of the sorted voxel map and its special-movement memberships.
     pub map_fingerprint: u64,
     /// Tactical measurements of the selected result.
@@ -539,6 +545,7 @@ fn build_with_candidate_selection_details(
         repair_actions,
         used_fallback,
         settings_fingerprint: settings_fingerprint(grid_radius, settings),
+        semantic_plan_fingerprint: None,
         map_fingerprint: map_fingerprint(&map, &special_regions),
         metrics,
         elapsed_micros,

@@ -198,6 +198,7 @@ where
         repair_actions,
         used_fallback,
         settings_fingerprint: settings_fingerprint(grid_radius, settings),
+        semantic_plan_fingerprint: None,
         map_fingerprint,
         metrics: metrics.tactical(),
         elapsed_micros,
