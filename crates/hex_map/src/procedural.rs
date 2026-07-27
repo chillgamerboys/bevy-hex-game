@@ -3021,7 +3021,12 @@ fn settings_fingerprint(grid_radius: u32, settings: &ProceduralSettings) -> u64 
     xxh3_64(&bytes)
 }
 
-fn map_fingerprint(map: &VoxelMap, special_regions: &SpecialMovementRegions) -> u64 {
+/// Frozen V1 map identity, shared with the V2 Hills parity boundary.
+///
+/// V2 maps without interiors must keep this byte-for-byte identity so equivalent
+/// Hills seeds can prove map parity. Interior-aware V2 recipes compose their exact
+/// floor and roof semantics on top of this result without changing this function.
+pub(crate) fn map_fingerprint(map: &VoxelMap, special_regions: &SpecialMovementRegions) -> u64 {
     let mut bytes = Vec::new();
     let mut columns: Vec<(HexCoord, &Column)> = map.columns().collect();
     columns.sort_by_key(|(coord, _)| *coord);

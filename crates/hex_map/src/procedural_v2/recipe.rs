@@ -2,9 +2,16 @@
 
 use std::fmt::Debug;
 
+use hex_core::{
+    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
+};
+use xxhash_rust::xxh3::xxh3_64;
+
 use super::seed::SeedStreams;
-use super::volume::TerrainVolumePlan;
+use super::volume::{voxelize, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
 use super::V2GenerationError;
+use crate::terrain::TerrainPalette;
+use crate::voxel::VoxelMap;
 
 pub(crate) const CANDIDATE_COUNT: u8 = 8;
 pub(crate) const MAX_REPAIR_ROUNDS: u8 = 4;
@@ -143,6 +150,127 @@ pub(crate) struct RecipeSelection<M, V> {
     pub(crate) repair_actions: Vec<String>,
     pub(crate) used_fallback: bool,
     pub(crate) notes: Vec<String>,
+}
+
+/// Fully materialized result of one selected recipe candidate.
+///
+/// Selection remains semantic until this boundary. Exact resources are derived from
+/// the final validated plan so repairs cannot leave stale anchors, region memberships,
+/// interior metadata, or framing behind.
+#[derive(Debug)]
+pub(crate) struct MaterializedSelection<M, V> {
+    pub(crate) map: VoxelMap,
+    pub(crate) anchors: MapAnchors,
+    pub(crate) special_regions: SpecialMovementRegions,
+    pub(crate) interiors: InteriorRegions,
+    pub(crate) view_hint: MapViewHint,
+    pub(crate) metadata: M,
+    pub(crate) metrics: V,
+    pub(crate) selected_candidate: Option<u8>,
+    pub(crate) candidates_evaluated: u8,
+    pub(crate) valid_candidates: u8,
+    pub(crate) repair_actions: Vec<String>,
+    pub(crate) used_fallback: bool,
+    pub(crate) notes: Vec<String>,
+    pub(crate) map_fingerprint: u64,
+}
+
+/// Resolves one selected semantic plan into voxels and exact generated resources.
+pub(crate) fn materialize_selection<M, V>(
+    selection: RecipeSelection<M, V>,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
+    let RecipeSelection {
+        plan,
+        metrics,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_actions,
+        used_fallback,
+        notes,
+    } = selection;
+    let RecipePlan { volume, metadata } = plan;
+
+    let anchors = volume
+        .anchors
+        .iter()
+        .map(|(name, position)| (MapAnchorId::from(name.clone()), *position))
+        .collect();
+    let special_regions = volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, surface)| match surface.access {
+            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
+            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
+        })
+        .collect();
+    let view_hint = volume.view_hint;
+    let VoxelizedTerrain { map, interiors } = voxelize(&volume, palette, is_solid)?;
+    let map_fingerprint = materialized_map_fingerprint(&map, &special_regions, &interiors);
+
+    Ok(MaterializedSelection {
+        map,
+        anchors,
+        special_regions,
+        interiors,
+        view_hint,
+        metadata,
+        metrics,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_actions,
+        used_fallback,
+        notes,
+        map_fingerprint,
+    })
+}
+
+/// Extends the frozen V1 identity only when a map has exact interior semantics.
+fn materialized_map_fingerprint(
+    map: &VoxelMap,
+    special_regions: &SpecialMovementRegions,
+    interiors: &InteriorRegions,
+) -> u64 {
+    let v1_fingerprint = crate::procedural::map_fingerprint(map, special_regions);
+    if interiors.is_empty() {
+        return v1_fingerprint;
+    }
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"procedural-v2-interiors-v1");
+    bytes.extend_from_slice(&v1_fingerprint.to_le_bytes());
+
+    let mut floors: Vec<_> = interiors.surfaces().collect();
+    floors.sort_unstable();
+    bytes.extend_from_slice(b"floors");
+    bytes.extend_from_slice(
+        &u64::try_from(floors.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
+    for (position, region) in floors {
+        append_interior_membership(&mut bytes, position, region.0);
+    }
+
+    let mut roofs: Vec<_> = interiors.roof_voxels().collect();
+    roofs.sort_unstable();
+    bytes.extend_from_slice(b"roofs");
+    bytes.extend_from_slice(&u64::try_from(roofs.len()).unwrap_or(u64::MAX).to_le_bytes());
+    for (position, region) in roofs {
+        append_interior_membership(&mut bytes, position, region.0);
+    }
+
+    xxh3_64(&bytes)
+}
+
+fn append_interior_membership(bytes: &mut Vec<u8>, position: hex_core::TilePos, region: u32) {
+    bytes.extend_from_slice(&position.coord.x().to_le_bytes());
+    bytes.extend_from_slice(&position.coord.y().to_le_bytes());
+    bytes.extend_from_slice(&position.level.to_le_bytes());
+    bytes.extend_from_slice(&region.to_le_bytes());
 }
 
 #[derive(Debug)]
@@ -292,13 +420,14 @@ mod tests {
     use std::cell::Cell;
     use std::collections::BTreeMap;
 
-    use hex_core::{HexCoord, MapViewHint, TilePos};
+    use hex_core::{HexCoord, InteriorRegionId, MapViewHint, TilePos};
 
     use super::*;
     use crate::procedural_v2::volume::{
         LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
         VolumeElement,
     };
+    use crate::terrain::TerrainPalette;
 
     #[derive(Debug, Clone, Copy)]
     struct MockSettings {
@@ -445,6 +574,26 @@ mod tests {
         }
     }
 
+    fn palette() -> TerrainPalette {
+        TerrainPalette {
+            bedrock: SubstanceId(1),
+            stone: SubstanceId(2),
+            dirt: SubstanceId(3),
+            grass: SubstanceId(4),
+            gravel: SubstanceId(5),
+            water: SubstanceId(6),
+            metal: SubstanceId(7),
+            snow: SubstanceId(8),
+            ice: SubstanceId(9),
+            basalt: SubstanceId(10),
+            lava: SubstanceId(11),
+        }
+    }
+
+    fn test_is_solid(substance: SubstanceId) -> bool {
+        matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10)
+    }
+
     #[test]
     fn evaluates_exactly_eight_candidates_and_caps_each_repair_sequence() {
         let recipe = MockRecipe::default();
@@ -509,6 +658,109 @@ mod tests {
         assert!(
             error.to_string().contains("fallback topology failed"),
             "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn materialization_publishes_exact_plan_outputs_and_preserves_v1_identity() {
+        let selection = run_recipe(
+            &MockRecipe::default(),
+            &MockSettings {
+                force_fallback: false,
+                invalid_fallback: false,
+            },
+            12,
+            77,
+        )
+        .expect("the mock runner should select a valid plan");
+        let expected_surface = TilePos::new(HexCoord::ORIGIN, 4);
+        let materialized = materialize_selection(selection, &palette(), &test_is_solid)
+            .expect("the selected plan should materialize");
+
+        assert_eq!(
+            materialized.anchors.get(&MapAnchorId::from("party_start")),
+            Some(expected_surface)
+        );
+        assert_eq!(
+            materialized.map.get(expected_surface),
+            SubstanceId(2),
+            "the semantic stone role should resolve through the supplied palette"
+        );
+        assert!(materialized.special_regions.is_empty());
+        assert!(materialized.interiors.is_empty());
+        assert_eq!(
+            materialized.view_hint,
+            MapViewHint::new((0.0, 10.0, 10.0), (0.0, 0.0, 0.0))
+        );
+        assert_eq!(materialized.metadata.candidate, 1);
+        assert_eq!(materialized.metrics, 1);
+        assert_eq!(materialized.selected_candidate, Some(1));
+        assert_eq!(materialized.candidates_evaluated, CANDIDATE_COUNT);
+        assert_eq!(
+            materialized.map_fingerprint,
+            crate::procedural::map_fingerprint(&materialized.map, &materialized.special_regions),
+            "an interior-free V2 map must retain the exact V1 map identity"
+        );
+    }
+
+    #[test]
+    fn materialized_fingerprint_orders_and_includes_exact_interior_semantics() {
+        let selection = run_recipe(
+            &MockRecipe::default(),
+            &MockSettings {
+                force_fallback: false,
+                invalid_fallback: false,
+            },
+            12,
+            77,
+        )
+        .expect("the mock runner should select a valid plan");
+        let materialized = materialize_selection(selection, &palette(), &test_is_solid)
+            .expect("the selected plan should materialize");
+        let first_floor = TilePos::new(HexCoord::ORIGIN, 4);
+        let [neighbor, ..] = HexCoord::ORIGIN.neighbors();
+        let second_floor = TilePos::new(neighbor, 5);
+        let first_roof = TilePos::new(HexCoord::ORIGIN, 8);
+        let second_roof = TilePos::new(neighbor, 9);
+        let low_region = InteriorRegionId(2);
+        let high_region = InteriorRegionId(7);
+
+        let mut forward = InteriorRegions::new();
+        forward.insert_surface(first_floor, low_region);
+        forward.insert_surface(second_floor, high_region);
+        forward.insert_roof_voxel(first_roof, low_region);
+        forward.insert_roof_voxel(second_roof, high_region);
+
+        let mut reverse = InteriorRegions::new();
+        reverse.insert_roof_voxel(second_roof, high_region);
+        reverse.insert_roof_voxel(first_roof, low_region);
+        reverse.insert_surface(second_floor, high_region);
+        reverse.insert_surface(first_floor, low_region);
+
+        let forward_fingerprint = materialized_map_fingerprint(
+            &materialized.map,
+            &materialized.special_regions,
+            &forward,
+        );
+        assert_eq!(
+            forward_fingerprint,
+            materialized_map_fingerprint(
+                &materialized.map,
+                &materialized.special_regions,
+                &reverse
+            ),
+            "hash-map insertion order must not affect map identity"
+        );
+
+        reverse.insert_roof_voxel(second_roof, low_region);
+        assert_ne!(
+            forward_fingerprint,
+            materialized_map_fingerprint(
+                &materialized.map,
+                &materialized.special_regions,
+                &reverse
+            ),
+            "changing exact roof ownership must change map identity"
         );
     }
 }
