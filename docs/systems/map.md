@@ -162,11 +162,12 @@ Mountains supports the original frozen ridge for compatibility and broader expan
 massifs. The selected scenario raises 60% of the map above the base, uses a
 meandering edge-to-edge spine with four long branches, and distributes seven
 non-collinear peaks across varied summit levels. The ordinary network keeps a
-two-wide high pass and a separated two-wide low bypass; the rest of the range
-deliberately retains cliff edges. It has no hazard fill or crossing material. Only
-summit components that are actually disconnected under the shared walker predicate
-are published as special-movement terrain, while the generated view looks across the
-range so both routes remain legible.
+two-wide high pass and a separated two-wide low bypass. A substantial three-level
+foothill apron on the player side is walker-connected beyond those routes; the rest
+of the range deliberately retains cliff edges. It has no hazard fill or crossing
+material. Only summit components that are actually disconnected under the shared
+walker predicate are published as special-movement terrain, while the generated view
+looks across the range so both routes remain legible.
 
 Caves keeps a playable rocky surface above one rooted underground network. A two-wide
 open entrance descends one level per row to six through twelve chambers joined by
@@ -176,8 +177,10 @@ and five levels of surface relief. The original six-through-eight-room path rema
 frozen for compatibility. Every corridor retains at least three clear levels, every
 chamber at least four, and cutaway roofs remain at least three solid levels thick.
 The party anchor names the surface entrance while the hostile anchor names the
-deepest main chamber; both are validated on the same exact walker graph as live
-movement.
+deepest main chamber. The hostile's exact floor maximizes its minimum horizontal
+distance from the ramp and entry connector; the shipped scenario checks that floor
+against the live combat policy so entry cannot be interrupted through an opaque roof.
+Both anchors are validated on the same exact walker graph as live movement.
 
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or

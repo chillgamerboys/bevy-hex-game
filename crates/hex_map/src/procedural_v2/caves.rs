@@ -449,13 +449,15 @@ fn construct_plan(
         .and_then(|row| row.first())
         .copied()
         .ok_or_else(|| CandidateAttemptError::rejected("cave entrance has no landing"))?;
-    let hostile_position = TilePos::new(
-        deepest_chamber,
-        floor_levels
-            .get(&deepest_chamber)
-            .copied()
-            .unwrap_or(settings.cave_floor_level),
-    );
+    let entry_approach = cave_entry_approach(&entrance_ramp, &corridor_routes);
+    let hostile_position = safest_deep_chamber_anchor(
+        chamber_footprints
+            .get(deepest_index)
+            .ok_or_else(|| CandidateAttemptError::rejected("deep cave footprint is missing"))?,
+        &floor_levels,
+        &entry_approach,
+    )
+    .ok_or_else(|| CandidateAttemptError::rejected("deep cave chamber has no floor"))?;
     let conflict_coord = chamber_centres.first().copied().unwrap_or(HexCoord::ORIGIN);
     let conflict_position = TilePos::new(
         conflict_coord,
@@ -1060,6 +1062,50 @@ fn coordinate_distances(start: HexCoord, allowed: &BTreeSet<HexCoord>) -> BTreeM
         }
     }
     distances
+}
+
+fn cave_entry_approach(entrance: &CaveRoute, corridor_routes: &[CaveRoute]) -> Vec<TilePos> {
+    entrance
+        .rows
+        .iter()
+        .chain(
+            corridor_routes
+                .first()
+                .into_iter()
+                .flat_map(|route| route.rows.iter()),
+        )
+        .flatten()
+        .copied()
+        .collect()
+}
+
+fn safest_deep_chamber_anchor(
+    footprint: &BTreeSet<HexCoord>,
+    floor_levels: &BTreeMap<HexCoord, Level>,
+    entry_approach: &[TilePos],
+) -> Option<TilePos> {
+    // Combat does not have wall-aware line of sight yet. Maximise geometric
+    // separation from the complete entrance route without coupling deterministic map
+    // construction to mutable combat settings; the shipped scenario regression
+    // checks the selected floor against the actual loaded policy.
+    footprint
+        .iter()
+        .filter_map(|coord| {
+            floor_levels
+                .get(coord)
+                .copied()
+                .map(|level| TilePos::new(*coord, level))
+        })
+        .max_by_key(|position| {
+            (
+                entry_approach
+                    .iter()
+                    .map(|approach| approach.coord.distance(position.coord))
+                    .min()
+                    .unwrap_or(u32::MAX),
+                position.coord,
+            )
+        })
 }
 
 fn surface_heights(
@@ -1769,14 +1815,15 @@ fn validate_plan(
         .first()
         .and_then(|row| row.first())
         .copied();
-    let expected_hostile = Some(TilePos::new(
-        metadata.deepest_chamber,
-        metadata
-            .floor_levels
-            .get(&metadata.deepest_chamber)
-            .copied()
-            .unwrap_or(settings.cave_floor_level),
-    ));
+    let entry_approach = cave_entry_approach(&metadata.entrance_ramp, &metadata.corridor_routes);
+    let expected_hostile = metadata
+        .chamber_centres
+        .iter()
+        .position(|centre| *centre == metadata.deepest_chamber)
+        .and_then(|index| metadata.chamber_footprints.get(index))
+        .and_then(|footprint| {
+            safest_deep_chamber_anchor(footprint, &metadata.floor_levels, &entry_approach)
+        });
     if party != expected_party || plan.volume.anchors.get(CAVE_ENTRANCE).copied() != expected_party
     {
         issues.push("cave party and entrance anchors are not ramp-derived".to_owned());
@@ -1784,7 +1831,10 @@ fn validate_plan(
     if hostile != expected_hostile
         || plan.volume.anchors.get(DEEP_CHAMBER).copied() != expected_hostile
     {
-        issues.push("cave hostile and deep-chamber anchors are not depth-derived".to_owned());
+        issues.push(
+            "cave hostile and deep-chamber anchors are not the safest floor in the deepest chamber"
+                .to_owned(),
+        );
     }
     if !metadata.chamber_centres.contains(&metadata.deepest_chamber) {
         issues.push("deep cave anchor is not a chamber centre".to_owned());
@@ -2437,6 +2487,27 @@ mod tests {
         assert_eq!(generated.metrics.chamber_count, 12);
         assert_eq!(generated.metrics.extra_links, 2);
         assert!(!generated.used_fallback);
+        assert_eq!(
+            generated.anchors.get(&HOSTILE_START.into()),
+            Some(TilePos::new(HexCoord::from_axial(4, 7), 8))
+        );
+        let entry_approach = cave_entry_approach(
+            &generated.metadata.entrance_ramp,
+            &generated.metadata.corridor_routes,
+        );
+        let hostile = generated
+            .anchors
+            .get(&HOSTILE_START.into())
+            .expect("the shipped cave should retain its hostile anchor");
+        let old_centre = TilePos::new(generated.metadata.deepest_chamber, 8);
+        let minimum_entry_distance = |position: TilePos| {
+            entry_approach
+                .iter()
+                .map(|approach| approach.coord.distance(position.coord))
+                .min()
+                .unwrap_or_default()
+        };
+        assert!(minimum_entry_distance(hostile) > minimum_entry_distance(old_centre));
     }
 
     #[test]
@@ -2768,6 +2839,28 @@ mod tests {
             .canonical_fallback(FallbackContext { grid_radius: 12 }, &settings)
             .expect("the expanded cave fallback should construct");
         assert!(validation_issues(&settings, &valid).is_empty());
+
+        let mut unsafe_hostile = valid.clone();
+        let unsafe_position = TilePos::new(
+            unsafe_hostile.metadata.deepest_chamber,
+            unsafe_hostile
+                .metadata
+                .floor_levels
+                .get(&unsafe_hostile.metadata.deepest_chamber)
+                .copied()
+                .expect("the deepest chamber centre should have an exact floor"),
+        );
+        unsafe_hostile
+            .volume
+            .anchors
+            .insert(HOSTILE_START.to_owned(), unsafe_position);
+        unsafe_hostile
+            .volume
+            .anchors
+            .insert(DEEP_CHAMBER.to_owned(), unsafe_position);
+        assert!(validation_issues(&settings, &unsafe_hostile)
+            .iter()
+            .any(|issue| issue.contains("safest floor")));
 
         let mut reordered_routes = valid.clone();
         reordered_routes.metadata.corridor_routes.swap(1, 2);

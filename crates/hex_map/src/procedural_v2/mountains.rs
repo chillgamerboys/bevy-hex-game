@@ -37,6 +37,10 @@ const EXPANDED_ROUTE_HALF_LENGTH: i32 = 5;
 const EXPANDED_RIDGE_RISE: Level = 7;
 const EXPANDED_BRANCH_RISE: Level = 5;
 const EXPANDED_MIN_PEAK_SEPARATION: u32 = 3;
+const FOOTHILL_TERRACE_DEPTH: u32 = 3;
+const MIN_ACCESSIBLE_FOOTHILL_PERCENT: u32 = 18;
+const MIN_ACCESSIBLE_FOOTHILL_PATCH: usize = 24;
+const MIN_FOOTHILL_PLAIN_LANDINGS: usize = 2;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
@@ -691,6 +695,15 @@ fn construct_expanded_plan(
         &route_coords,
         context,
     )?;
+    terrace_mountain_foothills(
+        &mut heights,
+        &mountain_cells,
+        settings.base_level,
+        orientation,
+        &ridge_cells,
+        &peak_centres,
+        &route_coords,
+    );
     if coordinate_components(&mountain_cells).len() != 1 {
         return Err(CandidateAttemptError::rejected(
             "expanded mountain top-up did not preserve one connected massif",
@@ -1232,6 +1245,58 @@ fn mountain_coverage_priority(coord: HexCoord, context: CandidateContext) -> u64
         .sample_coord(coord, 0)
 }
 
+fn terrace_mountain_foothills(
+    heights: &mut BTreeMap<HexCoord, Level>,
+    mountain_cells: &BTreeSet<HexCoord>,
+    base_level: Level,
+    orientation: u8,
+    ridge_cells: &BTreeSet<HexCoord>,
+    peak_centres: &[HexCoord],
+    route_coords: &BTreeSet<HexCoord>,
+) {
+    let protected: BTreeSet<_> = ridge_cells
+        .union(route_coords)
+        .copied()
+        .chain(peak_centres.iter().copied())
+        .collect();
+    let mut distances = BTreeMap::new();
+    let mut frontier = VecDeque::new();
+    for coord in mountain_cells {
+        let borders_plain = coord
+            .neighbors()
+            .into_iter()
+            .any(|neighbor| heights.contains_key(&neighbor) && !mountain_cells.contains(&neighbor));
+        if borders_plain {
+            distances.insert(*coord, 1_u32);
+            frontier.push_back(*coord);
+        }
+    }
+
+    while let Some(coord) = frontier.pop_front() {
+        let distance = distances.get(&coord).copied().unwrap_or(u32::MAX);
+        if distance >= FOOTHILL_TERRACE_DEPTH {
+            continue;
+        }
+        for neighbor in coord.neighbors() {
+            if mountain_cells.contains(&neighbor) && !distances.contains_key(&neighbor) {
+                distances.insert(neighbor, distance.saturating_add(1));
+                frontier.push_back(neighbor);
+            }
+        }
+    }
+
+    for (coord, distance) in distances {
+        if protected.contains(&coord) || to_local(coord, orientation).y() > 0 {
+            continue;
+        }
+        let terrace_rise = Level::try_from(distance).unwrap_or(Level::MAX);
+        let terrace_height = base_level.saturating_add(terrace_rise);
+        if let Some(height) = heights.get_mut(&coord) {
+            *height = (*height).min(terrace_height);
+        }
+    }
+}
+
 fn retain_elevated_core(
     heights: &mut BTreeMap<HexCoord, Level>,
     mountain_cells: &mut BTreeSet<HexCoord>,
@@ -1495,7 +1560,14 @@ fn surface_position(
 }
 
 fn walker_components(heights: &BTreeMap<HexCoord, Level>) -> Vec<BTreeSet<HexCoord>> {
-    let mut remaining: BTreeSet<_> = heights.keys().copied().collect();
+    walker_components_within(&heights.keys().copied().collect(), heights)
+}
+
+fn walker_components_within(
+    cells: &BTreeSet<HexCoord>,
+    heights: &BTreeMap<HexCoord, Level>,
+) -> Vec<BTreeSet<HexCoord>> {
+    let mut remaining = cells.clone();
     let mut components = Vec::new();
     while let Some(start) = remaining.pop_first() {
         let mut component = BTreeSet::from([start]);
@@ -1596,6 +1668,44 @@ fn mountain_column(surface: Level, top_material: SolidMaterialRole) -> VolumeCol
         cutaway_for: None,
     }));
     VolumeColumn { elements }
+}
+
+fn accessible_foothills(metadata: &MountainsMetadata) -> BTreeSet<HexCoord> {
+    let route_coords: BTreeSet<_> = metadata
+        .high_pass
+        .coords()
+        .union(&metadata.low_bypass.coords())
+        .copied()
+        .collect();
+    metadata
+        .mountain_cells
+        .intersection(&metadata.ordinary)
+        .copied()
+        .filter(|coord| {
+            !route_coords.contains(coord) && to_local(*coord, metadata.orientation).y() <= 0
+        })
+        .collect()
+}
+
+fn foothill_plain_landings(foothills: &BTreeSet<HexCoord>, metadata: &MountainsMetadata) -> usize {
+    let route_coords: BTreeSet<_> = metadata
+        .high_pass
+        .coords()
+        .union(&metadata.low_bypass.coords())
+        .copied()
+        .collect();
+    foothills
+        .iter()
+        .filter(|coord| {
+            coord.neighbors().into_iter().any(|neighbor| {
+                metadata.ordinary.contains(&neighbor)
+                    && !metadata.mountain_cells.contains(&neighbor)
+                    && !route_coords.contains(&neighbor)
+                    && to_local(neighbor, metadata.orientation).y() <= 0
+                    && walker_step(**coord, neighbor, &metadata.heights)
+            })
+        })
+        .count()
 }
 
 fn validate_plan(
@@ -1873,6 +1983,44 @@ fn validate_plan(
         .union(&metadata.low_bypass.coords())
         .copied()
         .collect();
+    let accessible_foothills = accessible_foothills(metadata);
+    let accessible_foothill_percent = u32::try_from(accessible_foothills.len())
+        .unwrap_or(u32::MAX)
+        .saturating_mul(100)
+        / u32::try_from(metadata.mountain_cells.len())
+            .unwrap_or(u32::MAX)
+            .max(1);
+    let largest_foothill_patch = walker_components_within(&accessible_foothills, &metadata.heights)
+        .into_iter()
+        .max_by_key(BTreeSet::len);
+    let largest_foothill_patch_size = largest_foothill_patch.as_ref().map_or(0, BTreeSet::len);
+    let accessible_foothill_relief = largest_foothill_patch
+        .iter()
+        .flat_map(|component| component.iter())
+        .filter_map(|coord| metadata.heights.get(coord))
+        .copied()
+        .max()
+        .unwrap_or(settings.base_level)
+        .saturating_sub(settings.base_level);
+    let foothill_plain_landings = largest_foothill_patch
+        .as_ref()
+        .map_or(0, |component| foothill_plain_landings(component, metadata));
+    if uses_expanded_geometry(settings)
+        && (accessible_foothill_percent < MIN_ACCESSIBLE_FOOTHILL_PERCENT
+            || largest_foothill_patch_size < MIN_ACCESSIBLE_FOOTHILL_PATCH
+            || accessible_foothill_relief < Level::try_from(FOOTHILL_TERRACE_DEPTH).unwrap_or(3)
+            || foothill_plain_landings < MIN_FOOTHILL_PLAIN_LANDINGS)
+    {
+        issues.push(format!(
+            "expanded player-side mountain foothills expose {accessible_foothill_percent}% \
+             ordinary terrain \
+             with a largest walker patch of {largest_foothill_patch_size} cells and relief \
+             {accessible_foothill_relief}, attached to the plain at \
+             {foothill_plain_landings} non-corridor landings; expected at least \
+             {MIN_ACCESSIBLE_FOOTHILL_PERCENT}%, {MIN_ACCESSIBLE_FOOTHILL_PATCH} connected cells, \
+             relief {FOOTHILL_TERRACE_DEPTH}, and {MIN_FOOTHILL_PLAIN_LANDINGS} landings"
+        ));
+    }
     if metadata
         .ridge_cells
         .intersection(&metadata.ordinary)
@@ -2328,10 +2476,35 @@ mod tests {
         .expect("the shipped Mountains selection should generate");
 
         assert_eq!(generated.selected_candidate, Some(0));
-        assert_eq!(generated.map_fingerprint, 8_059_820_049_498_199_862);
+        assert_eq!(generated.map_fingerprint, 228_308_395_851_360_446);
         assert_eq!(generated.metrics.mountain_coverage_percent, 60);
         assert_eq!(generated.metadata.peak_centres.len(), 7);
         assert!(!generated.used_fallback);
+        let foothills = accessible_foothills(&generated.metadata);
+        let accessible_percent = u32::try_from(foothills.len())
+            .unwrap_or(u32::MAX)
+            .saturating_mul(100)
+            / u32::try_from(generated.metadata.mountain_cells.len())
+                .unwrap_or(u32::MAX)
+                .max(1);
+        let largest_patch = walker_components_within(&foothills, &generated.metadata.heights)
+            .into_iter()
+            .max_by_key(BTreeSet::len)
+            .expect("the shipped mountains should have an accessible foothill patch");
+        let foothill_relief = largest_patch
+            .iter()
+            .filter_map(|coord| generated.metadata.heights.get(coord))
+            .copied()
+            .max()
+            .unwrap_or_default()
+            .saturating_sub(15);
+        assert!(accessible_percent >= MIN_ACCESSIBLE_FOOTHILL_PERCENT);
+        assert!(largest_patch.len() >= MIN_ACCESSIBLE_FOOTHILL_PATCH);
+        assert!(foothill_relief >= Level::try_from(FOOTHILL_TERRACE_DEPTH).unwrap_or(3));
+        assert!(
+            foothill_plain_landings(&largest_patch, &generated.metadata)
+                >= MIN_FOOTHILL_PLAIN_LANDINGS
+        );
     }
 
     #[test]
@@ -2766,6 +2939,26 @@ mod tests {
                 .iter()
                 .any(|issue| issue.contains("one connected massif")),
             "an isolated elevated cell must fail the massif contract"
+        );
+
+        let mut corridor_only = valid.clone();
+        let route_coords: BTreeSet<_> = corridor_only
+            .metadata
+            .high_pass
+            .coords()
+            .union(&corridor_only.metadata.low_bypass.coords())
+            .copied()
+            .collect();
+        let mountain_cells = corridor_only.metadata.mountain_cells.clone();
+        corridor_only
+            .metadata
+            .ordinary
+            .retain(|coord| !mountain_cells.contains(coord) || route_coords.contains(coord));
+        assert!(
+            validation_issues(&settings, &corridor_only)
+                .iter()
+                .any(|issue| issue.contains("player-side mountain foothills expose")),
+            "route-only mountain access must fail the foothill contract"
         );
 
         let mut overlapping = valid;

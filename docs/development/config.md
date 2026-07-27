@@ -242,7 +242,9 @@ special-movement regions; naturally walkable peaks remain ordinary terrain. Vali
 settings use relief `14..=24` and three through seven peaks. The low-relief
 compatibility path remains deterministic. The selected scenario uses the upper bounds
 to form a branched massif across most of the map and distribute peaks across multiple
-heights.
+heights. Its player-facing edge includes a substantial, three-level walker-connected
+foothill apron, so ordinary access extends into the range instead of ending at the two
+through routes.
 
 `Caves` carves one ordinary-walkable underground network beneath a varied rocky
 surface:
@@ -266,10 +268,13 @@ chambers, two floor bands, loop corridors, varied chamber heights, and the most
 developed rocky surface. Six-through-eight-room settings retain their deterministic
 compatibility geometry.
 Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
-underground floor cannot be confused with the surface above it. Recipe and
-environment combinations are validated together: Mountains requires `Frozen`, Caves
-requires `Rocky`, and invalid combinations leave the previous valid hot-reloaded
-settings active.
+underground floor cannot be confused with the surface above it. The hostile remains
+inside the deepest chamber on the floor with the greatest minimum horizontal
+separation from the complete ramp and entry connector. A live scenario regression
+checks that placement against the loaded combat policy so combat through rock cannot
+interrupt entry. Recipe and environment combinations are validated together:
+Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
+the previous valid hot-reloaded settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
