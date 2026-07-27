@@ -148,15 +148,13 @@ positions. The effect still applies authoritatively to hidden terrain and units,
 its acknowledgments, animations, and combat-log entries are filtered through faction
 knowledge and do not reveal hidden outcomes.
 
-> **Open question for the perception owner — does divination need an exception?**
-> The rule above is deliberately absolute, and for every spell that exists it is
-> right: the design's divination is a *lattice*-information channel, `Reveal` targets
-> a unit, and you must see a unit to scry it. The tension is only hypothetical — a
-> future **spatial** divination ("reveal what is over that ridge") could not be cast
-> at all, since its whole purpose is naming somewhere you cannot see. Note also that
-> Unknown positions are unpickable by design and expose no `TilePos`, so even with an
-> exception there would be nothing to name until a designation affordance exists.
-> Resolve before merge: leave absolute, or carve out purely-informational effects.
+The rule is absolute, including for divination. That is the honest reading of the
+design rather than an oversight: divination is the *lattice*-information channel, and
+`Reveal` targets a unit you must already see in order to scry. A **spatial** divination
+— "reveal what is over that ridge" — would need an exception, but no such spell is
+designed, and Unknown positions are unpickable by design so there would be nothing to
+name anyway. If one is ever specified, the exception is one condition in this ladder
+and changes nothing about the boundary with the world owner.
 
 The observation rung returns `true` until fog exists because every current target
 genuinely is Observed. It becomes a real query when `hex_perception` lands, and that is
