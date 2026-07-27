@@ -1217,6 +1217,10 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
                 2,
             ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
+                2,
+            ),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");

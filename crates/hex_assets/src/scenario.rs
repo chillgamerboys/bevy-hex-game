@@ -126,8 +126,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            4,
-            "the review library should include hills and three architecture probes"
+            5,
+            "the review library should include hills and four architecture probes"
         );
         let seeds: HashSet<u64> = generated
             .iter()

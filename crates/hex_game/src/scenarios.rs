@@ -1067,12 +1067,14 @@ mod tests {
 
     #[test]
     fn every_procedural_probe_loads_terrain_anchors_and_actors() {
-        for scenario_name in ["Frozen Hills", "Volcanic Hills", "Sky Islands"] {
-            let configured_seed = library()
+        for scenario_name in ["Frozen Hills", "Volcanic Hills", "Sky Islands", "Mountains"] {
+            let scenario = library()
                 .scenarios
                 .into_iter()
                 .find(|scenario| scenario.name == scenario_name)
-                .and_then(|scenario| scenario.generation_seed)
+                .expect("the procedural probe should be shipped");
+            let configured_seed = scenario
+                .generation_seed
                 .expect("the probe should have a configured seed");
             let mut app = procedural_gameplay_app(scenario_name);
             enter_screen(&mut app, Screen::Gameplay);
@@ -1097,16 +1099,27 @@ mod tests {
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
             let anchors = app.world().resource::<MapAnchors>();
-            for required in [
-                "party_start",
-                "hostile_start",
-                "conflict_center",
-                "bridge",
-                "alternate_crossing",
-            ] {
+            for required in [&scenario.units.player, &scenario.units.enemy]
+                .into_iter()
+                .filter_map(|placement| match placement {
+                    ScenarioPlacement::Anchor(name) => Some(name.as_str()),
+                    ScenarioPlacement::Fixed(_) => None,
+                })
+            {
                 assert!(
                     anchors.get(&MapAnchorId::from(required)).is_some(),
                     "{scenario_name} omitted {required}"
+                );
+            }
+            let recipe_anchors: &[&str] = if scenario_name == "Mountains" {
+                &["conflict_center", "high_pass", "low_bypass"]
+            } else {
+                &["conflict_center", "bridge", "alternate_crossing"]
+            };
+            for required in recipe_anchors {
+                assert!(
+                    anchors.get(&MapAnchorId::from(*required)).is_some(),
+                    "{scenario_name} omitted recipe anchor {required}"
                 );
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();

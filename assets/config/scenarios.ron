@@ -100,5 +100,15 @@
                 enemy: Anchor("hostile_start"),
             ),
         ),
+        (
+            name: "Mountains",
+            blurb: "Sharp frozen peaks split by a high saddle and a longer low-valley bypass.",
+            world: "config/worlds/procedural-mountains.ron",
+            generation_seed: Some(129704046),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
     ],
 )
