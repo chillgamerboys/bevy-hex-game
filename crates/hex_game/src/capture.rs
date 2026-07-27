@@ -24,10 +24,6 @@ const MIN_VARIED_REGIONS: usize = 8;
 /// What a persisted frame looked like, for the caller's policy to judge.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CaptureStats {
-    /// Frame width in pixels.
-    pub(crate) width: u32,
-    /// Frame height in pixels.
-    pub(crate) height: u32,
     /// The brightest channel value anywhere in the frame; `<= 8` means the
     /// frame is effectively black.
     pub(crate) brightest: u8,
@@ -65,8 +61,6 @@ pub(crate) fn write_png(image: &Image, path: &Path) -> Result<CaptureStats, Stri
         return Err(format!("cannot install PNG: {error}"));
     }
     Ok(CaptureStats {
-        width: rgb.width(),
-        height: rgb.height(),
         brightest: analysis.brightest,
         has_coverage: analysis.has_coverage,
     })
@@ -127,6 +121,10 @@ struct CoverageAnalysis {
 }
 
 /// Whether a frame passes the review-grade variation thresholds.
+///
+/// Production callers go through [`write_png`]'s stats; the tests exercise the
+/// analyzer directly against synthetic frames.
+#[cfg(test)]
 pub(crate) fn has_visual_coverage(bytes: &[u8], width: usize, height: usize) -> bool {
     analyze_coverage(bytes, width, height).has_coverage
 }

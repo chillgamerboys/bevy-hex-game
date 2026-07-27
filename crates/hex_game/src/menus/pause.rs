@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use hex_core::Pause;
 
 use super::overlay_root;
+use super::widgets::{blurb, display, UiAssets};
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Pause(true)), spawn_pause_menu);
@@ -17,19 +18,14 @@ pub(super) fn plugin(app: &mut App) {
 #[derive(Component)]
 struct PauseMenu;
 
-fn spawn_pause_menu(mut commands: Commands) {
+fn spawn_pause_menu(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((overlay_root("Pause Menu"), PauseMenu))
         .with_children(|parent| {
-            parent.spawn((
-                Text::new("paused"),
-                TextFont::from_font_size(44.0),
-                TextColor(Color::srgb(0.95, 0.95, 0.95)),
-            ));
-            parent.spawn((
-                Text::new("ESC to resume    -    BACKSPACE to quit to title"),
-                TextFont::from_font_size(18.0),
-                TextColor(Color::srgb(0.75, 0.75, 0.75)),
+            parent.spawn(display(&assets, "Paused"));
+            parent.spawn(blurb(
+                &assets,
+                "ESC to resume   ·   BACKSPACE to quit to title",
             ));
         });
 }
