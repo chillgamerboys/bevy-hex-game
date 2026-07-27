@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use serde::de::Error as _;
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// A colour written as `(r, g, b)` in sRGB, each component 0.0–1.0.
 ///
@@ -164,6 +164,8 @@ impl<'de> Deserialize<'de> for CameraSettings {
 #[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq)]
 #[reflect(Resource)]
 pub struct LightingSettings {
+    /// Optional time-of-day behavior. Older lighting files omit this and remain static.
+    pub profile: LightingProfile,
     /// Sun brightness, in lux.
     pub sun_illuminance: f32,
     /// Sun colour. Warm tints read as low sun; white is midday.
@@ -211,6 +213,185 @@ pub struct LightingSettings {
     pub fog_density: f32,
 }
 
+/// Whether a lighting asset is a fixed look or a time-resolved celestial cycle.
+#[derive(Reflect, Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub enum LightingProfile {
+    /// Preserve the authored flat [`LightingSettings`] values exactly.
+    #[default]
+    Static,
+    /// Resolve the authored keyframes at a selected time of day.
+    Cycle(CelestialCycleSettings),
+}
+
+/// Fixed celestial presentation and the ordered keyframes for a clear-sky day.
+#[derive(Reflect, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CelestialCycleSettings {
+    /// Time used when a scenario does not provide an override.
+    pub default_time_hours: f32,
+    /// Visible sRGB colour of the sun disc.
+    pub sun_disc_color: Rgb,
+    /// Apparent full angular diameter of the sun.
+    pub sun_angular_diameter_degrees: f32,
+    /// Radial angular thickness of the sun halo outside the disc edge.
+    pub sun_halo_width_degrees: f32,
+    /// Visible sRGB colour of the moon disc.
+    pub moon_disc_color: Rgb,
+    /// Apparent full angular diameter of the moon.
+    pub moon_angular_diameter_degrees: f32,
+    /// Radial angular thickness of the moon halo outside the disc edge.
+    pub moon_halo_width_degrees: f32,
+    /// Angular radius of the azimuth-local glow mirrored below the sun.
+    pub lower_glow_angular_radius_degrees: f32,
+    /// Restrained multiplier applied to the interpolated sun halo strength.
+    pub lower_glow_strength: f32,
+    /// Strictly time-ordered keyframes in the range `[0, 24)`.
+    pub keyframes: Vec<LightingKeyframe>,
+}
+
+/// The body that supplies the single shadow-casting key light.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CelestialBody {
+    /// Direct sunlight supplies the key.
+    Sun,
+    /// Stylized moonlight supplies the key.
+    Moon,
+}
+
+/// One authored point in a cyclic clear-sky lighting profile.
+#[derive(Reflect, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LightingKeyframe {
+    /// Keyframe position on the 24-hour clock.
+    pub time_hours: f32,
+    /// Sun compass angle, measured from world +Z towards +X.
+    pub sun_azimuth_degrees: f32,
+    /// Sun height above the true horizon.
+    pub sun_elevation_degrees: f32,
+    /// Body that casts shadows after the dark handoff.
+    pub active_body: CelestialBody,
+    /// Key light brightness, in lux.
+    pub direct_illuminance: f32,
+    /// Key light sRGB colour.
+    pub direct_color: Rgb,
+    /// Uniform fill brightness.
+    pub ambient_brightness: f32,
+    /// Uniform fill sRGB colour.
+    pub ambient_color: Rgb,
+    /// Directional sky fill intensity.
+    pub sky_light_intensity: f32,
+    /// Upward-bounced sRGB ground colour.
+    pub ground_color: Rgb,
+    /// Horizon sRGB colour.
+    pub sky_color: Rgb,
+    /// Zenith sRGB colour.
+    pub zenith_color: Rgb,
+    /// Cloud sRGB colour.
+    pub cloud_color: Rgb,
+    /// Distance haze sRGB colour.
+    pub fog_color: Rgb,
+    /// Sun-facing haze sRGB colour.
+    pub fog_sun_color: Rgb,
+    /// Exponential haze density.
+    pub fog_density: f32,
+    /// Camera exposure value at ISO 100.
+    pub exposure_ev100: f32,
+    /// Strength of the sun halo.
+    pub sun_halo_strength: f32,
+    /// Strength of the moon halo.
+    pub moon_halo_strength: f32,
+}
+
+/// A fully resolved lighting frame ready to apply to the renderer.
+#[derive(Resource, Reflect, Debug, Clone, PartialEq)]
+#[reflect(Resource)]
+pub struct ResolvedLighting {
+    /// Normalized cycle time, or `None` for a static profile.
+    pub time_hours: Option<f32>,
+    /// The visible body supplying the key light. Static profiles draw no body.
+    pub key_body: Option<CelestialBody>,
+    /// Interpolated key light brightness, in lux.
+    pub key_illuminance: f32,
+    /// Interpolated key light sRGB colour.
+    pub key_color: Rgb,
+    /// Normalized world-space direction from the scene towards the sun.
+    pub sun_direction: Vec3,
+    /// Normalized roll reference transported from the legacy directional-light frame.
+    pub key_light_up: Vec3,
+    /// Interpolated uniform fill brightness.
+    pub ambient_brightness: f32,
+    /// Interpolated uniform fill sRGB colour.
+    pub ambient_color: Rgb,
+    /// Interpolated directional sky fill intensity.
+    pub sky_light_intensity: f32,
+    /// Interpolated upward-bounced sRGB ground colour.
+    pub ground_color: Rgb,
+    /// Interpolated horizon sRGB colour.
+    pub sky_color: Rgb,
+    /// Interpolated zenith sRGB colour.
+    pub zenith_color: Rgb,
+    /// Interpolated cloud sRGB colour.
+    pub cloud_color: Rgb,
+    /// Cloud area fraction inherited from the flat settings.
+    pub cloud_coverage: f32,
+    /// Hex-cloud spatial scale inherited from the flat settings.
+    pub hex_cloud_scale: f32,
+    /// Cloud edge softness inherited from the flat settings.
+    pub cloud_softness: f32,
+    /// Cloud roundness inherited from the flat settings.
+    pub cloud_roundness: f32,
+    /// Cloud edge-noise strength inherited from the flat settings.
+    pub cloud_noise: f32,
+    /// Interpolated distance haze sRGB colour.
+    pub fog_color: Rgb,
+    /// Interpolated sun-facing haze sRGB colour.
+    pub fog_sun_color: Rgb,
+    /// Interpolated exponential haze density.
+    pub fog_density: f32,
+    /// Interpolated camera exposure value at ISO 100.
+    pub exposure_ev100: f32,
+    /// Fixed visible sRGB sun-disc colour.
+    pub sun_disc_color: Rgb,
+    /// Fixed apparent full angular diameter of the sun.
+    pub sun_angular_diameter_degrees: f32,
+    /// Fixed radial angular thickness of the sun halo outside the disc edge.
+    pub sun_halo_width_degrees: f32,
+    /// Interpolated sun-halo strength.
+    pub sun_halo_strength: f32,
+    /// Fixed visible sRGB moon-disc colour.
+    pub moon_disc_color: Rgb,
+    /// Fixed apparent full angular diameter of the moon.
+    pub moon_angular_diameter_degrees: f32,
+    /// Fixed radial angular thickness of the moon halo outside the disc edge.
+    pub moon_halo_width_degrees: f32,
+    /// Interpolated moon-halo strength.
+    pub moon_halo_strength: f32,
+    /// Normalized direction mirrored below the horizon at the sun's azimuth.
+    pub lower_glow_direction: Vec3,
+    /// Interpolated sRGB colour of the mirrored lower glow.
+    pub lower_glow_color: Rgb,
+    /// Fixed angular radius of the mirrored lower glow.
+    pub lower_glow_angular_radius_degrees: f32,
+    /// Interpolated restrained strength of the mirrored lower glow.
+    pub lower_glow_strength: f32,
+}
+
+impl ResolvedLighting {
+    /// World direction from the scene towards the body supplying the key light.
+    pub fn key_body_direction(&self) -> Option<Vec3> {
+        match self.key_body {
+            Some(CelestialBody::Sun) => Some(self.sun_direction),
+            Some(CelestialBody::Moon) => Some(-self.sun_direction),
+            None => None,
+        }
+    }
+
+    /// Direction travelled by rays from the active celestial key light.
+    pub fn key_light_ray_direction(&self) -> Option<Vec3> {
+        self.key_body_direction().map(|direction| -direction)
+    }
+}
+
 impl LightingSettings {
     /// Checks every value before a lighting asset can replace the active profile.
     ///
@@ -244,12 +425,455 @@ impl LightingSettings {
         validate_rgb("fog_sun_color", self.fog_sun_color)?;
         validate_nonnegative("fog_density", self.fog_density)?;
 
+        if let LightingProfile::Cycle(cycle) = &self.profile {
+            cycle.validate()?;
+        }
+
         Ok(())
+    }
+
+    /// The cycle's authored starting hour, or `None` for static lighting.
+    pub fn default_time_hours(&self) -> Option<f32> {
+        match &self.profile {
+            LightingProfile::Static => None,
+            LightingProfile::Cycle(cycle) => Some(cycle.default_time_hours),
+        }
+    }
+
+    /// Resolves a renderer-ready frame.
+    ///
+    /// A supplied time is an error for a static profile. Finite cycle times wrap around
+    /// the 24-hour clock, which keeps an inspector scrubber useful outside its nominal
+    /// range while scenario data can enforce the stricter `[0, 24)` authoring range.
+    pub fn resolve(&self, time_hours: Option<f32>) -> Result<ResolvedLighting, String> {
+        match (&self.profile, time_hours) {
+            (LightingProfile::Static, Some(_)) => {
+                Err("static lighting does not support a time override".to_owned())
+            }
+            (LightingProfile::Static, None) => Ok(self.resolve_static()),
+            (LightingProfile::Cycle(cycle), requested) => {
+                let time = requested.unwrap_or(cycle.default_time_hours);
+                if !time.is_finite() {
+                    return Err("time of day must be finite".to_owned());
+                }
+                cycle.resolve(self, time.rem_euclid(24.0))
+            }
+        }
+    }
+
+    fn resolve_static(&self) -> ResolvedLighting {
+        let (x, y, z) = self.sun_rotation;
+        let legacy_rotation = Quat::from_euler(EulerRot::XYZ, x, y, z);
+        let sun_direction = legacy_rotation * Vec3::Z;
+        let key_light_up = legacy_rotation * Vec3::Y;
+        let lower_glow_direction = mirrored_below_horizon(sun_direction);
+
+        ResolvedLighting {
+            time_hours: None,
+            key_body: None,
+            key_illuminance: self.sun_illuminance,
+            key_color: self.sun_color,
+            sun_direction,
+            key_light_up,
+            ambient_brightness: self.ambient_brightness,
+            ambient_color: self.ambient_color,
+            sky_light_intensity: self.sky_light_intensity,
+            ground_color: self.ground_color,
+            sky_color: self.sky_color,
+            zenith_color: self.zenith_color,
+            cloud_color: self.cloud_color,
+            cloud_coverage: self.cloud_coverage,
+            hex_cloud_scale: self.hex_cloud_scale,
+            cloud_softness: self.cloud_softness,
+            cloud_roundness: self.cloud_roundness,
+            cloud_noise: self.cloud_noise,
+            fog_color: self.fog_color,
+            fog_sun_color: self.fog_sun_color,
+            fog_density: self.fog_density,
+            exposure_ev100: 9.7,
+            sun_disc_color: (1.0, 1.0, 1.0),
+            sun_angular_diameter_degrees: 0.53,
+            sun_halo_width_degrees: 4.0,
+            sun_halo_strength: 0.0,
+            moon_disc_color: (0.86, 0.90, 1.0),
+            moon_angular_diameter_degrees: 0.53,
+            moon_halo_width_degrees: 3.0,
+            moon_halo_strength: 0.0,
+            lower_glow_direction,
+            lower_glow_color: self.fog_sun_color,
+            lower_glow_angular_radius_degrees: 20.0,
+            lower_glow_strength: 0.0,
+        }
+    }
+}
+
+impl CelestialCycleSettings {
+    fn validate(&self) -> Result<(), String> {
+        validate_time("profile.default_time_hours", self.default_time_hours)?;
+        validate_rgb("profile.sun_disc_color", self.sun_disc_color)?;
+        validate_angle_size(
+            "profile.sun_angular_diameter_degrees",
+            self.sun_angular_diameter_degrees,
+            10.0,
+        )?;
+        validate_angle_size(
+            "profile.sun_halo_width_degrees",
+            self.sun_halo_width_degrees,
+            90.0,
+        )?;
+        validate_rgb("profile.moon_disc_color", self.moon_disc_color)?;
+        validate_angle_size(
+            "profile.moon_angular_diameter_degrees",
+            self.moon_angular_diameter_degrees,
+            10.0,
+        )?;
+        validate_angle_size(
+            "profile.moon_halo_width_degrees",
+            self.moon_halo_width_degrees,
+            90.0,
+        )?;
+        validate_angle_size(
+            "profile.lower_glow_angular_radius_degrees",
+            self.lower_glow_angular_radius_degrees,
+            180.0,
+        )?;
+        validate_unit_interval("profile.lower_glow_strength", self.lower_glow_strength)?;
+
+        if self.keyframes.len() < 3 {
+            return Err("profile.keyframes must contain at least three entries".to_owned());
+        }
+        for (index, frame) in self.keyframes.iter().enumerate() {
+            frame.validate(index)?;
+        }
+        if self
+            .keyframes
+            .iter()
+            .zip(self.keyframes.iter().skip(1))
+            .any(|(previous, current)| previous.time_hours >= current.time_hours)
+        {
+            return Err(
+                "profile.keyframes must be unique and strictly ordered by time_hours".to_owned(),
+            );
+        }
+
+        if !self
+            .keyframes
+            .iter()
+            .any(|frame| frame.active_body == CelestialBody::Sun)
+            || !self
+                .keyframes
+                .iter()
+                .any(|frame| frame.active_body == CelestialBody::Moon)
+        {
+            return Err("profile.keyframes must include both Sun and Moon key lights".to_owned());
+        }
+
+        self.validate_dark_handoffs()
+    }
+
+    fn validate_dark_handoffs(&self) -> Result<(), String> {
+        let frame_count = self.keyframes.len();
+        let next_frames = self.keyframes.iter().cycle().skip(1).take(frame_count);
+        let following_frames = self.keyframes.iter().cycle().skip(2).take(frame_count);
+
+        for (index, ((current, next), following)) in self
+            .keyframes
+            .iter()
+            .zip(next_frames)
+            .zip(following_frames)
+            .enumerate()
+        {
+            if current.active_body == next.active_body {
+                continue;
+            }
+
+            if next.direct_illuminance > current.direct_illuminance
+                || next.direct_illuminance > following.direct_illuminance
+            {
+                return Err(format!(
+                    "profile.keyframes body change between indices {index} and {} must occur at \
+                     a local minimum of direct_illuminance",
+                    (index + 1) % frame_count
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve(
+        &self,
+        base: &LightingSettings,
+        time_hours: f32,
+    ) -> Result<ResolvedLighting, String> {
+        let (start, end, amount) = self.segment(time_hours)?;
+        let smooth_amount = amount * amount * (3.0 - 2.0 * amount);
+        let sun_azimuth_degrees =
+            lerp_angle_degrees(start.sun_azimuth_degrees, end.sun_azimuth_degrees, amount);
+        let sun_elevation_degrees = lerp(
+            start.sun_elevation_degrees,
+            end.sun_elevation_degrees,
+            amount,
+        );
+        let sun_direction = celestial_direction(sun_azimuth_degrees, sun_elevation_degrees);
+        let sun_halo_strength = lerp(
+            start.sun_halo_strength,
+            end.sun_halo_strength,
+            smooth_amount,
+        );
+        let key_body = handoff_body(start, end, amount, sun_elevation_degrees);
+        let key_body_direction = match key_body {
+            CelestialBody::Sun => sun_direction,
+            CelestialBody::Moon => -sun_direction,
+        };
+        let key_light_up = transported_legacy_light_up(base, key_body_direction);
+        let lower_glow_elevation =
+            low_solar_elevation_factor(sun_elevation_degrees, LOWER_GLOW_MAX_ELEVATION_DEGREES);
+
+        Ok(ResolvedLighting {
+            time_hours: Some(time_hours),
+            key_body: Some(key_body),
+            key_illuminance: lerp(
+                start.direct_illuminance,
+                end.direct_illuminance,
+                smooth_amount,
+            ),
+            key_color: lerp_rgb_linear(start.direct_color, end.direct_color, smooth_amount),
+            sun_direction,
+            key_light_up,
+            ambient_brightness: lerp(
+                start.ambient_brightness,
+                end.ambient_brightness,
+                smooth_amount,
+            ),
+            ambient_color: lerp_rgb_linear(start.ambient_color, end.ambient_color, smooth_amount),
+            sky_light_intensity: lerp(
+                start.sky_light_intensity,
+                end.sky_light_intensity,
+                smooth_amount,
+            ),
+            ground_color: lerp_rgb_linear(start.ground_color, end.ground_color, smooth_amount),
+            sky_color: lerp_rgb_linear(start.sky_color, end.sky_color, smooth_amount),
+            zenith_color: lerp_rgb_linear(start.zenith_color, end.zenith_color, smooth_amount),
+            cloud_color: lerp_rgb_linear(start.cloud_color, end.cloud_color, smooth_amount),
+            cloud_coverage: base.cloud_coverage,
+            hex_cloud_scale: base.hex_cloud_scale,
+            cloud_softness: base.cloud_softness,
+            cloud_roundness: base.cloud_roundness,
+            cloud_noise: base.cloud_noise,
+            fog_color: lerp_rgb_linear(start.fog_color, end.fog_color, smooth_amount),
+            fog_sun_color: lerp_rgb_linear(start.fog_sun_color, end.fog_sun_color, smooth_amount),
+            fog_density: lerp(start.fog_density, end.fog_density, smooth_amount),
+            exposure_ev100: lerp(start.exposure_ev100, end.exposure_ev100, amount),
+            sun_disc_color: self.sun_disc_color,
+            sun_angular_diameter_degrees: self.sun_angular_diameter_degrees,
+            sun_halo_width_degrees: self.sun_halo_width_degrees,
+            sun_halo_strength,
+            moon_disc_color: self.moon_disc_color,
+            moon_angular_diameter_degrees: self.moon_angular_diameter_degrees,
+            moon_halo_width_degrees: self.moon_halo_width_degrees,
+            moon_halo_strength: lerp(
+                start.moon_halo_strength,
+                end.moon_halo_strength,
+                smooth_amount,
+            ),
+            lower_glow_direction: mirrored_below_horizon(sun_direction),
+            lower_glow_color: lerp_rgb_linear(
+                start.fog_sun_color,
+                end.fog_sun_color,
+                smooth_amount,
+            ),
+            lower_glow_angular_radius_degrees: self.lower_glow_angular_radius_degrees,
+            lower_glow_strength: self.lower_glow_strength
+                * sun_halo_strength
+                * lower_glow_elevation,
+        })
+    }
+
+    fn segment(
+        &self,
+        time_hours: f32,
+    ) -> Result<(&LightingKeyframe, &LightingKeyframe, f32), String> {
+        let first = self
+            .keyframes
+            .first()
+            .ok_or_else(|| "profile.keyframes must not be empty".to_owned())?;
+        let last = self
+            .keyframes
+            .last()
+            .ok_or_else(|| "profile.keyframes must not be empty".to_owned())?;
+        let start = self
+            .keyframes
+            .iter()
+            .rev()
+            .find(|frame| frame.time_hours <= time_hours)
+            .unwrap_or(last);
+        let end = self
+            .keyframes
+            .iter()
+            .find(|frame| frame.time_hours > time_hours)
+            .unwrap_or(first);
+        let start_time = start.time_hours;
+        let mut end_time = end.time_hours;
+        let mut sample_time = time_hours;
+        if end_time <= start_time {
+            end_time += 24.0;
+            if sample_time < start_time {
+                sample_time += 24.0;
+            }
+        }
+        let amount = (sample_time - start_time) / (end_time - start_time);
+        Ok((start, end, amount.clamp(0.0, 1.0)))
+    }
+}
+
+impl LightingKeyframe {
+    fn validate(&self, index: usize) -> Result<(), String> {
+        let field = |name: &str| format!("profile.keyframes[{index}].{name}");
+        validate_time(&field("time_hours"), self.time_hours)?;
+        validate_range(
+            &field("sun_azimuth_degrees"),
+            self.sun_azimuth_degrees,
+            0.0,
+            360.0,
+            false,
+        )?;
+        validate_range(
+            &field("sun_elevation_degrees"),
+            self.sun_elevation_degrees,
+            -90.0,
+            90.0,
+            true,
+        )?;
+        let active_body_is_above_horizon = match self.active_body {
+            CelestialBody::Sun => self.sun_elevation_degrees >= 0.0,
+            CelestialBody::Moon => self.sun_elevation_degrees <= 0.0,
+        };
+        if !active_body_is_above_horizon {
+            return Err(format!(
+                "{} must select a body at or above its true horizon",
+                field("active_body")
+            ));
+        }
+        validate_nonnegative(&field("direct_illuminance"), self.direct_illuminance)?;
+        validate_rgb(&field("direct_color"), self.direct_color)?;
+        validate_nonnegative(&field("ambient_brightness"), self.ambient_brightness)?;
+        validate_rgb(&field("ambient_color"), self.ambient_color)?;
+        validate_nonnegative(&field("sky_light_intensity"), self.sky_light_intensity)?;
+        validate_rgb(&field("ground_color"), self.ground_color)?;
+        validate_rgb(&field("sky_color"), self.sky_color)?;
+        validate_rgb(&field("zenith_color"), self.zenith_color)?;
+        validate_rgb(&field("cloud_color"), self.cloud_color)?;
+        validate_rgb(&field("fog_color"), self.fog_color)?;
+        validate_rgb(&field("fog_sun_color"), self.fog_sun_color)?;
+        validate_nonnegative(&field("fog_density"), self.fog_density)?;
+        validate_range(
+            &field("exposure_ev100"),
+            self.exposure_ev100,
+            -10.0,
+            30.0,
+            true,
+        )?;
+        validate_unit_interval(&field("sun_halo_strength"), self.sun_halo_strength)?;
+        validate_unit_interval(&field("moon_halo_strength"), self.moon_halo_strength)
+    }
+}
+
+const LOWER_GLOW_MAX_ELEVATION_DEGREES: f32 = 18.0;
+
+fn handoff_body(
+    start: &LightingKeyframe,
+    end: &LightingKeyframe,
+    amount: f32,
+    sun_elevation_degrees: f32,
+) -> CelestialBody {
+    if sun_elevation_degrees > f32::EPSILON {
+        CelestialBody::Sun
+    } else if sun_elevation_degrees < -f32::EPSILON {
+        CelestialBody::Moon
+    } else if amount <= f32::EPSILON || start.active_body == end.active_body {
+        start.active_body
+    } else if start.direct_illuminance <= end.direct_illuminance {
+        end.active_body
+    } else {
+        start.active_body
+    }
+}
+
+fn low_solar_elevation_factor(elevation_degrees: f32, maximum_degrees: f32) -> f32 {
+    let amount = (1.0 - elevation_degrees.abs() / maximum_degrees).clamp(0.0, 1.0);
+    amount * amount * (3.0 - 2.0 * amount)
+}
+
+fn transported_legacy_light_up(base: &LightingSettings, target_body_direction: Vec3) -> Vec3 {
+    let (x, y, z) = base.sun_rotation;
+    let legacy_rotation = Quat::from_euler(EulerRot::XYZ, x, y, z);
+    let legacy_body_direction = legacy_rotation * Vec3::Z;
+    let legacy_up = legacy_rotation * Vec3::Y;
+    (Quat::from_rotation_arc(legacy_body_direction, target_body_direction) * legacy_up).normalize()
+}
+
+fn celestial_direction(azimuth_degrees: f32, elevation_degrees: f32) -> Vec3 {
+    let azimuth = azimuth_degrees.to_radians();
+    let elevation = elevation_degrees.to_radians();
+    let horizontal = elevation.cos();
+    Vec3::new(
+        azimuth.sin() * horizontal,
+        elevation.sin(),
+        azimuth.cos() * horizontal,
+    )
+    .normalize()
+}
+
+fn mirrored_below_horizon(direction: Vec3) -> Vec3 {
+    Vec3::new(direction.x, -direction.y.abs(), direction.z).normalize()
+}
+
+fn lerp(start: f32, end: f32, amount: f32) -> f32 {
+    start + (end - start) * amount
+}
+
+fn lerp_angle_degrees(start: f32, end: f32, amount: f32) -> f32 {
+    let delta = (end - start + 180.0).rem_euclid(360.0) - 180.0;
+    (start + delta * amount).rem_euclid(360.0)
+}
+
+fn lerp_rgb_linear(start: Rgb, end: Rgb, amount: f32) -> Rgb {
+    if amount <= f32::EPSILON {
+        return start;
+    }
+    if amount >= 1.0 - f32::EPSILON {
+        return end;
+    }
+    let channel =
+        |from: f32, to: f32| linear_to_srgb(lerp(srgb_to_linear(from), srgb_to_linear(to), amount));
+    (
+        channel(start.0, end.0),
+        channel(start.1, end.1),
+        channel(start.2, end.2),
+    )
+}
+
+fn srgb_to_linear(value: f32) -> f32 {
+    if value <= 0.040_45 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn linear_to_srgb(value: f32) -> f32 {
+    if value <= 0.003_130_8 {
+        value * 12.92
+    } else {
+        1.055 * value.powf(1.0 / 2.4) - 0.055
     }
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct UnvalidatedLightingSettings {
+    #[serde(default)]
+    profile: LightingProfile,
     sun_illuminance: f32,
     sun_color: Rgb,
     sun_rotation: (f32, f32, f32),
@@ -277,6 +901,7 @@ impl<'de> Deserialize<'de> for LightingSettings {
     {
         let raw = UnvalidatedLightingSettings::deserialize(deserializer)?;
         let settings = Self {
+            profile: raw.profile,
             sun_illuminance: raw.sun_illuminance,
             sun_color: raw.sun_color,
             sun_rotation: raw.sun_rotation,
@@ -304,6 +929,40 @@ impl<'de> Deserialize<'de> for LightingSettings {
 fn validate_nonnegative(name: &str, value: f32) -> Result<(), String> {
     if !value.is_finite() || value < 0.0 {
         return Err(format!("{name} must be nonnegative and finite"));
+    }
+    Ok(())
+}
+
+fn validate_time(name: &str, value: f32) -> Result<(), String> {
+    validate_range(name, value, 0.0, 24.0, false)
+}
+
+fn validate_angle_size(name: &str, value: f32, maximum: f32) -> Result<(), String> {
+    if !value.is_finite() || value <= 0.0 || value > maximum {
+        return Err(format!(
+            "{name} must be positive, finite, and no greater than {maximum}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_range(
+    name: &str,
+    value: f32,
+    minimum: f32,
+    maximum: f32,
+    inclusive_maximum: bool,
+) -> Result<(), String> {
+    let in_range = if inclusive_maximum {
+        (minimum..=maximum).contains(&value)
+    } else {
+        (minimum..maximum).contains(&value)
+    };
+    if !value.is_finite() || !in_range {
+        let upper = if inclusive_maximum { "..=" } else { ".." };
+        return Err(format!(
+            "{name} must be finite and in {minimum}{upper}{maximum}"
+        ));
     }
     Ok(())
 }
@@ -462,7 +1121,16 @@ mod tests {
 
     const CAMERA_RON: &str = include_str!("../../../assets/config/camera.ron");
     const LIGHTING_RON: &str = include_str!("../../../assets/config/lighting.ron");
+    const OVERCAST_RON: &str = include_str!("../../../assets/config/lighting/overcast.ron");
     const PLAYER_RON: &str = include_str!("../../../assets/config/player.ron");
+
+    fn assert_approx_eq(actual: f32, expected: f32) {
+        let tolerance = f32::EPSILON * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "expected {actual} to be within {tolerance} of {expected}"
+        );
+    }
 
     #[test]
     fn player_settings_reject_removed_fields() {
@@ -606,6 +1274,9 @@ mod tests {
         let lighting: LightingSettings =
             ron::from_str(LIGHTING_RON).expect("the shipped lighting settings should parse");
 
+        assert!(matches!(lighting.profile, LightingProfile::Cycle(_)));
+        assert_eq!(lighting.default_time_hours(), Some(12.0));
+
         // The optional extras ship disabled; both are removed from the camera rather
         // than applied at zero, so turning them on is the only way to change the look.
         assert!(
@@ -613,6 +1284,328 @@ mod tests {
             "the sky light ships off"
         );
         assert!(lighting.fog_density.abs() < f32::EPSILON, "haze ships off");
+    }
+
+    #[test]
+    fn legacy_lighting_without_a_profile_remains_static() {
+        let lighting: LightingSettings =
+            ron::from_str(OVERCAST_RON).expect("the legacy flat format should still parse");
+
+        assert_eq!(lighting.profile, LightingProfile::Static);
+        assert_eq!(lighting.default_time_hours(), None);
+        let resolved = lighting
+            .resolve(None)
+            .expect("static lighting should resolve without an override");
+        assert_eq!(resolved.time_hours, None);
+        assert_eq!(resolved.key_body, None);
+        assert_approx_eq(resolved.key_illuminance, lighting.sun_illuminance);
+        assert_eq!(resolved.key_color, lighting.sun_color);
+        assert_approx_eq(resolved.ambient_brightness, lighting.ambient_brightness);
+        assert_eq!(resolved.sky_color, lighting.sky_color);
+        assert_approx_eq(resolved.exposure_ev100, 9.7);
+        assert_approx_eq(resolved.sun_halo_strength, 0.0);
+        assert_approx_eq(resolved.moon_halo_strength, 0.0);
+        assert_approx_eq(resolved.lower_glow_strength, 0.0);
+
+        let expected_direction = {
+            let (x, y, z) = lighting.sun_rotation;
+            Quat::from_euler(EulerRot::XYZ, x, y, z) * Vec3::Z
+        };
+        assert!(resolved
+            .sun_direction
+            .abs_diff_eq(expected_direction, 1.0e-6));
+        let (x, y, z) = lighting.sun_rotation;
+        let legacy_rotation = Quat::from_euler(EulerRot::XYZ, x, y, z);
+        assert!(resolved
+            .key_light_up
+            .abs_diff_eq(legacy_rotation * Vec3::Y, 1.0e-6));
+        let restored = Transform::default()
+            .looking_to(-resolved.sun_direction, resolved.key_light_up)
+            .rotation;
+        assert!(
+            restored.dot(legacy_rotation).abs() >= 1.0 - 1.0e-6,
+            "static lighting must retain the complete legacy orientation"
+        );
+
+        let error = lighting
+            .resolve(Some(12.0))
+            .expect_err("a static profile must reject a time override");
+        assert!(error.contains("static lighting"));
+    }
+
+    #[test]
+    fn clear_noon_resolves_to_the_existing_flat_look() {
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+        let noon = lighting
+            .resolve(None)
+            .expect("the default clear-sky hour should resolve");
+
+        assert_eq!(noon.time_hours, Some(12.0));
+        assert_eq!(noon.key_body, Some(CelestialBody::Sun));
+        assert_approx_eq(noon.key_illuminance, lighting.sun_illuminance);
+        assert_eq!(noon.key_color, lighting.sun_color);
+        assert_approx_eq(noon.ambient_brightness, lighting.ambient_brightness);
+        assert_eq!(noon.ambient_color, lighting.ambient_color);
+        assert_approx_eq(noon.sky_light_intensity, lighting.sky_light_intensity);
+        assert_eq!(noon.ground_color, lighting.ground_color);
+        assert_eq!(noon.sky_color, lighting.sky_color);
+        assert_eq!(noon.zenith_color, lighting.zenith_color);
+        assert_eq!(noon.cloud_color, lighting.cloud_color);
+        assert_approx_eq(noon.cloud_coverage, lighting.cloud_coverage);
+        assert_approx_eq(noon.hex_cloud_scale, lighting.hex_cloud_scale);
+        assert_approx_eq(noon.cloud_softness, lighting.cloud_softness);
+        assert_approx_eq(noon.cloud_roundness, lighting.cloud_roundness);
+        assert_approx_eq(noon.cloud_noise, lighting.cloud_noise);
+        assert_eq!(noon.fog_color, lighting.fog_color);
+        assert_eq!(noon.fog_sun_color, lighting.fog_sun_color);
+        assert_approx_eq(noon.fog_density, lighting.fog_density);
+        assert_approx_eq(noon.exposure_ev100, 9.7);
+        assert_approx_eq(noon.lower_glow_strength, 0.0);
+
+        let (x, y, z) = lighting.sun_rotation;
+        let legacy_rotation = Quat::from_euler(EulerRot::XYZ, x, y, z);
+        let existing_direction = legacy_rotation * Vec3::Z;
+        assert!(
+            noon.sun_direction.abs_diff_eq(existing_direction, 1.0e-6),
+            "the explicit noon azimuth/elevation must retain the current shadow direction"
+        );
+        assert!(noon.key_light_up.is_finite() && noon.key_light_up.is_normalized());
+        assert!(noon.key_light_up.dot(noon.sun_direction).abs() <= 1.0e-6);
+        let restored = Transform::default()
+            .looking_to(-noon.sun_direction, noon.key_light_up)
+            .rotation;
+        assert!(
+            restored.dot(legacy_rotation).abs() >= 1.0 - 1.0e-6,
+            "cycle noon must retain the complete legacy orientation"
+        );
+    }
+
+    #[test]
+    fn cycle_wraps_at_midnight_and_uses_shortest_path_azimuth() {
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+
+        let midnight = lighting
+            .resolve(Some(0.0))
+            .expect("midnight should resolve");
+        let wrapped = lighting
+            .resolve(Some(24.0))
+            .expect("finite inspector values should wrap");
+        assert_eq!(wrapped, midnight);
+
+        let before_midnight = lighting
+            .resolve(Some(23.0))
+            .expect("the cyclic final segment should resolve");
+        assert_eq!(before_midnight.time_hours, Some(23.0));
+        assert_eq!(before_midnight.key_body, Some(CelestialBody::Moon));
+        assert!(before_midnight.sun_direction.y < 0.0);
+
+        // Sunrise -> noon crosses 360 degrees. Halfway must be close to north, not
+        // on the opposite side of the sky.
+        let morning = lighting
+            .resolve(Some(9.25))
+            .expect("the morning segment should resolve");
+        let azimuth = morning
+            .sun_direction
+            .x
+            .atan2(morning.sun_direction.z)
+            .to_degrees()
+            .rem_euclid(360.0);
+        assert!(
+            !(10.0..=350.0).contains(&azimuth),
+            "shortest-path interpolation should cross north, got {azimuth}"
+        );
+    }
+
+    #[test]
+    fn exact_keyframes_and_dark_body_handoffs_are_deterministic() {
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+        let LightingProfile::Cycle(cycle) = &lighting.profile else {
+            panic!("the shipped clear profile should cycle");
+        };
+
+        for frame in &cycle.keyframes {
+            let resolved = lighting
+                .resolve(Some(frame.time_hours))
+                .expect("an authored keyframe should resolve exactly");
+            assert_eq!(resolved.key_body, Some(frame.active_body));
+            assert_approx_eq(resolved.key_illuminance, frame.direct_illuminance);
+            assert_eq!(resolved.key_color, frame.direct_color);
+            assert_approx_eq(resolved.exposure_ev100, frame.exposure_ev100);
+        }
+
+        assert_eq!(
+            lighting.resolve(Some(6.19)).unwrap().key_body,
+            Some(CelestialBody::Moon)
+        );
+        assert_eq!(
+            lighting.resolve(Some(6.2)).unwrap().key_body,
+            Some(CelestialBody::Sun)
+        );
+        assert_eq!(
+            lighting.resolve(Some(18.74)).unwrap().key_body,
+            Some(CelestialBody::Sun)
+        );
+        assert_eq!(
+            lighting.resolve(Some(18.75)).unwrap().key_body,
+            Some(CelestialBody::Moon)
+        );
+    }
+
+    #[test]
+    fn celestial_key_stays_above_the_horizon_and_aligned_for_the_full_cycle() {
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+
+        for minute in 0_u16..24 * 60 {
+            let hour = f32::from(minute) / 60.0;
+            let resolved = lighting
+                .resolve(Some(hour))
+                .expect("every minute in the shipped cycle should resolve");
+            let body_direction = resolved
+                .key_body_direction()
+                .expect("a cycle should always have a celestial key");
+            let light_ray_direction = resolved
+                .key_light_ray_direction()
+                .expect("a cycle should always have celestial light rays");
+
+            assert!(
+                body_direction.y >= -1.0e-6,
+                "{hour:.4}h selected {:?} below its horizon: {body_direction:?}",
+                resolved.key_body
+            );
+            assert!(
+                body_direction.is_normalized() && light_ray_direction.is_normalized(),
+                "{hour:.4}h produced a non-normalized celestial direction"
+            );
+            assert!(
+                resolved.key_light_up.is_finite() && resolved.key_light_up.is_normalized(),
+                "{hour:.4}h produced an invalid key-light roll reference"
+            );
+            assert!(
+                resolved.key_light_up.dot(body_direction).abs() <= 1.0e-5,
+                "{hour:.4}h key-light roll reference must be orthogonal to its body direction"
+            );
+            assert!(
+                (body_direction + light_ray_direction).length_squared() <= 1.0e-10,
+                "{hour:.4}h body direction must be inverse to the light-ray direction"
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_lower_glow_is_limited_to_low_solar_elevations() {
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+        let noon = lighting.resolve(Some(12.0)).unwrap();
+        let sunset = lighting.resolve(Some(18.5)).unwrap();
+        let night = lighting.resolve(Some(0.0)).unwrap();
+
+        assert_approx_eq(noon.lower_glow_strength, 0.0);
+        assert!(
+            sunset.lower_glow_strength > 0.0,
+            "the map camera should retain a localized sunset reflection"
+        );
+        assert_approx_eq(night.lower_glow_strength, 0.0);
+        assert_approx_eq(
+            low_solar_elevation_factor(0.0, LOWER_GLOW_MAX_ELEVATION_DEGREES),
+            1.0,
+        );
+        assert_approx_eq(
+            low_solar_elevation_factor(18.0, LOWER_GLOW_MAX_ELEVATION_DEGREES),
+            0.0,
+        );
+        assert_approx_eq(
+            low_solar_elevation_factor(-18.0, LOWER_GLOW_MAX_ELEVATION_DEGREES),
+            0.0,
+        );
+    }
+
+    #[test]
+    fn cycle_colors_interpolate_in_linear_rgb_and_exposure_in_ev() {
+        let midpoint = lerp_rgb_linear((0.0, 0.0, 0.0), (1.0, 1.0, 1.0), 0.5);
+        for channel in [midpoint.0, midpoint.1, midpoint.2] {
+            assert!((channel - 0.735_357).abs() < 1.0e-5);
+        }
+
+        let lighting: LightingSettings =
+            ron::from_str(LIGHTING_RON).expect("the shipped cycle should parse");
+        let morning = lighting.resolve(Some(9.25)).unwrap();
+        assert_approx_eq(morning.exposure_ev100, (8.0 + 9.7) / 2.0);
+    }
+
+    #[test]
+    fn malformed_cycle_profiles_are_rejected_during_deserialization() {
+        for (needle, replacement, expected) in [
+            (
+                "default_time_hours: 12.0",
+                "default_time_hours: 24.0",
+                "default_time_hours",
+            ),
+            (
+                "sun_angular_diameter_degrees: 1.2",
+                "sun_angular_diameter_degrees: 0.0",
+                "sun_angular_diameter_degrees",
+            ),
+            (
+                "sun_azimuth_degrees: 218.17207",
+                "sun_azimuth_degrees: 360.0",
+                "sun_azimuth_degrees",
+            ),
+            (
+                "sun_elevation_degrees: -61.434143",
+                "sun_elevation_degrees: -91.0",
+                "sun_elevation_degrees",
+            ),
+            (
+                "sun_elevation_degrees: -61.434143,\n                active_body: Moon",
+                "sun_elevation_degrees: -61.434143,\n                active_body: Sun",
+                "active_body",
+            ),
+            ("time_hours: 5.0", "time_hours: 0.0", "strictly ordered"),
+            (
+                "sun_halo_strength: 0.80",
+                "sun_halo_strength: 1.1",
+                "sun_halo_strength",
+            ),
+            (
+                "direct_illuminance: 220.0",
+                "direct_illuminance: 4000.0",
+                "local minimum",
+            ),
+        ] {
+            let invalid = LIGHTING_RON.replacen(needle, replacement, 1);
+            assert_ne!(invalid, LIGHTING_RON, "missing fixture needle {needle:?}");
+            let error = ron::from_str::<LightingSettings>(&invalid)
+                .expect_err("invalid cycle settings should fail deserialization");
+            assert!(
+                error.to_string().contains(expected),
+                "{replacement:?} returned an unrelated error: {error}"
+            );
+        }
+
+        let error = ron::from_str::<LightingSettings>(&LIGHTING_RON.replacen(
+            "lower_glow_strength: 0.18",
+            "lower_glow_strength: NaN",
+            1,
+        ))
+        .expect_err("nonfinite cycle values should fail deserialization");
+        assert!(error.to_string().contains("lower_glow_strength"));
+        assert!(LightingSettings {
+            profile: LightingProfile::Static,
+            ..ron::from_str::<LightingSettings>(OVERCAST_RON).unwrap()
+        }
+        .resolve(Some(f32::NAN))
+        .unwrap_err()
+        .contains("static lighting"));
+
+        let cycle = ron::from_str::<LightingSettings>(LIGHTING_RON).unwrap();
+        assert!(
+            cycle.resolve(Some(f32::INFINITY)).is_err(),
+            "a nonfinite inspector time must not enter the resolver"
+        );
     }
 
     #[test]
@@ -811,7 +1804,7 @@ mod tests {
         );
         let previous = app.world().resource::<LightingSettings>().clone();
 
-        let invalid = LIGHTING_RON.replacen("cloud_softness: 0.1", "cloud_softness: -0.1", 1);
+        let invalid = LIGHTING_RON.replacen("profile:", "profle:", 1);
         fs::write(&lighting_path, invalid).expect("the invalid lighting edit should be written");
         app.world().resource::<AssetServer>().reload("lighting.ron");
 

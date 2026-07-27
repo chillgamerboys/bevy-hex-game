@@ -18,7 +18,7 @@
 //! `hex_game` that opens every world file a scenario names.
 
 use bevy::prelude::*;
-use serde::Deserialize;
+use serde::{de::Error as _, Deserialize, Deserializer};
 
 use crate::settings::ScenarioSettings;
 
@@ -59,6 +59,12 @@ pub struct Scenario {
     /// for the current process, but never writes that replacement back to this asset.
     #[serde(default)]
     pub generation_seed: Option<u64>,
+    /// Optional time of day at which this scenario starts, in `[0, 24)`.
+    ///
+    /// Only cyclic lighting profiles accept an override. That cross-asset contract is
+    /// checked after both this scenario and its lighting file have loaded.
+    #[serde(default, deserialize_with = "deserialize_optional_hour")]
+    pub starting_time_hours: Option<f32>,
     /// Where the units start.
     pub units: ScenarioSettings,
 }
@@ -66,6 +72,19 @@ pub struct Scenario {
 /// The lighting a scenario gets when it does not name one.
 fn shipped_lighting() -> String {
     "config/lighting.ron".to_owned()
+}
+
+fn deserialize_optional_hour<'de, D>(deserializer: D) -> Result<Option<f32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let hours = Option::<f32>::deserialize(deserializer)?;
+    if hours.is_some_and(|hours| !hours.is_finite() || !(0.0..24.0).contains(&hours)) {
+        return Err(D::Error::custom(
+            "starting_time_hours must be finite and in [0, 24)",
+        ));
+    }
+    Ok(hours)
 }
 
 #[cfg(test)]
@@ -109,6 +128,40 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two scenarios share a name");
+    }
+
+    #[test]
+    fn starting_time_must_be_a_finite_hour_in_the_day() {
+        let scenario = |hours: &str| {
+            format!(
+                r#"(
+                    name: "Time",
+                    blurb: "Time validation.",
+                    world: "config/world.ron",
+                    starting_time_hours: {hours},
+                    units: (
+                        player: Fixed((x: 0, y: 0, z: 0)),
+                        enemy: Fixed((x: 1, y: -1, z: 0)),
+                    ),
+                )"#
+            )
+        };
+
+        for valid in ["None", "Some(0.0)", "Some(12.5)", "Some(23.999)"] {
+            assert!(
+                ron::from_str::<Scenario>(&scenario(valid)).is_ok(),
+                "{valid} should be a valid starting time"
+            );
+        }
+        for invalid in ["Some(-0.1)", "Some(24.0)", "Some(inf)", "Some(NaN)"] {
+            let error = ron::from_str::<Scenario>(&scenario(invalid))
+                .expect_err("an invalid starting time should be rejected")
+                .to_string();
+            assert!(
+                error.contains("starting_time_hours"),
+                "unexpected error for {invalid}: {error}"
+            );
+        }
     }
 
     /// Generated review scenarios own distinct reproducible seeds and use the stable

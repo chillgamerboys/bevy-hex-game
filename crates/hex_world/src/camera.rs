@@ -4,10 +4,13 @@ use bevy::prelude::*;
 use bevy::transform::TransformSystems;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
-use hex_assets::{to_color, CameraSettings, LightingSettings, Rgb};
+use hex_assets::{to_color, CameraSettings, ResolvedLighting, Rgb};
 use hex_core::{AppSystems, CameraFocusTarget, GameplaySetup, MapViewHint, Screen};
 
-use crate::sky_material::{SkyMaterial, SkyParams};
+use crate::{
+    sky_material::{SkyMaterial, SkyParams},
+    LightingSystems,
+};
 
 /// Sky-dome radius, in world units. Comfortably inside the camera's default
 /// 1000-unit far plane and far outside the configured zoom range plus the terrain.
@@ -16,7 +19,7 @@ const SKY_DOME_RADIUS: f32 = 500.0;
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
 #[derive(Component, Reflect)]
 #[reflect(Component)]
-struct SkyDome;
+pub(crate) struct SkyDome;
 
 /// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
@@ -49,8 +52,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             apply_sky_material
-                .in_set(AppSystems::Update)
-                .run_if(resource_exists_and_changed::<LightingSettings>),
+                .in_set(LightingSystems::Apply)
+                .run_if(resource_exists_and_changed::<ResolvedLighting>),
         )
         // Camera control is gameplay-only, so dragging over a menu does not
         // silently move the world behind it.
@@ -195,6 +198,22 @@ fn default_sky_params() -> SkyParams {
         cloud_softness: 0.1,
         cloud_roundness: 0.5,
         cloud_noise: 0.0,
+        sun_direction: Vec3::Y,
+        celestial_bodies_enabled: 0.0,
+        sun_disc_color: Vec3::ONE,
+        sun_angular_radius_radians: 0.0,
+        moon_direction: Vec3::NEG_Y,
+        moon_angular_radius_radians: 0.0,
+        moon_disc_color: Vec3::ONE,
+        sun_halo_width_radians: 0.0,
+        lower_glow_direction: Vec3::NEG_Y,
+        moon_halo_width_radians: 0.0,
+        lower_glow_color: Vec3::ZERO,
+        sun_halo_strength: 0.0,
+        moon_halo_strength: 0.0,
+        lower_glow_angular_radius_radians: 0.0,
+        lower_glow_strength: 0.0,
+        _padding: 0.0,
     }
 }
 
@@ -379,32 +398,52 @@ fn frame_camera(
 
 /// Build sky parameters from settings. `to_color(..).to_linear()` converts the
 /// designer-facing sRGB tuples into the linear RGB the shader expects.
-fn sky_params(settings: &LightingSettings) -> SkyParams {
+pub(crate) fn sky_params(lighting: &ResolvedLighting) -> SkyParams {
     let lin = |rgb: Rgb| {
         let c = to_color(rgb).to_linear();
         Vec3::new(c.red, c.green, c.blue)
     };
     SkyParams {
-        horizon_color: lin(settings.sky_color),
-        cloud_coverage: settings.cloud_coverage,
-        zenith_color: lin(settings.zenith_color),
-        hex_scale: settings.hex_cloud_scale,
-        cloud_color: lin(settings.cloud_color),
-        cloud_softness: settings.cloud_softness,
-        cloud_roundness: settings.cloud_roundness,
-        cloud_noise: settings.cloud_noise,
+        horizon_color: lin(lighting.sky_color),
+        cloud_coverage: lighting.cloud_coverage,
+        zenith_color: lin(lighting.zenith_color),
+        hex_scale: lighting.hex_cloud_scale,
+        cloud_color: lin(lighting.cloud_color),
+        cloud_softness: lighting.cloud_softness,
+        cloud_roundness: lighting.cloud_roundness,
+        cloud_noise: lighting.cloud_noise,
+        sun_direction: lighting.sun_direction,
+        celestial_bodies_enabled: if lighting.key_body.is_some() {
+            1.0
+        } else {
+            0.0
+        },
+        sun_disc_color: lin(lighting.sun_disc_color),
+        sun_angular_radius_radians: 0.5 * lighting.sun_angular_diameter_degrees.to_radians(),
+        moon_direction: -lighting.sun_direction,
+        moon_angular_radius_radians: 0.5 * lighting.moon_angular_diameter_degrees.to_radians(),
+        moon_disc_color: lin(lighting.moon_disc_color),
+        sun_halo_width_radians: lighting.sun_halo_width_degrees.to_radians(),
+        lower_glow_direction: lighting.lower_glow_direction,
+        moon_halo_width_radians: lighting.moon_halo_width_degrees.to_radians(),
+        lower_glow_color: lin(lighting.lower_glow_color),
+        sun_halo_strength: lighting.sun_halo_strength,
+        moon_halo_strength: lighting.moon_halo_strength,
+        lower_glow_angular_radius_radians: lighting.lower_glow_angular_radius_degrees.to_radians(),
+        lower_glow_strength: lighting.lower_glow_strength,
+        _padding: 0.0,
     }
 }
 
-/// Push sky settings into the dome material, on load and on every hot reload.
-fn apply_sky_material(
-    settings: Res<LightingSettings>,
+/// Push a resolved lighting frame into the dome material.
+pub(crate) fn apply_sky_material(
+    lighting: Res<ResolvedLighting>,
     domes: Query<&MeshMaterial3d<SkyMaterial>, With<SkyDome>>,
     mut materials: ResMut<Assets<SkyMaterial>>,
 ) {
     for handle in &domes {
         if let Some(mut material) = materials.get_mut(&handle.0) {
-            material.params = sky_params(&settings);
+            material.params = sky_params(&lighting);
         }
     }
 }

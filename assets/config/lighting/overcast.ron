@@ -5,11 +5,12 @@
 //
 // # Why weather and not a time of day
 //
-// A sunset was the obvious idea and it does not work, for a reason worth writing down:
-// **the gameplay camera looks down at the map, so you only ever see the lower band of
-// the sky dome.** `zenith_color` is essentially never on screen, and `sky_color` is the
-// whole background. Give it a warm sunset orange and the game is green terrain on a
-// flat terracotta field — it reads as clay, not as evening.
+// A first sunset attempt exposed a reason worth writing down: **the map camera looks
+// down, so most of the visible dome is below the true horizon.** `zenith_color` is
+// barely on screen and `sky_color` is most of the surround. Giving that entire band a
+// warm orange produced green terrain on a flat terracotta field, not evening. The
+// cyclic clear profile now solves that with an azimuth-local mirrored glow, while this
+// file intentionally remains a flat static weather profile.
 //
 // So a second sky has to stay sky-*coloured*. Weather changes the light without asking
 // the background to be a colour skies are not, at the one angle you can see.
