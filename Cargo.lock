@@ -3234,6 +3234,7 @@ dependencies = [
  "hexx",
  "rand 0.8.7",
  "serde",
+ "serde_json",
  "xxhash-rust",
 ]
 
@@ -3293,6 +3294,8 @@ dependencies = [
  "hex_anim",
  "hex_assets",
  "hex_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

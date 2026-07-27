@@ -11,10 +11,7 @@ description = "The lattice: the game's core rules engine — gems, fusions, spel
 hex_core = { workspace = true }
 bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
 bevy_reflect = { workspace = true }
-# Bridge: HEX-6 hoists `serde` into `[workspace.dependencies]`; until then it is
-# pinned inline exactly as `hex_assets` already does. Switch to `workspace = true`
-# when rebasing onto HEX-6.
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { workspace = true }
 
 [dev-dependencies]
 # Seeded generators for the randomised property tests — deterministic, no new

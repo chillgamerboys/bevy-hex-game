@@ -7,11 +7,13 @@
 //! coordinate (or the reverse) is a class of silent geometric bug worth making
 //! unrepresentable in the type system.
 //!
-//! [`SpellId`] and [`EnchantId`] are opaque integer handles in the
-//! [`SubstanceId`](crate::SubstanceId) style. All three carry `serde` so a
-//! `hex_lattice::LatticeSpec` round-trips — that spec serializes the *resolved*
-//! ids, while the hand-authored `lattices.ron` references elements and spells by
-//! name (resolved to these ids at load, in a later ticket).
+//! [`EnchantId`] is an opaque integer handle in the
+//! [`SubstanceId`](crate::SubstanceId) style. Both types here carry `serde` so a
+//! `hex_lattice::LatticeSpec` round-trips. The content ids a lattice cell stores —
+//! [`ElementId`](crate::ElementId) and [`SpellId`](crate::SpellId) — live in
+//! [`elements`](crate::elements), where `hex_assets` assigns them from sorted
+//! content names; a battle-local counter id like [`EnchantId`] is a different kind
+//! of identity and stays here with the lattice vocabulary.
 
 use bevy_reflect::prelude::*;
 use hexx::Hex;
@@ -88,27 +90,6 @@ impl LatticeCoord {
         Hex::new(self.q, self.r).unsigned_distance_to(Hex::new(other.q, other.r))
     }
 }
-
-/// Opaque identity of a spell.
-///
-/// A session-local handle assigned from sorted spell names by `hex_assets`. The
-/// hand-authored `lattices.ron` refers to spells by name; this id is the resolved
-/// form a `LatticeSpec` serializes.
-#[derive(
-    Reflect,
-    Serialize,
-    Deserialize,
-    Debug,
-    Default,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-)]
-pub struct SpellId(pub u16);
 
 /// A per-battle handle to an active enchantment.
 ///

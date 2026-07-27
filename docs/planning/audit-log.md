@@ -7,7 +7,7 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
-## Wave 3 — feat(hex_lattice): add the pure lattice rules engine (HEX-8) (2026-07-26)
+## Wave 5 — feat(hex_lattice): add the pure lattice rules engine (HEX-8) (2026-07-27)
 
 - **PR**: #60 — `feat/hex-8-lattice-engine`
 - **Outcome**: green
@@ -23,7 +23,37 @@ file is the record that travels with the repo.
 | 1 | `crates/hex_lattice/src/cast.rs` (`apply_cast` locked-mana fold) | NON-BLOCKER | deferred — `u16` `locked_mana` `saturating_add` could under-record a cast draining >65535 mana; out of the practical domain (mana is small by construction) |
 | 3 | `crates/hex_core/src/lattice_ids.rs` (`neighbors`/`distance`) | NON-BLOCKER | deferred — overflow at extreme `i32` coords; out of the documented small/character-local domain, matches `HexCoord`'s own lack of a bound |
 
-**Notes**: two deferrals are latent, out-of-practical-domain integer edges (mana and lattice coordinates are small by construction). Lenses 2 (deps — serde/ron/rand match the workspace, hexx correctly absent, `--all-features` unifies cleanly), 6 & 8 (N/A — no ECS systems, no RON/features in this crate), and docs lenses D1–D4 on the four changed docs all verified clean. Determinism (BTree/sorted, no float/RNG/HashMap), backtracking undo, `break_enchant` clearing all locks, and `satisfy` termination were confirmed correct. The fresh-eyes pass caught what the eight lenses missed: the SHIP-BLOCKER fix sat at plan time while the invariant-violating write is at apply time. This PR carries two rebase-time bridges (`hex_core::elements::ElementId` owned by HEX-7; inline `serde` owned by HEX-6) and must not merge until rebased onto both.
+**Notes**: two deferrals are latent, out-of-practical-domain integer edges (mana and lattice coordinates are small by construction). Lenses 2 (deps — serde/ron/rand match the workspace, hexx correctly absent, `--all-features` unifies cleanly), 6 & 8 (N/A — no ECS systems, no RON/features in this crate), and docs lenses D1–D4 on the four changed docs all verified clean. Determinism (BTree/sorted, no float/RNG/HashMap), backtracking undo, `break_enchant` clearing all locks, and `satisfy` termination were confirmed correct. The fresh-eyes pass caught what the eight lenses missed: the SHIP-BLOCKER fix sat at plan time while the invariant-violating write is at apply time. Both rebase-time bridges were resolved in the wave-integration merge: the placeholder `hex_core/src/elements.rs` was dropped for HEX-7's (which owns `ElementId` **and** `SpellId` — `SpellId` left `lattice_ids` for `elements` as a content id), and `serde` switched to the workspace dependency HEX-6 hoisted. No `hex_lattice` source changes were needed, verified by grep: every import resolves through the root re-exports. (Entry renumbered from Wave 3: two parallel sessions each claimed the next number; sequenced at integration.)
+
+## Wave 4 — feat: elements and spells as content (2026-07-27)
+
+- **PR**: #63 (successor of the auto-closed #62) — `feat/hex-7-elements-and-spells`
+- **Outcome**: green
+- **Lenses triggered**: 1, 3, 8, doc build, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| doc build | `crates/hex_assets/{elements,spells}.rs` | SHIP-BLOCKER | fixed in `b22db57` — public docs intra-doc-linked the private `Unvalidated*` mirrors; the workspace doc gate runs `-D warnings` |
+| 3 | `crates/hex_assets/src/elements.rs`:128 | NON-BLOCKER | fixed in follow-up — fusion recipes had no upper input bound while spells cap at six; same six-neighbour ring, now enforced with a rejection test |
+| 8 | `crates/hex_assets/src/spells.rs`:255 | NON-BLOCKER | fixed in follow-up — `SelfCast` with a nonzero range parsed cleanly and meant nothing; rejected at parse with a rejection test |
+| 1 (fresh-eyes) | `crates/hex_assets/src/content_index.rs`:9 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — the kept last-valid index can desync from independently rebuilt tables' reassigned ids; needs coupling when a real consumer exists |
+| 1 | `crates/hex_assets/src/content_index.rs`:154 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — initial-load dangling cross-references log-and-continue instead of stalling the gate; the gate must wait on the index once something consumes it |
+
+**Notes**: reviewed on the wave-integration model — diffs against `wave/1-foundations`, gate run on the merged state (411 tests green, clippy/deny/ship clean). Schema fidelity to the frozen audit §8 verified: no code matches on an element name, opposition is index arithmetic, ids from byte-order sorted names, both new tables and the index keep the rebuild-deferred-during-Gameplay guard. The deliberate divergence from the audit sketch — flat defense on the `Enchantment` casting axis rather than an effect — is an improvement and is recorded here as accepted.
+
+## Wave 3 — feat(core): serde derives across the domain vocabulary (2026-07-26)
+
+- **PR**: #59 — `feat/hex-6-serde-vocabulary`
+- **Outcome**: green
+- **Lenses triggered**: 2 (Cargo hoist consolidation), plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_assets/Cargo.toml`:12 | NON-BLOCKER | deferred — serde/serde_json stay per-crate pins in hex_assets and hex_map, so the workspace hoist is not yet the sole source; hex_map is the colleague's off-limits crate and hex_assets is HEX-7's parallel territory, and all pins match (serde `1.0.229`, serde_json `1`) so there is no active drift |
+| fresh-eyes | `crates/hex_core/src/terrain.rs`:21 | NON-BLOCKER | fixed in `5dcc9d4` — the `MapAnchorId` doc justified its newtype pattern by "keeping serialization dependencies out of this bottom-level domain crate"; hoisting serde into hex_core falsified that, so the rationale was rewritten to the reason that still holds (single construction path, not pinned to an on-disk format) |
+| fresh-eyes (wave review) | `crates/hex_core/src/hex.rs`:95 | NON-BLOCKER | fixed in follow-up — `HexCoord`'s wire keys were its private field identifiers, so an internal rename would compile clean, pass the symmetric round-trip test, and silently change save files; the wire names are now deliberate axial `q`/`r` via serde renames, pinned by a concrete-string snapshot test |
+
+**Notes**: no ship-blockers. Pure additive data-layer change — serde on `TilePos`, `HexCoord` (axial-only storage keeps the cube invariant by construction), `SubstanceId`, `TerrainEdit`, `TraversalProfile`, `Turn`, `Faction`, `Body`; `HexSpan` deliberately excluded (floats stay out of saves) and the marker / map-measured types (`Headroom`, `HexGrid`, `HexTile`, `TraversalEndpoint`) left for the save work. `Turn` also gained `PartialEq`/`Eq` for the round-trip assertion (rustfmt then wrapped its derive). fmt, clippy (`-D warnings`), workspace tests, and the ship build all green; no rendering / movement / state surface, so no visual walk applies.
 
 ## Wave 2 — docs(planning): sequence the roadmap into waves around the V2 work (2026-07-26)
 

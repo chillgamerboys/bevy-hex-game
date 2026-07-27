@@ -29,6 +29,7 @@
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::HexCoord;
 
@@ -42,7 +43,21 @@ pub type Level = i32;
 /// Identity of a single voxel: which hex, and how far up.
 ///
 /// See the [module documentation](self) for why this rather than an [`Entity`].
-#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Component,
+    Reflect,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
 #[reflect(Component)]
 pub struct TilePos {
     /// Which hex column.
@@ -146,7 +161,21 @@ impl TilePos {
 /// `assets/config/substances.ron` rather than to this crate. Terrain generation still
 /// has to select that substance before it appears in a generated world. The table
 /// mapping ids to names and properties is loaded by `hex_assets`.
-#[derive(Component, Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Component,
+    Reflect,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
 #[reflect(Component)]
 pub struct SubstanceId(pub u16);
 
@@ -178,7 +207,7 @@ impl SubstanceId {
 /// Reading terrain does not go through here: gameplay queries entities marked
 /// [`HexTile`](crate::HexTile) for their [`TilePos`], [`HexSpan`](crate::HexSpan),
 /// [`SubstanceId`] and [`Headroom`].
-#[derive(Message, Debug, Clone, PartialEq, Eq)]
+#[derive(Message, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerrainEdit {
     /// Replace the voxel at `pos` with `substance`, unless its current substance is
     /// non-diggable.

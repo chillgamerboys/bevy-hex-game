@@ -22,14 +22,24 @@ preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range.
 
-The **lattice engine now exists** as a pure crate (`hex_lattice`): casting
+The element wheel and spells now load as **validated content**: `elements.ron` (the
+six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
+`spells.ron` (requirements as an element multiset with tier ≤ 6, casting and mana axes,
+targeting, and a closed effect enum). A `ContentIndex` resolves every element and
+substance name a spell references; a dangling reference is logged and the last valid
+content kept, and a test opens everything shipped so a broken reference cannot ship.
+`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
+`SubstanceId`. A dev-feature stub logs the resolved spell list to prove the pipeline
+end to end.
+
+The **lattice engine also exists** as a pure crate (`hex_lattice`): casting
 (`castable` → a `CastPlan` or a blocked reason), applying casts, disables that break
 enchantments and burn their locked mana, channelling, and a property suite carrying
-the design's geometric theorems — all headless. But it is **not yet wired into units
-or combat**: nothing spawns with a lattice, and there is still no in-game casting or
-damage (that is the "lattices wired" work). Bodies are one hex wide; there is no
-footprint for anything larger, and units do not obstruct each other — so a route may
-be drawn straight through another piece.
+the design's geometric theorems — all headless. Content and engine are **not yet
+joined**: the `FusionTable`/`SpellTable` wiring and everything that spawns units with
+lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). Bodies
+are one hex wide; there is no footprint for anything larger, and units do not obstruct
+each other — so a route may be drawn straight through another piece.
 
 ## What is provisional
 

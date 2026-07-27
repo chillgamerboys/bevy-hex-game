@@ -17,13 +17,11 @@ bevy_reflect = { workspace = true }
 bevy_state = { version = "0.19", default-features = false, features = ["bevy_app", "bevy_reflect"] }
 hexx = { version = "0.24", default-features = false, features = ["algorithms", "grid"] }
 rand = { workspace = true }
-# Bridge (HEX-6 owns this): serde is not yet a workspace dependency, so it is
-# pinned inline as `hex_assets` already does. HEX-6 hoists it into
-# `[workspace.dependencies]` and this becomes `serde = { workspace = true }`. It is
-# here for the `lattice_ids`/`elements` id newtypes, which round-trip in a
-# `LatticeSpec`.
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { workspace = true }
 xxhash-rust = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
 
 [lints]
 workspace = true
