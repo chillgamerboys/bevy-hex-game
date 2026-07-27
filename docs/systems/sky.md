@@ -3,7 +3,8 @@
 The sky is neither a cubemap nor Bevy's `Atmosphere`. It is a custom `Material`
 (`hex_world::sky_material::SkyMaterial`) whose fragment shader
 (`assets/shaders/sky.wgsl`) computes a colour per pixel from the view direction: a
-vertical horizon→zenith gradient with static hexagonal clouds.
+vertical horizon→zenith gradient, optional celestial bodies and halos, and static
+hexagonal clouds.
 
 It renders on the inside of a large inverted sphere — the *sky dome* — spawned at
 `Startup` beside the camera. `SkyMaterial::specialize` sets `cull_mode = None` so
@@ -42,7 +43,19 @@ Choices worth knowing:
   colour discontinuity computed inside the fragment shader, and there is no
   post-process AA in the project — a fixed-width edge shimmered and read as
   low-resolution.
+- **The sun and moon are shader discs, not scene meshes.** Their authored angular
+  sizes stay constant at every camera radius. The renderer derives the light ray and
+  body direction from one resolved vector, keeps the moon opposite the sun, clips
+  discs at the true horizon, and uses the same analytic derivative approach on their
+  edges. Clouds are evaluated last so they can cover a body naturally.
+- **Sunset glow is local in azimuth.** A mirrored patch on the lower dome carries the
+  low sun's colour into the downward map view. It is intentionally restrained and
+  directional: tinting the whole lower dome produced a flat terracotta surround.
 
-Colours and cloud parameters come from `LightingSettings` and are pushed into the
-material by `apply_sky_material` on load and on every hot reload — see
-[development/config.md](../development/config.md) for the knobs.
+`LightingSettings` resolves either its legacy static values or a cycle keyframe pair
+into `ResolvedLighting`. `TimeOfDay` is a reflected gameplay-session resource; changing
+it does not advance a simulation clock, it simply resolves another deterministic
+frame. `apply_sky_material` pushes that same frame into the dome while the lighting
+system applies it to the single shadow-casting key light, exposure, ambient fill,
+environment fill, and fog. See [development/config.md](../development/config.md) for
+the authored controls.

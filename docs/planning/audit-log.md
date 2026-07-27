@@ -7,6 +7,43 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 7 — feat(world): add celestial lighting and time-of-day scrubber (2026-07-27)
+
+- **PR**: #64 — `feat/celestial-lighting`
+- **Outcome**: green — 0 ship-blockers, 4 non-blockers, all left with the crate owner
+- **Lenses triggered**: 3, 8, plus the fresh-eyes pass; all seven Bevy-0.19 trap checks explicitly cleared
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 3 | `crates/hex_world/src/sky.rs`:31 | NON-BLOCKER | deferred to owner — `ResolvedLighting` derives `Reflect` + `#[reflect(Resource)]` but no plugin registers it; invisible in the inspector, against the register-what-you-introduce convention |
+| 8 | `crates/hex_assets/src/scenario.rs`:38 | NON-BLOCKER | deferred — `Scenario` lacks `deny_unknown_fields` just as it gains its first gameplay-visible optional field; a misspelled `starting_time_hours` silently launches at the cycle's noon default |
+| 8 | `assets/shaders/sky.wgsl` | NON-BLOCKER | residual — +102 lines of surface on the documented silent-black-sky naga trap; current code verified safe (`fwidth` only under uniform control flow) |
+| fresh-eyes | `crates/hex_assets/src/settings.rs`:589 | NON-BLOCKER | deferred — `validate_dark_handoffs` guards the flip keyframe, not the mid-segment elevation zero-crossing where the 180° key flip actually occurs; the shipped RON authors near-zero handoff elevations |
+
+**Notes**: verified on a local merge-with-dev tree (435 tests green, fmt/clippy/deny/doc/links/ship clean). Claim-level checks all held: hot-reload keep-last-valid is real (a failed parse emits no `Modified` event, so the resource is never replaced); exactly one shadow-casting celestial light across scrubbing and gameplay re-entry, pinned by test; the static profile's `exposure_ev100: 9.7` equals Bevy 0.19's `Exposure::default()`, which is what grounds the pixel-identical claim for legacy looks; `TimeOfDay` is genuinely session-static with change-tick-gated resolution (zero per-frame lighting work on a frozen clock); the new `HEX_REVIEW_TIME`/`HEX_REVIEW_CAMERA` overrides stay fully behind `map-review`. Cross-boundary edits: `hex_core/src/view.rs` adds the single shared `CameraFocusTarget` marker (registered by `hex_units::selection` per the convention), and the `hex_units` selection bridge was explicitly ACKed by its crate owner in review. Walk items this merge adds: the actual sky across scrubbed hours, and the close camera's widened 4.5° uphill pitch.
+
+## Wave 6 — feat(map): add procedural V2 Hills parity (2026-07-27)
+
+- **PR**: #58 — `feat/procedural-v2-hills`
+- **Outcome**: green — 0 ship-blockers, 4 non-blockers, all left with the crate owner
+- **Lenses triggered**: 2, 7, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_map/src/procedural_v2/hills.rs`:331 | NON-BLOCKER | deferred to owner — `covered_by_solid` surface rule and `element_levels` duplicate `volume.rs` logic; drift fails loudly (`InvalidVolume` at load), never silently |
+| 2 | `crates/hex_map/src/settings.rs`:635 | NON-BLOCKER | deferred to owner — V2 bounds duplicate `HillsSettings::validate`, and `canonical_v1_settings` bypasses V1 parse-time validation, so the V2 copy is the only fence keeping the frozen selector in its tested domain (verified identical today) |
+| 7 | `crates/hex_map/src/procedural_v2/hills.rs`:679 | NON-BLOCKER | deferred to owner — `_candidate_diagnostics` binds `notes` without asserting; a notes-pollution regression would pass the parity suite |
+| fresh-eyes | `crates/hex_map/src/grid.rs`:182 | NON-BLOCKER | **walk-checklist item** — the three shipped worlds now frame the opening camera from the generated `MapViewHint` instead of `camera.ron`; terrain is byte-identical, the first view is not; only a human can judge it |
+
+**Notes**: the deep walk corrected two characterizations from the initial review
+comment: a future substance whose palette role disagrees with `is_solid` fails
+**loudly** (`voxelize_plan` re-checks solidity per element → `MaterialContract` →
+`GameplaySetupFailure`), and success-path `GenerationReport.notes` stay empty on
+the shipped Hills path (V1 discards rejected-candidate notes on non-fallback
+success; the `scenarios.rs` relaxation is future-proofing for `run_recipe`
+consumers). Silent-failures pass: 0 real candidates. Numbering: Waves 3–5 were
+recorded on `wave/1-foundations` and land with the wave merge; this entry takes 6
+so the merged log stays monotonic.
 ## Wave 5 — feat(hex_lattice): add the pure lattice rules engine (HEX-8) (2026-07-27)
 
 - **PR**: #60 — `feat/hex-8-lattice-engine`

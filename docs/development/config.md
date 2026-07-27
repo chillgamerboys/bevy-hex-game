@@ -10,7 +10,7 @@ Rust, and you do not need to recompile the game.
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
-| `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
+| `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size, movement speed and colour |
 | `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
@@ -32,7 +32,7 @@ How quickly you *see* the change depends on which file:
 
 | File | When it takes effect |
 |---|---|
-| `camera.ron` | Movement values straight away; initial frame on the next rebuild |
+| `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
@@ -101,8 +101,8 @@ must clear the water, and the switchback must be contiguous and long enough to c
 one level at a time. An invalid save is reported in the terminal and the previous
 valid settings remain active.
 
-**Use procedural terrain instead.** Generator version 1 separates the broad landform,
-its materials, and its tactical structure:
+**Reproduce a frozen procedural map.** Generator version 1 separates the broad
+landform, its materials, and its tactical structure:
 
 ```ron
 terrain: Procedural((
@@ -129,10 +129,8 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-Generator version 2 uses one geometry recipe plus a separate material environment.
-The shape below documents the V2 schema while its recipes land in sequential PRs;
-until the V2 Hills recipe is shipped, selecting it reports a setup failure instead of
-publishing partial terrain:
+**Use current procedural terrain.** Generator version 2 uses one geometry recipe plus
+a separate material environment. Hills is the first shipped V2 recipe:
 
 ```ron
 terrain: Procedural((
@@ -146,12 +144,18 @@ terrain: Procedural((
 )),
 ```
 
-V2 Hills derives its three-wide hazard, two-wide crossings, bed and hazard bounds,
-and bridge level from `valley_level`; those invariants are intentionally not editable.
-Other V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`. Recipe and
-environment combinations are validated together: Mountains uses `Frozen`, Caves
-uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded settings
-active.
+V2 Hills preserves the approved V1 maps for equivalent Hills settings and seeds while
+publishing them through the V2 volume pipeline. It derives its three-wide hazard,
+two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`; those
+invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
+this recipe in the shipped scenario library.
+
+The remaining V2 recipe forms are `LayeredSkyIslands`, `Mountains`, and `Caves`.
+Their settings schemas are reserved while those generators land sequentially; selecting
+an unavailable recipe reports a setup failure rather than publishing partial terrain.
+Recipe and environment combinations are validated together: Mountains uses `Frozen`,
+Caves uses `Rocky`, and invalid combinations leave the previous valid hot-reloaded
+settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
@@ -203,43 +207,74 @@ directly.
 default `0.4` is quite flat; raising it towards `1.0` gives blockier terrain that reads
 better once you are digging into it.
 
-**Time of day.** In `lighting.ron`, `sun_rotation` is the sun's angle in radians
-(a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for overcast;
-`100000.0` is direct noon sun. `sun_color` tints it: warm values read as a low sun.
+**Time of day.** Lighting files have one of two profiles:
 
-> **Change the second number, not the first.** The three are Euler angles rather than
-> "height, compass, roll" — they wrap past 6.28, and whether the sun ends up above or
-> below the horizon depends on the first two *together*. The second swings it round the
-> compass and is safe to play with; changing the first as well can put the sun
-> underneath the map, which lights nothing and renders the terrain as a black mass with
-> no error anywhere. This has happened. There is now a test for it.
+- `Static` keeps the flat values in the file. Omitting `profile` also means `Static`,
+  so older files and `lighting/overcast.ron` keep their exact appearance.
+- `Cycle((...))` resolves an ordered set of clear-sky keyframes. The shipped
+  `lighting.ron` has midnight, pre-dawn, sunrise, noon, golden-hour, sunset, and night
+  entries and starts at noon.
+
+Run `cargo dev`, enter gameplay, and edit the reflected `TimeOfDay.hours` resource in
+the inspector to scrub the clear cycle. The clock is session-only and does not advance
+on its own. A scenario can set `starting_time_hours: Some(18.5)`; an authored hour is
+rejected when that scenario selects static lighting.
+
+Cycle directions use explicit azimuth and elevation in degrees. Colours interpolate in
+linear RGB, exposure interpolates in EV100, and the last keyframe wraps smoothly back
+to midnight. Exactly one directional key light casts shadows: the sun supplies it
+during the day and the moon supplies a deliberately brighter-than-physical key at
+night.
+
+The legacy flat fields remain the complete static appearance. In a cycle profile,
+cloud coverage and shape still come from the flat fields; light, colour, fog, and
+exposure come from the keyframes. The shipped noon keyframe deliberately duplicates
+the flat compatibility values, but changing a flat `sun_illuminance` does not rewrite
+that keyframe. In a static profile, `sun_rotation` is still an XYZ Euler angle in
+radians (a full circle is about 6.28). Lower `sun_illuminance` towards `1000.0` for
+overcast; `100000.0` is direct noon sun. `sun_color` tints it.
+
+> **For static lighting, change the second rotation number first.** The three values
+> are Euler angles rather than "height, compass, roll", and whether the sun ends up
+> above or below the horizon depends on the first two together. An invalid combination
+> can put the sun underneath the map, lighting nothing. Cycle profiles avoid that
+> ambiguity by authoring azimuth and elevation directly.
 
 The sun is worth treating carefully. The terrain has no texture, so **shadows are the
 only thing giving it shape** — changes that weaken them, or that light the shadowed
 faces back up, tend to read as "flat" rather than "soft".
 
-**Two extras that ship switched off.** Both live in `lighting.ron` and are worth
-knowing about before you reach for them:
+**Directional fill and haze.** Both live in `lighting.ron`. Their top-level values
+form the static/noon compatibility baseline and ship switched off:
 
 ```ron
 sky_light_intensity: 0.0,   // a soft fill from the sky itself
 fog_density:         0.0,   // distance haze
 ```
 
-`sky_light_intensity` adds light that varies with which way a surface faces — blue from
-overhead, a warm bounce from the ground — so it colours shadows instead of flooding
-everything equally. It is the honest way to soften shadows. Try `100`–`200` first;
-several hundred already starts washing out the shading that gives terrain its shape.
-`ground_color` sets the bounce colour underneath it.
+Cycle keyframes can enable either value away from noon. `sky_light_intensity` adds
+light that varies with which way a surface faces — blue from overhead, a warm bounce
+from the ground — so it colours shadows instead of flooding everything equally. It is
+the honest way to soften shadows. Try `100`–`200` first; several hundred already starts
+washing out the shading that gives terrain its shape. `ground_color` sets the bounce
+colour underneath it.
 
 `fog_density` hazes distant terrain, tinted `fog_color` and glowing `fog_sun_color`
-towards the sun. At this camera distance it costs more colour than it buys atmosphere,
-which is why it is off — `0.002` is about as much as is worth trying.
+towards the key light. At this camera distance it costs more colour than it buys
+atmosphere, which is why it is off at the static/noon baseline; cycle twilight uses
+only a restrained amount. `0.002` is about as much as is worth trying.
 
-**The sky and its clouds.** The sky is drawn procedurally — a vertical colour
-gradient with hexagonal clouds — and every part of it lives in `lighting.ron`.
-Like everything else in that file it updates **straight away**: edit, save, and the sky
-changes while you watch. It is the easiest thing in the game to tune.
+**The sky, celestial bodies, and clouds.** The sky is drawn procedurally: a vertical
+colour gradient, visible sun and full-moon discs for cycle profiles, localized halos,
+and hexagonal clouds. Every part lives in `lighting.ron`. Like everything else in that
+file it updates **straight away**: edit, save, and the sky changes while you watch.
+
+The sun and moon use the same resolved directions as the directional light, with the
+moon exactly opposite the sun. Their angular diameters and halo widths are set once on
+the cycle profile. Discs are drawn only above the true horizon. A restrained,
+azimuth-local lower-dome glow lets sunset remain visible from the downward map camera
+without tinting the entire surround orange. Clouds composite last and can obscure both
+discs and halos.
 
 The gradient runs between two colours:
 

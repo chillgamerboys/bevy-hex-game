@@ -16,7 +16,17 @@ pub mod sky;
 /// Procedural sky material.
 mod sky_material;
 
-pub use camera::PanOrbitCamera;
+pub use camera::{CameraMode, PanOrbitCamera};
+pub use sky::TimeOfDay;
+
+/// Same-frame ordering for resolving designer inputs and applying one coherent frame.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum LightingSystems {
+    /// Turn settings and the session clock into a renderer-safe snapshot.
+    Resolve,
+    /// Apply that snapshot to lights, views, and the sky material.
+    Apply,
+}
 
 /// Adds every world-presentation system.
 pub fn plugin(app: &mut App) {

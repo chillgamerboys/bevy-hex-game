@@ -276,7 +276,7 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron` | Immediate |
+| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
 | At spawn | `world.ron`, `substances.ron`, `player.ron` scale/colour | Next `OnEnter(Screen::Gameplay)` |
 

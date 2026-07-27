@@ -1,6 +1,14 @@
 //! Recipe-independent candidate selection for procedural generator V2.
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the generic V2 runner becomes live with the first native recipe"
+    )
+)]
 
 use std::fmt::Debug;
+use std::ops::Deref;
 
 use hex_core::{
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
@@ -8,7 +16,7 @@ use hex_core::{
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::seed::SeedStreams;
-use super::volume::{voxelize, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
+use super::volume::{voxelize_prevalidated, SurfaceAccess, TerrainVolumePlan, VoxelizedTerrain};
 use super::V2GenerationError;
 use crate::terrain::TerrainPalette;
 use crate::voxel::VoxelMap;
@@ -20,6 +28,13 @@ pub(crate) const MAX_REPAIR_ROUNDS: u8 = 4;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CandidateContext {
     pub(crate) grid_radius: u32,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "mock recipes exercise named streams rather than the raw seed"
+        )
+    )]
     pub(crate) seed: u64,
     pub(crate) candidate: u8,
     pub(crate) streams: SeedStreams,
@@ -38,15 +53,27 @@ impl CandidateContext {
 }
 
 /// Stable inputs available while constructing a separately authored fallback.
+///
+/// Native V2 fallbacks should derive geometry without sampling the seed. The seed is
+/// retained for compatibility recipes whose frozen material classification included
+/// it even on an otherwise canonical fallback.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FallbackContext {
     pub(crate) grid_radius: u32,
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "mock canonical fallbacks deliberately ignore the requested seed"
+        )
+    )]
+    pub(crate) seed: u64,
 }
 
 impl FallbackContext {
     #[must_use]
-    const fn new(grid_radius: u32) -> Self {
-        Self { grid_radius }
+    const fn new(grid_radius: u32, seed: u64) -> Self {
+        Self { grid_radius, seed }
     }
 }
 
@@ -174,6 +201,15 @@ pub(crate) trait V2Recipe {
         candidate: u8,
     ) -> Self::Score;
 
+    /// Semantic repairs completed before the common V2 runner receives the plan.
+    ///
+    /// Compatibility constructors may import repairs already performed by a frozen
+    /// generator. Native V2 recipes should normally return an empty list and use
+    /// [`Self::repair`] so the common runner owns their repair bound.
+    fn preexisting_repair_actions(&self, _plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
+        Vec::new()
+    }
+
     fn canonical_fallback(
         &self,
         context: FallbackContext,
@@ -192,6 +228,43 @@ pub(crate) struct RecipeSelection<M, V> {
     pub(crate) repair_actions: Vec<String>,
     pub(crate) used_fallback: bool,
     pub(crate) notes: Vec<String>,
+}
+
+/// Type-state proof that the complete semantic volume passed common validation.
+///
+/// The wrapper deliberately exposes no mutable dereference. A layered recipe must
+/// consume it with [`Self::into_unvalidated`], change the raw plan, then submit the
+/// layered recipe through [`run_recipe`] before materialization.
+#[derive(Debug)]
+pub(crate) struct ValidatedRecipeSelection<M, V>(RecipeSelection<M, V>);
+
+impl<M, V> ValidatedRecipeSelection<M, V> {
+    /// Imports a selection whose recipe-specific validation happened outside V2.
+    ///
+    /// Native and layered V2 recipes must use [`run_recipe`] so this common volume
+    /// check cannot preserve stale recipe metrics after a semantic change.
+    pub(super) fn from_compatibility_import(
+        selection: RecipeSelection<M, V>,
+    ) -> Result<Self, V2GenerationError> {
+        selection.plan.volume.validate()?;
+        Ok(Self(selection))
+    }
+
+    pub(crate) fn into_unvalidated(self) -> RecipeSelection<M, V> {
+        self.0
+    }
+
+    const fn from_recipe_validation(selection: RecipeSelection<M, V>) -> Self {
+        Self(selection)
+    }
+}
+
+impl<M, V> Deref for ValidatedRecipeSelection<M, V> {
+    type Target = RecipeSelection<M, V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 /// Fully materialized result of one selected recipe candidate.
@@ -219,10 +292,42 @@ pub(crate) struct MaterializedSelection<M, V> {
 
 /// Resolves one selected semantic plan into voxels and exact generated resources.
 pub(crate) fn materialize_selection<M, V>(
-    selection: RecipeSelection<M, V>,
+    selection: ValidatedRecipeSelection<M, V>,
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<MaterializedSelection<M, V>, V2GenerationError> {
+    let selection = selection.into_unvalidated();
+    let VoxelizedTerrain { map, interiors } =
+        voxelize_prevalidated(&selection.plan.volume, palette, is_solid)?;
+    let special_regions = exact_special_regions(&selection.plan.volume);
+    let map_fingerprint = materialized_map_fingerprint(&map, &special_regions, &interiors);
+    Ok(assemble_materialized(
+        selection,
+        map,
+        interiors,
+        special_regions,
+        map_fingerprint,
+    ))
+}
+
+fn exact_special_regions(volume: &TerrainVolumePlan) -> SpecialMovementRegions {
+    volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, surface)| match surface.access {
+            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
+            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
+        })
+        .collect()
+}
+
+fn assemble_materialized<M, V>(
+    selection: RecipeSelection<M, V>,
+    map: VoxelMap,
+    interiors: InteriorRegions,
+    special_regions: SpecialMovementRegions,
+    map_fingerprint: u64,
+) -> MaterializedSelection<M, V> {
     let RecipeSelection {
         plan,
         metrics,
@@ -240,19 +345,9 @@ pub(crate) fn materialize_selection<M, V>(
         .iter()
         .map(|(name, position)| (MapAnchorId::from(name.clone()), *position))
         .collect();
-    let special_regions = volume
-        .surfaces
-        .iter()
-        .filter_map(|(position, surface)| match surface.access {
-            SurfaceAccess::SpecialMovement(region) => Some((*position, region)),
-            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => None,
-        })
-        .collect();
     let view_hint = volume.view_hint;
-    let VoxelizedTerrain { map, interiors } = voxelize(&volume, palette, is_solid)?;
-    let map_fingerprint = materialized_map_fingerprint(&map, &special_regions, &interiors);
 
-    Ok(MaterializedSelection {
+    MaterializedSelection {
         map,
         anchors,
         special_regions,
@@ -267,7 +362,7 @@ pub(crate) fn materialize_selection<M, V>(
         used_fallback,
         notes,
         map_fingerprint,
-    })
+    }
 }
 
 /// Extends the frozen V1 identity only when a map has exact interior semantics.
@@ -331,7 +426,7 @@ pub(crate) fn run_recipe<R>(
     settings: &R::Settings,
     grid_radius: u32,
     seed: u64,
-) -> Result<RecipeSelection<R::Metadata, R::Metrics>, V2GenerationError>
+) -> Result<ValidatedRecipeSelection<R::Metadata, R::Metrics>, V2GenerationError>
 where
     R: V2Recipe,
 {
@@ -384,20 +479,23 @@ where
             .cmp(&right.score)
             .then_with(|| left.candidate.cmp(&right.candidate))
     }) {
-        return Ok(RecipeSelection {
-            plan: selected.plan,
-            metrics: selected.metrics,
-            selected_candidate: Some(selected.candidate),
-            candidates_evaluated: CANDIDATE_COUNT,
-            valid_candidates,
-            repair_actions: selected.repair_actions,
-            used_fallback: false,
-            notes: rejected_notes,
-        });
+        return Ok(ValidatedRecipeSelection::from_recipe_validation(
+            RecipeSelection {
+                plan: selected.plan,
+                metrics: selected.metrics,
+                selected_candidate: Some(selected.candidate),
+                candidates_evaluated: CANDIDATE_COUNT,
+                valid_candidates,
+                repair_actions: selected.repair_actions,
+                used_fallback: false,
+                notes: rejected_notes,
+            },
+        ));
     }
 
-    let fallback_context = FallbackContext::new(grid_radius);
+    let fallback_context = FallbackContext::new(grid_radius, seed);
     let fallback = recipe.canonical_fallback(fallback_context, settings)?;
+    let fallback_repair_actions = bounded_preexisting_repairs(recipe, &fallback)?;
     let validation = validate_plan(
         recipe,
         settings,
@@ -412,16 +510,18 @@ where
     };
     rejected_notes.push("all random candidates failed; canonical fallback selected".to_owned());
 
-    Ok(RecipeSelection {
-        plan: fallback,
-        metrics,
-        selected_candidate: None,
-        candidates_evaluated: CANDIDATE_COUNT,
-        valid_candidates: 0,
-        repair_actions: Vec::new(),
-        used_fallback: true,
-        notes: rejected_notes,
-    })
+    Ok(ValidatedRecipeSelection::from_recipe_validation(
+        RecipeSelection {
+            plan: fallback,
+            metrics,
+            selected_candidate: None,
+            candidates_evaluated: CANDIDATE_COUNT,
+            valid_candidates: 0,
+            repair_actions: fallback_repair_actions,
+            used_fallback: true,
+            notes: rejected_notes,
+        },
+    ))
 }
 
 fn validate_and_repair<R>(
@@ -433,10 +533,11 @@ fn validate_and_repair<R>(
 where
     R: V2Recipe,
 {
-    let mut repair_actions = Vec::new();
+    let mut repair_actions = bounded_preexisting_repairs(recipe, plan)?;
+    let first_available_round = u8::try_from(repair_actions.len()).unwrap_or(MAX_REPAIR_ROUNDS);
     let validation_context = ValidationContext::candidate(context.grid_radius, context.candidate);
     let mut validation = validate_plan(recipe, settings, validation_context, plan)?;
-    for round in 0..MAX_REPAIR_ROUNDS {
+    for round in first_available_round..MAX_REPAIR_ROUNDS {
         let RecipeValidation::Invalid(issues) = &validation else {
             break;
         };
@@ -462,6 +563,23 @@ where
         validation = validate_plan(recipe, settings, validation_context, plan)?;
     }
     Ok((validation, repair_actions))
+}
+
+fn bounded_preexisting_repairs<R>(
+    recipe: &R,
+    plan: &RecipePlan<R::Metadata>,
+) -> Result<Vec<String>, V2GenerationError>
+where
+    R: V2Recipe,
+{
+    let actions = recipe.preexisting_repair_actions(plan);
+    if actions.len() > usize::from(MAX_REPAIR_ROUNDS) {
+        return Err(V2GenerationError::RecipeContract(format!(
+            "candidate imported {} repair rounds; the V2 limit is {MAX_REPAIR_ROUNDS}",
+            actions.len()
+        )));
+    }
+    Ok(actions)
 }
 
 fn validate_plan<R>(
@@ -513,6 +631,7 @@ mod tests {
         fatal_repair: Option<(u8, u8)>,
         no_change: Option<u8>,
         equal_scores: bool,
+        imported_repairs: u8,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,6 +639,7 @@ mod tests {
         candidate: u8,
         repairs: u8,
         fallback: bool,
+        imported_repairs: u8,
     }
 
     #[derive(Default)]
@@ -556,8 +676,9 @@ mod tests {
                 context.grid_radius,
                 MockMetadata {
                     candidate: context.candidate,
-                    repairs: 0,
+                    repairs: settings.imported_repairs,
                     fallback: false,
+                    imported_repairs: settings.imported_repairs,
                 },
             ))
         }
@@ -629,6 +750,17 @@ mod tests {
             }
         }
 
+        fn preexisting_repair_actions(&self, plan: &RecipePlan<Self::Metadata>) -> Vec<String> {
+            let count = if plan.metadata.fallback {
+                plan.metadata.imported_repairs.max(1)
+            } else {
+                plan.metadata.imported_repairs
+            };
+            (0..count)
+                .map(|round| format!("imported repair {round}"))
+                .collect()
+        }
+
         fn canonical_fallback(
             &self,
             context: FallbackContext,
@@ -640,6 +772,7 @@ mod tests {
                     candidate: 0,
                     repairs: 0,
                     fallback: true,
+                    imported_repairs: settings.imported_repairs,
                 },
             );
             if settings.invalid_fallback_volume {
@@ -708,6 +841,10 @@ mod tests {
 
     #[test]
     fn evaluates_exactly_eight_candidates_and_caps_each_repair_sequence() {
+        let _stream_identity = CandidateContext::new(12, 77, 0)
+            .streams
+            .stage("mock.construct")
+            .sample(0);
         let recipe = MockRecipe::default();
         let selection = run_recipe(&recipe, &MockSettings::default(), 12, 77)
             .expect("at least one deterministic candidate should pass");
@@ -719,6 +856,51 @@ mod tests {
         assert!(
             recipe.repairs.get() <= CANDIDATE_COUNT.saturating_mul(MAX_REPAIR_ROUNDS),
             "no candidate may exceed the repair bound"
+        );
+    }
+
+    #[test]
+    fn imported_repairs_consume_the_shared_four_round_budget() {
+        let recipe = MockRecipe::default();
+        let selection = run_recipe(
+            &recipe,
+            &MockSettings {
+                imported_repairs: MAX_REPAIR_ROUNDS,
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect("a candidate finalized within the imported repair budget should pass");
+
+        assert_eq!(selection.selected_candidate, Some(1));
+        assert_eq!(
+            selection.repair_actions.len(),
+            usize::from(MAX_REPAIR_ROUNDS)
+        );
+        assert_eq!(
+            recipe.repairs.get(),
+            0,
+            "the common runner must not add rounds after the imported budget is exhausted"
+        );
+    }
+
+    #[test]
+    fn excessive_imported_repairs_are_a_recipe_contract_error() {
+        let error = run_recipe(
+            &MockRecipe::default(),
+            &MockSettings {
+                imported_repairs: MAX_REPAIR_ROUNDS.saturating_add(1),
+                ..MockSettings::default()
+            },
+            12,
+            77,
+        )
+        .expect_err("more than four imported repair rounds must be rejected");
+
+        assert!(
+            matches!(error, V2GenerationError::RecipeContract(_)),
+            "unexpected error: {error}"
         );
     }
 
@@ -875,6 +1057,11 @@ mod tests {
         assert_eq!(selection.valid_candidates, 0);
         assert!(selection.plan.metadata.fallback);
         assert_eq!(
+            selection.repair_actions,
+            ["imported repair 0"],
+            "compatibility fallback repairs must survive common selection"
+        );
+        assert_eq!(
             recipe.repairs.get(),
             CANDIDATE_COUNT.saturating_mul(MAX_REPAIR_ROUNDS)
         );
@@ -984,6 +1171,21 @@ mod tests {
             materialized.map_fingerprint,
             crate::procedural::map_fingerprint(&materialized.map, &materialized.special_regions),
             "an interior-free V2 map must retain the exact V1 map identity"
+        );
+    }
+
+    #[test]
+    fn compatibility_import_rechecks_common_volume() {
+        let validated = run_recipe(&MockRecipe::default(), &MockSettings::default(), 12, 77)
+            .expect("the source selection should be valid");
+        let mut changed = validated.into_unvalidated();
+        changed.plan.volume.columns.remove(&HexCoord::ORIGIN);
+
+        let error = ValidatedRecipeSelection::from_compatibility_import(changed)
+            .expect_err("a compatibility import must re-enter common validation");
+        assert!(
+            error.to_string().contains("volume footprint"),
+            "the common validation issue should be preserved: {error}"
         );
     }
 

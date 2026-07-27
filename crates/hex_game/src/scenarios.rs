@@ -25,6 +25,7 @@ use hex_core::{
 };
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::{Enemy, Player};
+use hex_world::TimeOfDay;
 
 pub(super) fn plugin(app: &mut App) {
     // `select_settings` rather than `load_settings`: there is no world file to load
@@ -40,9 +41,16 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario)
         .add_systems(
             OnEnter(Screen::Gameplay),
-            finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            (
+                initialize_time_of_day.in_set(GameplaySetup::Resources),
+                finalize_gameplay_setup.in_set(GameplaySetup::Finalize),
+            ),
         )
-        .add_systems(OnExit(Screen::Gameplay), clear_resolved_seed);
+        .add_systems(
+            Update,
+            validate_gameplay_lighting_contract.run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(OnExit(Screen::Gameplay), clear_session_resources);
 }
 
 /// The exact scenario and resolved seed whose button was clicked.
@@ -56,6 +64,14 @@ pub(super) struct ScenarioToLoad {
     pub(super) scenario: Scenario,
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
 }
+
+/// The selected scenario's authored hour, snapshotted before its lighting loads.
+///
+/// Keeping this separate from [`TimeOfDay`] lets the loading contract distinguish an
+/// absent override (use the cycle default) from an explicit hour. The latter is invalid
+/// for a static lighting profile.
+#[derive(Resource, Debug, Clone, Copy, PartialEq)]
+pub(crate) struct ScenarioTimeOverride(Option<f32>);
 
 /// Result of checking the selected scenario against its loaded world.
 ///
@@ -86,6 +102,8 @@ fn apply_selected_scenario(
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<ResolvedMapSeed>();
+    commands.remove_resource::<TimeOfDay>();
+    commands.remove_resource::<ScenarioTimeOverride>();
     commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<ScenarioContractStatus>();
 
@@ -114,6 +132,7 @@ fn apply_selected_scenario(
         info!("starting scenario: {}", scenario.name);
     }
     commands.insert_resource(scenario.units.clone());
+    commands.insert_resource(ScenarioTimeOverride(scenario.starting_time_hours));
     choose_settings::<MapSettings>(&mut commands, &asset_server, &mut registry, &scenario.world);
     choose_settings::<LightingSettings>(
         &mut commands,
@@ -134,6 +153,8 @@ pub(crate) fn validate_loaded_scenario(
     registry: Res<SettingsRegistry>,
     map: Option<Res<MapSettings>>,
     scenario: Option<Res<ScenarioSettings>>,
+    lighting: Option<Res<LightingSettings>>,
+    time_override: Option<Res<ScenarioTimeOverride>>,
     seed: Option<Res<ResolvedMapSeed>>,
     status: Option<Res<ScenarioContractStatus>>,
     mut next: ResMut<NextState<Screen>>,
@@ -145,17 +166,23 @@ pub(crate) fn validate_loaded_scenario(
     {
         return;
     }
-    let (Some(map), Some(scenario)) = (map, scenario) else {
+    let (Some(map), Some(scenario), Some(lighting), Some(time_override)) =
+        (map, scenario, lighting, time_override)
+    else {
         return;
     };
     let inputs_changed = map.is_changed()
         || scenario.is_changed()
+        || lighting.is_changed()
+        || time_override.is_changed()
         || seed.as_ref().is_some_and(|seed| seed.is_changed());
     if status.is_some() && !inputs_changed {
         return;
     }
 
-    if let Some(reason) = scenario_contract_error(&map, &scenario, seed.as_deref()) {
+    let contract_error = scenario_contract_error(&map, &scenario, seed.as_deref())
+        .or_else(|| lighting.resolve(time_override.0).err());
+    if let Some(reason) = contract_error {
         error!("selected scenario is incompatible with its world: {reason}");
         commands.insert_resource(ScenarioContractStatus::Invalid);
         commands.insert_resource(GameplaySetupFailure::new(format!(
@@ -165,6 +192,57 @@ pub(crate) fn validate_loaded_scenario(
     } else {
         commands.insert_resource(ScenarioContractStatus::Ready);
     }
+}
+
+/// Resolves the scenario/profile default before any presentation system needs it.
+fn initialize_time_of_day(
+    mut commands: Commands,
+    lighting: Res<LightingSettings>,
+    time_override: Res<ScenarioTimeOverride>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    match lighting.resolve(time_override.0) {
+        Ok(resolved) => match resolved.time_hours {
+            Some(hours) => {
+                commands.insert_resource(TimeOfDay { hours });
+            }
+            None => {
+                commands.remove_resource::<TimeOfDay>();
+            }
+        },
+        Err(reason) => {
+            error!("could not initialize scenario time of day: {reason}");
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The selected scenario cannot initialize its lighting: {reason}."
+            )));
+            next.set(Screen::Title);
+        }
+    }
+}
+
+/// Rechecks the cross-asset time contract when lighting hot-reloads in gameplay.
+///
+/// A static lighting file is valid by itself, but cannot replace a cycle while the
+/// active scenario owns an explicit hour. Returning to title preserves the authored
+/// scenario contract instead of silently discarding its time.
+fn validate_gameplay_lighting_contract(
+    mut commands: Commands,
+    lighting: Res<LightingSettings>,
+    time_override: Res<ScenarioTimeOverride>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if !lighting.is_changed() {
+        return;
+    }
+    let Err(reason) = lighting.resolve(time_override.0) else {
+        return;
+    };
+
+    error!("active scenario is incompatible with reloaded lighting: {reason}");
+    commands.insert_resource(GameplaySetupFailure::new(format!(
+        "The active scenario is incompatible with reloaded lighting: {reason}."
+    )));
+    next.set(Screen::Title);
 }
 
 fn scenario_contract_error(
@@ -236,8 +314,10 @@ fn finalize_gameplay_setup(
     next.set(Screen::Title);
 }
 
-fn clear_resolved_seed(mut commands: Commands) {
+fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<ResolvedMapSeed>();
+    commands.remove_resource::<ScenarioTimeOverride>();
+    commands.remove_resource::<TimeOfDay>();
 }
 
 #[cfg(test)]
@@ -260,9 +340,12 @@ mod tests {
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_units::{Enemy, Player, StandsOn};
+    use hex_world::TimeOfDay;
 
     use super::{
-        finalize_gameplay_setup, scenario_contract_error, validate_loaded_scenario, ScenarioToLoad,
+        clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
+        scenario_contract_error, validate_gameplay_lighting_contract, validate_loaded_scenario,
+        ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -351,7 +434,120 @@ mod tests {
                 scenario.name,
                 world.terrain
             );
+            let lighting_text = fs::read_to_string(assets_dir().join(&scenario.lighting))
+                .expect("the shipped lighting should be readable");
+            let lighting: LightingSettings =
+                ron::from_str(&lighting_text).expect("the shipped lighting should deserialize");
+            assert!(
+                lighting.resolve(scenario.starting_time_hours).is_ok(),
+                "scenario {:?} requests an hour its lighting profile cannot resolve",
+                scenario.name
+            );
         }
+    }
+
+    #[test]
+    fn static_lighting_rejects_a_scenario_time_override() {
+        let overcast = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.lighting.ends_with("overcast.ron"))
+            .expect("the shipped library should contain a static overcast scenario");
+        let text = fs::read_to_string(assets_dir().join(overcast.lighting))
+            .expect("the overcast lighting should be readable");
+        let lighting: LightingSettings =
+            ron::from_str(&text).expect("the overcast lighting should deserialize");
+
+        assert!(lighting
+            .resolve(Some(18.0))
+            .is_err_and(|error| error.contains("static lighting")));
+        assert!(lighting.resolve(None).is_ok());
+    }
+
+    #[test]
+    fn loaded_contract_reports_a_static_time_override_as_setup_failure() {
+        let entry = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.lighting.ends_with("overcast.ron"))
+            .expect("the shipped library should contain a static overcast scenario");
+        let world_text = fs::read_to_string(assets_dir().join(&entry.world))
+            .expect("the static scenario world should be readable");
+        let lighting_text = fs::read_to_string(assets_dir().join(&entry.lighting))
+            .expect("the static scenario lighting should be readable");
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(
+            ron::from_str::<MapSettings>(&world_text)
+                .expect("the static scenario world should deserialize"),
+        );
+        app.insert_resource(entry.units);
+        app.insert_resource(
+            ron::from_str::<LightingSettings>(&lighting_text)
+                .expect("the static scenario lighting should deserialize"),
+        );
+        app.insert_resource(ScenarioTimeOverride(Some(18.0)));
+        app.add_systems(Update, validate_loaded_scenario);
+
+        app.update();
+        app.update();
+
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("static lighting"));
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+    }
+
+    #[test]
+    fn gameplay_hot_reload_rejects_static_lighting_with_an_authored_time() {
+        let scenarios = library().scenarios;
+        let clear = scenarios
+            .iter()
+            .find(|scenario| scenario.lighting.ends_with("lighting.ron"))
+            .expect("the shipped library should contain clear lighting");
+        let overcast = scenarios
+            .iter()
+            .find(|scenario| scenario.lighting.ends_with("overcast.ron"))
+            .expect("the shipped library should contain static overcast lighting");
+        let read_lighting = |path: &str| {
+            let text = fs::read_to_string(assets_dir().join(path))
+                .expect("the shipped lighting should be readable");
+            ron::from_str::<LightingSettings>(&text)
+                .expect("the shipped lighting should deserialize")
+        };
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(read_lighting(&clear.lighting));
+        app.insert_resource(ScenarioTimeOverride(Some(18.5)));
+        app.add_systems(
+            Update,
+            validate_gameplay_lighting_contract.run_if(in_state(Screen::Gameplay)),
+        );
+
+        enter_gameplay_and_settle(&mut app);
+        app.insert_resource(read_lighting(&overcast.lighting));
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Title
+        );
+        assert!(app
+            .world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("static lighting"));
     }
 
     #[test]
@@ -409,7 +605,7 @@ mod tests {
             .into_iter()
             .find(|scenario| scenario.generation_seed.is_some())
             .expect("the shipped library should include procedural terrain");
-        let world_text = fs::read_to_string(assets_dir().join(entry.world))
+        let world_text = fs::read_to_string(assets_dir().join(&entry.world))
             .expect("the procedural world should be readable");
         let world: MapSettings =
             ron::from_str(&world_text).expect("the procedural world should deserialize");
@@ -423,6 +619,13 @@ mod tests {
         app.insert_resource(SettingsRegistry::default());
         app.insert_resource(world);
         app.insert_resource(fixed);
+        let lighting_text = fs::read_to_string(assets_dir().join(&entry.lighting))
+            .expect("the procedural lighting should be readable");
+        app.insert_resource(
+            ron::from_str::<LightingSettings>(&lighting_text)
+                .expect("the procedural lighting should deserialize"),
+        );
+        app.insert_resource(ScenarioTimeOverride(entry.starting_time_hours));
         app.insert_resource(ResolvedMapSeed(1));
         app.add_systems(Update, validate_loaded_scenario);
 
@@ -438,6 +641,113 @@ mod tests {
             .resource::<GameplaySetupFailure>()
             .reason
             .contains("must use a map anchor"));
+    }
+
+    #[test]
+    fn cyclic_time_initializes_from_override_and_resets_on_reentry() {
+        let scenario = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| {
+                let Ok(text) = fs::read_to_string(assets_dir().join(&scenario.lighting)) else {
+                    return false;
+                };
+                ron::from_str::<LightingSettings>(&text)
+                    .ok()
+                    .is_some_and(|lighting| lighting.default_time_hours().is_some())
+            })
+            .expect("the shipped library should contain cyclic lighting");
+        let text = fs::read_to_string(assets_dir().join(scenario.lighting))
+            .expect("the cyclic lighting should be readable");
+        let lighting: LightingSettings =
+            ron::from_str(&text).expect("the cyclic lighting should deserialize");
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                GameplaySetup::Resources,
+                GameplaySetup::Terrain,
+                GameplaySetup::Actors,
+                GameplaySetup::View,
+                GameplaySetup::Finalize,
+            )
+                .chain(),
+        );
+        app.insert_resource(lighting);
+        app.insert_resource(ScenarioTimeOverride(Some(18.5)));
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            initialize_time_of_day.in_set(GameplaySetup::Resources),
+        );
+        app.add_systems(OnExit(Screen::Gameplay), clear_session_resources);
+
+        enter_gameplay_and_settle(&mut app);
+        assert!(
+            (app.world().resource::<TimeOfDay>().hours - 18.5).abs() < f32::EPSILON,
+            "the scenario override did not win the profile default"
+        );
+        app.world_mut().resource_mut::<TimeOfDay>().hours = 3.0;
+
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Title);
+        app.update();
+        app.update();
+        assert!(
+            !app.world().contains_resource::<TimeOfDay>(),
+            "gameplay exit leaked the inspector-edited session hour"
+        );
+
+        app.insert_resource(ScenarioTimeOverride(Some(18.5)));
+        enter_gameplay_and_settle(&mut app);
+        assert!(
+            (app.world().resource::<TimeOfDay>().hours - 18.5).abs() < f32::EPSILON,
+            "gameplay re-entry did not restore the selected scenario hour"
+        );
+    }
+
+    #[test]
+    fn cyclic_time_uses_the_profile_default_without_an_override() {
+        let scenario = library()
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.lighting.ends_with("lighting.ron"))
+            .expect("the shipped library should contain clear lighting");
+        let text = fs::read_to_string(assets_dir().join(scenario.lighting))
+            .expect("the clear lighting should be readable");
+        let lighting: LightingSettings =
+            ron::from_str(&text).expect("the clear lighting should deserialize");
+        let expected = lighting
+            .default_time_hours()
+            .expect("the clear lighting should use a cycle");
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                GameplaySetup::Resources,
+                GameplaySetup::Terrain,
+                GameplaySetup::Actors,
+                GameplaySetup::View,
+                GameplaySetup::Finalize,
+            )
+                .chain(),
+        );
+        app.insert_resource(lighting);
+        app.insert_resource(ScenarioTimeOverride(None));
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            initialize_time_of_day.in_set(GameplaySetup::Resources),
+        );
+
+        enter_gameplay_and_settle(&mut app);
+
+        assert!((app.world().resource::<TimeOfDay>().hours - expected).abs() < f32::EPSILON);
     }
 
     fn finalizer_app(
@@ -700,6 +1010,7 @@ mod tests {
             .expect("the shipped library should not be empty");
         app.insert_resource(stale_units);
         app.insert_resource(ResolvedMapSeed(99));
+        app.insert_resource(TimeOfDay { hours: 3.0 });
         app.insert_resource(SpecialMovementRegions::new());
         app.insert_resource(InteriorRegions::new());
         app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
@@ -725,6 +1036,10 @@ mod tests {
         assert!(
             !app.world().contains_resource::<ResolvedMapSeed>(),
             "loading without a click reused a stale procedural seed"
+        );
+        assert!(
+            !app.world().contains_resource::<TimeOfDay>(),
+            "loading without a click reused a stale session hour"
         );
         assert!(
             !app.world().contains_resource::<SpecialMovementRegions>(),
@@ -1084,8 +1399,12 @@ mod tests {
             let report = app.world().resource::<GenerationReport>();
             assert_eq!(report.seed, configured_seed);
             assert!(
-                report.notes.is_empty(),
-                "{scenario_name}: {:?}",
+                report
+                    .notes
+                    .iter()
+                    .all(|note| note.starts_with("candidate ")),
+                "{scenario_name} retained a non-candidate diagnostic after successful generation: \
+                 {:?}",
                 report.notes
             );
             assert!(

@@ -31,8 +31,9 @@ pub use loader::{
 };
 pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
-    to_color, CameraSettings, CubeCoord, DisplaySettings, LightingSettings, MenuSettings,
-    PlayerSettings, PresentModeSetting, Rgb, ScenarioPlacement, ScenarioSettings,
+    to_color, CameraSettings, CelestialBody, CelestialCycleSettings, CubeCoord, DisplaySettings,
+    LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
+    PresentModeSetting, ResolvedLighting, Rgb, ScenarioPlacement, ScenarioSettings,
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
@@ -52,6 +53,10 @@ pub fn plugin(app: &mut App) {
 
     app.register_type::<CameraSettings>()
         .register_type::<LightingSettings>()
+        .register_type::<LightingProfile>()
+        .register_type::<CelestialCycleSettings>()
+        .register_type::<LightingKeyframe>()
+        .register_type::<CelestialBody>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()

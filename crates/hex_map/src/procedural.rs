@@ -114,6 +114,41 @@ impl GeneratedAnchors {
     }
 }
 
+/// Finalized V1 Hills topology needed when a V2 recipe adds an independent upper layer.
+///
+/// This deliberately exposes a compact compatibility snapshot rather than the frozen
+/// [`TerrainPlan`]. Layered recipes can preserve the ground hazard, crossings, and
+/// protected approaches without depending on V1's construction-only representation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct V1HillsTopology {
+    pub(crate) barrier: BTreeSet<HexCoord>,
+    pub(crate) bridge: BTreeSet<TilePos>,
+    pub(crate) alternate_crossing: BTreeSet<TilePos>,
+    pub(crate) protected_approaches: BTreeSet<HexCoord>,
+}
+
+/// One fully evaluated V1 Hills candidate, retained as the V2 parity oracle.
+#[derive(Debug)]
+#[cfg(test)]
+pub(crate) struct V1HillsCandidate {
+    pub(crate) map: VoxelMap,
+    pub(crate) anchors: GeneratedAnchors,
+    pub(crate) special_regions: SpecialMovementRegions,
+    pub(crate) metrics: TacticalMetrics,
+    pub(crate) valid: bool,
+    pub(crate) validation_notes: Vec<String>,
+    pub(crate) repair_actions: Vec<String>,
+    pub(crate) score: CandidateScore,
+    pub(crate) topology: V1HillsTopology,
+}
+
+/// Complete frozen V1 selection plus the semantic topology retained by V2 Hills.
+#[derive(Debug)]
+pub(crate) struct V1HillsBuild {
+    pub(crate) build: ProceduralBuild,
+    pub(crate) topology: V1HillsTopology,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SurfaceRole {
     Grass,
@@ -197,7 +232,7 @@ struct ValidCandidate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct CandidateScore {
+pub(crate) struct CandidateScore {
     detour_band_distance: u32,
     route_band_distance: u32,
     spawn_imbalance: Level,
@@ -238,6 +273,129 @@ pub(crate) fn build(
     build_with_candidate_selection(grid_radius, settings, seed, palette, walker, is_solid, true)
 }
 
+/// Runs the frozen V1 Hills selector once and retains its finalized topology for V2.
+///
+/// V2 converts only the selected result. Evaluating and converting every legacy
+/// candidate would repeat full-volume validation after V1 has already performed the
+/// exact eight-candidate selection and bounded repairs.
+pub(crate) fn build_hills_for_v2_parity(
+    grid_radius: u32,
+    settings: &ProceduralSettings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<V1HillsBuild, String> {
+    if !matches!(
+        (&settings.landform, &settings.tactical),
+        (LandformSettings::Hills(_), TacticalSettings::Crossing(_))
+    ) {
+        return Err("V2 Hills parity requires V1 Hills with Crossing".to_owned());
+    }
+
+    let (build, topology) = build_with_candidate_selection_details(
+        grid_radius,
+        settings,
+        seed,
+        palette,
+        TraversalProfile::WALKER,
+        is_solid,
+        CandidateSelectionOptions {
+            select_random_candidates: true,
+            retain_hills_topology: true,
+        },
+    );
+    let topology = topology
+        .ok_or_else(|| "V1 Hills selection did not retain finalized topology".to_owned())?;
+    Ok(V1HillsBuild { build, topology })
+}
+
+/// Evaluates exactly one requested V1 Hills candidate for V2 parity.
+///
+/// Construction, bounded repair, exact validation, special-region assignment, and
+/// scoring all remain owned by the frozen V1 implementation. The compatibility DTO
+/// prevents V2 from reaching into construction-only plan fields while preserving the
+/// complete selected output. A canonical fallback is always candidate zero.
+#[cfg(test)]
+pub(crate) fn build_hills_candidate_for_v2_parity(
+    grid_radius: u32,
+    settings: &ProceduralSettings,
+    seed: u64,
+    candidate: u8,
+    fallback: bool,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<V1HillsCandidate, String> {
+    if !matches!(
+        (&settings.landform, &settings.tactical),
+        (LandformSettings::Hills(_), TacticalSettings::Crossing(_))
+    ) {
+        return Err("V2 Hills parity requires V1 Hills with Crossing".to_owned());
+    }
+    if candidate >= CANDIDATE_COUNT {
+        return Err(format!(
+            "V1 parity candidate {candidate} is outside 0..{CANDIDATE_COUNT}"
+        ));
+    }
+    if fallback && candidate != 0 {
+        return Err("the canonical V1 Hills fallback must use candidate 0".to_owned());
+    }
+
+    let mut plan = construct_plan(grid_radius, settings, seed, candidate, fallback);
+    let (map, validation, repair_actions) = voxelize_validate_repair(
+        &mut plan,
+        settings,
+        seed,
+        candidate,
+        palette,
+        TraversalProfile::WALKER,
+        is_solid,
+    );
+    let special_regions = special_movement_regions(&plan);
+    let score = score_candidate(&plan, settings.environment, validation.metrics, candidate);
+    let topology = finalized_hills_topology(&plan);
+
+    Ok(V1HillsCandidate {
+        map,
+        anchors: plan.anchors,
+        special_regions,
+        metrics: validation.metrics,
+        valid: validation.valid,
+        validation_notes: validation.notes,
+        repair_actions,
+        score,
+        topology,
+    })
+}
+
+fn finalized_hills_topology(plan: &TerrainPlan) -> V1HillsTopology {
+    let mut protected_approaches = plan.barrier.clone();
+    protected_approaches.extend(
+        plan.bridge
+            .iter()
+            .chain(&plan.alternate)
+            .map(|position| position.coord),
+    );
+    for name in [PARTY_START, HOSTILE_START, BRIDGE, ALTERNATE_CROSSING] {
+        let Some(anchor) = plan.anchors.get(name) else {
+            continue;
+        };
+        protected_approaches.extend(
+            anchor
+                .coord
+                .within_radius(2)
+                .into_iter()
+                .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= plan.grid_radius),
+        );
+    }
+
+    V1HillsTopology {
+        barrier: plan.barrier.clone(),
+        bridge: plan.bridge.clone(),
+        alternate_crossing: plan.alternate.clone(),
+        protected_approaches,
+    }
+}
+
 fn build_with_candidate_selection(
     grid_radius: u32,
     settings: &ProceduralSettings,
@@ -247,6 +405,36 @@ fn build_with_candidate_selection(
     is_solid: &dyn Fn(SubstanceId) -> bool,
     select_random_candidates: bool,
 ) -> ProceduralBuild {
+    build_with_candidate_selection_details(
+        grid_radius,
+        settings,
+        seed,
+        palette,
+        walker,
+        is_solid,
+        CandidateSelectionOptions {
+            select_random_candidates,
+            retain_hills_topology: false,
+        },
+    )
+    .0
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CandidateSelectionOptions {
+    select_random_candidates: bool,
+    retain_hills_topology: bool,
+}
+
+fn build_with_candidate_selection_details(
+    grid_radius: u32,
+    settings: &ProceduralSettings,
+    seed: u64,
+    palette: &TerrainPalette,
+    walker: TraversalProfile,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+    options: CandidateSelectionOptions,
+) -> (ProceduralBuild, Option<V1HillsTopology>) {
     let started = Instant::now();
     let mut valid = Vec::new();
     let mut rejected_notes = Vec::new();
@@ -259,7 +447,7 @@ fn build_with_candidate_selection(
         );
         if validation.valid {
             hard_valid_candidates = hard_valid_candidates.saturating_add(1);
-            if select_random_candidates {
+            if options.select_random_candidates {
                 let score =
                     score_candidate(&plan, settings.environment, validation.metrics, candidate);
                 valid.push(ValidCandidate {
@@ -295,8 +483,12 @@ fn build_with_candidate_selection(
         metrics,
         notes,
         validated,
+        hills_topology,
     ) = if let Some(candidate) = selected {
         let special_regions = special_movement_regions(&candidate.plan);
+        let hills_topology = options
+            .retain_hills_topology
+            .then(|| finalized_hills_topology(&candidate.plan));
         (
             candidate.map,
             candidate.plan.anchors,
@@ -307,6 +499,7 @@ fn build_with_candidate_selection(
             candidate.metrics,
             Vec::new(),
             true,
+            hills_topology,
         )
     } else {
         let mut plan = construct_plan(grid_radius, settings, seed, 0, true);
@@ -317,6 +510,9 @@ fn build_with_candidate_selection(
         notes.push("all random candidates failed; canonical fallback selected".to_owned());
         notes.extend(validation.notes);
         let validated = validation.valid;
+        let hills_topology = options
+            .retain_hills_topology
+            .then(|| finalized_hills_topology(&plan));
         (
             map,
             plan.anchors,
@@ -327,6 +523,7 @@ fn build_with_candidate_selection(
             validation.metrics,
             notes,
             validated,
+            hills_topology,
         )
     };
 
@@ -348,13 +545,16 @@ fn build_with_candidate_selection(
         notes,
     };
 
-    ProceduralBuild {
-        map,
-        anchors,
-        special_regions,
-        report,
-        validated,
-    }
+    (
+        ProceduralBuild {
+            map,
+            anchors,
+            special_regions,
+            report,
+            validated,
+        },
+        hills_topology,
+    )
 }
 
 /// Assigns deterministic map-local ids to connected gated areas in the final plan.
@@ -3173,6 +3373,88 @@ mod tests {
         );
         assert!(first.special_regions.is_empty());
         assert!(second.special_regions.is_empty());
+    }
+
+    fn sorted_anchors(anchors: &GeneratedAnchors) -> BTreeMap<&'static str, TilePos> {
+        anchors.iter().collect()
+    }
+
+    fn sorted_regions(regions: &SpecialMovementRegions) -> Vec<(TilePos, SpecialMovementRegion)> {
+        let mut memberships: Vec<_> = regions.iter().collect();
+        memberships.sort_unstable();
+        memberships
+    }
+
+    fn assert_parity_candidate_matches_build(
+        candidate: &V1HillsCandidate,
+        complete: &ProceduralBuild,
+    ) {
+        assert_eq!(
+            map_fingerprint(&candidate.map, &candidate.special_regions),
+            complete.report.map_fingerprint
+        );
+        assert_eq!(
+            sorted_anchors(&candidate.anchors),
+            sorted_anchors(&complete.anchors)
+        );
+        assert_eq!(
+            sorted_regions(&candidate.special_regions),
+            sorted_regions(&complete.special_regions)
+        );
+        assert_eq!(candidate.metrics, complete.report.metrics);
+        assert_eq!(candidate.valid, complete.validated);
+        assert_eq!(candidate.repair_actions, complete.report.repair_actions);
+    }
+
+    #[test]
+    fn one_candidate_parity_adapter_matches_the_complete_v1_selection() {
+        let settings = hills(EnvironmentSettings::TemperateGrassland);
+        let complete = build(12, &settings, HERO_SEED, &palette(), WALKER, &solid);
+        let selected = complete
+            .report
+            .selected_candidate
+            .expect("the hero seed should select a random candidate");
+        let candidate = build_hills_candidate_for_v2_parity(
+            12,
+            &settings,
+            HERO_SEED,
+            selected,
+            false,
+            &palette(),
+            &solid,
+        )
+        .expect("the selected V1 Hills candidate should evaluate");
+
+        assert_parity_candidate_matches_build(&candidate, &complete);
+        assert!(candidate.validation_notes.is_empty());
+        assert!(!candidate.topology.barrier.is_empty());
+        assert!(!candidate.topology.bridge.is_empty());
+        assert!(!candidate.topology.alternate_crossing.is_empty());
+        assert_eq!(candidate.score.candidate, selected);
+        assert!(candidate
+            .topology
+            .bridge
+            .iter()
+            .chain(&candidate.topology.alternate_crossing)
+            .all(|position| candidate
+                .topology
+                .protected_approaches
+                .contains(&position.coord)));
+    }
+
+    #[test]
+    fn canonical_fallback_parity_adapter_matches_the_forced_v1_fallback() {
+        let settings = hills(EnvironmentSettings::TemperateGrassland);
+        let complete =
+            build_with_candidate_selection(12, &settings, 505, &palette(), WALKER, &solid, false);
+        let fallback =
+            build_hills_candidate_for_v2_parity(12, &settings, 505, 0, true, &palette(), &solid)
+                .expect("the canonical V1 Hills fallback should evaluate");
+
+        assert!(complete.report.used_fallback);
+        assert_eq!(complete.report.selected_candidate, None);
+        assert_parity_candidate_matches_build(&fallback, &complete);
+        assert!(fallback.validation_notes.is_empty());
     }
 
     #[test]

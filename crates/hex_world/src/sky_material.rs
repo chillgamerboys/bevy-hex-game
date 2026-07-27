@@ -23,6 +23,22 @@ pub(crate) struct SkyParams {
     pub cloud_softness: f32,
     pub cloud_roundness: f32,
     pub cloud_noise: f32,
+    pub sun_direction: Vec3,
+    pub celestial_bodies_enabled: f32,
+    pub sun_disc_color: Vec3,
+    pub sun_angular_radius_radians: f32,
+    pub moon_direction: Vec3,
+    pub moon_angular_radius_radians: f32,
+    pub moon_disc_color: Vec3,
+    pub sun_halo_width_radians: f32,
+    pub lower_glow_direction: Vec3,
+    pub moon_halo_width_radians: f32,
+    pub lower_glow_color: Vec3,
+    pub sun_halo_strength: f32,
+    pub moon_halo_strength: f32,
+    pub lower_glow_angular_radius_radians: f32,
+    pub lower_glow_strength: f32,
+    pub _padding: f32,
 }
 
 /// Material that renders the procedural sky onto the dome.
@@ -59,4 +75,28 @@ pub fn plugin(app: &mut App) {
     // by filtering the registry for `ReflectAsset`, which only this adds. With plain
     // `register_type` the material is registered and still never appears.
     app.register_asset_reflect::<SkyMaterial>();
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn celestial_bodies_clip_smoothly_and_clouds_composite_last() {
+        let shader = include_str!("../../../assets/shaders/sky.wgsl");
+        assert!(
+            !shader.contains("body_dir.y <= 0.0"),
+            "body centres must not be culled at the horizon"
+        );
+        assert!(shader.contains("body_elevation + outer_radius <= 0.0"));
+        assert!(shader.contains("fwidth(view_dir.y)"));
+        assert!(shader.contains("disc = disc * horizon"));
+        assert!(shader.contains("halo = halo * horizon"));
+
+        let moon = shader
+            .find("sky.moon_direction")
+            .expect("the moon should be composited");
+        let clouds = shader
+            .rfind("color = mix(color, sky.cloud_color")
+            .expect("clouds should be composited");
+        assert!(clouds > moon, "clouds must remain above celestial bodies");
+    }
 }
