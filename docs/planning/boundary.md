@@ -383,6 +383,16 @@ passed the cross-domain check.
 **Fallback if deferred**: terrain-conjuring spell effects remain rejected as unbuilt.
 They do not ship with an implicit allow-all policy.
 
+**Accepted by the gameplay owner**, including the initial exclusions. This supersedes
+an earlier gameplay-side ruling that any defined substance was conjurable and balance
+would live in a spell's cost and tier. That ruling was aimed at *balance* whitelists —
+gating an interesting material because it is strong — and this is a different concern:
+world integrity. Conjured bedrock would be an indestructible wall, which breaks the
+symmetry that anything magic creates can also be destroyed; conjured liquid creates
+the hanging-water problem ask K has not solved. The palette stays the world owner's to
+widen, and gating a material purely because it is powerful remains a balance decision
+that belongs in cost and tier.
+
 ## D1 — Pre-spawn terrain edit replay
 
 **Need**: save restoration (and encounter-authored terrain — a pre-broken

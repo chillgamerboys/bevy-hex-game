@@ -35,8 +35,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `BiomeRegions` — biome membership by exact `TilePos` | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `TraversalBlockers` — surfaces occupied by generated features | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `RunBottom(Level)` — each run's lowest voxel; prerequisite to wave 3 terrain casting | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) C |
-| `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
-| `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask H |
+| `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
+| `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) H |
 | `PendingTerrainEdits` — replay before first spawn | gameplay | world | **asked** | [planning/boundary.md](planning/boundary.md) ask D1 |
 | `TerrainSnapshot` — generator-independent dump | world | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask D2 |
 
@@ -70,8 +70,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
-| Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **asked** | [planning/boundary.md](planning/boundary.md) ask G |
-| `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **asked** | [planning/boundary.md](planning/boundary.md) ask L |
+| Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
+| `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
 
 Cross-file references between the two content domains are resolved and validated by
 [`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets a spell name a substance without either side
