@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use bevy::platform::collections::HashMap;
 use hex_core::{
     Headroom, HexCoord, InteriorRegionId, Level, MapViewHint, SubstanceId, TilePos,
     TraversalEndpoint, TraversalProfile, MAX_HEADROOM,
@@ -822,10 +823,14 @@ fn validate_plan(
     {
         issues.push("cave surface metadata does not cover the complete footprint".to_owned());
     }
+    let surface_height_lookup: HashMap<_, _> = metadata
+        .surface_heights
+        .iter()
+        .map(|(coord, level)| (*coord, *level))
+        .collect();
     if metadata.surface_heights.iter().any(|(coord, level)| {
         coord.neighbors().into_iter().any(|neighbor| {
-            metadata
-                .surface_heights
+            surface_height_lookup
                 .get(&neighbor)
                 .is_some_and(|other| level.abs_diff(*other) > 1)
         })
@@ -1087,7 +1092,7 @@ fn validate_plan(
         (distances, route_steps)
     } else {
         issues.push("cave actor anchors are missing".to_owned());
-        (BTreeMap::new(), None)
+        (HashMap::new(), None)
     };
 
     let ramp_end = metadata
@@ -1309,8 +1314,8 @@ fn surfaces_by_coord(
     by_coord
 }
 
-fn traversal_distances(volume: &TerrainVolumePlan, start: TilePos) -> BTreeMap<TilePos, u32> {
-    let endpoints: BTreeMap<_, _> = volume
+fn traversal_distances(volume: &TerrainVolumePlan, start: TilePos) -> HashMap<TilePos, u32> {
+    let endpoints: HashMap<_, _> = volume
         .surfaces
         .iter()
         .filter(|(_position, metadata)| metadata.access == SurfaceAccess::Ordinary)
@@ -1323,11 +1328,11 @@ fn traversal_distances(volume: &TerrainVolumePlan, start: TilePos) -> BTreeMap<T
             })
         })
         .collect();
-    let mut by_coord = BTreeMap::<HexCoord, Vec<TilePos>>::new();
+    let mut by_coord = HashMap::<HexCoord, Vec<TilePos>>::new();
     for position in endpoints.keys() {
         by_coord.entry(position.coord).or_default().push(*position);
     }
-    let mut distances = BTreeMap::from([(start, 0_u32)]);
+    let mut distances = HashMap::from([(start, 0_u32)]);
     let mut frontier = VecDeque::from([start]);
     while let Some(from) = frontier.pop_front() {
         let steps = distances.get(&from).copied().unwrap_or(u32::MAX);
