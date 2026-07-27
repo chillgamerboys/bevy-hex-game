@@ -1438,10 +1438,10 @@ mod tests {
                 );
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();
-            if scenario_name == "Sky Islands" {
+            if matches!(scenario_name, "Sky Islands" | "Mountains") {
                 assert!(
                     !special_regions.is_empty(),
-                    "Sky Islands dropped its optional island semantics"
+                    "{scenario_name} dropped its optional high-ground semantics"
                 );
             } else {
                 assert!(
