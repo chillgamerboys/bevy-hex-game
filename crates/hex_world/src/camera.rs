@@ -934,7 +934,10 @@ mod tests {
             .id();
         let target = target.map(|translation| {
             app.world_mut()
-                .spawn((Transform::from_translation(translation), CameraFocusTarget))
+                .spawn((
+                    Transform::from_translation(translation),
+                    CameraFocusTarget::new(hex_core::TilePos::ORIGIN),
+                ))
                 .id()
         });
         (app, camera, target)
@@ -1045,7 +1048,7 @@ mod tests {
         let replacement_position = Vec3::new(-4.0, 3.0, 6.0);
         app.world_mut().spawn((
             Transform::from_translation(replacement_position),
-            CameraFocusTarget,
+            CameraFocusTarget::new(hex_core::TilePos::ORIGIN),
         ));
         let eye_offset = moved.0.translation - moved.1;
         app.update();

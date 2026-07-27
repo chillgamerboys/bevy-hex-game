@@ -1308,8 +1308,10 @@ mod tests {
         assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
 
         let target = Vec3::new(2.0, 3.0, 4.0);
-        app.world_mut()
-            .spawn((Transform::from_translation(target), CameraFocusTarget));
+        app.world_mut().spawn((
+            Transform::from_translation(target),
+            CameraFocusTarget::new(hex_core::TilePos::ORIGIN),
+        ));
         app.update();
 
         assert!(app.world().resource::<ReviewCaptureState>().view_applied);
