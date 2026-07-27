@@ -263,8 +263,9 @@ Two extra repo-specific bars:
   headroom.
 - **The visual limit**: headless tests cannot see a black sky or a
   sunken piece. A finding that touches rendering or transforms must
-  be flagged "needs the human visual walk" rather than closed on
-  green tests.
+  be flagged "needs `/visual-walk`" (the scripted capture walk reads
+  real frames) — and "needs the human walk" on top for anything about
+  motion, feel, or taste — rather than closed on green tests.
 
 ### Lens 8 — Feature / config traceability
 
@@ -384,7 +385,8 @@ Lens 6 — Deferred-commands and ordering: every new system/observer/
   PausableSystems membership.
 Lens 7 — Test-altitude: every rule/world-touching change. Headless
   App integration test with a realistic fixture, or unit-only?
-  Rendering-adjacent findings flagged "needs the human visual walk".
+  Rendering-adjacent findings flagged "needs /visual-walk" (plus
+  the human walk for motion/taste).
 Lens 8 — Feature/config traceability: every feature/RON field added.
   Honored on every path? Missing value stalls loudly? Docs match
   the actual read timing? No dead branches? Paired values

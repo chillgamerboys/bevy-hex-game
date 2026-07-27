@@ -26,8 +26,10 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use bevy::camera::RenderTarget;
 use bevy::input::InputSystems;
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::ScenarioLibrary;
 use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen, TerrainReady};
@@ -39,6 +41,8 @@ use crate::scenarios::ScenarioToLoad;
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const WALK_WIDTH: u32 = 1920;
+const WALK_HEIGHT: u32 = 1080;
 
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -192,6 +196,18 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
+    /// The offscreen image the camera renders into for capture.
+    ///
+    /// The window surface is not readable on every backend — on macOS/Metal a
+    /// `Screenshot::primary_window()` comes back black — so the walk redirects
+    /// the game's single camera into a target image exactly as the map-review
+    /// harness does. `bevy_ui` only follows a *window*-targeting camera by
+    /// default, so the runner also tags every UI root with `UiTargetCamera`
+    /// pointing at the redirected camera; frames then show everything a
+    /// player would see.
+    target: Option<Handle<Image>>,
+    /// The camera entity the UI roots must be pointed at.
+    camera: Option<Entity>,
     failed: bool,
 }
 
@@ -207,6 +223,8 @@ impl WalkState {
             capture_outcome: None,
             pressed: None,
             held_key: None,
+            target: None,
+            camera: None,
             failed: false,
         }
     }
@@ -235,10 +253,35 @@ fn run_walk(
     library: Option<Res<ScenarioLibrary>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
+    mut images: ResMut<Assets<Image>>,
+    mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
+    ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if state.failed {
         return;
+    }
+
+    // Redirect the game's single camera into a readable offscreen image before
+    // anything is photographed; see `WalkState::target`.
+    if state.target.is_none() {
+        let Ok((camera, mut render_target)) = camera_targets.single_mut() else {
+            return;
+        };
+        let image =
+            Image::new_target_texture(WALK_WIDTH, WALK_HEIGHT, TextureFormat::Rgba8UnormSrgb, None);
+        let handle = images.add(image);
+        *render_target = RenderTarget::Image(handle.clone().into());
+        state.target = Some(handle);
+        state.camera = Some(camera);
+    }
+
+    // UI roots spawn and despawn with every screen; keep pointing new ones at
+    // the redirected camera or their screens render into nothing.
+    if let Some(camera) = state.camera {
+        for root in &ui_roots {
+            commands.entity(root).insert(UiTargetCamera(camera));
+        }
     }
     if let Some(failure) = failure {
         error!(
@@ -299,9 +342,12 @@ fn run_walk(
         }
         WalkStep::Capture(ref name) => {
             if !state.capture_requested {
+                let Some(target) = state.target.clone() else {
+                    return;
+                };
                 let path = state.out_dir.join(format!("{name}.png"));
                 info!("visual walk capturing {}", path.display());
-                commands.spawn(Screenshot::primary_window()).observe(
+                commands.spawn(Screenshot::image(target)).observe(
                     move |captured: On<ScreenshotCaptured>, mut state: ResMut<WalkState>| {
                         let outcome = match write_png(&captured.image, &path) {
                             Ok(stats) => CaptureOutcome::Written {
