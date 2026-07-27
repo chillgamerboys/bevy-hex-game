@@ -1,6 +1,6 @@
 ---
 name: audit-diff
-description: 8-lens code-correctness walk on the current diff. Standalone — runnable on its own AND used as Step 1 of /audit-pr. Lenses are bug-trained: silent failures, DRY, edge values, round-trip consistency, compiles-but-wrong API use, Commands/ordering contracts, test-altitude, feature/config traceability. Diff-anchored but sibling-sweeps from each finding. Findings-only — does not auto-fix.
+description: Correctness walk on the current diff. Standalone — runnable on its own AND used as Step 1 of /audit-pr. Code diffs get the 8 bug-trained lenses (silent failures, DRY, edge values, round-trip consistency, compiles-but-wrong API use, Commands/ordering contracts, test-altitude, feature/config traceability); diffs with no Rust take the cheap doc-only path (4 docs lenses: automation contracts, links+fragments, claims-vs-reality, single-source) with one subagent. Both paths end in the fresh-eyes pass and a mandatory Wave entry. Findings-only — does not auto-fix.
 ---
 
 When invoked, follow these steps. The goal is to catch correctness
@@ -16,6 +16,13 @@ attention on design rather than typos and silent swallowing.
    - For each changed file, read
      `git diff origin/dev...HEAD -- <file>` so you have the
      actual hunks, not summaries.
+
+   **If the diff contains no Rust** (`git diff --name-only
+   origin/dev...HEAD | grep '\.rs$'` is empty), take the **doc-only
+   path**: skip straight to the docs lenses (see "Doc-only diffs"
+   below) with ONE subagent, then the fresh-eyes pass, then the Wave
+   entry. Five of the eight code lenses can only ever report "clean —
+   no code" on such a diff; walking them is ceremony, not review.
 
 2. **Spawn one Explore subagent per major surface** (max 3 parallel).
    Each gets:
@@ -41,7 +48,7 @@ attention on design rather than typos and silent swallowing.
    return findings (and before triage), spawn ONE more Explore
    subagent with this prompt:
 
-   > The 8-lens audit on PR #N reported the following findings:
+   > The lens audit on PR #N reported the following findings:
    > {summarize}. The diff is attached below. Read the diff fresh —
    > don't redo the lens checks. Look for one bug class the lenses
    > didn't surface. The training set is retrospective; new bugs by
@@ -286,6 +293,54 @@ Reference bug shape: a flag added; one of three code paths checked
 it, the other two ignored it, and the docstring claimed it covered
 the entire run.
 
+## Doc-only diffs — the docs lenses
+
+When the diff has no Rust, the code lenses above are dead weight —
+but this repo's docs are load-bearing in ways ordinary prose is not:
+skills parse them, CI half-checks them, and the other developer reads
+them as instructions. One subagent walks these four instead, then the
+fresh-eyes pass (step 4) runs as usual. The Wave entry (step 6)
+remains mandatory.
+
+### Lens D1 — Automation contracts
+
+If a changed file is consumed by a skill, verify the skill's parse
+expectations against the new content. Current registry (extend as
+skills grow):
+
+| File | Consumer | Contract |
+|---|---|---|
+| `docs/planning/roadmap.md` | `/seed-tickets` | exactly one table, under `## Upcoming`, header `Epic \| Scope \| Owner`, 4 pipes per row, no `\|` inside cells, no hand-written `<!-- linear -->` markers |
+| `docs/planning/status.md`, `docs/README.md` | `/update-docs` | index rows ↔ files bidirectional; status claims audit-able |
+| `docs/planning/audit-log.md` | `/audit-diff` | the anchor comment intact; Wave entries only below it |
+| `CLAUDE.md` | `/update-docs` | exactly one `and NNN tests` clause, inside `## Current state` |
+
+### Lens D2 — Links and fragments
+
+Every relative link resolves from the file's own directory, **and
+every `#fragment` targets a real heading in the target file** — CI's
+checker strips fragments before testing, so anchors are only ever
+verified here.
+
+### Lens D3 — Claims against reality
+
+For every factual claim the diff makes about the repo, code, or an
+open PR (a type exists, a file is untouched by #N, a count, a
+delivered feature): spot-check it at the source. Reference bugs: a
+doc framed an open PR's types as "already delivered" (a fresh `dev`
+grep found nothing); a normative type sketch promised a serde default
+the attribute cannot produce. Docs read as instructions get
+implemented literally.
+
+### Lens D4 — Single source of truth
+
+Does the change duplicate or contradict prose that lives elsewhere —
+especially status-shaped claims (`docs/planning/status.md` is the
+only doc allowed to carry them) and anything CLAUDE.md summarizes
+with a pointer? Three drifting copies of "what's built" is the
+disease the docs tree was restructured to cure; don't let a diff
+reintroduce copy number two.
+
 ## Subagent prompt template
 
 When spawning the per-surface Explore subagents, use a prompt of
@@ -383,7 +438,9 @@ finding fires, the relevant lens's sibling sweep extends scope to:
 
 When a human reviewer flags a bug class not currently in the lens
 list, append a new lens (or extend an existing one) to this skill
-BEFORE fixing the bug. The skill should grow with each new bug class
+BEFORE fixing the bug. When a new skill starts parsing a doc, add the
+file to Lens D1's registry in the same PR — an unregistered contract
+is invisible to the doc-only path. The skill should grow with each new bug class
 observed. Keep the reference-bug pointer current — the next maintainer
 needs to know when each lens earned its place.
 
