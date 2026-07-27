@@ -398,7 +398,16 @@ fn an_unbuilt_verb_is_dropped_and_changes_nothing() {
     enter_gameplay(&mut app);
     assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
 
-    push(&mut app, GameCommand::Cast { unit: UnitId(1) });
+    push(
+        &mut app,
+        GameCommand::Cast {
+            unit: UnitId(1),
+            spell: "Ember".to_owned(),
+            target: TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL),
+            facing: None,
+            mana: None,
+        },
+    );
     app.update();
     app.update();
 

@@ -20,15 +20,18 @@ pub mod presentation;
 pub mod setup;
 pub mod spatial;
 pub mod terrain;
+pub mod terrain_impact;
 pub mod traversal;
 pub mod unit_ids;
 pub mod view;
 pub mod voxel;
 
-pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, Turn};
+pub use app::{
+    AppSystems, GameplaySetup, Mode, PausableSystems, Pause, RoundElapsed, Screen, Turn,
+};
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 pub use elements::{ElementId, SpellId};
-pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};
+pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use perception::{
     ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeState, KnownTraversal,
@@ -40,6 +43,10 @@ pub use spatial::{BiomeRegionId, BiomeRegions, TraversalBlockers};
 pub use terrain::{
     CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
     ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
+};
+pub use terrain_impact::{
+    TerrainBatchId, TerrainImpact, TerrainImpactDisposition, TerrainImpactOutcome,
+    TerrainVoxelOutcome,
 };
 pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use unit_ids::{ControlOwner, PlayerSeat, SimSeeds, UnitId};

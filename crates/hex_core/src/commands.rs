@@ -31,6 +31,7 @@ use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::hex::Sextant;
 use crate::unit_ids::{PlayerSeat, UnitId};
 use crate::voxel::TilePos;
 
@@ -71,9 +72,28 @@ pub enum GameCommand {
     },
     /// Cast a spell. **Not built** — waits on lattices being wired into units
     /// (HEX-12).
+    ///
+    /// The payload is settled ahead of the implementation on purpose: the
+    /// command log is the replay log, so every field is a permanent save
+    /// commitment, and two separate tickets need different halves of it.
+    /// Later additions arrive as optional serde-default fields or new
+    /// variants — never as speculative fields added now.
     Cast {
         /// Who casts.
         unit: UnitId,
+        /// Which spell, **by name**. Ids are assigned from sorted names and
+        /// are therefore session-local; a name is what survives a save.
+        spell: String,
+        /// The one positional anchor. A unit target resolves to the voxel it
+        /// stands on, so there is one target vocabulary rather than two.
+        target: TilePos,
+        /// Which way a directed shape points. Line, cone and authored-path
+        /// shapes need it; anchored shapes ignore it.
+        #[serde(default)]
+        facing: Option<Sextant>,
+        /// The choice a variable-mana spell requires, absent for fixed ones.
+        #[serde(default)]
+        mana: Option<u16>,
     },
     /// Sustain a channelled spell. **Not built** — waits on channelling
     /// (HEX-12).
@@ -97,7 +117,7 @@ impl GameCommand {
             Self::MoveAlong { unit, .. }
             | Self::Strike { unit, .. }
             | Self::EndTurn { unit }
-            | Self::Cast { unit }
+            | Self::Cast { unit, .. }
             | Self::Channel { unit }
             | Self::ChooseDisables { unit } => unit,
         }
@@ -229,7 +249,13 @@ mod tests {
                 target: UnitId(9),
             },
             GameCommand::EndTurn { unit },
-            GameCommand::Cast { unit },
+            GameCommand::Cast {
+                unit,
+                spell: "Ember".to_owned(),
+                target: TilePos::new(crate::HexCoord::ORIGIN, 1),
+                facing: None,
+                mana: None,
+            },
             GameCommand::Channel { unit },
             GameCommand::ChooseDisables { unit },
         ];
