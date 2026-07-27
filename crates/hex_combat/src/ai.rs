@@ -19,9 +19,12 @@ use bevy::prelude::*;
 
 use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, SubstanceTable};
-use hex_core::{Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn};
+use hex_core::{
+    Headroom, HexSpan, HexTile, Mode, PausableSystems, SubstanceId, TilePos, Turn, UnitId,
+};
 use hex_units::{
     route, Body, Enemy, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn,
+    UnitRegistry,
 };
 
 use crate::turns::TurnOrder;
@@ -67,11 +70,12 @@ pub(crate) fn plugin(app: &mut App) {
 fn take_enemy_turn(
     mut commands: Commands,
     turn_order: Res<TurnOrder>,
+    registry: Res<UnitRegistry>,
     mut acting: Query<
         (Entity, &mut Turn, &StandsOn, &Body, &Faction),
         (With<Enemy>, Without<Transformation>),
     >,
-    others: Query<(Entity, &Faction, &StandsOn)>,
+    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
     settings: Option<Res<PlayerSettings>>,
@@ -79,7 +83,10 @@ fn take_enemy_turn(
     let (Some(table), Some(settings)) = (table, settings) else {
         return;
     };
-    let Some(current) = turn_order.current() else {
+    let Some(current) = turn_order
+        .current()
+        .and_then(|unit| registry.entity_of(unit))
+    else {
         return;
     };
     let Ok((entity, mut turn, standing, body, faction)) = acting.get_mut(current) else {
@@ -147,6 +154,9 @@ enum FoeAction {
 /// One candidate target and the action available against it.
 struct FoePlan {
     entity: Entity,
+    /// `None` for a unit no spawn path identified; such a target sorts last
+    /// rather than becoming invisible (symmetric with `MovementCrossings`).
+    unit: Option<UnitId>,
     target: Standing,
     action: FoeAction,
 }
@@ -154,10 +164,11 @@ struct FoePlan {
 impl FoePlan {
     /// Deterministic target priority: attack, routable approach, unreachable.
     ///
-    /// Route cost decides between two approachable foes, horizontal distance is a
-    /// stable secondary signal, and entity id resolves exact ties. Query iteration
-    /// order is deliberately absent from the decision.
-    fn priority(&self, from: Standing) -> (u8, usize, u32, u64) {
+    /// Route cost decides between two approachable foes, horizontal distance is
+    /// a stable secondary signal, and the stable [`UnitId`] resolves exact
+    /// ties. Query iteration order is deliberately absent from the decision —
+    /// and so are entity bits, which are not stable across runs or saves.
+    fn priority(&self, from: Standing) -> (u8, usize, u32, bool, Option<UnitId>) {
         let (kind, route_cost) = match &self.action {
             FoeAction::Attack => (0, 0),
             FoeAction::Move(approach) => (1, approach.route_cost),
@@ -167,7 +178,9 @@ impl FoePlan {
             kind,
             route_cost,
             from.pos.coord.distance(self.target.pos.coord),
-            self.entity.to_bits(),
+            // `is_none` first so an unidentified unit genuinely sorts last.
+            self.unit.is_none(),
+            self.unit,
         )
     }
 }
@@ -180,7 +193,7 @@ impl FoePlan {
 /// ranked so the unreachable one cannot consume the turn merely by looking nearer on
 /// the map.
 fn best_foe(
-    others: &Query<(Entity, &Faction, &StandsOn)>,
+    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
     faction: Faction,
     from: Standing,
     footing: &Footing,
@@ -188,8 +201,8 @@ fn best_foe(
 ) -> Option<FoePlan> {
     others
         .iter()
-        .filter(|(_, other, _)| faction.is_hostile_to(**other))
-        .map(|(entity, _, standing)| {
+        .filter(|(_, _, other, _)| faction.is_hostile_to(**other))
+        .map(|(entity, unit, _, standing)| {
             let target = standing.0;
             let action = if footing.admits_step(from.pos, target.pos)
                 && footing.admits_step(target.pos, from.pos)
@@ -202,6 +215,7 @@ fn best_foe(
             };
             FoePlan {
                 entity,
+                unit: unit.copied(),
                 target,
                 action,
             }

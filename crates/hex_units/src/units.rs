@@ -19,9 +19,12 @@ use hex_assets::{
     to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings,
     SubstanceTable,
 };
+use std::collections::BTreeMap;
+
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId,
-    MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn,
+    ControlOwner, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
+    MapAnchorId, MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos,
+    TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
@@ -156,11 +159,91 @@ pub struct Player;
 #[reflect(Component)]
 pub struct Enemy;
 
+/// Allocates stable unit identities in scenario spawn order.
+///
+/// Never reuses an id within a session; reset when gameplay exits so the same
+/// scenario launch always deals the same ids — which is what lets a replay or
+/// a save name units without caring which `Entity` they landed on this run.
+///
+/// A future load path must restore this counter alongside the restored ids,
+/// or fresh deals can collide with loaded ones.
+#[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct UnitAllocator {
+    next: u64,
+}
+
+impl UnitAllocator {
+    /// Deals the next id. Ids are dense from zero in spawn order.
+    pub fn allocate(&mut self) -> UnitId {
+        let id = UnitId(self.next);
+        self.next += 1;
+        id
+    }
+}
+
+/// Resolves between stable [`UnitId`]s and the entities carrying them.
+///
+/// The sim's resources and decisions key on [`UnitId`]; systems that need to
+/// touch the actual ECS entity (insert a `Turn`, play an animation) resolve it
+/// here. Torn down with the units so a stale entry cannot outlive its entity.
+#[derive(Resource, Debug, Default)]
+pub struct UnitRegistry {
+    by_id: BTreeMap<UnitId, Entity>,
+    ids: BTreeMap<Entity, UnitId>,
+}
+
+impl UnitRegistry {
+    /// Records a unit's identity. Test spawners call this directly.
+    pub fn register(&mut self, id: UnitId, entity: Entity) {
+        self.by_id.insert(id, entity);
+        self.ids.insert(entity, id);
+    }
+
+    /// The entity registered for `id`, if any.
+    ///
+    /// The registry has no liveness knowledge: nothing despawns units
+    /// mid-session today, and when death lands it must unregister here or
+    /// this will serve a dead entity.
+    #[must_use]
+    pub fn entity_of(&self, id: UnitId) -> Option<Entity> {
+        self.by_id.get(&id).copied()
+    }
+
+    /// The stable id of `entity`, if it is a registered unit.
+    #[must_use]
+    pub fn id_of(&self, entity: Entity) -> Option<UnitId> {
+        self.ids.get(&entity).copied()
+    }
+
+    fn clear(&mut self) {
+        self.by_id.clear();
+        self.ids.clear();
+    }
+}
+
+/// The player's roster, by stable id.
+///
+/// One field, and it is the future party system: everything that needs "the
+/// player's units" as a set — co-op seat assignment, saves, the party UI —
+/// reads this rather than querying markers.
+#[derive(Resource, Debug, Default)]
+pub struct Party {
+    /// Player-controlled units in spawn order.
+    pub members: Vec<UnitId>,
+}
+
 /// Registers the units, their spawning, and click-to-move.
 pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
         .register_type::<Enemy>()
         .register_type::<Faction>()
+        // `hex_core` has no plugin, so the runtime plugin that introduces its
+        // shared types registers them.
+        .register_type::<UnitId>()
+        .register_type::<ControlOwner>()
+        .init_resource::<UnitAllocator>()
+        .init_resource::<UnitRegistry>()
+        .init_resource::<Party>()
         // `Actors` runs after `Terrain`, where `hex_map` spawns the tiles this
         // system queries to find the surface to stand on. The set boundary also
         // provides the sync point that makes those tiles queryable at all —
@@ -175,10 +258,21 @@ pub fn plugin(app: &mut App) {
         .add_observer(on_tile_clicked);
 }
 
-fn despawn_units(mut commands: Commands, units: Query<Entity, With<Faction>>) {
+fn despawn_units(
+    mut commands: Commands,
+    units: Query<Entity, With<Faction>>,
+    mut allocator: ResMut<UnitAllocator>,
+    mut registry: ResMut<UnitRegistry>,
+    mut party: ResMut<Party>,
+) {
     for entity in &units {
         commands.entity(entity).despawn();
     }
+    // Identity state resets with the units: the next launch deals ids from
+    // zero again, so a scenario's ids are a function of the scenario alone.
+    *allocator = UnitAllocator::default();
+    registry.clear();
+    party.members.clear();
 }
 
 /// Global picking observer: when any `HexTile` is clicked, animate the player over to
@@ -311,6 +405,7 @@ pub(crate) fn reconcile_movement(
     mut crossings: ResMut<MovementCrossings>,
     mut moving_units: Query<(
         Entity,
+        Option<&UnitId>,
         &mut MovingTo,
         &mut StandsOn,
         Option<&Transformation>,
@@ -318,7 +413,7 @@ pub(crate) fn reconcile_movement(
 ) {
     crossings.clear();
 
-    for (entity, mut moving, mut standing, animation) in &mut moving_units {
+    for (entity, unit, mut moving, mut standing, animation) in &mut moving_units {
         let reached_index = animation
             .and_then(|animation| moving.reached_at(animation.elapsed()))
             .or_else(|| moving.path.len().checked_sub(1));
@@ -328,7 +423,7 @@ pub(crate) fn reconcile_movement(
             if first_new <= reached_index {
                 for index in first_new..=reached_index {
                     if let Some(reached) = moving.path.get(index).copied() {
-                        crossings.push(entity, reached);
+                        crossings.push(unit.copied(), entity, reached);
                     }
                 }
 
@@ -345,6 +440,8 @@ pub(crate) fn reconcile_movement(
             commands.entity(entity).remove::<MovingTo>();
         }
     }
+
+    crossings.sort_deterministic();
 }
 
 /// Stops a walk where it is when a fight starts.
@@ -429,7 +526,15 @@ fn spawn_units(
     settings: Res<PlayerSettings>,
     scenario: Res<ScenarioSettings>,
     anchors: Option<Res<MapAnchors>>,
+    mut allocator: ResMut<UnitAllocator>,
+    mut registry: ResMut<UnitRegistry>,
+    mut party: ResMut<Party>,
 ) {
+    let mut identity = UnitIdentity {
+        allocator: &mut allocator,
+        registry: &mut registry,
+        party: &mut party,
+    };
     // Both units share a body for now. When lattices land, size becomes a property of
     // the unit rather than a global setting, and this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
@@ -441,6 +546,8 @@ fn spawn_units(
     let enemy_material = materials.add(StandardMaterial::from(Color::srgb(0.25, 0.45, 0.9)));
 
     let anchors = anchors.as_deref();
+    // Player first, then enemy: the fixed spawn order is what makes the dealt
+    // ids a function of the scenario rather than of this run.
     let player = placement_from(&scenario.player, "player", anchors).and_then(|placement| {
         spawn_unit(
             &mut commands,
@@ -454,6 +561,7 @@ fn spawn_units(
                 body,
             },
             &footing,
+            &mut identity,
         )
     });
     if let Err(reason) = player {
@@ -475,12 +583,21 @@ fn spawn_units(
                 body,
             },
             &footing,
+            &mut identity,
         )
     });
     if let Err(reason) = enemy {
         error!("{reason}");
         commands.insert_resource(GameplaySetupFailure::new(reason));
     }
+}
+
+/// The identity bookkeeping a spawn threads through: deal an id, record it,
+/// and enrol player units in the party.
+struct UnitIdentity<'a> {
+    allocator: &'a mut UnitAllocator,
+    registry: &'a mut UnitRegistry,
+    party: &'a mut Party,
 }
 
 /// A placement resolved as far as scenario settings permit.
@@ -532,6 +649,7 @@ fn spawn_unit(
     assets: &GameAssets,
     spawn: UnitSpawn,
     footing: &Footing,
+    identity: &mut UnitIdentity,
 ) -> Result<(), String> {
     let standing = match spawn.placement {
         // Stand on the lowest surface at an authored coordinate that this body fits
@@ -573,12 +691,16 @@ fn spawn_unit(
         ..default()
     };
 
+    let id = identity.allocator.allocate();
     let mut unit = commands.spawn((
         Transform::from_translation(standing.world_position()),
         Visibility::default(),
         StandsOn(standing),
         spawn.body,
         spawn.faction,
+        id,
+        // Seat 0 everywhere today; the command funnel gives this teeth.
+        ControlOwner::default(),
         Name::new(spawn.name),
     ));
 
@@ -586,6 +708,10 @@ fn spawn_unit(
         Faction::Player => unit.insert(Player),
         Faction::Hostile => unit.insert(Enemy),
     };
+    identity.registry.register(id, unit.id());
+    if spawn.faction == Faction::Player {
+        identity.party.members.push(id);
+    }
 
     unit.with_children(|parent| {
         // `Pickable::IGNORE` so clicks pass through to the tiles below. Without it a

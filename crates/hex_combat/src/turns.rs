@@ -23,8 +23,11 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
-use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn};
-use hex_units::{either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt};
+use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn, UnitId};
+use hex_units::{
+    either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
+    UnitRegistry,
+};
 
 /// How far apart two units can be and still start a fight, and related knobs.
 ///
@@ -66,10 +69,16 @@ impl Default for Initiative {
 ///
 /// Rebuilt whenever combat starts. Cleared when it ends, so its emptiness is the
 /// authoritative answer to "are we fighting" and cannot drift from [`Mode`].
+///
+/// Keyed by stable [`UnitId`], never [`Entity`]: entity indices are recycled
+/// and differ across runs and saves, so an order stored as entities silently
+/// reshuffles — exactly the randomness-by-another-name the design rules out.
+/// Systems that need the actual entity resolve through
+/// [`UnitRegistry`].
 #[derive(Resource, Debug, Default)]
 pub struct TurnOrder {
     /// Units in the order they act.
-    order: Vec<Entity>,
+    order: Vec<UnitId>,
     /// Index into [`Self::order`] of the unit currently acting.
     current: usize,
     /// How many full rounds have elapsed. Purely for display.
@@ -79,13 +88,13 @@ pub struct TurnOrder {
 impl TurnOrder {
     /// The unit currently acting, if there is one.
     #[must_use]
-    pub fn current(&self) -> Option<Entity> {
+    pub fn current(&self) -> Option<UnitId> {
         self.order.get(self.current).copied()
     }
 
     /// Everyone in the fight, in order.
     #[must_use]
-    pub fn order(&self) -> &[Entity] {
+    pub fn order(&self) -> &[UnitId] {
         &self.order
     }
 
@@ -97,8 +106,8 @@ impl TurnOrder {
 
     /// Where a unit sits in the order, counting from zero.
     #[must_use]
-    pub fn position_of(&self, entity: Entity) -> Option<usize> {
-        self.order.iter().position(|e| *e == entity)
+    pub fn position_of(&self, unit: UnitId) -> Option<usize> {
+        self.order.iter().position(|u| *u == unit)
     }
 
     /// Moves to the next unit, wrapping and counting a round.
@@ -133,6 +142,11 @@ pub fn plugin(app: &mut App) {
     app.register_type::<Initiative>()
         .register_type::<Turn>()
         .init_resource::<TurnOrder>()
+        // Idempotent alongside hex_units' own init: combat resolves the order
+        // through these, so they must exist even in a test app that composes
+        // only the combat half.
+        .init_resource::<UnitAllocator>()
+        .init_resource::<UnitRegistry>()
         .add_systems(OnEnter(Mode::Combat), begin_combat)
         .add_systems(OnExit(Mode::Combat), end_combat)
         // Both are pausable. A fight starting or a turn passing while the player is
@@ -263,28 +277,49 @@ fn first_hostile_crossing(
 fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&Initiative>), With<Faction>>,
+    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), With<Faction>>,
+    mut allocator: ResMut<UnitAllocator>,
+    mut registry: ResMut<UnitRegistry>,
 ) {
-    // `Option`, so a unit without an explicit initiative still joins the fight.
-    // Requiring the component would make the whole order silently empty — every unit
+    // `Option` on both components, so a unit missing one still joins the fight.
+    // Requiring them would make the whole order silently empty — every unit
     // filtered out, combat starting with nobody in it and no error anywhere.
-    let mut combatants: Vec<(Entity, Initiative)> = units
+    // A unit without a `UnitId` (hand-spawned in a test, or a future spawn path
+    // that forgot) is registered here rather than dropped.
+    let mut combatants: Vec<(UnitId, Entity, Initiative)> = units
         .iter()
-        .map(|(entity, initiative)| (entity, initiative.copied().unwrap_or_default()))
+        .map(|(entity, unit, initiative)| {
+            let unit = unit.copied().unwrap_or_else(|| {
+                // Dealing here re-admits query iteration order into id order —
+                // the exact nondeterminism this system exists to remove — so
+                // the breach must be observable, never silent.
+                warn!("dealing a combat-time id to {entity:?}; a spawn path missed it");
+                let id = allocator.allocate();
+                commands.entity(entity).insert(id);
+                id
+            });
+            // Upsert unconditionally: a unit carrying an id the registry has
+            // not seen (a test's explicit id, a future load path) must still
+            // resolve, or its turn silently never advances.
+            registry.register(unit, entity);
+            (unit, entity, initiative.copied().unwrap_or_default())
+        })
         .collect();
 
-    // Highest initiative first. Ties break on entity index rather than being left to
-    // query order, so the same units always produce the same order — the design rules
-    // out randomness in resolution, and an order that shuffles between runs would be
-    // randomness by another name.
-    combatants.sort_by(|(a_entity, a_init), (b_entity, b_init)| {
-        b_init.cmp(a_init).then(a_entity.cmp(b_entity))
+    // Highest initiative first. Ties break on the stable `UnitId` rather than
+    // being left to query order or entity index — the design rules out
+    // randomness in resolution, entity indices are not stable across runs or
+    // saves, and an order that shuffles between runs would be randomness by
+    // another name.
+    combatants.sort_by(|(a_unit, _, a_init), (b_unit, _, b_init)| {
+        b_init.cmp(a_init).then(a_unit.cmp(b_unit))
     });
 
     turn_order.clear();
-    turn_order.order = combatants.into_iter().map(|(entity, _)| entity).collect();
+    let first_entity = combatants.first().map(|&(_, entity, _)| entity);
+    turn_order.order = combatants.into_iter().map(|(unit, _, _)| unit).collect();
 
-    if let Some(first) = turn_order.current() {
+    if let Some(first) = first_entity {
         commands.entity(first).insert(Turn {
             movement_left: MOVEMENT_PER_TURN,
             acted: false,
@@ -316,12 +351,16 @@ fn advance_turn(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mut turn_order: ResMut<TurnOrder>,
+    registry: Res<UnitRegistry>,
     acting: Query<(Entity, &Turn, Has<Transformation>)>,
 ) {
     let Some(current) = turn_order.current() else {
         return;
     };
-    let Ok((entity, turn, is_moving)) = acting.get(current) else {
+    let Some(current_entity) = registry.entity_of(current) else {
+        return;
+    };
+    let Ok((entity, turn, is_moving)) = acting.get(current_entity) else {
         return;
     };
 
@@ -336,7 +375,10 @@ fn advance_turn(
 
     commands.entity(entity).remove::<Turn>();
     turn_order.advance();
-    if let Some(next) = turn_order.current() {
+    if let Some(next) = turn_order
+        .current()
+        .and_then(|unit| registry.entity_of(unit))
+    {
         commands.entity(next).insert(Turn {
             movement_left: MOVEMENT_PER_TURN,
             acted: false,
@@ -348,9 +390,9 @@ fn advance_turn(
 mod tests {
     use super::*;
 
-    fn order_of(entities: &[Entity]) -> TurnOrder {
+    fn order_of(units: &[UnitId]) -> TurnOrder {
         TurnOrder {
-            order: entities.to_vec(),
+            order: units.to_vec(),
             current: 0,
             round: 0,
         }
@@ -365,22 +407,18 @@ mod tests {
 
     #[test]
     fn advancing_moves_to_the_next_unit() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let mut order = order_of(&[a, b]);
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
 
-        assert_eq!(order.current(), Some(a));
+        assert_eq!(order.current(), Some(UnitId(1)));
         order.advance();
-        assert_eq!(order.current(), Some(b));
+        assert_eq!(order.current(), Some(UnitId(2)));
     }
 
     /// Running off the end wraps and counts a round, rather than leaving nobody
     /// acting — which would stall the fight with no way to recover.
     #[test]
     fn the_order_wraps_and_counts_a_round() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let mut order = order_of(&[a, b]);
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
 
         assert_eq!(order.round, 0);
         order.advance();
@@ -388,7 +426,7 @@ mod tests {
 
         assert_eq!(
             order.current(),
-            Some(a),
+            Some(UnitId(1)),
             "the order should wrap to the front"
         );
         assert_eq!(order.round, 1, "a full cycle is one round");
@@ -406,8 +444,7 @@ mod tests {
 
     #[test]
     fn clearing_forgets_the_round_count() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let mut order = order_of(&[a]);
+        let mut order = order_of(&[UnitId(1)]);
         order.advance();
         assert_eq!(order.round, 1);
 
@@ -418,14 +455,9 @@ mod tests {
 
     #[test]
     fn position_of_finds_a_unit_in_the_order() {
-        let a = Entity::from_raw_u32(1).expect("a valid entity id");
-        let b = Entity::from_raw_u32(2).expect("a valid entity id");
-        let order = order_of(&[a, b]);
+        let order = order_of(&[UnitId(1), UnitId(2)]);
 
-        assert_eq!(order.position_of(b), Some(1));
-        assert_eq!(
-            order.position_of(Entity::from_raw_u32(9).expect("a valid entity id")),
-            None
-        );
+        assert_eq!(order.position_of(UnitId(2)), Some(1));
+        assert_eq!(order.position_of(UnitId(9)), None);
     }
 }

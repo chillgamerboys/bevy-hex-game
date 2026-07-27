@@ -14,7 +14,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_combat::{Initiative, TurnOrder};
-use hex_core::{HexCoord, HexSpan, Mode, Screen, TilePos, Turn};
+use hex_core::{HexCoord, HexSpan, Mode, Screen, TilePos, Turn, UnitId};
 use hex_units::{Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
@@ -36,6 +36,18 @@ fn test_app() -> App {
         app.cleanup();
     }
     app
+}
+
+/// The stable id combat dealt this entity when the fight began.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; a missing id IS the failure"
+)]
+fn unit_id(app: &App, entity: Entity) -> UnitId {
+    *app.world()
+        .entity(entity)
+        .get::<UnitId>()
+        .expect("combat should have dealt this unit a stable id")
 }
 
 /// A unit at a coordinate. Only the components `hex_combat` actually reads.
@@ -91,11 +103,11 @@ fn closing_the_distance_starts_a_fight() {
         "both units should be in the turn order"
     );
     assert_eq!(
-        order.position_of(player),
+        order.position_of(unit_id(&app, player)),
         Some(0),
         "the higher initiative acts first"
     );
-    assert_eq!(order.position_of(enemy), Some(1));
+    assert_eq!(order.position_of(unit_id(&app, enemy)), Some(1));
 }
 
 /// Units far apart stay in real time. Without this the game would open in combat.
@@ -164,12 +176,15 @@ fn ending_the_last_turn_wraps_and_counts_a_round() {
     enter_gameplay(&mut app);
     app.update();
 
-    assert_eq!(app.world().resource::<TurnOrder>().current(), Some(player));
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(unit_id(&app, player))
+    );
 
     end_turn(&mut app);
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(enemy),
+        Some(unit_id(&app, enemy)),
         "the turn should pass to the next unit"
     );
     assert_eq!(app.world().resource::<TurnOrder>().round, 0);
@@ -177,7 +192,7 @@ fn ending_the_last_turn_wraps_and_counts_a_round() {
     end_turn(&mut app);
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
-        Some(player),
+        Some(unit_id(&app, player)),
         "the order should wrap to the front"
     );
     assert_eq!(
@@ -305,4 +320,41 @@ fn end_turn(app: &mut App) {
         window,
     });
     app.update();
+}
+
+/// A unit that already carries an explicit id (a test's, or a future load
+/// path's) must still resolve through the registry — deleting the upsert in
+/// `begin_combat` makes the wrap back to it silently stall.
+#[test]
+fn a_carried_id_still_receives_its_turn_on_the_wrap() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+    );
+    app.world_mut().entity_mut(player).insert(UnitId(5));
+    enter_gameplay(&mut app);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(5)),
+        "the carried id should appear in the order untouched"
+    );
+
+    end_turn(&mut app);
+    end_turn(&mut app);
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(UnitId(5)),
+        "the wrap should return to the carried id"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_some(),
+        "the registry must resolve a carried id back to its entity"
+    );
 }

@@ -29,8 +29,8 @@ use hex_core::{
     MAX_HEADROOM,
 };
 use hex_units::{
-    Body, Enemy, Faction, HoveredSurface, MovementSystems, MovingTo, PathOverlay, Player,
-    RangeOverlay, StandsOn, UnitRing,
+    Body, Enemy, Faction, HoveredSurface, MovementSystems, MovingTo, Party, PathOverlay, Player,
+    RangeOverlay, StandsOn, UnitRegistry, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -1423,4 +1423,71 @@ fn a_fight_stops_the_walk_where_it_started() {
         TilePos::new(destination, GROUND_LEVEL),
         "the piece was delivered to a destination chosen before the fight existed"
     );
+}
+
+/// Stable ids are dealt in scenario spawn order — player first — recorded in
+/// the registry and the party, and reset with the session so the same launch
+/// always deals the same ids. That determinism is what lets a save or replay
+/// name units without caring which entities they landed on this run.
+#[test]
+fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
+    use hex_core::UnitId;
+
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let ids = |app: &mut App| {
+        let mut players = app
+            .world_mut()
+            .query_filtered::<(Entity, &UnitId), With<Player>>();
+        let (player_entity, player_id) = players
+            .single(app.world())
+            .map(|(entity, id)| (entity, *id))
+            .expect("one player with an id");
+        let mut enemies = app.world_mut().query_filtered::<&UnitId, With<Enemy>>();
+        let enemy_id = *enemies.single(app.world()).expect("one enemy with an id");
+        (player_entity, player_id, enemy_id)
+    };
+
+    let (player_entity, player_id, enemy_id) = ids(&mut app);
+    assert_eq!(player_id, UnitId(0), "the player spawns first");
+    assert_eq!(enemy_id, UnitId(1), "the enemy spawns second");
+
+    let registry = app.world().resource::<UnitRegistry>();
+    assert_eq!(registry.entity_of(player_id), Some(player_entity));
+    assert_eq!(registry.id_of(player_entity), Some(player_id));
+    assert_eq!(
+        app.world()
+            .entity(player_entity)
+            .get::<hex_core::ControlOwner>(),
+        Some(&hex_core::ControlOwner::default()),
+        "spawned units carry the seat-0 ownership marker"
+    );
+    assert_eq!(
+        app.world().resource::<Party>().members,
+        vec![player_id],
+        "only player-faction units enrol in the party"
+    );
+
+    // Leaving tears identity down; re-entering deals the same ids again.
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(app.world().resource::<Party>().members.is_empty());
+    assert_eq!(
+        app.world().resource::<UnitRegistry>().entity_of(UnitId(0)),
+        None,
+        "the registry must not outlive its units"
+    );
+
+    enter_gameplay(&mut app);
+    let (_, player_again, enemy_again) = ids(&mut app);
+    assert_eq!(
+        player_again,
+        UnitId(0),
+        "a fresh session re-deals from zero"
+    );
+    assert_eq!(enemy_again, UnitId(1));
 }
