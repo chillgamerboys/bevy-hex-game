@@ -15,9 +15,8 @@
     windows_subsystem = "windows"
 )]
 
-use bevy::diagnostic::{
-    EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin,
-};
+use bevy::diagnostic::{EntityCountDiagnosticsPlugin, FrameTimeDiagnosticsPlugin};
+use bevy::log::{BoxedLayer, LogPlugin};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
@@ -38,7 +37,52 @@ mod screens;
 mod walk;
 
 fn main() -> AppExit {
+    // Chain rather than replace: console builds keep the default stderr report,
+    // and the windowed Windows release gets the panic into the log file — which
+    // otherwise records a session that just stops with no last line.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        bevy::log::error!("panic: {info}");
+        default_hook(info);
+    }));
     App::new().add_plugins(AppPlugin).run()
+}
+
+/// A plain-text log file beside the executable, fresh each launch.
+///
+/// The shipped Windows build hides its console, so without this a crash in the
+/// field leaves nothing to attach to a bug report. `Arc<File>` already
+/// satisfies `MakeWriter`, so no logging dependency is added, and
+/// `File::create` truncates — the file is *this* session, which is the version
+/// someone actually wants when the game just died.
+///
+/// Failure to create the file downgrades to stderr-and-carry-on: a read-only
+/// install directory must not stop the game from launching.
+fn file_log_layer(_app: &mut App) -> Option<BoxedLayer> {
+    use bevy::log::tracing_subscriber::{fmt, Layer};
+
+    let path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("hex_game.log")))
+        .unwrap_or_else(|| std::path::PathBuf::from("hex_game.log"));
+    match std::fs::File::create(&path) {
+        Ok(file) => Some(
+            fmt::layer()
+                .with_writer(std::sync::Arc::new(file))
+                .with_ansi(false)
+                .boxed(),
+        ),
+        Err(error) => {
+            #[expect(
+                clippy::print_stderr,
+                reason = "the log subscriber does not exist yet while its own layer is being built; stderr is the only channel there is"
+            )]
+            {
+                eprintln!("cannot create log file at {}: {error}", path.display());
+            }
+            None
+        }
+    }
 }
 
 /// The root plugin. Everything the game does hangs off this one place, so the
@@ -55,27 +99,34 @@ impl Plugin for AppPlugin {
         // filters Dozen out and renders on CPU: single-digit FPS even on a discrete
         // NVIDIA card. Don't remove it; it costs nothing on other platforms.
         app.add_plugins(
-            DefaultPlugins.set(RenderPlugin {
-                render_creation: WgpuSettings {
-                    instance_flags: InstanceFlags::default()
-                        | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+            DefaultPlugins
+                .set(RenderPlugin {
+                    render_creation: WgpuSettings {
+                        instance_flags: InstanceFlags::default()
+                            | InstanceFlags::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER,
+                        ..default()
+                    }
+                    .into(),
                     ..default()
-                }
-                .into(),
-                ..default()
-            }),
+                })
+                .set(LogPlugin {
+                    custom_layer: file_log_layer,
+                    ..default()
+                }),
         );
 
         app.add_plugins(MeshPickingPlugin);
 
-        // Frame-time + entity-count diagnostics are cheap and logged to stdout
-        // once per second by LogDiagnosticsPlugin. Always on so release-build
-        // perf is observable without rebuilding.
+        // Frame-time + entity-count collectors are cheap and stay on in every
+        // build: dev tooling reads them. The once-per-second printout is only
+        // for builds with a console to print to — in the shipped windowed
+        // release it would do nothing but churn the session log file.
         app.add_plugins((
             FrameTimeDiagnosticsPlugin::default(),
             EntityCountDiagnosticsPlugin::default(),
-            LogDiagnosticsPlugin::default(),
         ));
+        #[cfg(any(debug_assertions, feature = "dev", feature = "map-review"))]
+        app.add_plugins(bevy::diagnostic::LogDiagnosticsPlugin::default());
 
         // Order the shared `Update` phases once, here. Systems that participate in
         // cross-crate timing opt into these sets; self-contained state, UI and
