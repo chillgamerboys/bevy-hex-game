@@ -1264,6 +1264,135 @@ fn v2_hills_reentry_is_deterministic() {
 }
 
 #[test]
+fn v2_layered_sky_teardown_and_reentry_preserve_generated_state() {
+    let mut app = v2_layered_sky_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+
+    let first_tile_count = tile_count(&mut app);
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let first_special_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    let first_interior_surfaces: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let first_roof_voxels: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+
+    assert!(first_tile_count > 0);
+    assert!(!first_special_regions.is_empty());
+    assert_eq!(first_report.generator_version, 2);
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<HexGrid>>()
+            .iter(app.world())
+            .count(),
+        0
+    );
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.generator_version,
+        first_report.generator_version
+    );
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.candidates_evaluated,
+        first_report.candidates_evaluated
+    );
+    assert_eq!(
+        second_report.valid_candidates,
+        first_report.valid_candidates
+    );
+    assert_eq!(second_report.repair_rounds, first_report.repair_rounds);
+    assert_eq!(second_report.repair_actions, first_report.repair_actions);
+    assert_eq!(second_report.used_fallback, first_report.used_fallback);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(second_report.notes, first_report.notes);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_special_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    let second_interior_surfaces: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let second_roof_voxels: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .roof_voxels()
+        .collect();
+
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_special_regions, first_special_regions);
+    assert_eq!(second_interior_surfaces, first_interior_surfaces);
+    assert_eq!(second_roof_voxels, first_roof_voxels);
+}
+
+#[test]
 fn sky_regions_reenter_with_the_same_exact_memberships() {
     let mut app = sky_islands_app();
     enter_gameplay(&mut app);
