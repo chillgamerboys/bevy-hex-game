@@ -17,10 +17,11 @@ The world is a voxel map with substances, destruction, and a deterministic
 procedural generator: seeded recipes with validated crossings, anchors that scenarios
 place units on by name, and architecture probes for frozen, volcanic, and sky-island
 terrain. The sky-island probe now preserves a complete playable Hills map below a
-separate flight-gated upper network. Movement is level-based over stacked surfaces,
-with body size decided by headroom and a breadth-first pathfinder that cannot collapse
-a stack. A movement preview draws the reachable set and the route before a click commits
-to either.
+separate flight-gated upper network. The Mountains probe adds sharp frozen ridges,
+deliberate cliffs, and a high-pass/low-bypass route pair without introducing a river.
+Movement is level-based over stacked surfaces, with body size decided by headroom and
+a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
+reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range.
 

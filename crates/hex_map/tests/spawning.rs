@@ -244,6 +244,23 @@ fn v2_layered_sky_app() -> App {
     app
 }
 
+fn v2_mountains_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
+            environment: V2EnvironmentSettings::Frozen,
+            recipe: V2RecipeSettings::Mountains(MountainsSettings {
+                base_level: 15,
+                relief: 15,
+                peak_count: 4,
+            }),
+        })),
+    });
+    app
+}
+
 #[test]
 fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
     let mut app = procedural_app();
@@ -389,6 +406,52 @@ fn v2_layered_sky_publishes_ground_anchors_upper_regions_and_combined_view() {
         .resource::<VoxelMap>()
         .get(position)
         .is_air()));
+}
+
+#[test]
+fn v2_mountains_publishes_route_anchors_and_geometry_derived_view() {
+    let mut app = v2_mountains_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(!report.used_fallback, "{:?}", report.notes);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "high_pass",
+        "low_bypass",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing Mountains anchor {name}"
+        );
+    }
+
+    let map = app.world().resource::<VoxelMap>();
+    assert!(
+        app.world()
+            .resource::<SpecialMovementRegions>()
+            .iter()
+            .all(|(position, _)| !map.get(position).is_air()),
+        "a summit region named an air surface"
+    );
 }
 
 #[test]
@@ -594,17 +657,17 @@ fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
 }
 
 #[test]
-fn unavailable_v2_recipe_reports_failure_without_partial_terrain() {
+fn unavailable_v2_caves_recipe_reports_failure_without_partial_terrain() {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
         terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
-            environment: V2EnvironmentSettings::Frozen,
-            recipe: V2RecipeSettings::Mountains(MountainsSettings {
-                base_level: 15,
-                relief: 15,
-                peak_count: 4,
+            environment: V2EnvironmentSettings::Rocky,
+            recipe: V2RecipeSettings::Caves(hex_map::CavesSettings {
+                surface_level: 15,
+                cave_floor_level: 8,
+                chamber_count: 7,
             }),
         })),
     });
@@ -622,7 +685,7 @@ fn unavailable_v2_recipe_reports_failure_without_partial_terrain() {
         .world()
         .resource::<GameplaySetupFailure>()
         .reason
-        .contains("V2 recipe Mountains is not available"));
+        .contains("V2 recipe Caves is not available"));
     assert_eq!(tile_count(&mut app), 0);
 }
 
@@ -1390,6 +1453,87 @@ fn v2_layered_sky_teardown_and_reentry_preserve_generated_state() {
     assert_eq!(second_special_regions, first_special_regions);
     assert_eq!(second_interior_surfaces, first_interior_surfaces);
     assert_eq!(second_roof_voxels, first_roof_voxels);
+}
+
+#[test]
+fn v2_mountains_teardown_and_reentry_preserve_generated_state() {
+    let mut app = v2_mountains_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    let first_tile_count = tile_count(&mut app);
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let first_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.valid_candidates,
+        first_report.valid_candidates
+    );
+    assert_eq!(second_report.repair_actions, first_report.repair_actions);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_regions: BTreeMap<TilePos, SpecialMovementRegion> = app
+        .world()
+        .resource::<SpecialMovementRegions>()
+        .iter()
+        .collect();
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_regions, first_regions);
 }
 
 #[test]

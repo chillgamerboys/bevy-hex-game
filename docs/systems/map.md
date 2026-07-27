@@ -155,6 +155,14 @@ interior, river crossing, or protected approach. The selected upper footprint is
 one exact flight-gated `SpecialMovementRegion`. Its combined `MapViewHint` frames both
 ground play and the upper network.
 
+Mountains builds each native V2 candidate around an edge-to-edge ridge with short
+spurs and three to five sharp peaks. Its ordinary network keeps a two-wide high pass
+and a separated two-wide low bypass; the rest of the ridge deliberately retains
+two- and three-level cliff edges. It has no hazard fill or crossing material. Only
+summit components that are actually disconnected under the shared walker predicate
+are published as special-movement terrain, while the generated view looks across the
+ridge so both routes remain legible.
+
 Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
 its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
 non-standable and may associate it with an interior. Anchors also name exact

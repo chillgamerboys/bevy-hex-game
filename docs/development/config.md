@@ -166,10 +166,28 @@ The upper layer covers 15–25% of map columns, remains an exact special-movemen
 region, and cannot replace the finalized ground, its anchors, or its protected
 crossing approaches. It supports `TemperateGrassland` and `Frozen`.
 
-The remaining V2 recipe forms are `Mountains` and `Caves`. Their settings schemas are
-reserved while those generators land sequentially; selecting an unavailable recipe
-reports a setup failure rather than publishing partial terrain. Recipe and environment
-combinations are validated together: Mountains uses `Frozen`, Caves uses `Rocky`, and
+`Mountains` builds a sharp frozen ridge with explicit ordinary-walker routes instead
+of projecting the whole map into gentle slopes:
+
+```ron
+terrain: Procedural((
+    generator_version: 2,
+    environment: Frozen,
+    recipe: Mountains((
+        base_level: 15,
+        relief: 15,
+        peak_count: 4,
+    )),
+)),
+```
+
+It publishes a two-wide elevated saddle and a separated low-valley bypass, with no
+river or crossing structures. Inaccessible summit components are exact
+special-movement regions; naturally walkable peaks remain ordinary terrain.
+
+`Caves` is the remaining reserved V2 recipe. Selecting it currently reports a setup
+failure rather than publishing partial terrain. Recipe and environment combinations
+are validated together: Mountains requires `Frozen`, Caves requires `Rocky`, and
 invalid combinations leave the previous valid hot-reloaded settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
