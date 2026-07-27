@@ -1101,6 +1101,9 @@ mod tests {
         CameraSettings {
             gameplay_eye: (0.0, 48.0, 42.0),
             gameplay_focus: (0.0, 6.0, 0.0),
+            character_focus_height: 0.4,
+            character_radius: 7.0,
+            character_pitch: 0.3,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,

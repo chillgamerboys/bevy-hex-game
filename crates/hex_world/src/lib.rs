@@ -16,7 +16,7 @@ pub mod sky;
 /// Procedural sky material.
 mod sky_material;
 
-pub use camera::PanOrbitCamera;
+pub use camera::{CameraMode, PanOrbitCamera};
 
 /// Adds every world-presentation system.
 pub fn plugin(app: &mut App) {

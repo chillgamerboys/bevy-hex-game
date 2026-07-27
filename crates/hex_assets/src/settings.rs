@@ -27,13 +27,19 @@ pub fn to_color((r, g, b): Rgb) -> Color {
 }
 
 /// `assets/config/camera.ron` — pan, orbit, and zoom feel.
-#[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
+#[derive(Asset, Resource, Reflect, Debug, Clone)]
 #[reflect(Resource)]
 pub struct CameraSettings {
     /// Camera position applied whenever gameplay starts.
     pub gameplay_eye: (f32, f32, f32),
     /// Point the camera looks at and orbits around whenever gameplay starts.
     pub gameplay_focus: (f32, f32, f32),
+    /// Height above the selected character's feet used as the close-view focus.
+    pub character_focus_height: f32,
+    /// Initial orbit radius when entering the close character view.
+    pub character_radius: f32,
+    /// Initial close-view pitch as a fraction from the horizon toward straight down.
+    pub character_pitch: f32,
     /// WASD pan speed, scaled by zoom distance so panning feels the same when
     /// zoomed out as when zoomed in.
     pub pan_speed: f32,
@@ -50,6 +56,102 @@ pub struct CameraSettings {
     pub max_zoom: f32,
     /// Fraction of the current distance covered per scroll notch.
     pub zoom_sensitivity: f32,
+}
+
+impl CameraSettings {
+    /// Checks camera geometry and controls before settings replace the active asset.
+    pub fn validate(&self) -> Result<(), String> {
+        validate_finite_vec3("gameplay_eye", self.gameplay_eye)?;
+        validate_finite_vec3("gameplay_focus", self.gameplay_focus)?;
+        let eye = self.gameplay_eye;
+        let focus = self.gameplay_focus;
+        let offset_squared = [
+            f64::from(eye.0) - f64::from(focus.0),
+            f64::from(eye.1) - f64::from(focus.1),
+            f64::from(eye.2) - f64::from(focus.2),
+        ]
+        .into_iter()
+        .map(|component| component * component)
+        .sum::<f64>();
+        if offset_squared <= f64::from(f32::EPSILON) {
+            return Err("gameplay_eye and gameplay_focus must be distinct".to_owned());
+        }
+
+        validate_nonnegative("character_focus_height", self.character_focus_height)?;
+        if !self.character_radius.is_finite() || self.character_radius <= 0.0 {
+            return Err("character_radius must be positive and finite".to_owned());
+        }
+        validate_unit_interval("character_pitch", self.character_pitch)?;
+
+        validate_nonnegative("pan_speed", self.pan_speed)?;
+        validate_nonnegative("pan_speed_offset", self.pan_speed_offset)?;
+        validate_unit_interval("min_pitch", self.min_pitch)?;
+        validate_unit_interval("max_pitch", self.max_pitch)?;
+        if self.min_pitch > self.max_pitch {
+            return Err("min_pitch must not exceed max_pitch".to_owned());
+        }
+        if !(self.min_pitch..=self.max_pitch).contains(&self.character_pitch) {
+            return Err("character_pitch must be within min_pitch..=max_pitch".to_owned());
+        }
+
+        if !self.min_zoom.is_finite() || self.min_zoom <= 0.0 {
+            return Err("min_zoom must be positive and finite".to_owned());
+        }
+        if !self.max_zoom.is_finite() || self.max_zoom <= 0.0 {
+            return Err("max_zoom must be positive and finite".to_owned());
+        }
+        if self.min_zoom > self.max_zoom {
+            return Err("min_zoom must not exceed max_zoom".to_owned());
+        }
+        if !(self.min_zoom..=self.max_zoom).contains(&self.character_radius) {
+            return Err("character_radius must be within min_zoom..=max_zoom".to_owned());
+        }
+        validate_nonnegative("zoom_sensitivity", self.zoom_sensitivity)?;
+
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnvalidatedCameraSettings {
+    gameplay_eye: (f32, f32, f32),
+    gameplay_focus: (f32, f32, f32),
+    character_focus_height: f32,
+    character_radius: f32,
+    character_pitch: f32,
+    pan_speed: f32,
+    pan_speed_offset: f32,
+    min_pitch: f32,
+    max_pitch: f32,
+    min_zoom: f32,
+    max_zoom: f32,
+    zoom_sensitivity: f32,
+}
+
+impl<'de> Deserialize<'de> for CameraSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = UnvalidatedCameraSettings::deserialize(deserializer)?;
+        let settings = Self {
+            gameplay_eye: raw.gameplay_eye,
+            gameplay_focus: raw.gameplay_focus,
+            character_focus_height: raw.character_focus_height,
+            character_radius: raw.character_radius,
+            character_pitch: raw.character_pitch,
+            pan_speed: raw.pan_speed,
+            pan_speed_offset: raw.pan_speed_offset,
+            min_pitch: raw.min_pitch,
+            max_pitch: raw.max_pitch,
+            min_zoom: raw.min_zoom,
+            max_zoom: raw.max_zoom,
+            zoom_sensitivity: raw.zoom_sensitivity,
+        };
+        settings.validate().map_err(D::Error::custom)?;
+        Ok(settings)
+    }
 }
 
 /// `assets/config/lighting.ron` — sun, ambient, and sky.
@@ -358,6 +460,7 @@ mod tests {
 
     use super::*;
 
+    const CAMERA_RON: &str = include_str!("../../../assets/config/camera.ron");
     const LIGHTING_RON: &str = include_str!("../../../assets/config/lighting.ron");
     const PLAYER_RON: &str = include_str!("../../../assets/config/player.ron");
 
@@ -383,8 +486,7 @@ mod tests {
     #[test]
     fn shipped_camera_frames_the_showcase() {
         let camera: CameraSettings =
-            ron::from_str(include_str!("../../../assets/config/camera.ron"))
-                .expect("the shipped camera settings should parse");
+            ron::from_str(CAMERA_RON).expect("the shipped camera settings should parse");
         let (eye_x, eye_y, eye_z) = camera.gameplay_eye;
         let (focus_x, focus_y, focus_z) = camera.gameplay_focus;
         assert!(eye_x.abs() < f32::EPSILON);
@@ -401,6 +503,80 @@ mod tests {
             initial_radius <= camera.max_zoom * 0.9,
             "the full-map frame should retain at least 10% manual zoom-out headroom"
         );
+        assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
+        assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
+        assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn invalid_camera_values_are_rejected_during_deserialization() {
+        for (needle, replacement, expected) in [
+            (
+                "gameplay_eye: (0.0, 48.0, 42.0)",
+                "gameplay_eye: (NaN, 48.0, 42.0)",
+                "gameplay_eye",
+            ),
+            (
+                "gameplay_focus: (0.0, 6.0, 0.0)",
+                "gameplay_focus: (0.0, inf, 0.0)",
+                "gameplay_focus",
+            ),
+            (
+                "gameplay_focus: (0.0, 6.0, 0.0)",
+                "gameplay_focus: (0.0, 48.0, 42.0)",
+                "distinct",
+            ),
+            (
+                "character_focus_height: 0.4",
+                "character_focus_height: -0.1",
+                "character_focus_height",
+            ),
+            (
+                "character_radius: 7.0",
+                "character_radius: 0.0",
+                "character_radius",
+            ),
+            (
+                "character_radius: 7.0",
+                "character_radius: 4.0",
+                "character_radius",
+            ),
+            (
+                "character_pitch: 0.3",
+                "character_pitch: 1.0",
+                "character_pitch",
+            ),
+            ("pan_speed: 0.4", "pan_speed: -0.1", "pan_speed"),
+            (
+                "pan_speed_offset: 10.0",
+                "pan_speed_offset: NaN",
+                "pan_speed_offset",
+            ),
+            ("min_pitch: 0.25", "min_pitch: -0.1", "min_pitch"),
+            ("max_pitch: 0.95", "max_pitch: 1.1", "max_pitch"),
+            ("min_pitch: 0.25", "min_pitch: 0.96", "min_pitch"),
+            ("min_zoom: 5.0", "min_zoom: 0.0", "min_zoom"),
+            ("max_zoom: 70.0", "max_zoom: inf", "max_zoom"),
+            ("max_zoom: 70.0", "max_zoom: 4.0", "min_zoom"),
+            (
+                "zoom_sensitivity: 0.2",
+                "zoom_sensitivity: -0.1",
+                "zoom_sensitivity",
+            ),
+        ] {
+            let invalid = CAMERA_RON.replacen(needle, replacement, 1);
+            assert_ne!(
+                invalid, CAMERA_RON,
+                "the test fixture no longer contains {needle:?}"
+            );
+
+            let error = ron::from_str::<CameraSettings>(&invalid)
+                .expect_err("invalid camera settings should fail deserialization");
+            assert!(
+                error.to_string().contains(expected),
+                "{replacement:?} returned an unrelated error: {error}"
+            );
+        }
     }
 
     /// Every field must be present, or the game hangs on "loading…" with the reason

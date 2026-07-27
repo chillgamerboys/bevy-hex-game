@@ -1,15 +1,16 @@
 use bevy::input::mouse::MouseWheel;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::transform::TransformSystems;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
 use hex_assets::{to_color, CameraSettings, LightingSettings, Rgb};
-use hex_core::{AppSystems, GameplaySetup, MapViewHint, Screen};
+use hex_core::{AppSystems, CameraFocusTarget, GameplaySetup, MapViewHint, Screen};
 
 use crate::sky_material::{SkyMaterial, SkyParams};
 
 /// Sky-dome radius, in world units. Comfortably inside the camera's default
-/// 1000-unit far plane and far outside `max_zoom` (50) plus the terrain extent.
+/// 1000-unit far plane and far outside the configured zoom range plus the terrain.
 const SKY_DOME_RADIUS: f32 = 500.0;
 
 /// Marks the sky-dome entity so `follow_camera` can pin it to the camera.
@@ -20,14 +21,19 @@ struct SkyDome;
 /// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
+        .register_type::<CameraMode>()
         .register_type::<MapViewHint>()
         .register_type::<SkyDome>()
+        .init_resource::<CameraMode>()
+        .init_resource::<SavedMapCamera>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
         .add_systems(
             OnEnter(Screen::Gameplay),
-            frame_gameplay_camera.in_set(GameplaySetup::View),
+            (reset_camera_mode, frame_gameplay_camera)
+                .chain()
+                .in_set(GameplaySetup::View),
         )
         // **The sky belongs to the world, not to the menus.** Hidden outside gameplay,
         // so the title screen is the flat `sky_color` that `apply_ambient` already
@@ -46,15 +52,40 @@ pub fn plugin(app: &mut App) {
                 .in_set(AppSystems::Update)
                 .run_if(resource_exists_and_changed::<LightingSettings>),
         )
-        .add_systems(Update, follow_camera.in_set(AppSystems::Update))
         // Camera control is gameplay-only, so dragging over a menu does not
         // silently move the world behind it.
         .add_systems(
             Update,
-            (orbit_camera, pan_camera)
+            (
+                orbit_camera,
+                pan_camera.run_if(map_camera_active),
+                toggle_camera_mode,
+            )
+                .chain()
                 .in_set(AppSystems::RecordInput)
                 .run_if(in_state(Screen::Gameplay)),
+        )
+        // Unit animation writes its Transform in Update. Following in PostUpdate
+        // observes that final position without coupling this presentation crate to
+        // hex_anim or hex_units, then updates GlobalTransform in the same frame.
+        .add_systems(
+            PostUpdate,
+            (follow_character_camera, follow_camera)
+                .chain()
+                .before(TransformSystems::Propagate)
+                .run_if(in_state(Screen::Gameplay)),
         );
+}
+
+/// Which perspective currently controls the gameplay camera.
+#[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum CameraMode {
+    /// Free pan/orbit view framed around the complete map.
+    #[default]
+    Map,
+    /// Close orbit whose focus follows the selected character.
+    Character,
 }
 
 /// Tags an entity as capable of panning and orbiting.
@@ -75,6 +106,32 @@ impl Default for PanOrbitCamera {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+struct CameraPose {
+    transform: Transform,
+    focus: Vec3,
+    radius: f32,
+}
+
+impl CameraPose {
+    fn capture(transform: &Transform, camera: &PanOrbitCamera) -> Self {
+        Self {
+            transform: *transform,
+            focus: camera.focus,
+            radius: camera.radius,
+        }
+    }
+
+    fn restore(self, transform: &mut Transform, camera: &mut PanOrbitCamera) {
+        *transform = self.transform;
+        camera.focus = self.focus;
+        camera.radius = self.radius;
+    }
+}
+
+#[derive(Resource, Debug, Default)]
+struct SavedMapCamera(Option<CameraPose>);
 
 /// Spawn the game camera and the procedural sky dome.
 fn spawn_camera(
@@ -171,6 +228,94 @@ fn frame_gameplay_camera(
         ),
     };
     frame_camera(cameras, eye, focus, what);
+}
+
+fn reset_camera_mode(mut mode: ResMut<CameraMode>, mut saved: ResMut<SavedMapCamera>) {
+    *mode = CameraMode::Map;
+    saved.0 = None;
+}
+
+fn map_camera_active(mode: Res<CameraMode>) -> bool {
+    *mode == CameraMode::Map
+}
+
+/// Snaps between the current free-map pose and a close orbit around the selected unit.
+fn toggle_camera_mode(
+    keys: Res<ButtonInput<KeyCode>>,
+    settings: Res<CameraSettings>,
+    mut mode: ResMut<CameraMode>,
+    mut saved: ResMut<SavedMapCamera>,
+    targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyC) {
+        return;
+    }
+
+    let Ok((mut transform, mut camera)) = cameras.single_mut() else {
+        return;
+    };
+    match *mode {
+        CameraMode::Map => {
+            let Ok(target) = targets.single() else {
+                warn!("cannot enter character camera without exactly one selected focus target");
+                return;
+            };
+            saved.0 = Some(CameraPose::capture(&transform, &camera));
+
+            let wanted_pitch = settings.character_pitch * std::f32::consts::FRAC_PI_2;
+            let pitch_delta = wanted_pitch - downward_pitch(transform.rotation);
+            transform.rotation = apply_pitch_delta(
+                transform.rotation,
+                pitch_delta,
+                settings.min_pitch,
+                settings.max_pitch,
+            );
+
+            camera.focus = target.translation + Vec3::Y * settings.character_focus_height;
+            camera.radius = settings.character_radius;
+            transform.translation = camera.focus
+                + Mat3::from_quat(transform.rotation).mul_vec3(Vec3::new(0.0, 0.0, camera.radius));
+            *mode = CameraMode::Character;
+        }
+        CameraMode::Character => {
+            if let Some(pose) = saved.0.take() {
+                pose.restore(&mut transform, &mut camera);
+            }
+            *mode = CameraMode::Map;
+        }
+    }
+}
+
+/// Keeps a close orbit centred on the selected unit's rendered position.
+fn follow_character_camera(
+    mut mode: ResMut<CameraMode>,
+    mut saved: ResMut<SavedMapCamera>,
+    settings: Res<CameraSettings>,
+    targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
+    mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
+) {
+    if *mode != CameraMode::Character {
+        return;
+    }
+    let Ok((mut transform, mut camera)) = cameras.single_mut() else {
+        return;
+    };
+    let Ok(target) = targets.single() else {
+        if let Some(pose) = saved.0.take() {
+            pose.restore(&mut transform, &mut camera);
+        }
+        *mode = CameraMode::Map;
+        return;
+    };
+
+    let wanted_focus = target.translation + Vec3::Y * settings.character_focus_height;
+    let change = wanted_focus - camera.focus;
+    if change.length_squared() <= f32::EPSILON {
+        return;
+    }
+    camera.focus = wanted_focus;
+    transform.translation += change;
 }
 
 /// Reveals the sky when the world does.
@@ -442,6 +587,8 @@ fn get_primary_window_size(windows: &Query<&Window, With<PrimaryWindow>>) -> Vec
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use bevy::asset::AssetPlugin;
     use bevy::state::app::StatesPlugin;
 
@@ -451,6 +598,9 @@ mod tests {
         CameraSettings {
             gameplay_eye: (0.0, 48.0, 42.0),
             gameplay_focus: (0.0, 6.0, 0.0),
+            character_focus_height: 0.4,
+            character_radius: 7.0,
+            character_pitch: 0.3,
             pan_speed: 0.4,
             pan_speed_offset: 10.0,
             min_pitch: 0.25,
@@ -575,7 +725,12 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_state::<Screen>();
         app.insert_resource(camera_settings());
-        app.add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        app.init_resource::<CameraMode>();
+        app.init_resource::<SavedMapCamera>();
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            (reset_camera_mode, frame_gameplay_camera).chain(),
+        );
         let entity = app
             .world_mut()
             .spawn((
@@ -588,6 +743,18 @@ mod tests {
         assert_full_map_frame(&app, entity);
 
         enter(&mut app, Screen::Title);
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        let saved_pose = CameraPose::capture(
+            app.world()
+                .entity(entity)
+                .get::<Transform>()
+                .expect("the camera should have a transform"),
+            app.world()
+                .entity(entity)
+                .get::<PanOrbitCamera>()
+                .expect("the camera should have pan/orbit state"),
+        );
+        app.world_mut().resource_mut::<SavedMapCamera>().0 = Some(saved_pose);
         {
             let mut entity_mut = app.world_mut().entity_mut(entity);
             entity_mut
@@ -603,6 +770,8 @@ mod tests {
 
         enter(&mut app, Screen::Gameplay);
         assert_full_map_frame(&app, entity);
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
     }
 
     #[test]
@@ -667,6 +836,264 @@ mod tests {
         enter(&mut app, Screen::Gameplay);
 
         assert_full_map_frame(&app, entity);
+    }
+
+    fn prototype_camera_app(target: Option<Vec3>) -> (App, Entity, Option<Entity>) {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(camera_settings());
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.init_resource::<CameraMode>();
+        app.init_resource::<SavedMapCamera>();
+        app.add_systems(Update, toggle_camera_mode);
+        app.add_systems(PostUpdate, follow_character_camera);
+
+        let eye = Vec3::new(0.0, 48.0, 42.0);
+        let focus = Vec3::new(0.0, 6.0, 0.0);
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::from_translation(eye).looking_at(focus, Vec3::Y),
+                PanOrbitCamera {
+                    focus,
+                    radius: eye.distance(focus),
+                },
+            ))
+            .id();
+        let target = target.map(|translation| {
+            app.world_mut()
+                .spawn((Transform::from_translation(translation), CameraFocusTarget))
+                .id()
+        });
+        (app, camera, target)
+    }
+
+    fn toggle_camera(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyC);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset(KeyCode::KeyC);
+    }
+
+    fn camera_pose(app: &App, entity: Entity) -> (Transform, Vec3, f32) {
+        let entity = app.world().entity(entity);
+        let transform = *entity
+            .get::<Transform>()
+            .expect("the camera should have a transform");
+        let camera = entity
+            .get::<PanOrbitCamera>()
+            .expect("the camera should have pan/orbit state");
+        (transform, camera.focus, camera.radius)
+    }
+
+    #[test]
+    fn character_camera_snaps_close_and_restores_the_exact_map_pose() {
+        let target = Vec3::new(3.0, 2.0, -1.0);
+        let (mut app, camera, _) = prototype_camera_app(Some(target));
+        let original = camera_pose(&app, camera);
+        let original_heading = (original.0.rotation * Vec3::NEG_Z).xz().normalize();
+
+        toggle_camera(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Character);
+        let close = camera_pose(&app, camera);
+        let expected_focus = target + Vec3::Y * camera_settings().character_focus_height;
+        assert!(close.1.distance(expected_focus) < 1e-5);
+        assert!((close.2 - camera_settings().character_radius).abs() < f32::EPSILON);
+        assert_pitch(
+            close.0.rotation,
+            camera_settings().character_pitch * std::f32::consts::FRAC_PI_2,
+        );
+        let close_heading = (close.0.rotation * Vec3::NEG_Z).xz().normalize();
+        assert!(original_heading.dot(close_heading) > 0.9999);
+        assert!(
+            close
+                .0
+                .forward()
+                .as_vec3()
+                .dot((expected_focus - close.0.translation).normalize())
+                > 0.9999
+        );
+
+        {
+            let mut entity = app.world_mut().entity_mut(camera);
+            entity
+                .get_mut::<Transform>()
+                .expect("the camera should have a transform")
+                .translation = Vec3::splat(-20.0);
+            let mut orbit = entity
+                .get_mut::<PanOrbitCamera>()
+                .expect("the camera should have orbit state");
+            orbit.focus = Vec3::splat(8.0);
+            orbit.radius = 5.5;
+        }
+        toggle_camera(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        let restored = camera_pose(&app, camera);
+        assert_eq!(restored.0, original.0);
+        assert_eq!(restored.1, original.1);
+        assert!((restored.2 - original.2).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn character_camera_follows_movement_and_a_new_focus_target() {
+        let start = Vec3::new(2.0, 1.0, -3.0);
+        let (mut app, camera, target) = prototype_camera_app(Some(start));
+        let target = target.expect("the fixture should spawn a target");
+        toggle_camera(&mut app);
+        let before = camera_pose(&app, camera);
+
+        let movement = Vec3::new(1.5, 0.4, -2.0);
+        app.world_mut()
+            .entity_mut(target)
+            .get_mut::<Transform>()
+            .expect("the target should have a transform")
+            .translation += movement;
+        app.update();
+
+        let moved = camera_pose(&app, camera);
+        assert!(
+            moved
+                .0
+                .translation
+                .distance(before.0.translation + movement)
+                < 1e-5
+        );
+        assert!(moved.1.distance(before.1 + movement) < 1e-5);
+        assert!((moved.2 - before.2).abs() < f32::EPSILON);
+        assert_eq!(moved.0.rotation, before.0.rotation);
+
+        app.world_mut()
+            .entity_mut(target)
+            .remove::<CameraFocusTarget>();
+        let replacement_position = Vec3::new(-4.0, 3.0, 6.0);
+        app.world_mut().spawn((
+            Transform::from_translation(replacement_position),
+            CameraFocusTarget,
+        ));
+        let eye_offset = moved.0.translation - moved.1;
+        app.update();
+
+        let retargeted = camera_pose(&app, camera);
+        let expected_focus =
+            replacement_position + Vec3::Y * camera_settings().character_focus_height;
+        assert!(retargeted.1.distance(expected_focus) < 1e-5);
+        assert!(
+            retargeted
+                .0
+                .translation
+                .distance(expected_focus + eye_offset)
+                < 1e-5
+        );
+    }
+
+    fn move_focus_target_in_update(mut targets: Query<&mut Transform, With<CameraFocusTarget>>) {
+        for mut target in &mut targets {
+            target.translation += Vec3::new(1.5, 0.4, -2.0);
+        }
+    }
+
+    #[test]
+    fn post_update_follow_observes_target_movement_from_the_same_frame() {
+        let (mut app, camera, _) = prototype_camera_app(Some(Vec3::new(2.0, 1.0, -3.0)));
+        toggle_camera(&mut app);
+        let before = camera_pose(&app, camera);
+        let movement = Vec3::new(1.5, 0.4, -2.0);
+        app.add_systems(Update, move_focus_target_in_update);
+
+        app.update();
+
+        let after = camera_pose(&app, camera);
+        assert!(
+            after
+                .0
+                .translation
+                .distance(before.0.translation + movement)
+                < 1e-5
+        );
+        assert!(after.1.distance(before.1 + movement) < 1e-5);
+    }
+
+    #[test]
+    fn wasd_pan_runs_only_in_map_mode() {
+        let mut app = App::new();
+        app.insert_resource(camera_settings());
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        let mut time = Time::<()>::default();
+        time.advance_by(Duration::from_secs(1));
+        app.insert_resource(time);
+        app.init_resource::<CameraMode>();
+        app.add_systems(Update, pan_camera.run_if(map_camera_active));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(0.0, 7.0, 7.0).looking_at(Vec3::ZERO, Vec3::Y),
+                PanOrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 10.0,
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        let before = camera_pose(&app, camera);
+
+        app.update();
+
+        let character = camera_pose(&app, camera);
+        assert_eq!(character.0, before.0);
+        assert_eq!(character.1, before.1);
+
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Map;
+        app.update();
+
+        let map = camera_pose(&app, camera);
+        assert_ne!(map.0.translation, before.0.translation);
+        assert_ne!(map.1, before.1);
+        assert_eq!(
+            map.0.translation - before.0.translation,
+            map.1 - before.1,
+            "panning should translate the eye and focus together"
+        );
+    }
+
+    #[test]
+    fn missing_focus_target_leaves_the_map_camera_unchanged() {
+        let (mut app, camera, _) = prototype_camera_app(None);
+        let before = camera_pose(&app, camera);
+
+        toggle_camera(&mut app);
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        let after = camera_pose(&app, camera);
+        assert_eq!(after.0, before.0);
+        assert_eq!(after.1, before.1);
+        assert!((after.2 - before.2).abs() < f32::EPSILON);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
+    }
+
+    #[test]
+    fn losing_the_focus_target_restores_the_saved_map_pose() {
+        let (mut app, camera, target) = prototype_camera_app(Some(Vec3::new(2.0, 1.0, -3.0)));
+        let target = target.expect("the fixture should spawn a target");
+        let map_pose = camera_pose(&app, camera);
+        toggle_camera(&mut app);
+
+        app.world_mut().entity_mut(target).despawn();
+        app.update();
+
+        assert_eq!(*app.world().resource::<CameraMode>(), CameraMode::Map);
+        let restored = camera_pose(&app, camera);
+        assert_eq!(restored.0, map_pose.0);
+        assert_eq!(restored.1, map_pose.1);
+        assert!((restored.2 - map_pose.2).abs() < f32::EPSILON);
+        assert!(app.world().resource::<SavedMapCamera>().0.is_none());
     }
 
     /// The sky is drawn in the world and nowhere else.

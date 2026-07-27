@@ -8,7 +8,7 @@ Rust, and you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — and its colours |
-| `camera.ron` | Initial gameplay frame, pan speed, zoom and tilt |
+| `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size, movement speed and colour |
 | `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
@@ -30,7 +30,7 @@ How quickly you *see* the change depends on which file:
 
 | File | When it takes effect |
 |---|---|
-| `camera.ron` | Movement values straight away; initial frame on the next rebuild |
+| `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
