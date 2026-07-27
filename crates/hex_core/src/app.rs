@@ -70,7 +70,9 @@ pub enum Mode {
 /// and `hex_units` has to refuse a move when it is not yours. That is the same
 /// situation `Headroom` is in, and it gets the same answer — the shared fact goes in
 /// the crate both sides already depend on.
-#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize,
+)]
 #[reflect(Component)]
 pub struct Turn {
     /// Hexes of movement still available this turn.
