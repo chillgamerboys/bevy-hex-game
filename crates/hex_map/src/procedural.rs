@@ -120,13 +120,6 @@ impl GeneratedAnchors {
 /// [`TerrainPlan`]. Layered recipes can preserve the ground hazard, crossings, and
 /// protected approaches without depending on V1's construction-only representation.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the V2 Hills recipe immediately after this isolated parity seam"
-    )
-)]
 pub(crate) struct V1HillsTopology {
     pub(crate) barrier: BTreeSet<HexCoord>,
     pub(crate) bridge: BTreeSet<TilePos>,
@@ -136,13 +129,6 @@ pub(crate) struct V1HillsTopology {
 
 /// One fully evaluated V1 Hills candidate, retained as the V2 parity oracle.
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the V2 Hills recipe immediately after this isolated parity seam"
-    )
-)]
 pub(crate) struct V1HillsCandidate {
     pub(crate) map: VoxelMap,
     pub(crate) anchors: GeneratedAnchors,
@@ -285,13 +271,6 @@ pub(crate) fn build(
 /// scoring all remain owned by the frozen V1 implementation. The compatibility DTO
 /// prevents V2 from reaching into construction-only plan fields while preserving the
 /// complete selected output. A canonical fallback is always candidate zero.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed by the V2 Hills recipe immediately after this isolated parity seam"
-    )
-)]
 pub(crate) fn build_hills_candidate_for_v2_parity(
     grid_radius: u32,
     settings: &ProceduralSettings,
@@ -343,13 +322,6 @@ pub(crate) fn build_hills_candidate_for_v2_parity(
     })
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "consumed through the isolated V1-to-V2 parity adapter"
-    )
-)]
 fn finalized_hills_topology(plan: &TerrainPlan) -> V1HillsTopology {
     let mut protected_approaches = plan.barrier.clone();
     protected_approaches.extend(
