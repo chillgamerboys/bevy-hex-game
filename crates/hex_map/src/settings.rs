@@ -1359,6 +1359,33 @@ mod tests {
 
     #[test]
     fn expanded_visual_iteration_ranges_validate_without_loosening_their_bounds() {
+        for (min_clearance, upper_coverage_percent) in [(14, 18), (18, 21), (22, 24)] {
+            let settings = MapSettings {
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: TerrainSettings::Procedural(ProceduralSettings::V2(
+                    ProceduralV2Settings {
+                        environment: V2EnvironmentSettings::TemperateGrassland,
+                        recipe: V2RecipeSettings::LayeredSkyIslands(
+                            LayeredSkyIslandsSettings {
+                                ground: V2HillsSettings {
+                                    valley_level: 15,
+                                    max_relief: 8,
+                                    hills_per_bank: 3,
+                                },
+                                min_clearance,
+                                upper_coverage_percent,
+                            },
+                        ),
+                    },
+                )),
+            };
+            assert!(
+                settings.validate().is_ok(),
+                "sky option {min_clearance}/{upper_coverage_percent} should validate"
+            );
+        }
+
         for (relief, peak_count) in [(18, 5), (21, 6), (24, 7)] {
             let settings = MapSettings {
                 grid_radius: 12,
