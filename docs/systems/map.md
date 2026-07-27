@@ -45,11 +45,30 @@ surface unreachable, and a piece crossing a bridge teleports to the ground. That
 existed briefly and was deleted rather than fixed — one that *can* express the
 forbidden thing eventually will.
 
-### One level is one step
+### One level is one step, when the body fits
 
-A step is legal when the destination is an adjacent surface and its level is within
-**one level**. Because levels are integers, that is `step.abs() <= 1` — no epsilon, no
-accumulated float error. This is the concrete payoff for quantising the vertical axis.
+Ordinary movement uses one complete predicate: `TraversalProfile::admits_transition`.
+Both endpoints must be solid, have enough headroom, occupy adjacent `HexCoord`s, and
+stay within the profile's climb and drop limits. The canonical walker is two levels
+tall and can climb or drop one level.
+
+Two individually standable endpoints still may not connect. The clear volumes above
+them must overlap laterally for the body's full height:
+
+```text
+min(from.level + from.headroom, to.level + to.headroom)
+    - max(from.level, to.level)
+    >= levels_tall
+```
+
+For example, a one-level ramp with exactly two clear levels above each endpoint has
+only a one-level shared aperture. A two-level walker cannot pass its lintel; the lower
+endpoint needs a third clear level. Live movement, pathfinding, AI, and V2 validation
+all use this same transition predicate. The position-only `admits_step` remains for
+frozen V1 generator compatibility.
+
+Because levels are integers, there is no epsilon or accumulated float error. This is
+the concrete payoff for quantising the vertical axis.
 
 ### A surface has to have room above it
 
@@ -105,6 +124,43 @@ hole in the walkable surface.
 
 ## How it is stored
 
+### V2 plans occupied volumes first
+
+`TerrainVolumePlan` is V2's recipe-independent semantic model before voxelization.
+Every coordinate in the map footprint has one `VolumeColumn` containing ordered,
+non-overlapping occupied intervals:
+
+- `SolidMass` intervals support surfaces and may identify a cutaway interior.
+- `NonSolidFill` intervals hold visible hazards such as water or lava but cannot
+  support footing.
+- Gaps between occupied intervals are implicit air.
+
+This represents ground plus floating islands, cave floors plus roofs, bridges, and
+hazards without recipe-specific storage exceptions. Validation rejects missing
+columns, invalid or overlapping intervals, incompatible materials, and malformed
+interior references before the plan becomes a `VoxelMap`.
+
+Every exposed upward solid boundary has exactly one `SurfaceMetadata` entry keyed by
+its full `TilePos`. It classifies that exact surface as ordinary, special-movement, or
+non-standable and may associate it with an interior. Anchors also name exact
+`TilePos`s, so stacked surfaces at one `HexCoord` never become interchangeable.
+
+Each interior records its exact floor and entrance surfaces plus the air intervals
+that must remain clear. Roof masses identify their `InteriorRegionId`; voxelization
+publishes every exact authored roof voxel through `InteriorRegions`. The grid splits
+its disposable material runs wherever cutaway membership changes and projects
+`CutawayOccluder(region)` onto the resulting roof segments. Digging through a roof
+therefore preserves both surviving fragments without transferring the tag to replacement
+material. A cutaway tag does not remove or make terrain transparent, change voxel
+storage, or change traversal. Cave presentation may hide tagged opaque roof segments
+locally while leaving adjacent untagged columns visible as walls.
+
+The plan also publishes a `MapViewHint` so camera setup can frame the generated
+geometry after terrain and actors exist. V1 keeps its frozen single-height plan and
+hashing behavior for compatibility; only V2 uses this volume contract.
+
+### Runtime storage remains voxel columns
+
 A column is a list of substances, indexed by level from the floor up. Anything above
 the top is air, so empty sky costs nothing. Air *inside* a column is stored explicitly —
 that is what a cave is.
@@ -150,7 +206,9 @@ dependency on the map back into movement.
 
 ```
 hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
-             SpecialMovementRegion, SpecialMovementRegions, TerrainEdit
+             TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
+             SpecialMovementRegions, InteriorRegionId, InteriorRegions,
+             CutawayOccluder, MapViewHint, TerrainEdit
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
@@ -164,10 +222,12 @@ The map exposes rendered footing through components on tile entities:
 ```
 
 Exact optional-region memberships live in the `SpecialMovementRegions` resource keyed
-by `TilePos`; they are not duplicated on tile entities until a real query-based
-consumer needs that projection. `hex_units` queries the footing components. It never
-reads `VoxelMap` or any generator, so terrain storage and generation can be replaced
-wholesale — chunked, streamed, generated differently — without anything else noticing.
+by `TilePos`; they are not duplicated on tile entities. Exact interior floors and
+cutaway roof voxels likewise live in `InteriorRegions`; only rendered segments projected
+from those roof voxels receive the `CutawayOccluder` component needed by live
+presentation queries. `hex_units` queries the footing components. It never reads
+`VoxelMap` or any generator, so terrain storage and generation can be replaced wholesale
+— chunked, streamed, generated differently — without anything else noticing.
 
 **Writing** goes the other way, through a message:
 
@@ -187,6 +247,8 @@ and the map applies it. That is the whole write path.
 | A tile's `TilePos` is its **run surface** | the topmost material voxel, not the base |
 | Headroom of 0 means **buried** | solid, but inside a column and not standable |
 | A one-voxel gap under a bridge is **not** a corridor | a 2-level body does not fit; a 1-level one does |
+| Two standable endpoints do not guarantee a step | the shared lateral aperture can still be too short |
+| Cutaway metadata names exact opaque roof voxels | rendering projects them onto disposable run segments |
 | Air is never spawned | so an air-filled cave is a gap between two entities |
 | A tile's transform must agree with its span | otherwise pieces float or sink, and **nothing errors** |
 | Clearing a one-voxel run **removes** an entity | only clearing the middle of a taller run adds one |

@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
 use hex_assets::{to_color, CameraSettings, LightingSettings, Rgb};
-use hex_core::{AppSystems, Screen};
+use hex_core::{AppSystems, GameplaySetup, MapViewHint, Screen};
 
 use crate::sky_material::{SkyMaterial, SkyParams};
 
@@ -20,11 +20,15 @@ struct SkyDome;
 /// Registers the pan/orbit camera and the procedural sky.
 pub fn plugin(app: &mut App) {
     app.register_type::<PanOrbitCamera>()
+        .register_type::<MapViewHint>()
         .register_type::<SkyDome>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
-        .add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera)
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            frame_gameplay_camera.in_set(GameplaySetup::View),
+        )
         // **The sky belongs to the world, not to the menus.** Hidden outside gameplay,
         // so the title screen is the flat `sky_color` that `apply_ambient` already
         // puts in `ClearColor` rather than a view of a dome the player cannot move.
@@ -137,17 +141,36 @@ fn default_sky_params() -> SkyParams {
     }
 }
 
-/// Restores the designer-authored full-map view whenever gameplay begins.
+/// Applies generated map framing, or the designer-authored fallback, on every entry.
 fn frame_gameplay_camera(
     settings: Res<CameraSettings>,
+    hint: Option<Res<MapViewHint>>,
     cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
-    frame_camera(
-        cameras,
-        settings.gameplay_eye,
-        settings.gameplay_focus,
-        "gameplay_eye and gameplay_focus",
-    );
+    let to_vec3 = |(x, y, z)| Vec3::new(x, y, z);
+    let fallback_eye = to_vec3(settings.gameplay_eye);
+    let fallback_focus = to_vec3(settings.gameplay_focus);
+    let (eye, focus, what) = match hint.as_deref() {
+        Some(hint) if hint.is_valid() => (
+            to_vec3(hint.eye),
+            to_vec3(hint.focus),
+            "generated map view hint",
+        ),
+        Some(_) => {
+            warn!("generated map view hint must contain finite, distinct points; using camera.ron");
+            (
+                fallback_eye,
+                fallback_focus,
+                "gameplay_eye and gameplay_focus",
+            )
+        }
+        None => (
+            fallback_eye,
+            fallback_focus,
+            "gameplay_eye and gameplay_focus",
+        ),
+    };
+    frame_camera(cameras, eye, focus, what);
 }
 
 /// Reveals the sky when the world does.
@@ -181,14 +204,10 @@ fn set_sky(mut domes: Query<&mut Visibility, With<SkyDome>>, wanted: Visibility)
 /// `what` names the settings being applied, so a bad edit says which pair to look at.
 fn frame_camera(
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera)>,
-    eye: (f32, f32, f32),
-    focus: (f32, f32, f32),
+    eye: Vec3,
+    focus: Vec3,
     what: &str,
 ) {
-    let (eye_x, eye_y, eye_z) = eye;
-    let (focus_x, focus_y, focus_z) = focus;
-    let eye = Vec3::new(eye_x, eye_y, eye_z);
-    let focus = Vec3::new(focus_x, focus_y, focus_z);
     let offset = eye - focus;
 
     if !eye.is_finite() || !focus.is_finite() || offset.length_squared() <= f32::EPSILON {
@@ -450,6 +469,15 @@ mod tests {
     }
 
     fn assert_full_map_frame(app: &App, entity: Entity) {
+        assert_camera_frame(
+            app,
+            entity,
+            Vec3::new(0.0, 48.0, 42.0),
+            Vec3::new(0.0, 6.0, 0.0),
+        );
+    }
+
+    fn assert_camera_frame(app: &App, entity: Entity, eye: Vec3, focus: Vec3) {
         let transform = app
             .world()
             .entity(entity)
@@ -460,14 +488,16 @@ mod tests {
             .entity(entity)
             .get::<PanOrbitCamera>()
             .expect("the camera should have pan/orbit state");
-        let eye = Vec3::new(0.0, 48.0, 42.0);
-        let focus = Vec3::new(0.0, 6.0, 0.0);
 
         assert!(transform.translation.distance(eye) < 1e-5);
         assert!(camera.focus.distance(focus) < 1e-5);
         assert!((camera.radius - eye.distance(focus)).abs() < 1e-5);
         let forward = transform.forward().as_vec3();
         assert!(forward.dot((focus - eye).normalize()) > 0.9999);
+    }
+
+    fn publish_generated_view(mut commands: Commands) {
+        commands.insert_resource(MapViewHint::new((12.0, 36.0, -18.0), (2.0, 5.0, -1.0)));
     }
 
     fn rotation_at_pitch(angle: f32) -> Quat {
@@ -572,6 +602,70 @@ mod tests {
         }
 
         enter(&mut app, Screen::Gameplay);
+        assert_full_map_frame(&app, entity);
+    }
+
+    #[test]
+    fn generated_view_published_in_resources_wins_in_view() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(camera_settings());
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                GameplaySetup::Resources,
+                GameplaySetup::Terrain,
+                GameplaySetup::Actors,
+                GameplaySetup::View,
+                GameplaySetup::Finalize,
+            )
+                .chain(),
+        );
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            publish_generated_view.in_set(GameplaySetup::Resources),
+        );
+        app.add_systems(
+            OnEnter(Screen::Gameplay),
+            frame_gameplay_camera.in_set(GameplaySetup::View),
+        );
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                PanOrbitCamera::default(),
+            ))
+            .id();
+
+        enter(&mut app, Screen::Gameplay);
+
+        assert_camera_frame(
+            &app,
+            entity,
+            Vec3::new(12.0, 36.0, -18.0),
+            Vec3::new(2.0, 5.0, -1.0),
+        );
+    }
+
+    #[test]
+    fn invalid_generated_view_uses_camera_settings() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.insert_resource(camera_settings());
+        app.insert_resource(MapViewHint::new((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)));
+        app.add_systems(OnEnter(Screen::Gameplay), frame_gameplay_camera);
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(1.0, 2.0, 3.0),
+                PanOrbitCamera::default(),
+            ))
+            .id();
+
+        enter(&mut app, Screen::Gameplay);
+
         assert_full_map_frame(&app, entity);
     }
 

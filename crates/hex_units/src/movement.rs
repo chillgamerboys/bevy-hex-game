@@ -6,8 +6,9 @@
 //! > [`TraversalProfile`](hex_core::TraversalProfile) admits the substance and
 //! > [`Headroom`](hex_core::Headroom).
 //!
-//! > A **step** is legal when the destination is an adjacent surface a body can stand
-//! > on, and the same profile admits the climb or drop.
+//! > A **step** is legal when both endpoints are adjacent standable surfaces, the
+//! > profile admits the climb or drop, and their clear volumes share a body-high
+//! > lateral aperture.
 //!
 //! Surfaces stacked in one column are never adjacent, so a piece on a bridge
 //! cannot drop to the ground beneath it. Getting down means a ramp of adjacent
@@ -43,7 +44,7 @@ use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{
     AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
-    TraversalProfile,
+    TraversalEndpoint, TraversalProfile,
 };
 
 /// Ordering for systems that consume a unit's logical position.
@@ -165,6 +166,7 @@ impl Standing {
 pub struct Footing {
     profile: TraversalProfile,
     by_pos: HashMap<TilePos, Standing>,
+    headroom_by_pos: HashMap<TilePos, Headroom>,
     /// Surfaces at each coordinate, so one can be found without knowing which
     /// level its top happens to be at.
     surfaces: HashMap<HexCoord, Vec<Standing>>,
@@ -198,6 +200,7 @@ impl Footing {
         let mut footing = Self {
             profile,
             by_pos: HashMap::default(),
+            headroom_by_pos: HashMap::default(),
             surfaces: HashMap::default(),
         };
 
@@ -214,6 +217,7 @@ impl Footing {
                 span: *span,
             };
             footing.by_pos.insert(standing.pos, standing);
+            footing.headroom_by_pos.insert(standing.pos, *headroom);
             footing
                 .surfaces
                 .entry(pos.coord)
@@ -237,7 +241,16 @@ impl Footing {
     /// another.
     #[must_use]
     pub fn admits_step(&self, from: TilePos, to: TilePos) -> bool {
-        self.profile.admits_step(from, to)
+        let (Some(from_headroom), Some(to_headroom)) = (
+            self.headroom_by_pos.get(&from),
+            self.headroom_by_pos.get(&to),
+        ) else {
+            return false;
+        };
+        self.profile.admits_transition(
+            TraversalEndpoint::new(from, true, *from_headroom),
+            TraversalEndpoint::new(to, true, *to_headroom),
+        )
     }
 
     /// Every standable surface at a coordinate, lowest first.
@@ -585,8 +598,9 @@ mod tests {
         assert!(footing.ground(exact).is_some());
     }
 
-    /// The same parity check for step height: one level belongs to the live graph and
-    /// two levels does not, exactly as the validator-facing predicate reports.
+    /// The same parity check for complete transitions: one level with shared clearance
+    /// belongs to the live graph and two levels does not, exactly as the shared
+    /// predicate reports.
     #[test]
     fn live_steps_match_the_shared_profile() {
         let from_coord = HexCoord::ORIGIN;
@@ -602,14 +616,51 @@ mod tests {
 
         assert_eq!(
             footing.step_from(from, one_coord).is_some(),
-            profile.admits_step(from.pos, one)
+            profile.admits_transition(
+                TraversalEndpoint::new(from.pos, true, Headroom(MAX_HEADROOM)),
+                TraversalEndpoint::new(one, true, Headroom(MAX_HEADROOM)),
+            )
         );
         assert_eq!(
             footing.step_from(from, two_coord).is_some(),
-            profile.admits_step(from.pos, two)
+            profile.admits_transition(
+                TraversalEndpoint::new(from.pos, true, Headroom(MAX_HEADROOM)),
+                TraversalEndpoint::new(two, true, Headroom(MAX_HEADROOM)),
+            )
         );
         assert!(footing.step_from(from, one_coord).is_some());
         assert!(footing.step_from(from, two_coord).is_none());
+    }
+
+    /// Two rooms can each fit the walker while the boundary between them cannot. On a
+    /// one-level ramp, two clear levels above each endpoint overlap by only one level;
+    /// the lower room needs one extra clear voxel to provide a full lateral aperture.
+    #[test]
+    fn a_low_lintel_blocks_an_individually_standable_ramp() {
+        let low_coord = HexCoord::ORIGIN;
+        let [high_coord, ..] = low_coord.neighbors();
+        let low = roofed(low_coord, 4, 2);
+        let high = roofed(high_coord, 5, 2);
+        let footing = footing_from(&[low, high]);
+        let from = footing.ground(low_coord).expect("the lower room fits");
+        let to = footing.ground(high_coord).expect("the higher room fits");
+
+        assert!(route(from, to, &footing).is_none());
+        assert!(route(to, from, &footing).is_none());
+    }
+
+    #[test]
+    fn a_one_level_underground_ramp_with_shared_aperture_is_walkable() {
+        let low_coord = HexCoord::ORIGIN;
+        let [high_coord, ..] = low_coord.neighbors();
+        let low = roofed(low_coord, 4, 3);
+        let high = roofed(high_coord, 5, 2);
+        let footing = footing_from(&[low, high]);
+        let from = footing.ground(low_coord).expect("the lower room fits");
+        let to = footing.ground(high_coord).expect("the higher room fits");
+
+        assert!(route(from, to, &footing).is_some());
+        assert!(route(to, from, &footing).is_some());
     }
 
     /// A budget is a hard edge: everything within it is reachable, nothing beyond is.

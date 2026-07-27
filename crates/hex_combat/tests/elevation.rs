@@ -169,6 +169,17 @@ fn spawn_unit_with_profile(
     unit.id()
 }
 
+fn spawn_surface(app: &mut App, coord: HexCoord, level: Level, headroom: Level) {
+    app.world_mut().spawn((
+        HexTile,
+        coord,
+        TilePos::new(coord, level),
+        span_at(level),
+        STONE,
+        Headroom(headroom),
+    ));
+}
+
 fn enter_gameplay(app: &mut App) {
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -277,6 +288,37 @@ fn asymmetric_drop_does_not_grant_downhill_melee() {
     assert!(
         app.world().get::<Transformation>(player).is_none(),
         "a long-drop profile granted a one-sided downhill melee attack"
+    );
+}
+
+/// Melee uses the same complete transition boundary as walking. Each unit can fit at
+/// its endpoint here, but the one-level ramp leaves only one shared clear level beneath
+/// the lower ceiling, so neither can swing through the lintel.
+#[test]
+fn low_lintel_does_not_admit_melee_between_standable_rooms() {
+    let mut app = test_app();
+    let low_coord = HexCoord::new_cubic(7, -7, 0);
+    let high_coord = HexCoord::new_cubic(8, -8, 0);
+    let low_level = 4;
+    let high_level = 5;
+    spawn_surface(&mut app, low_coord, low_level, 2);
+    spawn_surface(&mut app, high_coord, high_level, 2);
+
+    let player = spawn_unit(&mut app, Faction::Player, low_coord, low_level);
+    let hostile = spawn_unit(&mut app, Faction::Hostile, high_coord, high_level);
+    app.world_mut().entity_mut(hostile).insert(Initiative(20));
+    enter_gameplay(&mut app);
+    assert_eq!(
+        mode(&mut app),
+        Mode::Combat,
+        "adjacent units should enter combat before melee is evaluated"
+    );
+    app.update();
+    app.update();
+
+    assert!(
+        app.world().get::<Transformation>(player).is_none(),
+        "the enemy attacked through a one-level lateral aperture"
     );
 }
 

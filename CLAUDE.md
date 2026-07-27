@@ -104,12 +104,12 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors → Finalize`) orders
+  **`GameplaySetup`** (`Resources → Terrain → Actors → View → Finalize`) orders
   `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a shared
   set — `.chain()` cannot express it, and a local chain that looks correct will race.
   The set boundary also supplies a sync point: `Commands`-spawned entities are not
-  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made
-  and `Finalize` sees the required actors.
+  queryable until the queue is applied, so `Actors` sees the tiles `Terrain` made,
+  `View` sees the completed world, and `Finalize` sees the required actors.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.

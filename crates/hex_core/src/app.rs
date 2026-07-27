@@ -89,11 +89,12 @@ pub struct PausableSystems;
 /// Ordering for world construction on entering [`Screen::Gameplay`].
 ///
 /// Building a world has a dependency chain — resources, terrain, the things standing
-/// on the terrain, then final contract checks — and each step lives in a different
-/// crate. `hex_map` validates and builds the map, then `hex_units` spawns the player
-/// onto it. Systems added to the same `OnEnter` schedule otherwise run in
-/// **unspecified order**, and `.chain()` cannot express ordering across a crate
-/// boundary because neither crate can see the other's systems.
+/// on the terrain, presentation derived from that complete geometry, then final
+/// contract checks — and each step lives in a different crate. `hex_map` validates and
+/// builds the map, `hex_units` spawns the player onto it, and `hex_world` frames the
+/// result. Systems added to the same `OnEnter` schedule otherwise run in **unspecified
+/// order**, and `.chain()` cannot express ordering across a crate boundary because no
+/// leaf crate can see all the others' systems.
 ///
 /// Bevy inserts a sync point between ordered sets, which matters here beyond mere
 /// ordering: entities spawned through `Commands` in one set are not queryable until
@@ -111,6 +112,12 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
+    /// Apply presentation that depends on the completed terrain and its actors.
+    ///
+    /// Generated camera framing belongs here so a view hint cannot race terrain
+    /// generation, and future actor-aware framing sees commands flushed by
+    /// [`Self::Actors`].
+    View,
     /// Verify that terrain and required actors were published successfully.
     ///
     /// This terminal phase sees commands flushed by [`Self::Actors`], so setup

@@ -20,8 +20,8 @@ use hex_assets::{
     SelectSettings, SettingsRegistry, CONFIG_EXTENSIONS,
 };
 use hex_core::{
-    GameplaySetup, GameplaySetupFailure, MapAnchors, ResolvedMapSeed, Screen,
-    SpecialMovementRegions, TerrainReady,
+    GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
+    Screen, SpecialMovementRegions, TerrainReady,
 };
 use hex_map::{MapSettings, TerrainSettings};
 use hex_units::{Enemy, Player};
@@ -82,6 +82,8 @@ fn apply_selected_scenario(
     // stale readiness marker.
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
+    commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<ResolvedMapSeed>();
     commands.remove_resource::<GameplaySetupFailure>();
@@ -253,8 +255,8 @@ mod tests {
         ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
-        GameplaySetup, GameplaySetupFailure, HexGrid, MapAnchorId, MapAnchors, Mode, Pause,
-        ResolvedMapSeed, Screen, SpecialMovementRegions, TerrainReady,
+        GameplaySetup, GameplaySetupFailure, HexGrid, InteriorRegions, MapAnchorId, MapAnchors,
+        MapViewHint, Mode, Pause, ResolvedMapSeed, Screen, SpecialMovementRegions, TerrainReady,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_units::{Enemy, Player, StandsOn};
@@ -453,6 +455,7 @@ mod tests {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::View,
                 GameplaySetup::Finalize,
             )
                 .chain(),
@@ -698,6 +701,8 @@ mod tests {
         app.insert_resource(stale_units);
         app.insert_resource(ResolvedMapSeed(99));
         app.insert_resource(SpecialMovementRegions::new());
+        app.insert_resource(InteriorRegions::new());
+        app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
 
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
@@ -724,6 +729,14 @@ mod tests {
         assert!(
             !app.world().contains_resource::<SpecialMovementRegions>(),
             "loading without a click reused stale generated-region semantics"
+        );
+        assert!(
+            !app.world().contains_resource::<InteriorRegions>(),
+            "loading without a click reused stale interior semantics"
+        );
+        assert!(
+            !app.world().contains_resource::<MapViewHint>(),
+            "loading without a click reused stale generated framing"
         );
         assert!(app
             .world()
@@ -922,6 +935,7 @@ mod tests {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::View,
                 GameplaySetup::Finalize,
             )
                 .chain(),
@@ -989,12 +1003,16 @@ mod tests {
             .expect("the map should publish hostile_start");
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        app.insert_resource(InteriorRegions::new());
+        app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
 
         enter_screen(&mut app, Screen::Title);
         assert!(!app.world().contains_resource::<VoxelMap>());
         assert!(!app.world().contains_resource::<MapAnchors>());
         assert!(!app.world().contains_resource::<GenerationReport>());
         assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+        assert!(!app.world().contains_resource::<InteriorRegions>());
+        assert!(!app.world().contains_resource::<MapViewHint>());
         assert!(!app.world().contains_resource::<TerrainReady>());
         assert_eq!(
             app.world_mut()

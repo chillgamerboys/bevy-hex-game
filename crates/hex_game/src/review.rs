@@ -22,7 +22,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
 use hex_assets::{CameraSettings, Scenario, ScenarioLibrary};
-use hex_core::{GameplaySetupFailure, HexTile, ResolvedMapSeed, Screen, TerrainReady};
+use hex_core::{GameplaySetupFailure, HexTile, MapViewHint, ResolvedMapSeed, Screen, TerrainReady};
 use hex_world::PanOrbitCamera;
 
 use crate::scenarios::ScenarioToLoad;
@@ -427,6 +427,7 @@ fn capture_timeout_diagnostic(
 fn apply_review_view(
     mut state: ResMut<ReviewCaptureState>,
     settings: Res<CameraSettings>,
+    hint: Option<Res<MapViewHint>>,
     mut images: ResMut<Assets<Image>>,
     mut camera: Query<(&mut Transform, &mut PanOrbitCamera, &mut RenderTarget)>,
     mut exit: MessageWriter<AppExit>,
@@ -450,16 +451,25 @@ fn apply_review_view(
         state.target = Some(handle);
     }
 
-    let eye = Vec3::from_array([
+    let fallback_eye = Vec3::from_array([
         settings.gameplay_eye.0,
         settings.gameplay_eye.1,
         settings.gameplay_eye.2,
     ]);
-    let focus = Vec3::from_array([
+    let fallback_focus = Vec3::from_array([
         settings.gameplay_focus.0,
         settings.gameplay_focus.1,
         settings.gameplay_focus.2,
     ]);
+    let (eye, focus) = hint.as_deref().filter(|hint| hint.is_valid()).map_or(
+        (fallback_eye, fallback_focus),
+        |hint| {
+            (
+                Vec3::new(hint.eye.0, hint.eye.1, hint.eye.2),
+                Vec3::new(hint.focus.0, hint.focus.1, hint.focus.2),
+            )
+        },
+    );
     if let Err(error) =
         apply_camera_view(state.capture.view, eye, focus, &mut transform, &mut orbit)
     {

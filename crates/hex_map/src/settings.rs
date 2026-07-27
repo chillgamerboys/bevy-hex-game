@@ -11,14 +11,17 @@
 //! has picked one. `world.ron` is still the world the first scenario uses and still the
 //! file to edit while trying terrain out.
 
+use std::collections::BTreeSet;
+
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use hex_assets::{RegisterSettings, CONFIG_EXTENSIONS};
 use hex_core::{HexCoord, Level};
-use serde::de::Error as _;
+use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-const MAX_PROCEDURAL_LEVEL: Level = 128;
+pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
+const SKY_UPPER_VERTICAL_BUDGET: Level = 8;
 
 /// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
@@ -91,15 +94,26 @@ pub enum TerrainSettings {
     Procedural(ProceduralSettings),
 }
 
-/// Settings for the semantic-first procedural generator.
+/// Versioned settings for the semantic-first procedural generator.
 ///
-/// The three recipe axes are intentionally independent. A landform defines geometry,
-/// an environment chooses materials, and a tactical recipe defines the routes and
-/// barriers that make the result playable.
-#[derive(Reflect, Debug, Clone, PartialEq, Deserialize)]
-pub struct ProceduralSettings {
-    /// Algorithm contract used to reproduce saved seeds after the generator evolves.
-    pub generator_version: u32,
+/// V1 remains a frozen compatibility contract. V2 gives each topology an honest
+/// recipe payload instead of allowing landform/tactical combinations which cannot
+/// be generated.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+pub enum ProceduralSettings {
+    /// The frozen landform/environment/tactical generator.
+    V1(ProceduralV1Settings),
+    /// The volume-based recipe generator.
+    V2(ProceduralV2Settings),
+}
+
+/// Frozen V1 procedural settings.
+///
+/// These fields intentionally retain their original types and validation. The
+/// custom [`Deserialize`] implementation for [`ProceduralSettings`] preserves the
+/// existing flat RON shape rather than requiring a `V1((...))` wrapper.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+pub struct ProceduralV1Settings {
     /// Large-scale terrain geometry.
     pub landform: LandformSettings,
     /// Surface and hazard materials.
@@ -179,18 +193,355 @@ pub struct LinkedIslandsSettings {
     pub bridge_width: u32,
 }
 
-impl ProceduralSettings {
-    const SUPPORTED_VERSION: u32 = 1;
+/// Settings shared by every V2 recipe.
+#[derive(Reflect, Debug, Clone, PartialEq)]
+pub struct ProceduralV2Settings {
+    /// Material family applied after the recipe has finalized its geometry.
+    pub environment: V2EnvironmentSettings,
+    /// Geometry, topology, validation, and repair contract.
+    pub recipe: V2RecipeSettings,
+}
 
-    fn validate(&self, grid_radius: u32) -> Result<(), String> {
-        if self.generator_version != Self::SUPPORTED_VERSION {
-            return Err(format!(
-                "unsupported procedural generator_version {}; expected {}",
-                self.generator_version,
-                Self::SUPPORTED_VERSION
-            ));
+/// V2 material families.
+///
+/// This is deliberately separate from [`EnvironmentSettings`] so adding a V2
+/// environment can never change the frozen V1 match space or its fingerprints.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum V2EnvironmentSettings {
+    /// Grass, dirt, exposed stone, gravel, and water.
+    TemperateGrassland,
+    /// Snow and ice over stone.
+    Frozen,
+    /// Basalt separated by non-solid lava.
+    Volcanic,
+    /// Stone, gravel, and dirt suited to underground spaces.
+    Rocky,
+}
+
+/// Geometry recipes supported by the V2 volume generator.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+pub enum V2RecipeSettings {
+    /// V1-compatible hills represented by the V2 volume model.
+    Hills(V2HillsSettings),
+    /// A finalized Hills ground map with flight-gated islands above it.
+    LayeredSkyIslands(LayeredSkyIslandsSettings),
+    /// A sharp ridge, peaks, a high pass, and a lower bypass.
+    Mountains(MountainsSettings),
+    /// A playable surface above one underground chamber network.
+    Caves(CavesSettings),
+}
+
+/// V2 Hills parameters.
+///
+/// These are the three genuine degrees of freedom from V1 Hills. Hazard width,
+/// crossing width, and all crossing levels are derived by
+/// [`Self::derived_crossing`] so every deserializable V2 Hills recipe is
+/// structurally consistent.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V2HillsSettings {
+    /// Base surface level of the river valley and crossing approaches.
+    pub valley_level: Level,
+    /// Maximum height above the valley.
+    pub max_relief: Level,
+    /// Number of hill centres placed on each side of the barrier.
+    pub hills_per_bank: u8,
+}
+
+/// Derived V2 Hills crossing invariants.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DerivedHillsCrossing {
+    /// Cells expanded around the centreline. One creates a three-wide hazard.
+    pub hazard_half_width: u32,
+    /// Width of the bridge and alternate crossing in cells.
+    pub crossing_width: u32,
+    /// Surface level of the channel bed.
+    pub bed_level: Level,
+    /// Lowest occupied hazard voxel.
+    pub hazard_bottom: Level,
+    /// Highest occupied hazard voxel, inclusive.
+    pub hazard_top: Level,
+    /// Level occupied by the one-voxel bridge deck.
+    pub bridge_level: Level,
+}
+
+/// Parameters for Hills ground with a separate upper island layer.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LayeredSkyIslandsSettings {
+    /// The ground recipe, finalized before any sky stream is sampled.
+    pub ground: V2HillsSettings,
+    /// Completely empty levels required between local ground and an island mass.
+    pub min_clearance: Level,
+    /// Target percentage of map columns covered by the upper layer.
+    pub upper_coverage_percent: u8,
+}
+
+/// Parameters for the sharp mountain recipe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MountainsSettings {
+    /// Surface level away from the ridge.
+    pub base_level: Level,
+    /// Difference between the base and the tallest peak.
+    pub relief: Level,
+    /// Number of sharp peaks distributed along the main ridge.
+    pub peak_count: u8,
+}
+
+/// Parameters for the surface-and-underground cave recipe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CavesSettings {
+    /// Typical surface level before modest rocky variation.
+    pub surface_level: Level,
+    /// Typical floor level of the underground stratum.
+    pub cave_floor_level: Level,
+    /// Target number of rooted chambers in the main network.
+    pub chamber_count: u8,
+}
+
+struct ProceduralSettingsWire {
+    generator_version: u32,
+    landform: Option<LandformSettings>,
+    environment: Option<ProceduralEnvironmentWire>,
+    tactical: Option<TacticalSettings>,
+    recipe: Option<V2RecipeSettings>,
+    unknown_fields: BTreeSet<String>,
+}
+
+#[derive(Deserialize)]
+enum ProceduralEnvironmentWire {
+    TemperateGrassland,
+    Frozen,
+    Volcanic,
+    Rocky,
+}
+
+enum ProceduralSettingsField {
+    GeneratorVersion,
+    Landform,
+    Environment,
+    Tactical,
+    Recipe,
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for ProceduralSettingsField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct FieldVisitor;
+
+        impl Visitor<'_> for FieldVisitor {
+            type Value = ProceduralSettingsField;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a procedural settings field")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(match value {
+                    "generator_version" => ProceduralSettingsField::GeneratorVersion,
+                    "landform" => ProceduralSettingsField::Landform,
+                    "environment" => ProceduralSettingsField::Environment,
+                    "tactical" => ProceduralSettingsField::Tactical,
+                    "recipe" => ProceduralSettingsField::Recipe,
+                    _ => ProceduralSettingsField::Unknown(value.to_owned()),
+                })
+            }
         }
 
+        deserializer.deserialize_identifier(FieldVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProceduralSettingsWire {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct WireVisitor;
+
+        impl<'de> Visitor<'de> for WireVisitor {
+            type Value = ProceduralSettingsWire;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("procedural settings")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut generator_version = None;
+                let mut landform = None;
+                let mut environment = None;
+                let mut tactical = None;
+                let mut recipe = None;
+                let mut unknown_fields = BTreeSet::new();
+
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        ProceduralSettingsField::GeneratorVersion => {
+                            if generator_version.is_some() {
+                                return Err(A::Error::duplicate_field("generator_version"));
+                            }
+                            generator_version = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Landform => {
+                            if landform.is_some() {
+                                return Err(A::Error::duplicate_field("landform"));
+                            }
+                            landform = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Environment => {
+                            if environment.is_some() {
+                                return Err(A::Error::duplicate_field("environment"));
+                            }
+                            environment = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Tactical => {
+                            if tactical.is_some() {
+                                return Err(A::Error::duplicate_field("tactical"));
+                            }
+                            tactical = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Recipe => {
+                            if recipe.is_some() {
+                                return Err(A::Error::duplicate_field("recipe"));
+                            }
+                            recipe = Some(map.next_value()?);
+                        }
+                        ProceduralSettingsField::Unknown(field) => {
+                            map.next_value::<IgnoredAny>()?;
+                            unknown_fields.insert(field);
+                        }
+                    }
+                }
+
+                Ok(ProceduralSettingsWire {
+                    generator_version: generator_version
+                        .ok_or_else(|| A::Error::missing_field("generator_version"))?,
+                    landform,
+                    environment,
+                    tactical,
+                    recipe,
+                    unknown_fields,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &[
+            "generator_version",
+            "landform",
+            "environment",
+            "tactical",
+            "recipe",
+        ];
+        deserializer.deserialize_struct("ProceduralSettingsWire", FIELDS, WireVisitor)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProceduralSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ProceduralSettingsWire::deserialize(deserializer)?;
+        match wire.generator_version {
+            1 => {
+                let landform = wire
+                    .landform
+                    .ok_or_else(|| D::Error::custom("procedural V1 requires the landform field"))?;
+                let tactical = wire
+                    .tactical
+                    .ok_or_else(|| D::Error::custom("procedural V1 requires the tactical field"))?;
+                if wire.recipe.is_some() {
+                    return Err(D::Error::custom(
+                        "procedural V1 does not accept the V2 recipe field",
+                    ));
+                }
+                let environment = match wire.environment.ok_or_else(|| {
+                    D::Error::custom("procedural V1 requires the environment field")
+                })? {
+                    ProceduralEnvironmentWire::TemperateGrassland => {
+                        EnvironmentSettings::TemperateGrassland
+                    }
+                    ProceduralEnvironmentWire::Frozen => EnvironmentSettings::Frozen,
+                    ProceduralEnvironmentWire::Volcanic => EnvironmentSettings::Volcanic,
+                    ProceduralEnvironmentWire::Rocky => {
+                        return Err(D::Error::custom(
+                            "procedural V1 does not support the Rocky environment",
+                        ));
+                    }
+                };
+                Ok(Self::V1(ProceduralV1Settings {
+                    landform,
+                    environment,
+                    tactical,
+                }))
+            }
+            2 => {
+                if let Some(field) = wire.unknown_fields.iter().next() {
+                    return Err(D::Error::custom(format!(
+                        "procedural V2 contains unknown field {field:?}"
+                    )));
+                }
+                if wire.landform.is_some() || wire.tactical.is_some() {
+                    return Err(D::Error::custom(
+                        "procedural V2 uses recipe instead of landform and tactical fields",
+                    ));
+                }
+                let recipe = wire
+                    .recipe
+                    .ok_or_else(|| D::Error::custom("procedural V2 requires the recipe field"))?;
+                let environment = match wire.environment.ok_or_else(|| {
+                    D::Error::custom("procedural V2 requires the environment field")
+                })? {
+                    ProceduralEnvironmentWire::TemperateGrassland => {
+                        V2EnvironmentSettings::TemperateGrassland
+                    }
+                    ProceduralEnvironmentWire::Frozen => V2EnvironmentSettings::Frozen,
+                    ProceduralEnvironmentWire::Volcanic => V2EnvironmentSettings::Volcanic,
+                    ProceduralEnvironmentWire::Rocky => V2EnvironmentSettings::Rocky,
+                };
+                Ok(Self::V2(ProceduralV2Settings {
+                    environment,
+                    recipe,
+                }))
+            }
+            version => Err(D::Error::custom(format!(
+                "unsupported procedural generator_version {version}; expected 1 or 2"
+            ))),
+        }
+    }
+}
+
+impl ProceduralSettings {
+    /// Algorithm contract used to reproduce saved seeds.
+    #[must_use]
+    pub const fn generator_version(&self) -> u32 {
+        match self {
+            Self::V1(_) => 1,
+            Self::V2(_) => 2,
+        }
+    }
+
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        match self {
+            Self::V1(settings) => settings.validate(grid_radius),
+            Self::V2(settings) => settings.validate(grid_radius),
+        }
+    }
+}
+
+impl ProceduralV1Settings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
         match (&self.landform, &self.tactical) {
             (LandformSettings::Hills(hills), TacticalSettings::Crossing(crossing)) => {
                 hills.validate(grid_radius)?;
@@ -208,6 +559,184 @@ impl ProceduralSettings {
                     "SkyIslands landform requires the LinkedIslands tactical recipe".to_owned(),
                 );
             }
+        }
+        Ok(())
+    }
+}
+
+impl ProceduralV2Settings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err("procedural V2 requires grid_radius from 12 through 40".to_owned());
+        }
+
+        match (&self.recipe, self.environment) {
+            (
+                V2RecipeSettings::Hills(hills),
+                V2EnvironmentSettings::TemperateGrassland
+                | V2EnvironmentSettings::Frozen
+                | V2EnvironmentSettings::Volcanic,
+            ) => hills.validate(grid_radius),
+            (V2RecipeSettings::Hills(_), V2EnvironmentSettings::Rocky) => {
+                Err("V2 Hills does not support the Rocky environment".to_owned())
+            }
+            (
+                V2RecipeSettings::LayeredSkyIslands(islands),
+                V2EnvironmentSettings::TemperateGrassland | V2EnvironmentSettings::Frozen,
+            ) => islands.validate(grid_radius),
+            (
+                V2RecipeSettings::LayeredSkyIslands(_),
+                V2EnvironmentSettings::Volcanic | V2EnvironmentSettings::Rocky,
+            ) => Err("V2 LayeredSkyIslands requires TemperateGrassland or Frozen".to_owned()),
+            (V2RecipeSettings::Mountains(mountains), V2EnvironmentSettings::Frozen) => {
+                mountains.validate(grid_radius)
+            }
+            (V2RecipeSettings::Mountains(_), _) => {
+                Err("V2 Mountains requires the Frozen environment".to_owned())
+            }
+            (V2RecipeSettings::Caves(caves), V2EnvironmentSettings::Rocky) => {
+                caves.validate(grid_radius)
+            }
+            (V2RecipeSettings::Caves(_), _) => {
+                Err("V2 Caves requires the Rocky environment".to_owned())
+            }
+        }
+    }
+}
+
+impl V2HillsSettings {
+    /// Derives invariants shared by the river, bridge, and alternate crossing.
+    pub fn derived_crossing(&self) -> Result<DerivedHillsCrossing, String> {
+        let bed_level = self
+            .valley_level
+            .checked_sub(3)
+            .ok_or_else(|| "V2 Hills valley_level is too low for its hazard".to_owned())?;
+        let hazard_bottom = bed_level
+            .checked_add(1)
+            .ok_or_else(|| "V2 Hills crossing level relationship overflows Level".to_owned())?;
+        let hazard_top = bed_level
+            .checked_add(2)
+            .ok_or_else(|| "V2 Hills crossing level relationship overflows Level".to_owned())?;
+        let bridge_level = self
+            .valley_level
+            .checked_add(1)
+            .ok_or_else(|| "V2 Hills bridge level relationship overflows Level".to_owned())?;
+
+        Ok(DerivedHillsCrossing {
+            hazard_half_width: 1,
+            crossing_width: 2,
+            bed_level,
+            hazard_bottom,
+            hazard_top,
+            bridge_level,
+        })
+    }
+
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err("procedural V2 Hills requires grid_radius from 12 through 40".to_owned());
+        }
+        if self.valley_level < 5 {
+            return Err("V2 Hills valley_level must leave room for bedrock and strata".to_owned());
+        }
+        if !(1..=8).contains(&self.max_relief) {
+            return Err("V2 Hills max_relief must be between 1 and 8".to_owned());
+        }
+        let Some(highest_surface) = self.valley_level.checked_add(self.max_relief) else {
+            return Err("V2 Hills level relationship overflows Level".to_owned());
+        };
+        if highest_surface > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "V2 Hills surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        if !(1..=6).contains(&self.hills_per_bank) {
+            return Err("V2 Hills hills_per_bank must be between 1 and 6".to_owned());
+        }
+        self.derived_crossing()?;
+        Ok(())
+    }
+}
+
+impl LayeredSkyIslandsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        self.ground.validate(grid_radius)?;
+        if self.min_clearance < 8 {
+            return Err("LayeredSkyIslands min_clearance must be at least 8".to_owned());
+        }
+        if !(15..=25).contains(&self.upper_coverage_percent) {
+            return Err(
+                "LayeredSkyIslands upper_coverage_percent must be between 15 and 25".to_owned(),
+            );
+        }
+
+        let highest_ground = self
+            .ground
+            .valley_level
+            .checked_add(self.ground.max_relief)
+            .ok_or_else(|| "LayeredSkyIslands ground relationship overflows Level".to_owned())?;
+        let highest_reserved = highest_ground
+            .checked_add(self.min_clearance)
+            .and_then(|level| level.checked_add(SKY_UPPER_VERTICAL_BUDGET))
+            .ok_or_else(|| "LayeredSkyIslands level relationship overflows Level".to_owned())?;
+        if highest_reserved > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "LayeredSkyIslands reserved volume cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl MountainsSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err(
+                "procedural V2 Mountains requires grid_radius from 12 through 40".to_owned(),
+            );
+        }
+        if self.base_level < 5 {
+            return Err("Mountains base_level must leave room for bedrock and strata".to_owned());
+        }
+        if !(14..=16).contains(&self.relief) {
+            return Err("Mountains relief must be between 14 and 16".to_owned());
+        }
+        if !(3..=5).contains(&self.peak_count) {
+            return Err("Mountains peak_count must be between 3 and 5".to_owned());
+        }
+        let Some(highest_surface) = self.base_level.checked_add(self.relief) else {
+            return Err("Mountains level relationship overflows Level".to_owned());
+        };
+        if highest_surface > MAX_PROCEDURAL_LEVEL {
+            return Err(format!(
+                "Mountains surfaces cannot exceed level {MAX_PROCEDURAL_LEVEL}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl CavesSettings {
+    fn validate(&self, grid_radius: u32) -> Result<(), String> {
+        if !(12..=40).contains(&grid_radius) {
+            return Err("procedural V2 Caves requires grid_radius from 12 through 40".to_owned());
+        }
+        if !(14..=17).contains(&self.surface_level) {
+            return Err("Caves surface_level must be between 14 and 17".to_owned());
+        }
+        if !(6..=8).contains(&self.cave_floor_level) {
+            return Err("Caves cave_floor_level must be between 6 and 8".to_owned());
+        }
+        if !(6..=8).contains(&self.chamber_count) {
+            return Err("Caves chamber_count must be between 6 and 8".to_owned());
+        }
+        let Some(vertical_space) = self.surface_level.checked_sub(self.cave_floor_level) else {
+            return Err("Caves cave_floor_level must be below the surface".to_owned());
+        };
+        if vertical_space < 7 {
+            return Err(
+                "Caves need four clear chamber levels below at least three roof levels".to_owned(),
+            );
         }
         Ok(())
     }
@@ -657,8 +1186,296 @@ mod tests {
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
-            assert!(matches!(settings.terrain, TerrainSettings::Procedural(_)));
+            let TerrainSettings::Procedural(procedural) = settings.terrain else {
+                panic!("the shipped preset should be Procedural")
+            };
+            assert_eq!(procedural.generator_version(), 1);
+            assert!(matches!(procedural, ProceduralSettings::V1(_)));
         }
+    }
+
+    #[test]
+    fn v1_keeps_its_flat_external_ron_shape() {
+        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron");
+        let settings: MapSettings =
+            ron::from_str(source).expect("the original flat V1 RON should remain valid");
+        let TerrainSettings::Procedural(ProceduralSettings::V1(v1)) = settings.terrain else {
+            panic!("generator_version 1 should dispatch to the internal V1 variant")
+        };
+        assert_eq!(
+            v1.landform,
+            LandformSettings::Hills(HillsSettings {
+                valley_level: 15,
+                max_relief: 8,
+                hills_per_bank: 3,
+            })
+        );
+        assert_eq!(v1.environment, EnvironmentSettings::TemperateGrassland);
+
+        let wrapped = source.replacen("Procedural((", "Procedural(V1((", 1);
+        let wrapped = wrapped.replacen("\n    )),\n)", "\n    ))),\n)", 1);
+        ron::from_str::<MapSettings>(&wrapped)
+            .expect_err("the internal V1 variant must not leak into external RON");
+    }
+
+    #[test]
+    fn v1_keeps_legacy_unknown_field_tolerance() {
+        let source = include_str!("../../../assets/config/worlds/procedural-hills.ron").replacen(
+            "generator_version: 1,",
+            "generator_version: 1,\n        legacy_extension: 42,",
+            1,
+        );
+        ron::from_str::<MapSettings>(&source)
+            .expect("manual version dispatch must not tighten the frozen V1 wire contract");
+    }
+
+    #[test]
+    fn v2_rejects_unknown_top_level_fields() {
+        let source = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 2,
+                    environment: TemperateGrassland,
+                    recipe: Hills((
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                    )),
+                    typoed_setting: 42,
+                )),
+            )
+        "#;
+        let error =
+            ron::from_str::<MapSettings>(source).expect_err("V2 top-level fields must be rejected");
+        assert!(
+            error.to_string().contains("unknown field")
+                && error.to_string().contains("typoed_setting"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn unsupported_version_is_reported_without_parsing_a_recipe_shape() {
+        let source = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 99,
+                )),
+            )
+        "#;
+        let error = ron::from_str::<MapSettings>(source)
+            .expect_err("an unknown generator version must fail during wire dispatch");
+        assert!(
+            error.to_string().contains("expected 1 or 2"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn v2_recipes_dispatch_from_generator_version() {
+        for (recipe, environment) in [
+            (
+                "Hills((valley_level: 15, max_relief: 8, hills_per_bank: 3))",
+                "TemperateGrassland",
+            ),
+            (
+                "LayeredSkyIslands((ground: (valley_level: 15, max_relief: 8, hills_per_bank: 3), min_clearance: 8, upper_coverage_percent: 20))",
+                "TemperateGrassland",
+            ),
+            (
+                "Mountains((base_level: 15, relief: 15, peak_count: 4))",
+                "Frozen",
+            ),
+            (
+                "Caves((surface_level: 15, cave_floor_level: 8, chamber_count: 7))",
+                "Rocky",
+            ),
+        ] {
+            let source = format!(
+                "(
+                    grid_radius: 12,
+                    level_height: 0.4,
+                    terrain: Procedural((
+                        generator_version: 2,
+                        environment: {environment},
+                        recipe: {recipe},
+                    )),
+                )"
+            );
+            let settings: MapSettings =
+                ron::from_str(&source).expect("a valid V2 recipe should deserialize");
+            let TerrainSettings::Procedural(procedural) = settings.terrain else {
+                panic!("the parsed preset should be Procedural")
+            };
+            assert_eq!(procedural.generator_version(), 2);
+            assert!(matches!(procedural, ProceduralSettings::V2(_)));
+        }
+    }
+
+    #[test]
+    fn v2_hills_derives_fixed_crossing_invariants() {
+        let hills = V2HillsSettings {
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        };
+        assert_eq!(
+            hills
+                .derived_crossing()
+                .expect("a valid valley should derive its crossing"),
+            DerivedHillsCrossing {
+                hazard_half_width: 1,
+                crossing_width: 2,
+                bed_level: 12,
+                hazard_bottom: 13,
+                hazard_top: 14,
+                bridge_level: 16,
+            }
+        );
+    }
+
+    #[test]
+    fn version_specific_fields_cannot_be_mixed() {
+        let v1_with_recipe = include_str!("../../../assets/config/worlds/procedural-hills.ron")
+            .replacen(
+                "environment: TemperateGrassland,",
+                "environment: TemperateGrassland,\n        recipe: Hills((valley_level: 15, max_relief: 8, hills_per_bank: 3)),",
+                1,
+            );
+        let v1_error = ron::from_str::<MapSettings>(&v1_with_recipe)
+            .expect_err("V1 must reject a V2 recipe field");
+        assert!(
+            v1_error
+                .to_string()
+                .contains("does not accept the V2 recipe"),
+            "unexpected error: {v1_error}"
+        );
+
+        let v2_with_legacy_axes = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 2,
+                    landform: Hills((
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                    )),
+                    environment: TemperateGrassland,
+                    tactical: Crossing((
+                        barrier_half_width: 1,
+                        bed_level: 12,
+                        hazard_bottom: 13,
+                        hazard_top: 14,
+                        bridge_level: 16,
+                    )),
+                    recipe: Hills((
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                    )),
+                )),
+            )
+        "#;
+        let v2_error = ron::from_str::<MapSettings>(v2_with_legacy_axes)
+            .expect_err("V2 must reject V1 landform and tactical fields");
+        assert!(
+            v2_error.to_string().contains("uses recipe instead"),
+            "unexpected error: {v2_error}"
+        );
+    }
+
+    #[test]
+    fn invalid_v2_environment_recipe_combinations_are_rejected() {
+        for (recipe, environment, expected) in [
+            (
+                "Hills((valley_level: 15, max_relief: 8, hills_per_bank: 3))",
+                "Rocky",
+                "does not support",
+            ),
+            (
+                "LayeredSkyIslands((ground: (valley_level: 15, max_relief: 8, hills_per_bank: 3), min_clearance: 8, upper_coverage_percent: 20))",
+                "Volcanic",
+                "requires TemperateGrassland or Frozen",
+            ),
+            (
+                "Mountains((base_level: 15, relief: 15, peak_count: 4))",
+                "TemperateGrassland",
+                "requires the Frozen",
+            ),
+            (
+                "Caves((surface_level: 15, cave_floor_level: 8, chamber_count: 7))",
+                "Frozen",
+                "requires the Rocky",
+            ),
+        ] {
+            let source = format!(
+                "(
+                    grid_radius: 12,
+                    level_height: 0.4,
+                    terrain: Procedural((
+                        generator_version: 2,
+                        environment: {environment},
+                        recipe: {recipe},
+                    )),
+                )"
+            );
+            let error = ron::from_str::<MapSettings>(&source)
+                .expect_err("an unsupported recipe/environment pair should fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {recipe}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn v2_recipe_fields_and_vertical_contracts_are_strict() {
+        let unknown = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 2,
+                    environment: TemperateGrassland,
+                    recipe: Hills((
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                        barrier_half_width: 1,
+                    )),
+                )),
+            )
+        "#;
+        ron::from_str::<MapSettings>(unknown)
+            .expect_err("derived V2 invariants must not be accepted as settings");
+
+        let shallow_cave = r#"
+            (
+                grid_radius: 12,
+                level_height: 0.4,
+                terrain: Procedural((
+                    generator_version: 2,
+                    environment: Rocky,
+                    recipe: Caves((
+                        surface_level: 14,
+                        cave_floor_level: 8,
+                        chamber_count: 7,
+                    )),
+                )),
+            )
+        "#;
+        let error = ron::from_str::<MapSettings>(shallow_cave)
+            .expect_err("caves must reserve chamber clearance and three roof levels");
+        assert!(
+            error.to_string().contains("four clear chamber levels"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

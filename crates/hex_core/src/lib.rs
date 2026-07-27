@@ -21,8 +21,8 @@ pub use app::{AppSystems, GameplaySetup, Mode, PausableSystems, Pause, Screen, T
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile};
 pub use setup::GameplaySetupFailure;
 pub use terrain::{
-    MapAnchorId, MapAnchors, ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions,
-    TerrainReady,
+    CutawayOccluder, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
+    ResolvedMapSeed, SpecialMovementRegion, SpecialMovementRegions, TerrainReady,
 };
-pub use traversal::TraversalProfile;
+pub use traversal::{TraversalEndpoint, TraversalProfile};
 pub use voxel::{Headroom, Level, SubstanceId, TerrainEdit, TilePos, MAX_HEADROOM};

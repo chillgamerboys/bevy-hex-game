@@ -18,7 +18,7 @@ use xxhash_rust::xxh3::{xxh3_64, xxh3_64_with_seed};
 
 use crate::settings::{
     CrossingSettings, EnvironmentSettings, HillsSettings, LandformSettings, LinkedIslandsSettings,
-    ProceduralSettings, SkyIslandsSettings, TacticalSettings,
+    ProceduralV1Settings as ProceduralSettings, SkyIslandsSettings, TacticalSettings,
 };
 use crate::terrain::TerrainPalette;
 use crate::voxel::{Column, VoxelMap};
@@ -333,7 +333,7 @@ fn build_with_candidate_selection(
     let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
     let repair_rounds = u8::try_from(repair_actions.len()).unwrap_or(u8::MAX);
     let report = GenerationReport {
-        generator_version: settings.generator_version,
+        generator_version: 1,
         seed,
         selected_candidate,
         candidates_evaluated: CANDIDATE_COUNT,
@@ -2925,7 +2925,7 @@ const fn top_surface(cell: PlannedCell) -> Level {
     }
 }
 
-fn named_hash(seed: u64, candidate: u8, stage: &str, index: u64) -> u64 {
+pub(crate) fn named_hash(seed: u64, candidate: u8, stage: &str, index: u64) -> u64 {
     let mut bytes = Vec::with_capacity(stage.len().saturating_add(17));
     bytes.extend_from_slice(&seed.to_le_bytes());
     bytes.push(candidate);
@@ -2985,7 +2985,7 @@ fn clamp_axial_y(x: i32, y: i32, radius: i32) -> i32 {
 fn settings_fingerprint(grid_radius: u32, settings: &ProceduralSettings) -> u64 {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(&grid_radius.to_le_bytes());
-    bytes.extend_from_slice(&settings.generator_version.to_le_bytes());
+    bytes.extend_from_slice(&1_u32.to_le_bytes());
     match &settings.landform {
         LandformSettings::Hills(hills) => {
             bytes.push(0);
@@ -3021,7 +3021,12 @@ fn settings_fingerprint(grid_radius: u32, settings: &ProceduralSettings) -> u64 
     xxh3_64(&bytes)
 }
 
-fn map_fingerprint(map: &VoxelMap, special_regions: &SpecialMovementRegions) -> u64 {
+/// Frozen V1 map identity, shared with the V2 Hills parity boundary.
+///
+/// V2 maps without interiors must keep this byte-for-byte identity so equivalent
+/// Hills seeds can prove map parity. Interior-aware V2 recipes compose their exact
+/// floor and roof semantics on top of this result without changing this function.
+pub(crate) fn map_fingerprint(map: &VoxelMap, special_regions: &SpecialMovementRegions) -> u64 {
     let mut bytes = Vec::new();
     let mut columns: Vec<(HexCoord, &Column)> = map.columns().collect();
     columns.sort_by_key(|(coord, _)| *coord);
@@ -3106,7 +3111,6 @@ mod tests {
 
     fn hills(environment: EnvironmentSettings) -> ProceduralSettings {
         ProceduralSettings {
-            generator_version: 1,
             landform: LandformSettings::Hills(HillsSettings {
                 valley_level: 15,
                 max_relief: 8,
@@ -3125,7 +3129,6 @@ mod tests {
 
     fn sky() -> ProceduralSettings {
         ProceduralSettings {
-            generator_version: 1,
             landform: LandformSettings::SkyIslands(SkyIslandsSettings {
                 surface_level: 15,
                 island_radius: 3,
@@ -3222,7 +3225,9 @@ mod tests {
             expected_map_fingerprint,
         ) in cases
         {
-            let terrain = TerrainSettings::Procedural(settings.clone());
+            let terrain = TerrainSettings::Procedural(crate::settings::ProceduralSettings::V1(
+                settings.clone(),
+            ));
             let runtime_palette = TerrainPalette::for_terrain(&table, &terrain)
                 .expect("the shipped substance table should cover procedural terrain");
             let result = build(
