@@ -2,8 +2,9 @@
 //!
 //! # The shape of a round
 //!
-//! Combat begins when a hostile comes within engaging distance of the party — see
-//! [`CombatSettings`](crate::turns::CombatSettings). A [`TurnOrder`] is built from
+//! Combat begins when a hostile comes within engaging distance of the party — the
+//! thresholds come from `assets/config/combat.ron`
+//! ([`CombatSettings`](hex_assets::CombatSettings)). A [`TurnOrder`] is built from
 //! everyone present, sorted by [`Initiative`],
 //! and the first unit gets a [`Turn`]. Ending a turn hands the [`Turn`] to the next
 //! unit; running off the end wraps to the front and the round number goes up.
@@ -23,27 +24,12 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
+use hex_assets::CombatSettings;
 use hex_core::{AppSystems, Mode, PausableSystems, Screen, TilePos, Turn, UnitId};
 use hex_units::{
     either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
     UnitRegistry,
 };
-
-/// How far apart two units can be and still start a fight, and related knobs.
-///
-/// Not loaded from RON yet — these are the crudest possible defaults and exist to be
-/// argued with. When they earn their place they belong in `assets/config/combat.ron`
-/// alongside the rest of the designer-facing settings.
-pub struct CombatSettings;
-
-impl CombatSettings {
-    /// Hexes between a hostile and the party that start a fight.
-    pub const ENGAGE_RANGE: u32 = 4;
-
-    /// Extra hexes a hostile must retreat beyond [`Self::ENGAGE_RANGE`] before combat
-    /// ends. Prevents a unit on the boundary flipping in and out every frame.
-    pub const DISENGAGE_MARGIN: u32 = 2;
-}
 
 /// Where a unit sits in the turn order. Higher acts first.
 ///
@@ -58,12 +44,6 @@ impl CombatSettings {
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[reflect(Component)]
 pub struct Initiative(pub u32);
-
-impl Default for Initiative {
-    fn default() -> Self {
-        Self(10)
-    }
-}
 
 /// The running order, and where in it we are.
 ///
@@ -129,14 +109,6 @@ impl TurnOrder {
     }
 }
 
-/// Hexes a unit may move on its turn.
-///
-/// Provisional. The design's current preference is one or two hexes of free movement
-/// plus one action, which keeps big spells feeling categorical while stopping the map
-/// from being scenery. Four is generous enough to make terrain worth looking at while
-/// the map is the thing being tested.
-const MOVEMENT_PER_TURN: u32 = 4;
-
 /// Registers the loop.
 pub fn plugin(app: &mut App) {
     app.register_type::<Initiative>()
@@ -193,22 +165,23 @@ fn engagement(
     mut next: ResMut<NextState<Mode>>,
     units: Query<(Entity, &Faction, &StandsOn)>,
     crossings: Option<Res<MovementCrossings>>,
+    settings: Res<CombatSettings>,
 ) {
-    let engage = CombatSettings::ENGAGE_RANGE;
-    let disengage = engage + CombatSettings::DISENGAGE_MARGIN;
+    let engage = settings.engage_range;
+    let disengage = engage + settings.disengage_margin;
+    let levels_per_bonus = settings.levels_per_bonus_range;
 
     match mode.get() {
         Mode::Exploring => {
-            if let Some((entity, stopped)) = crossings
-                .as_deref()
-                .and_then(|crossings| first_hostile_crossing(&units, crossings, engage))
-            {
+            if let Some((entity, stopped)) = crossings.as_deref().and_then(|crossings| {
+                first_hostile_crossing(&units, crossings, engage, levels_per_bonus)
+            }) {
                 // The rendered transform may already have crossed several more legs.
                 // Preserve the first engaging waypoint until combat-entry movement
                 // reconciliation can snap the unit back to it.
                 commands.entity(entity).insert(StopMovingAt::new(stopped));
                 next.set(Mode::Combat);
-            } else if any_hostile_in_reach(&units, engage) == Some(true) {
+            } else if any_hostile_in_reach(&units, engage, levels_per_bonus) == Some(true) {
                 next.set(Mode::Combat);
             }
         }
@@ -216,7 +189,7 @@ fn engagement(
         // side is gone entirely. That is a different thing from "far apart", and
         // collapsing them would leave combat running with nobody to fight.
         Mode::Combat => {
-            if any_hostile_in_reach(&units, disengage) != Some(true) {
+            if any_hostile_in_reach(&units, disengage, levels_per_bonus) != Some(true) {
                 next.set(Mode::Exploring);
             }
         }
@@ -232,7 +205,11 @@ fn engagement(
 /// put a unit on a bridge and one on the ground beneath it zero hexes apart — true
 /// horizontally, and exactly why the answer has to come from a reach rule that knows
 /// what height is worth rather than from raw separation.
-fn any_hostile_in_reach(units: &Query<(Entity, &Faction, &StandsOn)>, range: u32) -> Option<bool> {
+fn any_hostile_in_reach(
+    units: &Query<(Entity, &Faction, &StandsOn)>,
+    range: u32,
+    levels_per_bonus: u32,
+) -> Option<bool> {
     let mut by_faction: HashMap<Faction, Vec<TilePos>> = HashMap::default();
     for (_, faction, standing) in units.iter() {
         by_faction.entry(*faction).or_default().push(standing.0.pos);
@@ -241,10 +218,11 @@ fn any_hostile_in_reach(units: &Query<(Entity, &Faction, &StandsOn)>, range: u32
     let mine = by_faction.get(&Faction::Player)?;
     let theirs = by_faction.get(&Faction::Hostile)?;
 
-    Some(
-        mine.iter()
-            .any(|a| theirs.iter().any(|b| either_in_reach(*a, *b, range))),
-    )
+    Some(mine.iter().any(|a| {
+        theirs
+            .iter()
+            .any(|b| either_in_reach(*a, *b, range, levels_per_bonus))
+    }))
 }
 
 /// The first completed waypoint this frame that came within hostile reach.
@@ -256,6 +234,7 @@ fn first_hostile_crossing(
     units: &Query<(Entity, &Faction, &StandsOn)>,
     crossings: &MovementCrossings,
     range: u32,
+    levels_per_bonus: u32,
 ) -> Option<(Entity, Standing)> {
     for (moving_entity, crossed) in crossings.iter() {
         let Ok((_, moving_faction, _)) = units.get(moving_entity) else {
@@ -264,7 +243,7 @@ fn first_hostile_crossing(
         let entered_reach = units.iter().any(|(entity, faction, standing)| {
             entity != moving_entity
                 && moving_faction.is_hostile_to(*faction)
-                && either_in_reach(crossed.pos, standing.0.pos, range)
+                && either_in_reach(crossed.pos, standing.0.pos, range, levels_per_bonus)
         });
         if entered_reach {
             return Some((moving_entity, crossed));
@@ -280,6 +259,7 @@ fn begin_combat(
     units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), With<Faction>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
+    settings: Res<CombatSettings>,
 ) {
     // `Option` on both components, so a unit missing one still joins the fight.
     // Requiring them would make the whole order silently empty — every unit
@@ -302,7 +282,8 @@ fn begin_combat(
             // not seen (a test's explicit id, a future load path) must still
             // resolve, or its turn silently never advances.
             registry.register(unit, entity);
-            (unit, entity, initiative.copied().unwrap_or_default())
+            let fallback = Initiative(settings.default_initiative);
+            (unit, entity, initiative.copied().unwrap_or(fallback))
         })
         .collect();
 
@@ -321,7 +302,7 @@ fn begin_combat(
 
     if let Some(first) = first_entity {
         commands.entity(first).insert(Turn {
-            movement_left: MOVEMENT_PER_TURN,
+            movement_left: settings.movement_per_turn,
             acted: false,
         });
     }
@@ -352,6 +333,7 @@ fn advance_turn(
     keys: Res<ButtonInput<KeyCode>>,
     mut turn_order: ResMut<TurnOrder>,
     registry: Res<UnitRegistry>,
+    settings: Res<CombatSettings>,
     acting: Query<(Entity, &Turn, Has<Transformation>)>,
 ) {
     let Some(current) = turn_order.current() else {
@@ -380,7 +362,7 @@ fn advance_turn(
         .and_then(|unit| registry.entity_of(unit))
     {
         commands.entity(next).insert(Turn {
-            movement_left: MOVEMENT_PER_TURN,
+            movement_left: settings.movement_per_turn,
             acted: false,
         });
     }
