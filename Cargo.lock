@@ -3255,6 +3255,7 @@ dependencies = [
  "hex_combat",
  "hex_core",
  "hex_dev",
+ "hex_lattice",
  "hex_map",
  "hex_units",
  "hex_world",

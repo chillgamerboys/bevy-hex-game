@@ -36,6 +36,7 @@ pub(super) fn plugin(app: &mut App) {
             rebuild_scenario_list,
             reroll_scenario_seed,
             start_chosen_scenario,
+            open_lattice_demo,
             handle_input,
         )
             .chain()
@@ -63,6 +64,10 @@ struct StartsScenario {
 struct RerollsScenario {
     scenario: Scenario,
 }
+
+/// The button that opens the lattice ruleset demo.
+#[derive(Component)]
+struct OpensLatticeDemo;
 
 /// The line that stands in for the list until the library has loaded.
 #[derive(Component)]
@@ -174,6 +179,14 @@ fn spawn_title(mut commands: Commands, failure: Option<Res<GameplaySetupFailure>
                         Text::new("loading scenarios..."),
                         TextFont::from_font_size(16.0),
                         TextColor(MUTED),
+                    ));
+                });
+            parent
+                .spawn((button("Lattice Demo"), OpensLatticeDemo))
+                .with_children(|entry| {
+                    entry.spawn(label("Lattice Demo"));
+                    entry.spawn(blurb(
+                        "Poke the magic ruleset: cast, channel, strike, break enchantments.",
                     ));
                 });
             parent.spawn((
@@ -321,6 +334,18 @@ fn start_chosen_scenario(
     }
 }
 
+/// Opens the lattice ruleset demo when its button is pressed.
+fn open_lattice_demo(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensLatticeDemo>)>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    for interaction in &clicked {
+        if *interaction == Interaction::Pressed {
+            next.set(Screen::LatticeDemo);
+        }
+    }
+}
+
 fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
     if keys.just_pressed(KeyCode::Escape) {
         exit.write(AppExit::Success);
@@ -429,6 +454,30 @@ mod tests {
         let world = app.world_mut();
         let mut query = world.query::<&Text>();
         query.iter(world).any(|text| text.0.contains(wanted))
+    }
+
+    /// The demo button is part of the static title layout and switches screens.
+    #[test]
+    fn the_lattice_demo_button_opens_the_demo_screen() {
+        let mut app = test_app();
+        go_to(&mut app, Screen::Title);
+
+        let world = app.world_mut();
+        let mut buttons = world.query_filtered::<Entity, With<OpensLatticeDemo>>();
+        let button = buttons
+            .single(world)
+            .expect("the title screen should offer exactly one demo button");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::LatticeDemo,
+            "pressing the demo button should enter the demo screen"
+        );
     }
 
     #[test]
