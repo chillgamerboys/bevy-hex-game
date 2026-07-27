@@ -15,12 +15,17 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+pub mod content_index;
+pub mod elements;
 pub mod loader;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
+pub mod spells;
 pub mod substances;
 
+pub use content_index::{ContentError, ContentIndex};
+pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
@@ -29,6 +34,10 @@ pub use settings::{
     to_color, CameraSettings, CelestialBody, CelestialCycleSettings, CubeCoord, DisplaySettings,
     LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
     PresentModeSetting, ResolvedLighting, Rgb, ScenarioPlacement, ScenarioSettings,
+};
+pub use spells::{
+    CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
+    TargetingSpec,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 
@@ -56,6 +65,9 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(elements::plugin);
+    app.add_plugins(spells::plugin);
+    app.add_plugins(content_index::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //

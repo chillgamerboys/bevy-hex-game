@@ -12,6 +12,7 @@ use hex_core::{Mode, Pause, Screen};
 use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
+use crate::menus::widgets::UiAssets;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_sub_state::<Pause>();
@@ -35,7 +36,7 @@ pub(super) fn plugin(app: &mut App) {
 struct HudText;
 
 /// Controls are otherwise undiscoverable — there is no manual and no tutorial.
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((
             Name::new("Gameplay HUD"),
@@ -58,7 +59,10 @@ fn spawn_hud(mut commands: Commands) {
             parent.spawn((
                 HudText,
                 Text::new(exploring_hint()),
-                TextFont::from_font_size(14.0),
+                TextFont {
+                    font: assets.body.clone().into(),
+                    ..TextFont::from_font_size(14.0)
+                },
                 TextColor(Color::srgb(0.94, 0.94, 0.94)),
                 Pickable::IGNORE,
             ));
@@ -66,8 +70,8 @@ fn spawn_hud(mut commands: Commands) {
 }
 
 fn exploring_hint() -> String {
-    "EXPLORING    -    click a tile to move    -    right-drag to orbit    -    \
-     WASD to pan    -    scroll to zoom    -    ESC to pause"
+    "EXPLORING   ·   click a tile to move   ·   right-drag to orbit   ·   \
+     WASD to pan   ·   scroll to zoom   ·   ESC to pause"
         .to_owned()
 }
 
@@ -99,8 +103,8 @@ fn update_hud(
                 Err(_) => "…".to_owned(),
             };
             format!(
-                "COMBAT    -    round {}    -    {}    -    SPACE to end turn    \
-                 -    ESC to pause",
+                "COMBAT   ·   round {}   ·   {}   ·   SPACE to end turn   \
+                 ·   ESC to pause",
                 order.round + 1,
                 whose
             )
@@ -152,6 +156,11 @@ mod tests {
     fn gameplay_hud_does_not_block_tile_clicks() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
         app.add_systems(Startup, spawn_hud);
         app.update();
 

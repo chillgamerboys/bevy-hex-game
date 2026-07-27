@@ -64,6 +64,7 @@ use bevy_ecs::prelude::*;
 use bevy_math::Vec3;
 use bevy_reflect::prelude::*;
 use hexx::Hex;
+use serde::{Deserialize, Serialize};
 
 use crate::config::HEX_CIRCUMRADIUS;
 
@@ -74,10 +75,29 @@ use crate::config::HEX_CIRCUMRADIUS;
 // `Ord` has no geometric meaning — a hex grid has no natural ordering — but it makes
 // coordinates usable as `BTreeMap` keys and gives deterministic iteration when
 // sorting for a save file or a stable diff. It compares the stored axial pair.
-#[derive(Component, Reflect, Default, Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Component,
+    Reflect,
+    Default,
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+)]
 #[reflect(Component)]
 pub struct HexCoord {
+    // The serialized names are a save-format contract: axial `q`/`r`, the
+    // standard notation, deliberately decoupled from these private field
+    // identifiers so an internal rename cannot silently change save files.
+    #[serde(rename = "q")]
     x: i32,
+    #[serde(rename = "r")]
     y: i32,
 }
 

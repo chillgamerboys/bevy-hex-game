@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a nine-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a ten-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -73,13 +73,40 @@ visual-coverage check still leaves its PNG at the requested path and exits with 
 error, so the rejected output can be inspected. Map-review builds keep their console on
 Windows because these diagnostics are part of the tool.
 
+### Scripted visual walks
+
+The sibling default-off `visual-walk` feature drives the whole game through a RON
+step list — screens, button clicks by `Name`, keys, scenario launches — and
+photographs each step, so an agent can *look* at the frames (`/visual-walk` in the
+skill pipeline reads them; audit-pr runs it as Step 2.5):
+
+```sh
+HEX_WALK_SCRIPT=walks/menus.ron \
+HEX_WALK_OUT=.context/visual-walks/local \
+cargo run -p hex_game --features visual-walk
+```
+
+Exit code is the mechanical verdict: any stalled step or black frame fails the
+run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
+covers both scenario families and the pause overlay. The capture goes through an
+offscreen render target (the window surface is not readable on macOS/Metal), with
+every UI root pointed at the redirected camera.
+
 ## Workspace
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
+
+**`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
+spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
+`App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
+design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
+`hex_assets` and the combat wiring consume it as the content and spawning land.
+See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
@@ -226,7 +253,9 @@ Conventional Commits — `/release` computes the version bump from them.
 merge without a green receipt for the current HEAD.
 Test tiers: `/test-quick` (fmt+clippy+tests) → `/test-local` (+deny, doc,
 links) → `/test-full` (+ship build; the visual walk stays manual).
-Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`.
+Standalone audits: `/audit-diff`, `/audit-silent-failures`, `/update-docs`,
+`/visual-walk` (the scripted capture walk — audit-pr's Step 2.5; the agent
+reads the frames, and the human walk still owns motion and taste).
 Tickets live in Linear (team HEX): `/plan-ticket` to start from one,
 `/update-linear` to bind a PR, `/seed-tickets` to turn a roadmap into
 tickets. Binding is encouraged, never required.
@@ -234,7 +263,7 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 395 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 510 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

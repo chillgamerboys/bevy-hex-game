@@ -7,6 +7,8 @@
 use bevy::prelude::*;
 use hex_core::Screen;
 
+use crate::menus::widgets::{display, UiAssets};
+
 use super::{despawn_screen, screen_root};
 
 const SPLASH_SECONDS: f32 = 0.8;
@@ -20,7 +22,7 @@ pub(super) fn plugin(app: &mut App) {
 #[derive(Resource)]
 struct SplashTimer(Timer);
 
-fn spawn_splash(mut commands: Commands) {
+fn spawn_splash(mut commands: Commands, assets: Res<UiAssets>) {
     commands.insert_resource(SplashTimer(Timer::from_seconds(
         SPLASH_SECONDS,
         TimerMode::Once,
@@ -28,11 +30,7 @@ fn spawn_splash(mut commands: Commands) {
     commands
         .spawn(screen_root(Screen::Splash, "Splash Screen"))
         .with_children(|parent| {
-            parent.spawn((
-                Text::new("hex game"),
-                TextFont::from_font_size(48.0),
-                TextColor(Color::srgb(0.9, 0.9, 0.9)),
-            ));
+            parent.spawn(display(&assets, "Hex Game"));
         });
 }
 

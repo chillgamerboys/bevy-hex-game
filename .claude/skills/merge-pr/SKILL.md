@@ -25,7 +25,12 @@ path. Six cases (routed on `schema_version`):
    for *this exact commit* recently. Proceed with full confidence.
    (A `warn` on step `0_audit_linear` — no ticket tie — is part of
    green here; this repo's Linear tie is soft. Echo it in the report,
-   don't block on it.)
+   don't block on it. A `warn` on `5_visual_walk` is also green, but
+   is NOT silent: print its review-tier findings `{step, png_path,
+   check, message}` in the report so the operator sees what the
+   agent's eyes flagged before finalizing. A `fail` on
+   `5_visual_walk` flips `overall_status` to failed like any other
+   step; `skipped` means the diff had no runtime surface.)
 
 2. **Receipt present, SHA matches, but `completed_at` > 60 min old**
    → ⚠ warn (don't STOP):
@@ -374,17 +379,20 @@ double-firing anything.
 - **Audit-pr was not run.** Run it first. `/merge-pr` is the
   finalize-after-gate step, not the gate itself.
 - **Drafts / WIP PRs.** Mark `gh pr ready` first.
-- **A PR nobody has played.** The receipt cannot see the window. If
-  the change touches rendering, movement, or state transitions and
-  nobody walked it, the merge is premature even with a green receipt
-  — that's what `dev` is for, and what `/promote` gates on.
+- **A PR nobody has played.** The receipt now carries the agent's
+  scripted walk (`5_visual_walk`) — stills of the real screens, read
+  by the agent — but stills are not play. If the change touches
+  motion, feel, or anything the walk scripts don't photograph, and no
+  human walked it, the merge is premature even with a green receipt —
+  that's what `dev` is for, and what `/promote` gates on.
 
 ## Self-updating
 
 - **Receipt format / fields change** → update Step 0's schema here
   AND the writer in `audit-pr/SKILL.md` together; a mismatch silently
   breaks the strict gate. The step keys (`0_audit_linear` …
-  `4_update_docs`) are the contract.
+  `4_update_docs`, plus `5_visual_walk` — numbered past the legacy
+  keys although it runs as Step 2.5) are the contract.
 - **Merge policy changes** → this file hardcodes `--merge` because
   CONTRIBUTING.md and CLAUDE.md both document merge commits. Change
   all three together or not at all.

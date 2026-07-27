@@ -1,0 +1,138 @@
+// Spells. Loaded by `hex_assets::spells`.
+//
+// Spell ids are assigned from SORTED names, never file order. A spell's `requirements`
+// list is the gems it draws on; its LENGTH is the tier (at most 6, a full ring). The
+// `casting` axis is Evocation or Enchantment(defense: N); the `mana` axis is Fixed or
+// Variable; a spell that is both Variable and co_castable is a "ritual" (derived).
+//
+// `effects` is a CLOSED enum (audit §8) — no scripting. Element names must exist in
+// elements.ron and substance names in substances.ron (checked at load by ContentIndex).
+//
+// This roster is provisional: it exists to exercise every effect variant and both
+// axes end to end, not to be balanced. The design owner sets the real numbers.
+(
+    spells: {
+        // Tier-1 evocation: one Fire gem, disables one hex (docs/design/game.md).
+        "Ember": (
+            requirements: [(element: "Fire", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 3, shape: Single, needs_los: true),
+            effects: [DisableHexes(count: 1, targeted: false)],
+        ),
+
+        // Tier-6 evocation: a full ring of Fire gems, disables three and knocks back.
+        "Fireball": (
+            requirements: [
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+            ],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 4, shape: Blast, needs_los: true),
+            effects: [
+                DisableHexes(count: 3, targeted: false),
+                Displace(distance: 1),
+            ],
+        ),
+
+        // Ritual: variable mana AND co-castable — a flamethrower that scales with fuel
+        // and stays useful late in a fight (docs/design/game.md, "rituals").
+        "Flamethrower": (
+            requirements: [
+                (element: "Fire", mana: 1),
+                (element: "Fire", mana: 1),
+            ],
+            casting: Evocation,
+            mana: Variable,
+            co_castable: true,
+            targeting: (range: 2, shape: Line, needs_los: true),
+            effects: [Burn(amount: 2)],
+        ),
+
+        // Defensive enchantment: ties up Metal mana to subtract from incoming disables.
+        // Its whole point is the defense, so it carries no effect.
+        "Metal Shield": (
+            requirements: [
+                (element: "Metal", mana: 1),
+                (element: "Metal", mana: 1),
+            ],
+            casting: Enchantment(defense: 2),
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 0, shape: SelfCast, needs_los: false),
+            effects: [],
+        ),
+
+        // Enchantment that conjures a persistent wall (capacity tied up while it stands).
+        "Earthen Wall": (
+            requirements: [
+                (element: "Earth", mana: 1),
+                (element: "Earth", mana: 1),
+            ],
+            casting: Enchantment(defense: 0),
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 2, shape: Single, needs_los: true),
+            effects: [SpawnWall(substance: "stone")],
+        ),
+
+        // Terrain-shaping evocation: place and clear voxels by substance name.
+        "Stone Shaper": (
+            requirements: [(element: "Earth", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 2, shape: Single, needs_los: false),
+            effects: [
+                SetTerrain(substance: "stone"),
+                ClearTerrain,
+            ],
+        ),
+
+        // Divination: a Light spell that reveals part of a hidden lattice.
+        "Scrying Eye": (
+            requirements: [(element: "Light", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 6, shape: Single, needs_los: false),
+            effects: [Reveal(tier: 1)],
+        ),
+
+        // Light: lifts fog in an area.
+        "Daylight": (
+            requirements: [
+                (element: "Light", mana: 1),
+                (element: "Light", mana: 1),
+            ],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 3, shape: Blast, needs_los: false),
+            effects: [Illuminate(radius: 3)],
+        ),
+
+        // Restorative evocation: re-enables disabled hexes and blunts the next hit.
+        "Renewal": (
+            requirements: [
+                (element: "Water", mana: 1),
+                (element: "Water", mana: 1),
+            ],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 3, shape: Single, needs_los: true),
+            effects: [
+                RestoreHexes(count: 2),
+                ModifyIncomingDisables(amount: 1),
+            ],
+        ),
+    },
+)

@@ -12,6 +12,7 @@
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use hex_anim::Transformation;
 use hex_assets::{
@@ -122,7 +123,7 @@ impl StopMovingAt {
 /// A component rather than a `Player`-or-not check, so "is this hostile to me" is one
 /// comparison and does not have to enumerate every unit type that exists. Neutral
 /// parties and enemies that turn on each other both fit without a new mechanism.
-#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[reflect(Component)]
 pub enum Faction {
     /// The party the player controls.

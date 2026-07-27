@@ -1,0 +1,97 @@
+---
+name: visual-walk
+description: Run the scripted visual walk — build with the visual-walk feature, drive the game through its screens from walks/*.ron, capture PNGs, then READ every frame and judge it. Mechanical failures (stalled step, black frame, missing screen) are hard fails; layout and taste findings are warns for the human. Step 2.5 of /audit-pr, receipt key 5_visual_walk. Local-only — CI has no GPU.
+---
+
+When invoked, follow these steps. The point of this skill is the part no
+other gate does: **an agent actually looks at the game.**
+
+## What this skill can and cannot judge
+
+Two tiers, and the split is the contract:
+
+- **Mechanical tier (hard fail):** the walk stalls, a capture comes back
+  black, the wrong screen is visible, a panel is entirely missing, text
+  renders as nothing. These are `fail` — they block the merge exactly like a
+  failing test.
+- **Review tier (warn):** overlap, overflow, misalignment, cramped or dead
+  space, illegible contrast, inconsistent sizing — anything a reader of the
+  PNG can point at. These are findings the human decides on; they never flip
+  the receipt off green by themselves.
+- **Not covered:** motion (movement speed, animation feel), sub-pixel seams,
+  and final taste. The human walk owns those — this skill narrows the
+  human's job, it does not replace it.
+
+## Step 0 — Applicability
+
+Diffs with no runtime surface (docs, CI, pure data with no renderer path)
+skip the walk: report `skipped — no runtime surface` and stop. The trigger
+rule is the same one audit-diff uses for its visual flag: rendering, UI,
+transforms, movement, screen/state transitions → walk.
+
+## Step 1 — Build and run the walks
+
+```bash
+cargo build -p hex_game --features visual-walk --profile ci
+OUT=.context/visual-walks/pr-<N>   # or /tmp for uncommitted work
+HEX_WALK_SCRIPT=walks/menus.ron    HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
+HEX_WALK_SCRIPT=walks/gameplay.ron HEX_WALK_OUT=$OUT cargo run -p hex_game --features visual-walk
+```
+
+Run the scripts relevant to the diff (menus.ron for UI/screen changes,
+gameplay.ron for world/lighting/camera changes; both when unsure). Each run
+must exit 0 — a nonzero exit is a mechanical `fail`; the process's own log
+names the stalled step or black frame. NEVER run while the operator has a
+game instance open (the two windows fight for nothing, but the operator's
+session must not be disturbed — check first).
+
+A walk drives the REAL binary through the REAL wiring: clicks are injected
+`Interaction::Pressed` on named buttons, keys go through `ButtonInput`, and
+scenario launches use the same bypass as map-review. If a script's click
+target was renamed, fix the script in the same PR — scripts are part of the
+UI's contract now.
+
+## Step 2 — Read every frame
+
+Open each PNG with the Read tool, in script order, and judge it against the
+step's intent (the script comments say what each frame should show). For
+each frame record: `ok`, or a finding
+`{step, png_path, check: mechanical|review, message}`.
+
+Checklist per frame — the known silent failure modes first (blue window,
+black sky from the down-looking camera, missing HUD, pause overlay absent),
+then the review tier (alignment, overflow, contrast, spacing, hierarchy).
+Say what is GOOD too when it is — the operator uses this to calibrate trust.
+
+## Step 3 — Report and receipt entry
+
+Print a table: frame × verdict × finding. Then the receipt entry for
+`/audit-pr` (this skill is its Step 2.5, key `5_visual_walk`):
+
+- All frames ok → `"status": "pass"`, summary like
+  `"11 frames across 2 walks, 0 mechanical, 0 review findings"`.
+- Review findings only → `"status": "warn"` + the findings array. Green
+  overall; the human sees the list in the PR body / merge report.
+- Any mechanical failure → `"status": "fail"` + findings. This blocks
+  `/merge-pr` like any failing step.
+
+Findings shape: `{step, png_path, check, message}`.
+
+## When NOT to invoke
+
+- **In GitHub CI** — runners have no GPU; this is a local gate on the dev
+  machine, like the rest of the audit chain's heavy steps.
+- **Doc-only / no-runtime diffs** — that's Step 0's `skipped`.
+- **As a substitute for the human walk.** The PR template keeps two boxes:
+  the automated walk (this skill, auto-tickable from the receipt) and the
+  human's "I ran the game and looked at it" — `/promote` still gates on the
+  human one, always.
+
+## Self-updating
+
+- New screen or interaction worth photographing → extend `walks/*.ron` (and
+  add a step comment saying what the frame should show).
+- New mechanical check (e.g. a frame-diff for frozen detection) → add to the
+  harness (`crates/hex_game/src/walk.rs`) first, then note it here.
+- If the walk scripts' click names drift from the UI, the walk fails loudly —
+  fix the script with the UI change, never delete the step.

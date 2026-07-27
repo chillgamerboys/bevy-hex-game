@@ -7,6 +7,21 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 7 — feat(world): add celestial lighting and time-of-day scrubber (2026-07-27)
+
+- **PR**: #64 — `feat/celestial-lighting`
+- **Outcome**: green — 0 ship-blockers, 4 non-blockers, all left with the crate owner
+- **Lenses triggered**: 3, 8, plus the fresh-eyes pass; all seven Bevy-0.19 trap checks explicitly cleared
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 3 | `crates/hex_world/src/sky.rs`:31 | NON-BLOCKER | deferred to owner — `ResolvedLighting` derives `Reflect` + `#[reflect(Resource)]` but no plugin registers it; invisible in the inspector, against the register-what-you-introduce convention |
+| 8 | `crates/hex_assets/src/scenario.rs`:38 | NON-BLOCKER | deferred — `Scenario` lacks `deny_unknown_fields` just as it gains its first gameplay-visible optional field; a misspelled `starting_time_hours` silently launches at the cycle's noon default |
+| 8 | `assets/shaders/sky.wgsl` | NON-BLOCKER | residual — +102 lines of surface on the documented silent-black-sky naga trap; current code verified safe (`fwidth` only under uniform control flow) |
+| fresh-eyes | `crates/hex_assets/src/settings.rs`:589 | NON-BLOCKER | deferred — `validate_dark_handoffs` guards the flip keyframe, not the mid-segment elevation zero-crossing where the 180° key flip actually occurs; the shipped RON authors near-zero handoff elevations |
+
+**Notes**: verified on a local merge-with-dev tree (435 tests green, fmt/clippy/deny/doc/links/ship clean). Claim-level checks all held: hot-reload keep-last-valid is real (a failed parse emits no `Modified` event, so the resource is never replaced); exactly one shadow-casting celestial light across scrubbing and gameplay re-entry, pinned by test; the static profile's `exposure_ev100: 9.7` equals Bevy 0.19's `Exposure::default()`, which is what grounds the pixel-identical claim for legacy looks; `TimeOfDay` is genuinely session-static with change-tick-gated resolution (zero per-frame lighting work on a frozen clock); the new `HEX_REVIEW_TIME`/`HEX_REVIEW_CAMERA` overrides stay fully behind `map-review`. Cross-boundary edits: `hex_core/src/view.rs` adds the single shared `CameraFocusTarget` marker (registered by `hex_units::selection` per the convention), and the `hex_units` selection bridge was explicitly ACKed by its crate owner in review. Walk items this merge adds: the actual sky across scrubbed hours, and the close camera's widened 4.5° uphill pitch.
+
 ## Wave 6 — feat(map): add procedural V2 Hills parity (2026-07-27)
 
 - **PR**: #58 — `feat/procedural-v2-hills`
@@ -29,6 +44,57 @@ success; the `scenarios.rs` relaxation is future-proofing for `run_recipe`
 consumers). Silent-failures pass: 0 real candidates. Numbering: Waves 3–5 were
 recorded on `wave/1-foundations` and land with the wave merge; this entry takes 6
 so the merged log stays monotonic.
+## Wave 5 — feat(hex_lattice): add the pure lattice rules engine (HEX-8) (2026-07-27)
+
+- **PR**: #60 — `feat/hex-8-lattice-engine`
+- **Outcome**: green
+- **Lenses triggered**: 4 (conservation/invariant), 7 (test-altitude), 5 (API/rebase), 1 & 3 (latent, deferred); fresh-eyes pass (plan-time vs mutation-site invariant)
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_lattice/src/cast.rs` (`satisfy` filter; `state.rs` `locks`/`lock`) | SHIP-BLOCKER | fixed in `8da1907` — a gem with residual mana could fund a second enchantment, and `apply_cast`'s `lock` overwrote the first's entry in the one-per-gem `locks` map, orphaning it (disable→break invariant violated, an unbreakable shield). Fixed by excluding locked gems from `satisfy`'s casting candidates |
+| fresh-eyes | `crates/hex_lattice/src/cast.rs` (`apply_cast`) | MEDIUM | fixed in `27b2bb2` — the plan-time filter left the apply-time write reachable via a stale/concurrent plan (two plans on one state, then both applied), re-opening the orphan. `apply_cast` now returns `bool` and rejects a stale plan (a funding gem drained/locked/disabled) atomically; regression test computes two plans before applying |
+| 7 | `crates/hex_lattice/tests/engine.rs` | NON-BLOCKER | fixed in `8da1907`/`27b2bb2` — added the shared-gem regression, the stale-plan regression, a two-gem enchantment clearing both locks on break, and channel budget distribution in coordinate order (all previously untested) |
+| 5 | `crates/hex_core/src/elements.rs` | NON-BLOCKER | fixed in `8da1907` — bridge doc claimed re-pointing at HEX-7's `ElementId` is a no-op and that ids are "never written to files"; corrected — a `LatticeSpec` serializes the resolved ids, and HEX-7's `ElementId` must derive serde (unlike `SubstanceId`) for the rebase to compile |
+| — (sweep) | `crates/hex_lattice/tests/engine.rs` (tier-6 random sweep) | NON-BLOCKER | fixed in `8da1907` — the sweep could pass vacuously; added a guard asserting it exercised ≥1 adjacent pair |
+| 1 | `crates/hex_lattice/src/cast.rs` (`apply_cast` locked-mana fold) | NON-BLOCKER | deferred — `u16` `locked_mana` `saturating_add` could under-record a cast draining >65535 mana; out of the practical domain (mana is small by construction) |
+| 3 | `crates/hex_core/src/lattice_ids.rs` (`neighbors`/`distance`) | NON-BLOCKER | deferred — overflow at extreme `i32` coords; out of the documented small/character-local domain, matches `HexCoord`'s own lack of a bound |
+
+| wave deep-review | `crates/hex_lattice/src/channel.rs`:23 | SHIP-BLOCKER | fixed in wave follow-up — `channel()` refilled **locked** gems, refunding enchantment-locked mana and collapsing the throughput/capacity distinction; locked gems now skip channelling, with a regression test verified to fail against the bug |
+| wave deep-review | `crates/hex_lattice/tests/engine.rs` | NON-BLOCKER | fixed in wave follow-up — `LatticeState` serde round-trip was claimed but untested; drained/disabled staleness modes untested; atomic rejection not pinned by full-state equality; `LatticeCoord`/`CellKind` wire formats unpinned (the Wave-3 HexCoord class). Four tests added |
+| wave deep-review | `crates/hex_lattice/src/tables.rs`:20 | NON-BLOCKER | documented — `Requirement.mana` is drained when a gem satisfies it but a fusion substitutes its recipe; the design supports it (recipe complexity, not volume) and the cost question is deferred to HEX-12 |
+
+**Notes**: two deferrals are latent, out-of-practical-domain integer edges (mana and lattice coordinates are small by construction). Lenses 2 (deps — serde/ron/rand match the workspace, hexx correctly absent, `--all-features` unifies cleanly), 6 & 8 (N/A — no ECS systems, no RON/features in this crate), and docs lenses D1–D4 on the four changed docs all verified clean. Determinism (BTree/sorted, no float/RNG/HashMap), backtracking undo, `break_enchant` clearing all locks, and `satisfy` termination were confirmed correct. The fresh-eyes pass caught what the eight lenses missed: the SHIP-BLOCKER fix sat at plan time while the invariant-violating write is at apply time. Both rebase-time bridges were resolved in the wave-integration merge: the placeholder `hex_core/src/elements.rs` was dropped for HEX-7's (which owns `ElementId` **and** `SpellId` — `SpellId` left `lattice_ids` for `elements` as a content id), and `serde` switched to the workspace dependency HEX-6 hoisted. No `hex_lattice` source changes were needed, verified by grep: every import resolves through the root re-exports. (Entry renumbered from Wave 3: two parallel sessions each claimed the next number; sequenced at integration.)
+
+## Wave 4 — feat: elements and spells as content (2026-07-27)
+
+- **PR**: #63 (successor of the auto-closed #62) — `feat/hex-7-elements-and-spells`
+- **Outcome**: green
+- **Lenses triggered**: 1, 3, 8, doc build, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| doc build | `crates/hex_assets/{elements,spells}.rs` | SHIP-BLOCKER | fixed in `b22db57` — public docs intra-doc-linked the private `Unvalidated*` mirrors; the workspace doc gate runs `-D warnings` |
+| 3 | `crates/hex_assets/src/elements.rs`:128 | NON-BLOCKER | fixed in follow-up — fusion recipes had no upper input bound while spells cap at six; same six-neighbour ring, now enforced with a rejection test |
+| 8 | `crates/hex_assets/src/spells.rs`:255 | NON-BLOCKER | fixed in follow-up — `SelfCast` with a nonzero range parsed cleanly and meant nothing; rejected at parse with a rejection test |
+| 1 (fresh-eyes) | `crates/hex_assets/src/content_index.rs`:9 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — the kept last-valid index can desync from independently rebuilt tables' reassigned ids; needs coupling when a real consumer exists |
+| 1 | `crates/hex_assets/src/content_index.rs`:154 | NON-BLOCKER | deferred to HEX-12 (recorded on the ticket) — initial-load dangling cross-references log-and-continue instead of stalling the gate; the gate must wait on the index once something consumes it |
+
+**Notes**: reviewed on the wave-integration model — diffs against `wave/1-foundations`, gate run on the merged state (411 tests green, clippy/deny/ship clean). Schema fidelity to the frozen audit §8 verified: no code matches on an element name, opposition is index arithmetic, ids from byte-order sorted names, both new tables and the index keep the rebuild-deferred-during-Gameplay guard. The deliberate divergence from the audit sketch — flat defense on the `Enchantment` casting axis rather than an effect — is an improvement and is recorded here as accepted.
+
+## Wave 3 — feat(core): serde derives across the domain vocabulary (2026-07-26)
+
+- **PR**: #59 — `feat/hex-6-serde-vocabulary`
+- **Outcome**: green
+- **Lenses triggered**: 2 (Cargo hoist consolidation), plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2 | `crates/hex_assets/Cargo.toml`:12 | NON-BLOCKER | deferred — serde/serde_json stay per-crate pins in hex_assets and hex_map, so the workspace hoist is not yet the sole source; hex_map is the colleague's off-limits crate and hex_assets is HEX-7's parallel territory, and all pins match (serde `1.0.229`, serde_json `1`) so there is no active drift |
+| fresh-eyes | `crates/hex_core/src/terrain.rs`:21 | NON-BLOCKER | fixed in `5dcc9d4` — the `MapAnchorId` doc justified its newtype pattern by "keeping serialization dependencies out of this bottom-level domain crate"; hoisting serde into hex_core falsified that, so the rationale was rewritten to the reason that still holds (single construction path, not pinned to an on-disk format) |
+| fresh-eyes (wave review) | `crates/hex_core/src/hex.rs`:95 | NON-BLOCKER | fixed in follow-up — `HexCoord`'s wire keys were its private field identifiers, so an internal rename would compile clean, pass the symmetric round-trip test, and silently change save files; the wire names are now deliberate axial `q`/`r` via serde renames, pinned by a concrete-string snapshot test |
+
+**Notes**: no ship-blockers. Pure additive data-layer change — serde on `TilePos`, `HexCoord` (axial-only storage keeps the cube invariant by construction), `SubstanceId`, `TerrainEdit`, `TraversalProfile`, `Turn`, `Faction`, `Body`; `HexSpan` deliberately excluded (floats stay out of saves) and the marker / map-measured types (`Headroom`, `HexGrid`, `HexTile`, `TraversalEndpoint`) left for the save work. `Turn` also gained `PartialEq`/`Eq` for the round-trip assertion (rustfmt then wrapped its derive). fmt, clippy (`-D warnings`), workspace tests, and the ship build all green; no rendering / movement / state surface, so no visual walk applies.
 
 ## Wave 2 — docs(planning): sequence the roadmap into waves around the V2 work (2026-07-26)
 

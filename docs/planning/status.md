@@ -22,9 +22,24 @@ preview draws the reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range.
 
-There are still **no abilities and no lattices**. Bodies are one hex wide; there is
-no footprint for anything larger, and units do not obstruct each other — so a route
-may be drawn straight through another piece.
+The element wheel and spells now load as **validated content**: `elements.ron` (the
+six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
+`spells.ron` (requirements as an element multiset with tier ≤ 6, casting and mana axes,
+targeting, and a closed effect enum). A `ContentIndex` resolves every element and
+substance name a spell references; a dangling reference is logged and the last valid
+content kept, and a test opens everything shipped so a broken reference cannot ship.
+`ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
+`SubstanceId`. A dev-feature stub logs the resolved spell list to prove the pipeline
+end to end.
+
+The **lattice engine also exists** as a pure crate (`hex_lattice`): casting
+(`castable` → a `CastPlan` or a blocked reason), applying casts, disables that break
+enchantments and burn their locked mana, channelling, and a property suite carrying
+the design's geometric theorems — all headless. Content and engine are **not yet
+joined**: the `FusionTable`/`SpellTable` wiring and everything that spawns units with
+lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). Bodies
+are one hex wide; there is no footprint for anything larger, and units do not obstruct
+each other — so a route may be drawn straight through another piece.
 
 ## What is provisional
 
@@ -36,7 +51,7 @@ place** — they are meant to be replaced.
 |---|---|---|
 | **Initiative** | a number on a component, high to low, ties by entity index | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
-| **Damage** | none at all | Lattices. Damage disables lattice hexes, and there are no lattices |
+| **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
 | **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
 | **Engage range** | 4 hexes, 6 to disengage | Nothing in particular. It is a feel question and wants playing with |
 | **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
