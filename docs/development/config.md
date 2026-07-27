@@ -208,7 +208,10 @@ recipe: LayeredSkyIslands((
 
 The upper layer covers 15–25% of map columns, remains an exact special-movement
 region, and cannot replace the finalized ground, its anchors, or its protected
-crossing approaches. It supports `TemperateGrassland` and `Frozen`.
+crossing approaches. The shipped `min_clearance: 8` construction remains unchanged.
+Larger values raise the full island mass, vary its walkable terraces, and taper its
+stone underside without consuming the configured empty gap. It supports
+`TemperateGrassland` and `Frozen`.
 
 `Mountains` builds a sharp frozen ridge with explicit ordinary-walker routes instead
 of projecting the whole map into gentle slopes:
@@ -227,7 +230,11 @@ terrain: Procedural((
 
 It publishes a two-wide elevated saddle and a separated low-valley bypass, with no
 river or crossing structures. Inaccessible summit components are exact
-special-movement regions; naturally walkable peaks remain ordinary terrain.
+special-movement regions; naturally walkable peaks remain ordinary terrain. Valid
+settings use relief `14..=24` and three through seven peaks. The shipped low-relief
+path remains unchanged; higher settings expand the ridge into a branched massif
+covering slightly more than half the map and distribute the peaks across multiple
+heights.
 
 `Caves` carves one ordinary-walkable underground network beneath a modest rocky
 surface:
@@ -244,13 +251,16 @@ terrain: Procedural((
 )),
 ```
 
-It publishes a two-wide descending entrance, a rooted network of six to eight
-chambers, three clear levels in critical corridors, four in chambers, and at least
-three solid roof levels. Exact floor, entrance, and cutaway-roof memberships remain
-keyed by `TilePos`, so the underground floor cannot be confused with the surface
-above it. Recipe and environment combinations are validated together: Mountains
-requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave the
-previous valid hot-reloaded settings active.
+It publishes a two-wide descending entrance, a rooted network of six to twelve
+chambers, at least three clear levels in critical corridors, at least four in
+chambers, and at least three solid roof levels. Six-through-eight-room settings keep
+the shipped geometry unchanged. Larger networks add walkable floor variation,
+selected loop corridors, varied chamber heights, and a more developed rocky surface.
+Exact floor, entrance, and cutaway-roof memberships remain keyed by `TilePos`, so the
+underground floor cannot be confused with the surface above it. Recipe and
+environment combinations are validated together: Mountains requires `Frozen`, Caves
+requires `Rocky`, and invalid combinations leave the previous valid hot-reloaded
+settings active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

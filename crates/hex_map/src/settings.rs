@@ -1366,17 +1366,15 @@ mod tests {
                 terrain: TerrainSettings::Procedural(ProceduralSettings::V2(
                     ProceduralV2Settings {
                         environment: V2EnvironmentSettings::TemperateGrassland,
-                        recipe: V2RecipeSettings::LayeredSkyIslands(
-                            LayeredSkyIslandsSettings {
-                                ground: V2HillsSettings {
-                                    valley_level: 15,
-                                    max_relief: 8,
-                                    hills_per_bank: 3,
-                                },
-                                min_clearance,
-                                upper_coverage_percent,
+                        recipe: V2RecipeSettings::LayeredSkyIslands(LayeredSkyIslandsSettings {
+                            ground: V2HillsSettings {
+                                valley_level: 15,
+                                max_relief: 8,
+                                hills_per_bank: 3,
                             },
-                        ),
+                            min_clearance,
+                            upper_coverage_percent,
+                        }),
                     },
                 )),
             };
