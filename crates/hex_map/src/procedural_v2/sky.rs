@@ -4,7 +4,8 @@
 //! candidate clones that immutable semantic ground, appends an independent upper
 //! network, and passes the complete volume through the common V2 validator.
 
-use std::collections::BTreeSet;
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, VecDeque};
 
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, SubstanceId, TilePos};
 
@@ -46,12 +47,13 @@ impl ReportMetrics for SkyMetrics {
 #[derive(Debug, Clone)]
 pub(crate) struct SkyMetadata {
     upper_region: SpecialMovementRegion,
-    upper_surface: Level,
+    bridge_level: Level,
     primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
     satellite_centres: Vec<HexCoord>,
     island_cells: BTreeSet<HexCoord>,
-    bridge_lanes: Vec<[BTreeSet<HexCoord>; 2]>,
+    bridge_rows: Vec<Vec<[HexCoord; 2]>>,
     upper_cells: BTreeSet<HexCoord>,
+    upper_surfaces: BTreeMap<HexCoord, Level>,
     ground_repair_actions: Vec<String>,
 }
 
@@ -100,7 +102,7 @@ pub(crate) fn build(
     let mut selection = run_recipe(&recipe, sky_settings, grid_radius, seed)?;
     selection.prepend_diagnostics(
         format!(
-            "ground selected candidate {:?}; fallback={}",
+            "candidate ground: selected {:?}; fallback={}",
             ground.selected_candidate, ground.used_fallback
         ),
         ground.used_fallback,
@@ -190,10 +192,13 @@ fn layered_plan(
     fallback: bool,
 ) -> Result<RecipePlan<SkyMetadata>, CandidateAttemptError> {
     let mut volume = recipe.ground.plan.volume.clone();
+    let topology = &recipe.ground.plan.metadata.topology;
+    let route_exclusions = overhead_route_exclusions(topology);
     let layout = choose_layout(
         context,
         settings,
-        &recipe.ground.plan.metadata.topology.protected_approaches,
+        &topology.protected_approaches,
+        &route_exclusions,
         fallback,
     )?;
     let highest_ground = volume
@@ -206,27 +211,27 @@ fn layered_plan(
         .checked_add(1)
         .and_then(|level| level.checked_add(settings.min_clearance))
         .ok_or_else(|| CandidateAttemptError::rejected("upper clearance level overflowed"))?;
-    let upper_surface = lowest_upper
-        .checked_add(3)
+    let bridge_level = lowest_upper
+        .checked_add(1)
         .ok_or_else(|| CandidateAttemptError::rejected("upper island level overflowed"))?;
     let upper_region = next_special_region(&volume);
+    let island_depths = island_depths(&layout.island_cells);
+    let mut upper_surfaces = BTreeMap::new();
 
     for coord in &layout.upper_cells {
         let is_bridge = layout.bridge_cells.contains(coord) && !layout.island_cells.contains(coord);
+        let relief = island_depths.get(coord).copied().unwrap_or(0).min(2);
+        let upper_surface = bridge_level.saturating_add_unsigned(relief);
         let column = volume.columns.get_mut(coord).ok_or_else(|| {
             CandidateAttemptError::rejected(format!(
                 "upper layout escaped the map footprint at {coord:?}"
             ))
         })?;
-        let distance = layout
-            .all_centres()
-            .map(|centre| centre.distance(*coord))
-            .min()
-            .unwrap_or(u32::MAX);
         append_upper_mass(
             &mut column.elements,
+            bridge_level,
             upper_surface,
-            distance,
+            relief,
             is_bridge,
             recipe.environment,
             context
@@ -241,24 +246,31 @@ fn layered_plan(
                 interior: None,
             },
         );
+        upper_surfaces.insert(*coord, upper_surface);
     }
+    let highest_upper = upper_surfaces
+        .values()
+        .copied()
+        .max()
+        .unwrap_or(bridge_level);
     volume.view_hint = sky_view_hint(
         context.grid_radius,
         recipe.level_height,
         highest_ground,
-        upper_surface,
+        highest_upper,
     )?;
 
     Ok(RecipePlan {
         volume,
         metadata: SkyMetadata {
             upper_region,
-            upper_surface,
+            bridge_level,
             primary_centres: layout.primary_centres,
             satellite_centres: layout.satellite_centres,
             island_cells: layout.island_cells,
-            bridge_lanes: layout.bridge_lanes,
+            bridge_rows: layout.bridge_rows,
             upper_cells: layout.upper_cells,
+            upper_surfaces,
             ground_repair_actions: recipe.ground.plan.metadata.repair_actions.clone(),
         },
     })
@@ -269,23 +281,31 @@ struct SkyLayout {
     satellite_centres: Vec<HexCoord>,
     island_cells: BTreeSet<HexCoord>,
     bridge_cells: BTreeSet<HexCoord>,
-    bridge_lanes: Vec<[BTreeSet<HexCoord>; 2]>,
+    bridge_rows: Vec<Vec<[HexCoord; 2]>>,
     upper_cells: BTreeSet<HexCoord>,
 }
 
-impl SkyLayout {
-    fn all_centres(&self) -> impl Iterator<Item = HexCoord> + '_ {
-        self.primary_centres
+fn overhead_route_exclusions(topology: &crate::procedural::V1HillsTopology) -> BTreeSet<HexCoord> {
+    let mut exclusions: BTreeSet<_> = topology
+        .protected_approaches
+        .difference(&topology.barrier)
+        .copied()
+        .collect();
+    exclusions.extend(
+        topology
+            .bridge
             .iter()
-            .copied()
-            .chain(self.satellite_centres.iter().copied())
-    }
+            .chain(&topology.alternate_crossing)
+            .map(|position| position.coord),
+    );
+    exclusions
 }
 
 fn choose_layout(
     context: CandidateContext,
     settings: &LayeredSkyIslandsSettings,
     protected_approaches: &BTreeSet<HexCoord>,
+    route_exclusions: &BTreeSet<HexCoord>,
     fallback: bool,
 ) -> Result<SkyLayout, CandidateAttemptError> {
     let radius = i32::try_from(context.grid_radius)
@@ -297,11 +317,35 @@ fn choose_layout(
             .unwrap_or_default()
     };
     let extent = (radius / 2).max(5);
-    let primary_centres = [
-        rotate_third(HexCoord::from_axial(-extent, extent / 3), orientation),
-        rotate_third(HexCoord::from_axial(0, -extent / 2), orientation),
-        rotate_third(HexCoord::from_axial(extent, -extent / 3), orientation),
+    let proposed_primary = [
+        rotate_third(HexCoord::from_axial(-extent, 0), orientation),
+        rotate_third(HexCoord::from_axial(extent, -extent), orientation),
+        rotate_third(HexCoord::from_axial(0, extent), orientation),
     ];
+    let [first_proposed, middle_proposed, last_proposed] = proposed_primary;
+    let mut chosen = Vec::new();
+    let first_primary = nearest_clear_centre(
+        context.grid_radius,
+        first_proposed,
+        protected_approaches,
+        &chosen,
+    )?;
+    chosen.push(first_primary);
+    let middle_primary = nearest_clear_centre(
+        context.grid_radius,
+        middle_proposed,
+        protected_approaches,
+        &chosen,
+    )?;
+    chosen.push(middle_primary);
+    let last_primary = nearest_clear_centre(
+        context.grid_radius,
+        last_proposed,
+        protected_approaches,
+        &chosen,
+    )?;
+    chosen.push(last_primary);
+    let primary_centres = [first_primary, middle_primary, last_primary];
     let satellite_count = if fallback
         || context
             .streams
@@ -314,13 +358,22 @@ fn choose_layout(
         1
     };
     let satellite_candidates = [
-        rotate_third(HexCoord::from_axial(0, extent), orientation),
-        rotate_third(HexCoord::from_axial(-extent / 2, extent), orientation),
+        rotate_third(HexCoord::from_axial(0, -extent), orientation),
+        rotate_third(HexCoord::from_axial(extent, 0), orientation),
     ];
-    let satellite_centres: Vec<_> = satellite_candidates
-        .into_iter()
-        .take(satellite_count)
-        .collect();
+    let mut satellite_centres = Vec::new();
+    for proposed in satellite_candidates.into_iter().take(satellite_count) {
+        let centre =
+            nearest_clear_centre(context.grid_radius, proposed, protected_approaches, &chosen)?;
+        chosen.push(centre);
+        satellite_centres.push(centre);
+    }
+    let bridge_rows = bridge_tree(
+        context.grid_radius,
+        primary_centres,
+        &satellite_centres,
+        route_exclusions,
+    )?;
 
     let target_columns = footprint_size(context.grid_radius)
         .saturating_mul(u32::from(settings.upper_coverage_percent))
@@ -330,27 +383,67 @@ fn choose_layout(
     let mut layouts = Vec::new();
     for primary_radius in 1..=max_island_radius {
         let satellite_radius = primary_radius.saturating_div(2).max(1);
-        let layout = build_layout(
+        let layout = match build_layout(
             context.grid_radius,
             primary_centres,
             &satellite_centres,
             primary_radius,
             satellite_radius,
             protected_approaches,
-        )?;
+            &bridge_rows,
+        ) {
+            Ok(layout) => layout,
+            Err(CandidateAttemptError::Rejected(_issues)) => continue,
+            Err(CandidateAttemptError::Fatal(error)) => {
+                return Err(CandidateAttemptError::Fatal(error));
+            }
+        };
         layouts.push(layout);
     }
     layouts
         .into_iter()
         .min_by_key(|layout| {
             (
-                u32::try_from(layout.island_cells.len())
+                u32::try_from(layout.upper_cells.len())
                     .unwrap_or(u32::MAX)
                     .abs_diff(target_columns),
-                layout.island_cells.len(),
+                layout.upper_cells.len(),
             )
         })
         .ok_or_else(|| CandidateAttemptError::rejected("no upper layout could be constructed"))
+}
+
+fn nearest_clear_centre(
+    grid_radius: u32,
+    proposed: HexCoord,
+    blocked: &BTreeSet<HexCoord>,
+    chosen: &[HexCoord],
+) -> Result<HexCoord, CandidateAttemptError> {
+    let minimum_separation = grid_radius.saturating_div(2).max(5);
+    let target_clearance = grid_radius.saturating_div(5).max(2);
+    for clearance in (1..=target_clearance).rev() {
+        let maximum_distance = grid_radius.saturating_sub(clearance);
+        let forbidden: BTreeSet<_> = blocked
+            .iter()
+            .flat_map(|coord| coord.within_radius(clearance))
+            .collect();
+        let centre = HexCoord::ORIGIN
+            .within_radius(maximum_distance)
+            .into_iter()
+            .filter(|candidate| {
+                !forbidden.contains(candidate)
+                    && chosen
+                        .iter()
+                        .all(|other| other.distance(*candidate) >= minimum_separation)
+            })
+            .min_by_key(|candidate| (proposed.distance(*candidate), *candidate));
+        if let Some(centre) = centre {
+            return Ok(centre);
+        }
+    }
+    Err(CandidateAttemptError::rejected(
+        "protected ground approaches leave no separated sky island centre",
+    ))
 }
 
 fn build_layout(
@@ -360,31 +453,58 @@ fn build_layout(
     primary_radius: u32,
     satellite_radius: u32,
     protected_approaches: &BTreeSet<HexCoord>,
+    bridge_rows: &[Vec<[HexCoord; 2]>],
 ) -> Result<SkyLayout, CandidateAttemptError> {
     let mut island_cells = BTreeSet::new();
     for centre in primary_centres {
-        island_cells.extend(
-            centre
-                .within_radius(primary_radius)
-                .into_iter()
-                .filter(|coord| {
-                    HexCoord::ORIGIN.distance(*coord) <= grid_radius
-                        && !protected_approaches.contains(coord)
-                }),
-        );
+        let footprint: BTreeSet<_> = centre
+            .within_radius(primary_radius)
+            .into_iter()
+            .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
+            .collect();
+        if !footprint.is_disjoint(protected_approaches) {
+            return Err(CandidateAttemptError::rejected(
+                "primary island footprint overlaps a protected ground approach",
+            ));
+        }
+        island_cells.extend(footprint);
     }
     for centre in satellite_centres {
-        island_cells.extend(
-            centre
-                .within_radius(satellite_radius)
-                .into_iter()
-                .filter(|coord| {
-                    HexCoord::ORIGIN.distance(*coord) <= grid_radius
-                        && !protected_approaches.contains(coord)
-                }),
-        );
+        let footprint: BTreeSet<_> = centre
+            .within_radius(satellite_radius)
+            .into_iter()
+            .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
+            .collect();
+        if !footprint.is_disjoint(protected_approaches) {
+            return Err(CandidateAttemptError::rejected(
+                "satellite footprint overlaps a protected ground approach",
+            ));
+        }
+        island_cells.extend(footprint);
     }
 
+    let bridge_cells = bridge_rows
+        .iter()
+        .flatten()
+        .flat_map(|row| row.iter().copied())
+        .collect();
+    let upper_cells = island_cells.union(&bridge_cells).copied().collect();
+    Ok(SkyLayout {
+        primary_centres,
+        satellite_centres: satellite_centres.to_vec(),
+        island_cells,
+        bridge_cells,
+        bridge_rows: bridge_rows.to_vec(),
+        upper_cells,
+    })
+}
+
+fn bridge_tree(
+    grid_radius: u32,
+    primary_centres: [HexCoord; PRIMARY_ISLAND_COUNT],
+    satellite_centres: &[HexCoord],
+    route_exclusions: &BTreeSet<HexCoord>,
+) -> Result<Vec<Vec<[HexCoord; 2]>>, CandidateAttemptError> {
     let [first_primary, middle_primary, last_primary] = primary_centres;
     let mut connections = vec![
         (first_primary, middle_primary),
@@ -396,66 +516,256 @@ fn build_layout(
     if let Some(second) = satellite_centres.get(1).copied() {
         connections.push((second, first_primary));
     }
-
-    let mut bridge_cells = BTreeSet::new();
-    let mut bridge_lanes = Vec::new();
-    for (start, end) in connections {
-        let lanes = bridge_between(grid_radius, start, end)?;
-        let [first_lane, second_lane] = &lanes;
-        bridge_cells.extend(first_lane.iter().copied());
-        bridge_cells.extend(second_lane.iter().copied());
-        bridge_lanes.push(lanes);
-    }
-    let upper_cells = island_cells.union(&bridge_cells).copied().collect();
-    Ok(SkyLayout {
-        primary_centres,
-        satellite_centres: satellite_centres.to_vec(),
-        island_cells,
-        bridge_cells,
-        bridge_lanes,
-        upper_cells,
-    })
+    connections
+        .into_iter()
+        .map(|(start, end)| bridge_between(grid_radius, start, end, route_exclusions))
+        .collect()
 }
 
 fn bridge_between(
     grid_radius: u32,
     start: HexCoord,
     end: HexCoord,
-) -> Result<[BTreeSet<HexCoord>; 2], CandidateAttemptError> {
-    let line = start.line_between(end);
-    let line_cells: BTreeSet<_> = line.iter().copied().collect();
-    let midpoint = line
-        .get(line.len().saturating_div(2))
-        .copied()
-        .ok_or_else(|| CandidateAttemptError::rejected("sky bridge has no centreline"))?;
-    let lane_index = midpoint
-        .neighbors()
-        .into_iter()
-        .enumerate()
-        .find_map(|(index, neighbor)| (!line_cells.contains(&neighbor)).then_some(index))
-        .ok_or_else(|| CandidateAttemptError::rejected("sky bridge has no parallel lane"))?;
-    let first: BTreeSet<_> = line
-        .iter()
-        .copied()
-        .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
-        .collect();
-    let second: BTreeSet<_> = line
-        .iter()
-        .filter_map(|coord| coord.neighbors().get(lane_index).copied())
-        .filter(|coord| HexCoord::ORIGIN.distance(*coord) <= grid_radius)
-        .collect();
-    if first.len() != line.len() || second.len() != line.len() {
+    protected_approaches: &BTreeSet<HexCoord>,
+) -> Result<Vec<[HexCoord; 2]>, CandidateAttemptError> {
+    paired_route(grid_radius, start, end, protected_approaches)
+}
+
+fn paired_route(
+    grid_radius: u32,
+    start: HexCoord,
+    end: HexCoord,
+    blocked: &BTreeSet<HexCoord>,
+) -> Result<Vec<[HexCoord; 2]>, CandidateAttemptError> {
+    if blocked.contains(&start) || blocked.contains(&end) {
         return Err(CandidateAttemptError::rejected(
-            "two-wide sky bridge escaped the map footprint",
+            "sky island centre overlaps a protected ground approach",
         ));
     }
-    Ok([first, second])
+
+    let direct = start.line_between(end);
+    if let Some(rows) = paired_rows_for_centerline(&direct, grid_radius, blocked) {
+        return Ok(rows);
+    }
+    if let Some(centerline) = shortest_centerline(grid_radius, start, end, blocked) {
+        if let Some(rows) = paired_rows_for_centerline(&centerline, grid_radius, blocked) {
+            return Ok(rows);
+        }
+    }
+
+    search_paired_route(grid_radius, start, end, blocked)
+}
+
+fn paired_rows_for_centerline(
+    centerline: &[HexCoord],
+    grid_radius: u32,
+    blocked: &BTreeSet<HexCoord>,
+) -> Option<Vec<[HexCoord; 2]>> {
+    if centerline.is_empty()
+        || centerline
+            .iter()
+            .any(|coord| !route_cell_is_open(*coord, grid_radius, blocked))
+    {
+        return None;
+    }
+
+    let mut layers = Vec::<BTreeMap<HexCoord, Option<HexCoord>>>::new();
+    for centre in centerline {
+        let previous = layers.last();
+        let mut layer = BTreeMap::new();
+        for candidate in centre.neighbors() {
+            if !route_cell_is_open(candidate, grid_radius, blocked) {
+                continue;
+            }
+            let predecessor = match previous {
+                None => Some(None),
+                Some(previous) => previous
+                    .keys()
+                    .find(|before| **before == candidate || before.distance(candidate) == 1)
+                    .copied()
+                    .map(Some),
+            };
+            if let Some(predecessor) = predecessor {
+                layer.insert(candidate, predecessor);
+            }
+        }
+        if layer.is_empty() {
+            return None;
+        }
+        layers.push(layer);
+    }
+
+    let mut current = layers.last()?.keys().next().copied()?;
+    let mut second_reversed = Vec::with_capacity(layers.len());
+    for layer in layers.iter().rev() {
+        second_reversed.push(current);
+        let previous = layer.get(&current).copied()?;
+        let Some(previous) = previous else {
+            break;
+        };
+        current = previous;
+    }
+    if second_reversed.len() != layers.len() {
+        return None;
+    }
+    second_reversed.reverse();
+    Some(
+        centerline
+            .iter()
+            .copied()
+            .zip(second_reversed)
+            .map(|(first, second)| [first, second])
+            .collect(),
+    )
+}
+
+fn shortest_centerline(
+    grid_radius: u32,
+    start: HexCoord,
+    end: HexCoord,
+    blocked: &BTreeSet<HexCoord>,
+) -> Option<Vec<HexCoord>> {
+    let mut parent = BTreeMap::new();
+    let mut reached = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(coord) = frontier.pop_front() {
+        if coord == end {
+            break;
+        }
+        for neighbor in coord.neighbors() {
+            if !route_cell_is_open(neighbor, grid_radius, blocked) || !reached.insert(neighbor) {
+                continue;
+            }
+            parent.insert(neighbor, coord);
+            frontier.push_back(neighbor);
+        }
+    }
+    if !reached.contains(&end) {
+        return None;
+    }
+    let mut current = end;
+    let mut reversed = vec![current];
+    while current != start {
+        current = parent.get(&current).copied()?;
+        reversed.push(current);
+    }
+    reversed.reverse();
+    Some(reversed)
+}
+
+fn search_paired_route(
+    grid_radius: u32,
+    start: HexCoord,
+    end: HexCoord,
+    blocked: &BTreeSet<HexCoord>,
+) -> Result<Vec<[HexCoord; 2]>, CandidateAttemptError> {
+    let mut frontier = BinaryHeap::new();
+    let mut best_steps = BTreeMap::<[HexCoord; 2], u32>::new();
+    let mut parent = BTreeMap::<[HexCoord; 2], [HexCoord; 2]>::new();
+    for neighbor in start.neighbors() {
+        if !route_cell_is_open(neighbor, grid_radius, blocked) {
+            continue;
+        }
+        for row in [[start, neighbor], [neighbor, start]] {
+            let estimate = row_distance_to(row, end);
+            best_steps.insert(row, 0);
+            frontier.push(Reverse((estimate, 0_u32, row)));
+        }
+    }
+
+    let mut goal = None;
+    while let Some(Reverse((_estimate, steps, row))) = frontier.pop() {
+        if best_steps.get(&row).is_none_or(|best| steps != *best) {
+            continue;
+        }
+        if row.contains(&end) {
+            goal = Some(row);
+            break;
+        }
+
+        let next_steps = steps.saturating_add(1);
+        for next in next_bridge_rows(row, grid_radius, blocked) {
+            if best_steps
+                .get(&next)
+                .is_some_and(|known| *known <= next_steps)
+            {
+                continue;
+            }
+            best_steps.insert(next, next_steps);
+            parent.insert(next, row);
+            let estimate = next_steps.saturating_add(row_distance_to(next, end));
+            frontier.push(Reverse((estimate, next_steps, next)));
+        }
+    }
+
+    let Some(mut current) = goal else {
+        return Err(CandidateAttemptError::rejected(
+            "protected ground approaches block a two-wide upper bridge",
+        ));
+    };
+    let mut reversed = vec![current];
+    while !current.contains(&start) {
+        let Some(previous) = parent.get(&current).copied() else {
+            return Err(CandidateAttemptError::rejected(
+                "upper bridge route has incomplete parent metadata",
+            ));
+        };
+        reversed.push(previous);
+        current = previous;
+    }
+    reversed.reverse();
+    Ok(reversed)
+}
+
+fn next_bridge_rows(
+    row: [HexCoord; 2],
+    grid_radius: u32,
+    blocked: &BTreeSet<HexCoord>,
+) -> Vec<[HexCoord; 2]> {
+    let [first, second] = row;
+    let mut first_steps = Vec::with_capacity(7);
+    first_steps.push(first);
+    first_steps.extend(first.neighbors());
+    let mut second_steps = Vec::with_capacity(7);
+    second_steps.push(second);
+    second_steps.extend(second.neighbors());
+
+    let mut rows = BTreeSet::new();
+    for next_first in &first_steps {
+        if !route_cell_is_open(*next_first, grid_radius, blocked) {
+            continue;
+        }
+        for next_second in &second_steps {
+            let next = [*next_first, *next_second];
+            if next == row
+                || next_first == next_second
+                || next_first.distance(*next_second) != 1
+                || !route_cell_is_open(*next_second, grid_radius, blocked)
+            {
+                continue;
+            }
+            rows.insert(next);
+        }
+    }
+    rows.into_iter().collect()
+}
+
+fn route_cell_is_open(coord: HexCoord, grid_radius: u32, blocked: &BTreeSet<HexCoord>) -> bool {
+    HexCoord::ORIGIN.distance(coord) <= grid_radius && !blocked.contains(&coord)
+}
+
+fn row_distance_to(row: [HexCoord; 2], target: HexCoord) -> u32 {
+    row.into_iter()
+        .map(|coord| coord.distance(target))
+        .min()
+        .unwrap_or(u32::MAX)
 }
 
 fn append_upper_mass(
     elements: &mut Vec<VolumeElement>,
+    bridge_level: Level,
     surface: Level,
-    distance: u32,
+    relief: u32,
     bridge: bool,
     environment: V2EnvironmentSettings,
     material_sample: u64,
@@ -469,8 +779,9 @@ fn append_upper_mass(
         return;
     }
 
-    let thickness = 4_i32.saturating_sub(i32::try_from(distance.min(2)).unwrap_or(2));
+    let thickness = 2_i32.saturating_add_unsigned(relief);
     let bottom = surface.saturating_add(1).saturating_sub(thickness);
+    debug_assert_eq!(bottom, bridge_level.saturating_sub(1));
     let top_material = match environment {
         V2EnvironmentSettings::TemperateGrassland => SolidMaterialRole::Grass,
         V2EnvironmentSettings::Frozen if material_sample.is_multiple_of(11) => {
@@ -494,6 +805,33 @@ fn append_upper_mass(
     }));
 }
 
+fn island_depths(islands: &BTreeSet<HexCoord>) -> BTreeMap<HexCoord, u32> {
+    let boundary: BTreeSet<_> = islands
+        .iter()
+        .copied()
+        .filter(|coord| {
+            coord
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| !islands.contains(&neighbor))
+        })
+        .collect();
+    let mut depths: BTreeMap<HexCoord, u32> =
+        boundary.iter().copied().map(|coord| (coord, 0)).collect();
+    let mut frontier: VecDeque<_> = boundary.into_iter().collect();
+    while let Some(coord) = frontier.pop_front() {
+        let depth = depths.get(&coord).copied().unwrap_or(0);
+        for neighbor in coord.neighbors() {
+            if !islands.contains(&neighbor) || depths.contains_key(&neighbor) {
+                continue;
+            }
+            depths.insert(neighbor, depth.saturating_add(1));
+            frontier.push_back(neighbor);
+        }
+    }
+    depths
+}
+
 fn validate_layered_plan(
     recipe: &LayeredSkyRecipe<'_>,
     settings: &LayeredSkyIslandsSettings,
@@ -507,37 +845,52 @@ fn validate_layered_plan(
     if !(1..=2).contains(&metadata.satellite_centres.len()) {
         issues.push("upper layer must contain one or two satellites".to_owned());
     }
-    if metadata.bridge_lanes.len()
+    if metadata.bridge_rows.len()
         != PRIMARY_ISLAND_COUNT
             .saturating_sub(1)
             .saturating_add(metadata.satellite_centres.len())
     {
         issues.push("upper layer bridge count does not match its island tree".to_owned());
     }
-    if metadata.bridge_lanes.iter().any(|lanes| {
-        let [first, second] = lanes;
-        first.is_empty()
-            || first.len() != second.len()
-            || !first
-                .iter()
-                .all(|coord| metadata.upper_cells.contains(coord))
-            || !second
-                .iter()
-                .all(|coord| metadata.upper_cells.contains(coord))
-    }) {
+    if metadata
+        .bridge_rows
+        .iter()
+        .any(|rows| !valid_bridge_rows(rows, &metadata.upper_cells))
+    {
         issues.push("an upper bridge is not a complete two-wide route".to_owned());
     }
     if !ground_is_unchanged(&recipe.ground.plan.volume, &plan.volume) {
         issues.push("upper construction changed finalized Hills ground semantics".to_owned());
     }
+    if metadata.island_cells.is_empty() || !metadata.island_cells.is_subset(&metadata.upper_cells) {
+        issues.push("island footprint is empty or escapes the upper network".to_owned());
+    }
+    let expected_island_components =
+        PRIMARY_ISLAND_COUNT.saturating_add(metadata.satellite_centres.len());
+    if connected_component_count(&metadata.island_cells) != expected_island_components {
+        issues.push(format!(
+            "island footprint does not contain {expected_island_components} distinct bodies"
+        ));
+    }
     if !metadata
         .island_cells
         .is_disjoint(&recipe.ground.plan.metadata.topology.protected_approaches)
     {
-        issues.push("an island mass covers a protected Hills approach".to_owned());
+        issues.push("an island mass covers the river or a protected Hills approach".to_owned());
+    }
+    let bridge_cells: BTreeSet<_> = metadata
+        .bridge_rows
+        .iter()
+        .flatten()
+        .flat_map(|row| row.iter().copied())
+        .collect();
+    if !bridge_cells.is_disjoint(&overhead_route_exclusions(
+        &recipe.ground.plan.metadata.topology,
+    )) {
+        issues.push("an upper bridge covers a protected ground landing or crossing".to_owned());
     }
 
-    let upper_columns = u32::try_from(metadata.island_cells.len()).unwrap_or(u32::MAX);
+    let upper_columns = u32::try_from(metadata.upper_cells.len()).unwrap_or(u32::MAX);
     let total_columns = footprint_size(plan.volume.grid_radius);
     let coverage_percent = upper_columns.saturating_mul(100) / total_columns.max(1);
     if !(15..=25).contains(&coverage_percent) {
@@ -546,10 +899,9 @@ fn validate_layered_plan(
         ));
     }
     let expected_region_surfaces: BTreeSet<_> = metadata
-        .upper_cells
+        .upper_surfaces
         .iter()
-        .copied()
-        .map(|coord| TilePos::new(coord, metadata.upper_surface))
+        .map(|(coord, level)| TilePos::new(*coord, *level))
         .collect();
     let actual_region_surfaces: BTreeSet<_> = plan
         .volume
@@ -562,6 +914,19 @@ fn validate_layered_plan(
         .collect();
     if actual_region_surfaces != expected_region_surfaces {
         issues.push("upper special-movement membership is not exact".to_owned());
+    }
+    if metadata.upper_surfaces.len() != metadata.upper_cells.len()
+        || !metadata
+            .upper_surfaces
+            .keys()
+            .all(|coord| metadata.upper_cells.contains(coord))
+    {
+        issues.push("upper surface levels do not match the upper footprint".to_owned());
+    }
+    if metadata.upper_surfaces.values().any(|surface| {
+        !(metadata.bridge_level..=metadata.bridge_level.saturating_add(2)).contains(surface)
+    }) {
+        issues.push("upper island relief exceeds the supported zero-to-two range".to_owned());
     }
 
     for coord in &metadata.upper_cells {
@@ -607,11 +972,49 @@ fn validate_layered_plan(
             upper_columns,
             coverage_percent,
             satellite_count: u8::try_from(metadata.satellite_centres.len()).unwrap_or(u8::MAX),
-            bridge_count: u8::try_from(metadata.bridge_lanes.len()).unwrap_or(u8::MAX),
+            bridge_count: u8::try_from(metadata.bridge_rows.len()).unwrap_or(u8::MAX),
         })
     } else {
         RecipeValidation::invalid(issues)
     }
+}
+
+fn valid_bridge_rows(rows: &[[HexCoord; 2]], upper_cells: &BTreeSet<HexCoord>) -> bool {
+    !rows.is_empty()
+        && rows.iter().all(|row| {
+            let [first, second] = *row;
+            first != second
+                && first.distance(second) == 1
+                && upper_cells.contains(&first)
+                && upper_cells.contains(&second)
+        })
+        && rows.windows(2).all(|pair| {
+            let [before, after] = pair else {
+                return false;
+            };
+            let [before_first, before_second] = *before;
+            let [after_first, after_second] = *after;
+            (before_first == after_first || before_first.distance(after_first) == 1)
+                && (before_second == after_second || before_second.distance(after_second) == 1)
+                && before != after
+        })
+}
+
+fn connected_component_count(coords: &BTreeSet<HexCoord>) -> usize {
+    let mut remaining = coords.clone();
+    let mut components = 0_usize;
+    while let Some(start) = remaining.pop_first() {
+        components = components.saturating_add(1);
+        let mut frontier = VecDeque::from([start]);
+        while let Some(coord) = frontier.pop_front() {
+            for neighbor in coord.neighbors() {
+                if remaining.remove(&neighbor) {
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+    }
+    components
 }
 
 fn ground_is_unchanged(
@@ -687,6 +1090,8 @@ const fn footprint_size(radius: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use hex_core::{MapAnchorId, SpecialMovementRegions};
 
     use super::*;
@@ -780,6 +1185,8 @@ mod tests {
         .expect("the matching Hills ground should generate");
 
         assert_eq!(sky.map.len(), ground.map.len());
+        assert_eq!(sky.selected_candidate, Some(3));
+        assert_eq!(sky.map_fingerprint, 4_313_975_567_675_515_163);
         let mut upper_columns = 0_usize;
         for (coord, ground_column) in ground.map.columns() {
             let layered_column = sky
@@ -806,18 +1213,64 @@ mod tests {
             .collect();
         let layered_ground_regions: BTreeSet<_> = sorted_regions(&sky.special_regions)
             .into_iter()
-            .filter(|(position, _region)| position.level < sky.metadata.upper_surface)
+            .filter(|(position, _region)| position.level < sky.metadata.bridge_level)
             .collect();
         assert_eq!(layered_ground_regions, ground_regions);
         assert!(sky.interiors.is_empty());
         assert!((15..=25).contains(&sky.metrics.coverage_percent));
         assert_eq!(sky.metadata.primary_centres.len(), 3);
         assert!((1..=2).contains(&sky.metadata.satellite_centres.len()));
-        assert!(!sky.metadata.bridge_lanes.is_empty());
-        assert!(sky.metadata.upper_cells.iter().all(|coord| sky
-            .special_regions
-            .get(TilePos::new(*coord, sky.metadata.upper_surface))
-            == Some(sky.metadata.upper_region)));
+        assert!(!sky.metadata.bridge_rows.is_empty());
+        assert_eq!(
+            connected_component_count(&sky.metadata.island_cells),
+            PRIMARY_ISLAND_COUNT + sky.metadata.satellite_centres.len()
+        );
+        assert!(sky
+            .metadata
+            .bridge_rows
+            .iter()
+            .all(|rows| valid_bridge_rows(rows, &sky.metadata.upper_cells)));
+        assert!(sky.metadata.upper_cells.iter().all(|coord| {
+            let level = sky
+                .metadata
+                .upper_surfaces
+                .get(coord)
+                .copied()
+                .expect("every upper coordinate should have one exact surface");
+            sky.special_regions.get(TilePos::new(*coord, level)) == Some(sky.metadata.upper_region)
+        }));
+        let bridge_only: BTreeSet<_> = sky
+            .metadata
+            .bridge_rows
+            .iter()
+            .flatten()
+            .flat_map(|row| row.iter().copied())
+            .filter(|coord| !sky.metadata.island_cells.contains(coord))
+            .collect();
+        assert!(!bridge_only.is_empty());
+        assert!(bridge_only.iter().all(|coord| {
+            let surface = sky
+                .metadata
+                .upper_surfaces
+                .get(coord)
+                .copied()
+                .expect("every bridge coordinate should have an upper surface");
+            surface == sky.metadata.bridge_level
+                && sky.map.get(TilePos::new(*coord, surface)) == METAL
+                && sky
+                    .map
+                    .get(TilePos::new(*coord, surface.saturating_add(1)))
+                    .is_air()
+        }));
+        assert!(sky.metadata.island_cells.iter().all(|coord| {
+            let surface = sky
+                .metadata
+                .upper_surfaces
+                .get(coord)
+                .copied()
+                .expect("every island coordinate should have an upper surface");
+            sky.map.get(TilePos::new(*coord, surface)) == GRASS
+        }));
         assert!(sky.anchors.get(&MapAnchorId::from("party_start")).is_some());
     }
 
@@ -832,7 +1285,9 @@ mod tests {
                 &palette(),
                 &is_solid,
             )
-            .expect("Frozen layered sky should generate");
+            .unwrap_or_else(|error| {
+                panic!("Frozen layered sky radius {radius} should generate: {error}")
+            });
             let second = build(
                 radius,
                 0.4,
@@ -849,5 +1304,215 @@ mod tests {
             assert_eq!(first.candidates_evaluated, 8);
             assert!(!first.special_regions.is_empty());
         }
+    }
+
+    #[test]
+    fn fixed_seed_corpus_is_valid_without_fallback() {
+        for environment in [
+            V2EnvironmentSettings::TemperateGrassland,
+            V2EnvironmentSettings::Frozen,
+        ] {
+            for seed in [0, 1, 505, 808, 20_260_726, SKY_SEED, u64::MAX] {
+                let generated = build(12, 0.4, &settings(environment), seed, &palette(), &is_solid)
+                    .unwrap_or_else(|error| {
+                        panic!("{environment:?} seed {seed} should generate: {error}")
+                    });
+
+                assert!(
+                    !generated.used_fallback,
+                    "{environment:?} seed {seed} unexpectedly used the canonical fallback"
+                );
+                assert!(generated.valid_candidates > 0);
+                assert!(generated.repair_actions.len() <= 4);
+                assert_eq!(
+                    connected_component_count(&generated.metadata.island_cells),
+                    PRIMARY_ISLAND_COUNT + generated.metadata.satellite_centres.len()
+                );
+                assert!((15..=25).contains(&generated.metrics.coverage_percent));
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_upper_layout_validates_over_representative_finalized_ground() {
+        let palette = palette();
+        let sky_settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let V2RecipeSettings::LayeredSkyIslands(layered_settings) = &sky_settings.recipe else {
+            unreachable!("the helper always constructs layered sky settings")
+        };
+
+        for seed in [0, 20_260_726, SKY_SEED, u64::MAX] {
+            let finalized_ground = hills::select(
+                12,
+                0.4,
+                &ground_settings(V2EnvironmentSettings::TemperateGrassland),
+                seed,
+                &palette,
+                &is_solid,
+            )
+            .expect("the representative Hills ground should select")
+            .into_unvalidated();
+            let recipe = LayeredSkyRecipe {
+                ground: &finalized_ground,
+                environment: V2EnvironmentSettings::TemperateGrassland,
+                level_height: 0.4,
+            };
+            let fallback = recipe
+                .canonical_fallback(FallbackContext { grid_radius: 12 }, layered_settings)
+                .unwrap_or_else(|error| {
+                    panic!("seed {seed} canonical upper layout should construct: {error}")
+                });
+
+            fallback
+                .volume
+                .validate()
+                .expect("the canonical upper layout should pass common volume validation");
+            assert!(matches!(
+                validate_layered_plan(&recipe, layered_settings, &fallback),
+                RecipeValidation::Valid(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn recipe_validation_rejects_corrupt_upper_semantics() {
+        let palette = palette();
+        let sky_settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let V2RecipeSettings::LayeredSkyIslands(layered_settings) = &sky_settings.recipe else {
+            unreachable!("the helper always constructs layered sky settings")
+        };
+        let finalized_ground = hills::select(
+            12,
+            0.4,
+            &ground_settings(V2EnvironmentSettings::TemperateGrassland),
+            SKY_SEED,
+            &palette,
+            &is_solid,
+        )
+        .expect("the Hills ground should select")
+        .into_unvalidated();
+        let recipe = LayeredSkyRecipe {
+            ground: &finalized_ground,
+            environment: V2EnvironmentSettings::TemperateGrassland,
+            level_height: 0.4,
+        };
+        let context = CandidateContext {
+            grid_radius: 12,
+            candidate: 0,
+            streams: super::super::seed::SeedStreams::new(SKY_SEED, 0),
+        };
+        let valid = layered_plan(&recipe, context, layered_settings, false)
+            .expect("the fixed candidate should construct");
+
+        let mut broken_lane = valid.clone();
+        let first_row = broken_lane
+            .metadata
+            .bridge_rows
+            .first_mut()
+            .and_then(|rows| rows.first_mut())
+            .expect("the valid candidate should have a bridge row");
+        let [first, _second] = *first_row;
+        *first_row = [first, first];
+        assert!(validation_issues(&recipe, layered_settings, &broken_lane)
+            .iter()
+            .any(|issue| issue.contains("two-wide route")));
+
+        let mut missing_membership = valid.clone();
+        let (&upper_coord, &upper_level) = missing_membership
+            .metadata
+            .upper_surfaces
+            .iter()
+            .next()
+            .expect("the candidate should have upper surfaces");
+        missing_membership
+            .volume
+            .surfaces
+            .remove(&TilePos::new(upper_coord, upper_level));
+        assert!(
+            validation_issues(&recipe, layered_settings, &missing_membership)
+                .iter()
+                .any(|issue| issue.contains("membership is not exact"))
+        );
+
+        let mut changed_ground = valid;
+        changed_ground
+            .volume
+            .anchors
+            .remove(crate::procedural::PARTY_START);
+        assert!(
+            validation_issues(&recipe, layered_settings, &changed_ground)
+                .iter()
+                .any(|issue| issue.contains("ground semantics"))
+        );
+    }
+
+    fn validation_issues(
+        recipe: &LayeredSkyRecipe<'_>,
+        settings: &LayeredSkyIslandsSettings,
+        plan: &RecipePlan<SkyMetadata>,
+    ) -> Vec<String> {
+        match validate_layered_plan(recipe, settings, plan) {
+            RecipeValidation::Valid(_metrics) => Vec::new(),
+            RecipeValidation::Invalid(issues) => issues,
+        }
+    }
+
+    #[test]
+    #[ignore = "10,000 seeds are a manual stress corpus"]
+    fn ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks() {
+        let mut fallback_count = 0_u32;
+        for seed in 0..10_000 {
+            let generated = build(
+                12,
+                0.4,
+                &settings(V2EnvironmentSettings::TemperateGrassland),
+                seed,
+                &palette(),
+                &is_solid,
+            )
+            .unwrap_or_else(|error| panic!("seed {seed} should generate: {error}"));
+            fallback_count += u32::from(generated.used_fallback);
+        }
+        assert!(
+            fallback_count < 100,
+            "{fallback_count} of 10,000 maps used fallback"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release/debug generator benchmark"]
+    fn layered_sky_radius_benchmark_tracks_the_radius_40_target() {
+        let palette = palette();
+        let settings = settings(V2EnvironmentSettings::TemperateGrassland);
+        let mut radius_40_median = 0_u128;
+        for radius in [12, 20, 40] {
+            let mut samples = Vec::new();
+            for seed in 0..8 {
+                let started = Instant::now();
+                let generated = build(radius, 0.4, &settings, seed, &palette, &is_solid)
+                    .expect("the benchmark map should generate");
+                samples.push(started.elapsed().as_micros());
+                std::hint::black_box(generated);
+            }
+            samples.sort_unstable();
+            let median = samples
+                .get(samples.len() / 2)
+                .copied()
+                .expect("the benchmark always records eight samples");
+            eprintln!("Layered Sky radius {radius}: median={median}us");
+            if radius == 40 {
+                radius_40_median = median;
+            }
+        }
+
+        let target_micros = if cfg!(debug_assertions) {
+            250_000
+        } else {
+            50_000
+        };
+        assert!(
+            radius_40_median < target_micros,
+            "Layered Sky radius 40 median was {radius_40_median}us; target is {target_micros}us"
+        );
     }
 }
