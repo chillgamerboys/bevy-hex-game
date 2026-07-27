@@ -606,7 +606,9 @@ fn spawn_lattice_panel(
                 let (color, title, line) = cell_face(coord, kind, demo, elements, spells);
                 lattice
                     .spawn((
-                        Name::new("Demo Cell"),
+                        // Coordinates in the name give the visual-walk scripts a
+                        // deterministic handle on one specific cell.
+                        Name::new(format!("Demo Cell ({}, {})", coord.q(), coord.r())),
                         Button,
                         DemoCell(coord),
                         OwnColors,
