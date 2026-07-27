@@ -9,7 +9,7 @@ file is the record that travels with the repo.
 
 ## Wave 8 — chore(skills): formalize the wave delivery model (2026-07-27)
 
-- **PR**: (this branch) — `chore/wave-model-skills`
+- **PR**: #72 — `chore/wave-model-skills`
 - **Outcome**: green — docs-only path (4 docs lenses + fresh-eyes)
 - **Lenses triggered**: D1 (one fix), D2–D4 clean
 
