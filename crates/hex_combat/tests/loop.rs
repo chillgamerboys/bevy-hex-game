@@ -28,6 +28,8 @@ fn test_app() -> App {
     // names neither the system nor the resource.
     app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
     app.init_state::<Screen>();
+    // The shipped combat.ron values; production loads the file instead.
+    app.insert_resource(hex_assets::CombatSettings::default());
     app.add_sub_state::<Mode>();
     app.add_plugins(hex_combat::plugin);
 

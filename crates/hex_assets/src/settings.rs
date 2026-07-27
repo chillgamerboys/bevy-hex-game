@@ -1120,6 +1120,204 @@ pub struct ScenarioSettings {
     pub enemy: ScenarioPlacement,
 }
 
+/// `assets/config/combat.ron` — the combat policy knobs.
+///
+/// Moves the provisional constants out of compiled code and names the
+/// deliberately-open design questions as data. Unbuilt policy variants parse
+/// but fail validation with a reason naming what they wait on — flipping a
+/// playtest option is a file edit, and nothing gets settled by accident.
+#[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(Resource)]
+pub struct CombatSettings {
+    /// Hexes between a hostile and the party that start a fight.
+    pub engage_range: u32,
+    /// Extra hexes beyond `engage_range` a hostile must retreat before combat
+    /// ends — the hysteresis that stops boundary flapping.
+    pub disengage_margin: u32,
+    /// Hexes a unit may move on its turn.
+    pub movement_per_turn: u32,
+    /// Initiative for a unit that declares none.
+    pub default_initiative: u32,
+    /// Levels of height that buy one extra hex of range.
+    pub levels_per_bonus_range: u32,
+    /// How turn order is decided. Only [`InitiativePolicy::FlatComponent`] is built.
+    pub initiative_policy: InitiativePolicy,
+    /// What a turn affords. Only [`ActionEconomy::MoveAndAction`] is built.
+    pub action_economy: ActionEconomy,
+    /// Whether mana returns passively. Only [`ChannellingTrickle::BurstOnly`] is built.
+    pub channelling_trickle: ChannellingTrickle,
+    /// How fights end short of annihilation. Only [`RoutPolicy::FightToTheEnd`] is built.
+    pub rout_policy: RoutPolicy,
+}
+
+/// The initiative options from `docs/design/game.md` § Open questions.
+#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiativePolicy {
+    /// Today's placeholder: a flat number on the unit, ties by stable id.
+    FlatComponent,
+    /// Derived from the lattice (Air attunement or capacity).
+    DerivedFromLattice,
+    /// One roll per combat, fixed.
+    RolledPerCombat,
+    /// Re-rolled each round.
+    RerolledEachRound,
+    /// Fixed order with a hold/delay action.
+    FixedWithHold,
+}
+
+/// The action-economy options from the design's open questions.
+#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActionEconomy {
+    /// Today's shape: a movement budget plus one action per turn.
+    MoveAndAction,
+    /// Strict one action: move *or* cast *or* channel.
+    StrictOneAction,
+    /// Free small movement plus one action — the design's current preference.
+    FreeMovementPlusAction,
+    /// Action points, roughly three per turn.
+    ActionPoints,
+}
+
+/// Whether channelling trickles passively or only bursts on the action.
+#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannellingTrickle {
+    /// Today's rule: mana returns only when the channel action is taken.
+    BurstOnly,
+    /// A passive per-turn trickle with the action as a burst refill.
+    TrickleWithBurst,
+}
+
+/// How a fight can end before one side is annihilated.
+#[derive(Reflect, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoutPolicy {
+    /// Today's rule: fights end only by distance or destruction.
+    FightToTheEnd,
+    /// A morale threshold routs a side before zero.
+    RoutThreshold,
+    /// Enemies can offer surrender.
+    SurrenderOffers,
+}
+
+impl CombatSettings {
+    /// Checks the knob ranges and rejects unbuilt policy variants with the
+    /// reason each one waits on.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.engage_range == 0 {
+            return Err("combat.ron: engage_range must be at least 1".to_owned());
+        }
+        if self.disengage_margin == 0 {
+            return Err(
+                "combat.ron: disengage_margin must be at least 1 — zero re-opens the \
+                 boundary flapping the margin exists to stop"
+                    .to_owned(),
+            );
+        }
+        if self.movement_per_turn == 0 {
+            return Err("combat.ron: movement_per_turn must be at least 1".to_owned());
+        }
+        if self.levels_per_bonus_range == 0 {
+            return Err(
+                "combat.ron: levels_per_bonus_range must be at least 1 — zero would make \
+                 every height difference an unbounded range bonus"
+                    .to_owned(),
+            );
+        }
+        match self.initiative_policy {
+            InitiativePolicy::FlatComponent => {}
+            other => {
+                return Err(format!(
+                    "combat.ron: initiative_policy {other:?} is not built yet — it waits on \
+                     the initiative question being settled (docs/design/game.md, Open \
+                     questions), and DerivedFromLattice additionally on lattices being \
+                     wired into units (HEX-12)"
+                ));
+            }
+        }
+        match self.action_economy {
+            ActionEconomy::MoveAndAction => {}
+            other => {
+                return Err(format!(
+                    "combat.ron: action_economy {other:?} is not built yet — it waits on \
+                     the command funnel's turn budgets growing beyond movement-plus-action"
+                ));
+            }
+        }
+        match self.channelling_trickle {
+            ChannellingTrickle::BurstOnly => {}
+            other => {
+                return Err(format!(
+                    "combat.ron: channelling_trickle {other:?} is not built yet — it waits \
+                     on channelling being wired into units (HEX-12)"
+                ));
+            }
+        }
+        match self.rout_policy {
+            RoutPolicy::FightToTheEnd => {}
+            other => {
+                return Err(format!(
+                    "combat.ron: rout_policy {other:?} is not built yet — it waits on \
+                     morale rules that do not exist"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for CombatSettings {
+    /// The shipped `combat.ron` values, for tests that never load assets.
+    /// Production never defaults: the resource is absent until the file parses.
+    fn default() -> Self {
+        Self {
+            engage_range: 4,
+            disengage_margin: 2,
+            movement_per_turn: 4,
+            default_initiative: 10,
+            levels_per_bonus_range: 5,
+            initiative_policy: InitiativePolicy::FlatComponent,
+            action_economy: ActionEconomy::MoveAndAction,
+            channelling_trickle: ChannellingTrickle::BurstOnly,
+            rout_policy: RoutPolicy::FightToTheEnd,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnvalidatedCombatSettings {
+    engage_range: u32,
+    disengage_margin: u32,
+    movement_per_turn: u32,
+    default_initiative: u32,
+    levels_per_bonus_range: u32,
+    initiative_policy: InitiativePolicy,
+    action_economy: ActionEconomy,
+    channelling_trickle: ChannellingTrickle,
+    rout_policy: RoutPolicy,
+}
+
+impl<'de> Deserialize<'de> for CombatSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = UnvalidatedCombatSettings::deserialize(deserializer)?;
+        let settings = Self {
+            engage_range: raw.engage_range,
+            disengage_margin: raw.disengage_margin,
+            movement_per_turn: raw.movement_per_turn,
+            default_initiative: raw.default_initiative,
+            levels_per_bonus_range: raw.levels_per_bonus_range,
+            initiative_policy: raw.initiative_policy,
+            action_economy: raw.action_economy,
+            channelling_trickle: raw.channelling_trickle,
+            rout_policy: raw.rout_policy,
+        };
+        settings.validate().map_err(D::Error::custom)?;
+        Ok(settings)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -1941,5 +2139,95 @@ mod tests {
             }),
             "a valid selected-settings edit after an invalid reload did not replace the resource"
         );
+    }
+
+    #[test]
+    fn the_shipped_combat_settings_parse() {
+        let combat: CombatSettings =
+            ron::from_str(include_str!("../../../assets/config/combat.ron"))
+                .expect("the shipped combat settings should parse");
+        assert_eq!(
+            combat,
+            CombatSettings::default(),
+            "the shipped file and the test default must agree"
+        );
+    }
+
+    #[test]
+    fn invalid_combat_values_are_rejected_during_deserialization() {
+        let shipped = include_str!("../../../assets/config/combat.ron");
+        let cases = [
+            ("engage_range: 4", "engage_range: 0", "engage_range"),
+            (
+                "disengage_margin: 2",
+                "disengage_margin: 0",
+                "disengage_margin",
+            ),
+            (
+                "movement_per_turn: 4",
+                "movement_per_turn: 0",
+                "movement_per_turn",
+            ),
+            (
+                "levels_per_bonus_range: 5",
+                "levels_per_bonus_range: 0",
+                "levels_per_bonus_range",
+            ),
+        ];
+        for (from, to, named) in cases {
+            let invalid = shipped.replace(from, to);
+            let error = ron::from_str::<CombatSettings>(&invalid)
+                .expect_err("a zero knob should be rejected")
+                .to_string();
+            assert!(
+                error.contains(named),
+                "the rejection should name {named}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unbuilt_policy_variants_reject_with_a_reason() {
+        let shipped = include_str!("../../../assets/config/combat.ron");
+        let cases = [
+            (
+                "initiative_policy: FlatComponent",
+                "initiative_policy: DerivedFromLattice",
+                "not built yet",
+            ),
+            (
+                "action_economy: MoveAndAction",
+                "action_economy: FreeMovementPlusAction",
+                "not built yet",
+            ),
+            (
+                "channelling_trickle: BurstOnly",
+                "channelling_trickle: TrickleWithBurst",
+                "HEX-12",
+            ),
+            (
+                "rout_policy: FightToTheEnd",
+                "rout_policy: RoutThreshold",
+                "morale",
+            ),
+        ];
+        for (from, to, reason) in cases {
+            let flipped = shipped.replace(from, to);
+            let error = ron::from_str::<CombatSettings>(&flipped)
+                .expect_err("an unbuilt policy variant should be rejected")
+                .to_string();
+            assert!(
+                error.contains(reason),
+                "the rejection should say what it waits on ({reason}): {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn combat_settings_reject_unknown_fields() {
+        let shipped = include_str!("../../../assets/config/combat.ron");
+        let stale = shipped.replace("engage_range: 4,", "engage_range: 4,\n    engage_rage: 9,");
+        ron::from_str::<CombatSettings>(&stale)
+            .expect_err("a misspelled knob must fail loudly, not be silently ignored");
     }
 }
