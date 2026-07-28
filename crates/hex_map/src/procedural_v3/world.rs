@@ -8,10 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
-use super::layout::ResolvedLayoutPlan;
-use super::liquid::LiquidIssue;
+use super::layout::{ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidPort};
 pub(crate) use super::liquid::LiquidPlan;
-use super::volume::{SurfaceAccess, VolumeElement, VolumeIssue, VolumePlan};
+use super::liquid::{LiquidBodyId, LiquidIssue};
+use super::volume::{NonSolidFill, SurfaceAccess, VolumeElement, VolumeIssue, VolumePlan};
 
 /// Stable map-local identity of a planned surface feature.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -131,6 +131,7 @@ impl GeneratedWorldPlan {
         }
 
         append_liquid_issues(&mut issues, &self.liquids.validate(&self.volume));
+        self.validate_liquid_seams(&mut issues);
         self.validate_features_and_blockers(&mut issues);
         self.validate_structures(&mut issues);
         self.validate_biomes(&mut issues);
@@ -145,6 +146,123 @@ impl GeneratedWorldPlan {
         }
 
         issues
+    }
+
+    fn validate_liquid_seams(&self, issues: &mut Vec<WorldValidationIssue>) {
+        let fill_runs = self.volume.fill_runs_by_top();
+        let mut runs_by_coord = BTreeMap::<_, Vec<_>>::new();
+        for (position, fill) in &fill_runs {
+            runs_by_coord
+                .entry(position.coord)
+                .or_default()
+                .push((*position, *fill));
+        }
+        validate_uncontracted_liquid_crossings(&self.layout, &self.liquids, &runs_by_coord, issues);
+
+        for (edge_id, edge) in &self.layout.shared_edges {
+            let mut crossings = Vec::new();
+            for (body_id, body) in &self.liquids.bodies {
+                for (source, node) in &body.nodes {
+                    let Some(target) = node.downstream else {
+                        continue;
+                    };
+                    if let Some((lane, forward)) =
+                        oriented_seam_lane(edge, source.coord, target.coord)
+                    {
+                        crossings.push(SeamCrossing {
+                            body: *body_id,
+                            source: *source,
+                            target,
+                            lane,
+                            forward,
+                        });
+                    }
+                }
+            }
+
+            match &edge.liquid {
+                ResolvedLiquidPort::Dry => {
+                    for crossing in &crossings {
+                        issues.push(WorldValidationIssue::new(
+                            WorldIssueCode::Liquid,
+                            format!(
+                                "dry seam {edge_id:?} has directed liquid crossing {:?} -> {:?}",
+                                crossing.source, crossing.target
+                            ),
+                        ));
+                    }
+                    validate_dry_seam_contacts(*edge_id, edge, &runs_by_coord, issues);
+                }
+                ResolvedLiquidPort::Directed { source, sink, port } => {
+                    let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
+                    let source_is_second = *source == edge.second.0 && *sink == edge.first.0;
+                    if !source_is_first && !source_is_second {
+                        continue;
+                    }
+                    let mut realized = BTreeMap::new();
+                    for crossing in crossings {
+                        if !port.lanes.contains(&crossing.lane)
+                            || crossing.forward != source_is_first
+                        {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "liquid body {:?} crosses seam {edge_id:?} outside its exact directed port: {:?} -> {:?}",
+                                    crossing.body, crossing.source, crossing.target
+                                ),
+                            ));
+                            continue;
+                        }
+                        if !level_in_edge_band(crossing.source.level, edge)
+                            || !level_in_edge_band(crossing.target.level, edge)
+                        {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "liquid seam {edge_id:?} crossing {:?} -> {:?} leaves elevation band {}..={}",
+                                    crossing.source,
+                                    crossing.target,
+                                    edge.elevation.min,
+                                    edge.elevation.max
+                                ),
+                            ));
+                            continue;
+                        }
+                        let normalized = if crossing.forward {
+                            (crossing.source, crossing.target)
+                        } else {
+                            (crossing.target, crossing.source)
+                        };
+                        if realized.insert(crossing.lane, normalized).is_some() {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "liquid seam {edge_id:?} realizes lane {:?} more than once",
+                                    crossing.lane
+                                ),
+                            ));
+                        }
+                    }
+                    for lane in &port.lanes {
+                        if !realized.contains_key(lane) {
+                            issues.push(WorldValidationIssue::new(
+                                WorldIssueCode::Liquid,
+                                format!(
+                                    "liquid seam {edge_id:?} does not realize exact port lane {lane:?}"
+                                ),
+                            ));
+                        }
+                    }
+                    validate_directed_seam_contacts(
+                        *edge_id,
+                        edge,
+                        &realized,
+                        &runs_by_coord,
+                        issues,
+                    );
+                }
+            }
+        }
     }
 
     fn validate_features_and_blockers(&self, issues: &mut Vec<WorldValidationIssue>) {
@@ -400,6 +518,171 @@ impl GeneratedWorldPlan {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SeamCrossing {
+    body: LiquidBodyId,
+    source: TilePos,
+    target: TilePos,
+    lane: (hex_core::HexCoord, hex_core::HexCoord),
+    forward: bool,
+}
+
+fn oriented_seam_lane(
+    edge: &ResolvedEdgeContract,
+    source: hex_core::HexCoord,
+    target: hex_core::HexCoord,
+) -> Option<((hex_core::HexCoord, hex_core::HexCoord), bool)> {
+    if edge.boundary_pairs.contains(&(source, target)) {
+        Some(((source, target), true))
+    } else if edge.boundary_pairs.contains(&(target, source)) {
+        Some(((target, source), false))
+    } else {
+        None
+    }
+}
+
+fn level_in_edge_band(level: i32, edge: &ResolvedEdgeContract) -> bool {
+    (edge.elevation.min..=edge.elevation.max).contains(&level)
+}
+
+fn fills_touch(first: NonSolidFill, second: NonSolidFill) -> bool {
+    first.levels.bottom < second.levels.top && second.levels.bottom < first.levels.top
+}
+
+fn normalized_coord_pair(
+    first: hex_core::HexCoord,
+    second: hex_core::HexCoord,
+) -> (hex_core::HexCoord, hex_core::HexCoord) {
+    if first <= second {
+        (first, second)
+    } else {
+        (second, first)
+    }
+}
+
+fn validate_uncontracted_liquid_crossings(
+    layout: &ResolvedLayoutPlan,
+    liquids: &LiquidPlan,
+    runs_by_coord: &BTreeMap<hex_core::HexCoord, Vec<(TilePos, NonSolidFill)>>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let patch_by_coord: BTreeMap<_, _> = layout
+        .patches
+        .iter()
+        .flat_map(|(patch, resolved)| resolved.mask.iter().map(|coord| (*coord, *patch)))
+        .collect();
+    let contracted: BTreeSet<_> = layout
+        .shared_edges
+        .values()
+        .flat_map(|edge| {
+            edge.boundary_pairs
+                .iter()
+                .map(|(first, second)| normalized_coord_pair(*first, *second))
+        })
+        .collect();
+
+    for (body_id, body) in &liquids.bodies {
+        for (source, node) in &body.nodes {
+            let Some(target) = node.downstream else {
+                continue;
+            };
+            let crosses_patches =
+                patch_by_coord.get(&source.coord) != patch_by_coord.get(&target.coord);
+            if crosses_patches
+                && !contracted.contains(&normalized_coord_pair(source.coord, target.coord))
+            {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Liquid,
+                    format!(
+                        "liquid body {body_id:?} crosses uncontracted patch boundary: \
+                         {source:?} -> {target:?}"
+                    ),
+                ));
+            }
+        }
+    }
+
+    for (first_coord, first_runs) in runs_by_coord {
+        for second_coord in first_coord.neighbors() {
+            if *first_coord >= second_coord
+                || patch_by_coord.get(first_coord) == patch_by_coord.get(&second_coord)
+                || contracted.contains(&normalized_coord_pair(*first_coord, second_coord))
+            {
+                continue;
+            }
+            let Some(second_runs) = runs_by_coord.get(&second_coord) else {
+                continue;
+            };
+            for (first, first_fill) in first_runs {
+                for (second, second_fill) in second_runs {
+                    if fills_touch(*first_fill, *second_fill) {
+                        issues.push(WorldValidationIssue::new(
+                            WorldIssueCode::Liquid,
+                            format!(
+                                "liquid runs {first:?} and {second:?} touch across an \
+                                 uncontracted patch boundary"
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn validate_dry_seam_contacts(
+    edge_id: super::layout::ResolvedEdgeId,
+    edge: &ResolvedEdgeContract,
+    runs_by_coord: &BTreeMap<hex_core::HexCoord, Vec<(TilePos, NonSolidFill)>>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    for lane in &edge.boundary_pairs {
+        for (first, first_fill) in runs_by_coord.get(&lane.0).into_iter().flatten() {
+            for (second, second_fill) in runs_by_coord.get(&lane.1).into_iter().flatten() {
+                if fills_touch(*first_fill, *second_fill) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Liquid,
+                        format!(
+                            "dry seam {edge_id:?} has touching liquid runs {first:?} and {second:?}"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+fn validate_directed_seam_contacts(
+    edge_id: super::layout::ResolvedEdgeId,
+    edge: &ResolvedEdgeContract,
+    realized: &BTreeMap<(hex_core::HexCoord, hex_core::HexCoord), (TilePos, TilePos)>,
+    runs_by_coord: &BTreeMap<hex_core::HexCoord, Vec<(TilePos, NonSolidFill)>>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let realized_first: BTreeSet<_> = realized.values().map(|(first, _)| *first).collect();
+    let realized_second: BTreeSet<_> = realized.values().map(|(_, second)| *second).collect();
+    for lane in &edge.boundary_pairs {
+        for (first, first_fill) in runs_by_coord.get(&lane.0).into_iter().flatten() {
+            for (second, second_fill) in runs_by_coord.get(&lane.1).into_iter().flatten() {
+                if !fills_touch(*first_fill, *second_fill) {
+                    continue;
+                }
+                let inside_port =
+                    realized_first.contains(first) && realized_second.contains(second);
+                if !inside_port {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Liquid,
+                        format!(
+                            "liquid runs {first:?} and {second:?} touch across seam {edge_id:?} \
+                             outside its exact directed port"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn append_volume_issues(issues: &mut Vec<WorldValidationIssue>, volume_issues: &[VolumeIssue]) {
     issues.extend(
         volume_issues
@@ -463,12 +746,14 @@ mod tests {
 
     use super::*;
     use crate::procedural_v3::layout::{
-        HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
+        HexSide, LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
+        ResolvedElevationBand, ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+        ResolvedWalkerPorts,
     };
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode};
     use crate::procedural_v3::volume::{
-        FillMaterialRole, LevelInterval, SolidMass, SolidMaterialRole, SurfaceMetadata,
-        VolumeColumn,
+        FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole,
+        SurfaceMetadata, VolumeColumn,
     };
 
     #[test]
@@ -578,6 +863,275 @@ mod tests {
             anchors: BTreeMap::from([("party_start".to_owned(), floor)]),
             view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
         }
+    }
+
+    fn two_patch_liquid_plan() -> GeneratedWorldPlan {
+        let first_low = hex_core::HexCoord::ORIGIN;
+        let first_high = hex_core::HexCoord::new_cubic(0, 1, -1);
+        let second_low = HexSide::East.neighbor(first_low);
+        let second_high = HexSide::East.neighbor(first_high);
+        let first_mask = BTreeSet::from([first_low, first_high]);
+        let second_mask = BTreeSet::from([second_low, second_high]);
+        let footprint: BTreeSet<_> = first_mask.union(&second_mask).copied().collect();
+        let edge_id = ResolvedEdgeId(0);
+        let mut first_edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect::<BTreeMap<_, _>>();
+        first_edges.insert(HexSide::East, ResolvedEdgeReference::Shared(edge_id));
+        let mut second_edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect::<BTreeMap<_, _>>();
+        second_edges.insert(HexSide::West, ResolvedEdgeReference::Shared(edge_id));
+        let lanes = BTreeSet::from([(first_low, second_low), (first_high, second_high)]);
+        let boundary_pairs = BTreeSet::from([
+            (first_low, second_low),
+            (first_high, second_low),
+            (first_high, second_high),
+        ]);
+        let port = ResolvedPort {
+            lanes: lanes.clone(),
+            first_approach: first_mask.clone(),
+            second_approach: second_mask.clone(),
+        };
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring7,
+            grid_radius: 12,
+            footprint: footprint.clone(),
+            patches: BTreeMap::from([
+                (
+                    PatchId(0),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(0),
+                        mask: first_mask.clone(),
+                        edges: first_edges,
+                    },
+                ),
+                (
+                    PatchId(1),
+                    ResolvedPatch {
+                        biome_region: BiomeRegionId(1),
+                        mask: second_mask.clone(),
+                        edges: second_edges,
+                    },
+                ),
+            ]),
+            shared_edges: BTreeMap::from([(
+                edge_id,
+                ResolvedEdgeContract {
+                    first: (PatchId(0), HexSide::East),
+                    second: (PatchId(1), HexSide::West),
+                    elevation: ResolvedElevationBand {
+                        preferred: 3,
+                        min: 2,
+                        max: 4,
+                    },
+                    walker: ResolvedWalkerPorts {
+                        count: 0,
+                        width: 0,
+                        ports: Vec::new(),
+                    },
+                    liquid: ResolvedLiquidPort::Directed {
+                        source: PatchId(0),
+                        sink: PatchId(1),
+                        port,
+                    },
+                    approach_depth: 1,
+                    boundary_pairs,
+                    protected_approaches: BTreeMap::from([
+                        (PatchId(0), first_mask),
+                        (PatchId(1), second_mask),
+                    ]),
+                },
+            )]),
+        };
+        let mut volume = VolumePlan::new(footprint);
+        for coord in [first_low, first_high, second_low, second_high] {
+            volume
+                .columns
+                .get_mut(&coord)
+                .unwrap()
+                .elements
+                .push(VolumeElement::Fill(NonSolidFill {
+                    levels: LevelInterval::new(2, 4),
+                    material: FillMaterialRole::Water,
+                }));
+        }
+        let first_low = TilePos::new(first_low, 3);
+        let first_high = TilePos::new(first_high, 3);
+        let second_low = TilePos::new(second_low, 3);
+        let second_high = TilePos::new(second_high, 3);
+
+        GeneratedWorldPlan {
+            layout,
+            volume,
+            liquids: LiquidPlan {
+                bodies: BTreeMap::from([(
+                    LiquidBodyId(0),
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Water,
+                        nodes: BTreeMap::from([
+                            (
+                                first_low,
+                                LiquidNode {
+                                    state: LiquidFlowState::Current,
+                                    downstream: Some(second_low),
+                                },
+                            ),
+                            (
+                                first_high,
+                                LiquidNode {
+                                    state: LiquidFlowState::Current,
+                                    downstream: Some(second_high),
+                                },
+                            ),
+                            (
+                                second_low,
+                                LiquidNode {
+                                    state: LiquidFlowState::Still,
+                                    downstream: None,
+                                },
+                            ),
+                            (
+                                second_high,
+                                LiquidNode {
+                                    state: LiquidFlowState::Still,
+                                    downstream: None,
+                                },
+                            ),
+                        ]),
+                    },
+                )]),
+            },
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: BTreeMap::new(),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
+        }
+    }
+
+    fn seam_issues(plan: &GeneratedWorldPlan) -> Vec<WorldValidationIssue> {
+        let mut issues = Vec::new();
+        plan.validate_liquid_seams(&mut issues);
+        issues
+    }
+
+    fn liquid_node_mut(plan: &mut GeneratedWorldPlan, position: TilePos) -> &mut LiquidNode {
+        let Some(body) = plan.liquids.bodies.get_mut(&LiquidBodyId(0)) else {
+            panic!("the seam fixture should contain its liquid body");
+        };
+        let Some(node) = body.nodes.get_mut(&position) else {
+            panic!("the seam fixture should contain node {position:?}");
+        };
+        node
+    }
+
+    #[test]
+    fn directed_liquid_seams_require_every_exact_lane() {
+        let plan = two_patch_liquid_plan();
+        assert_eq!(seam_issues(&plan), Vec::new());
+
+        let mut missing = plan.clone();
+        let source = TilePos::new(hex_core::HexCoord::new_cubic(0, 1, -1), 3);
+        *liquid_node_mut(&mut missing, source) = LiquidNode {
+            state: LiquidFlowState::Still,
+            downstream: None,
+        };
+        assert!(seam_issues(&missing)
+            .iter()
+            .any(|issue| issue.detail.contains("does not realize exact port lane")));
+
+        let mut outside_port = plan;
+        let first_low = hex_core::HexCoord::ORIGIN;
+        let second_low = HexSide::East.neighbor(first_low);
+        let first_high = hex_core::HexCoord::new_cubic(0, 1, -1);
+        let Some(edge) = outside_port.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
+            panic!("the seam fixture should contain its edge");
+        };
+        let ResolvedLiquidPort::Directed { port, .. } = &mut edge.liquid else {
+            panic!("the seam fixture should contain a directed port");
+        };
+        port.lanes = BTreeSet::from([(first_low, second_low)]);
+        *liquid_node_mut(&mut outside_port, TilePos::new(first_high, 3)) = LiquidNode {
+            state: LiquidFlowState::Still,
+            downstream: None,
+        };
+        assert!(seam_issues(&outside_port)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
+
+        let mut stacked = two_patch_liquid_plan();
+        for coord in [first_low, second_low] {
+            let Some(column) = stacked.volume.columns.get_mut(&coord) else {
+                panic!("the seam fixture should contain column {coord:?}");
+            };
+            column.elements.push(VolumeElement::Fill(NonSolidFill {
+                levels: LevelInterval::new(5, 7),
+                material: FillMaterialRole::Water,
+            }));
+        }
+        assert!(seam_issues(&stacked).iter().any(|issue| {
+            issue.detail.contains("outside its exact directed port")
+                && issue.detail.contains("level: 6")
+        }));
+    }
+
+    #[test]
+    fn liquid_seams_reject_reversed_extra_and_dry_crossings() {
+        let plan = two_patch_liquid_plan();
+        let first_low = TilePos::new(hex_core::HexCoord::ORIGIN, 3);
+        let second_low = TilePos::new(HexSide::East.neighbor(hex_core::HexCoord::ORIGIN), 3);
+
+        let mut reversed = plan.clone();
+        *liquid_node_mut(&mut reversed, first_low) = LiquidNode {
+            state: LiquidFlowState::Still,
+            downstream: None,
+        };
+        *liquid_node_mut(&mut reversed, second_low) = LiquidNode {
+            state: LiquidFlowState::Current,
+            downstream: Some(first_low),
+        };
+        assert!(seam_issues(&reversed)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
+
+        let mut extra = plan.clone();
+        let first_high = TilePos::new(hex_core::HexCoord::new_cubic(0, 1, -1), 3);
+        *liquid_node_mut(&mut extra, first_high) = LiquidNode {
+            state: LiquidFlowState::Current,
+            downstream: Some(second_low),
+        };
+        assert!(seam_issues(&extra)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
+
+        let mut dry = plan;
+        let Some(edge) = dry.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
+            panic!("the seam fixture should contain its edge");
+        };
+        edge.liquid = ResolvedLiquidPort::Dry;
+        let dry_issues = seam_issues(&dry);
+        assert!(dry_issues
+            .iter()
+            .any(|issue| issue.detail.contains("dry seam") && issue.detail.contains("crossing")));
+        assert!(dry_issues.iter().any(|issue| {
+            issue.detail.contains("dry seam") && issue.detail.contains("touching liquid runs")
+        }));
+
+        let mut uncontracted = two_patch_liquid_plan();
+        let Some(edge) = uncontracted.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
+            panic!("the seam fixture should contain its edge");
+        };
+        edge.boundary_pairs.clear();
+        let uncontracted_issues = seam_issues(&uncontracted);
+        assert!(uncontracted_issues
+            .iter()
+            .any(|issue| issue.detail.contains("uncontracted patch boundary")));
     }
 
     #[test]
