@@ -123,7 +123,7 @@
         ),
         (
             name: "Waterfall",
-            blurb: "An elevated river accelerates into a broad fall, with a two-wide dry route around it.",
+            blurb: "An elevated river accelerates into a broad fall, with short and long dry routes around it.",
             world: "config/worlds/procedural-waterfall.ron",
             generation_seed: Some(771203419),
             units: (

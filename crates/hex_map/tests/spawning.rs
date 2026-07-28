@@ -43,11 +43,11 @@ use hex_map::{
     CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
-    ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings, SubstanceRun, TacticalMetrics,
-    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
-    V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings,
-    V3WaterfallSettings, VoxelMap,
+    PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
+    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
+    SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
+    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings,
+    V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -390,19 +390,35 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.seed, 771_203_419);
     assert_eq!(report.candidates_evaluated, 8);
     assert_eq!(report.valid_candidates, 8);
-    assert!(report.selected_candidate.is_some());
+    assert_eq!(report.selected_candidate, Some(7));
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
     assert!(report.notes.is_empty());
-    assert!(report.semantic_plan_fingerprint.is_some());
+    assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(1_427_819_116_951_828_988)
+    );
+    assert_eq!(report.map_fingerprint, 10_801_394_444_515_877_317);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
         "semantic and materialized identities use independent domains"
     );
-    assert_eq!(report.metrics.relief, 8);
+    assert_eq!(report.metrics.relief, 10);
     assert_eq!(report.metrics.critical_route_steps, 8);
+    let Some(ProceduralRecipeMetrics::Waterfall(metrics)) = &report.recipe_metrics else {
+        panic!("V3 Waterfall should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.fall_height, 8);
+    assert_eq!(metrics.fall_nodes, 3);
+    assert_eq!(metrics.bypass_steps, 8);
+    assert_eq!(metrics.alternate_bypass_steps, 10);
+    assert_eq!(metrics.raised_terrain, 111);
+    assert_eq!(report.metrics.alternate_detour_percent, 25);
+    assert_eq!(metrics.water_nodes, report.metrics.barrier_cells);
+    assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
 
     let anchors = app.world().resource::<MapAnchors>();
     let party = anchors
@@ -412,6 +428,12 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
         .get(&MapAnchorId::from("hostile_start"))
         .expect("Waterfall should publish hostile_start");
     assert_eq!(party.level - hostile.level, 8);
+    for review_anchor in ["fall_overlook", "basin_overlook"] {
+        assert!(
+            anchors.get(&MapAnchorId::from(review_anchor)).is_some(),
+            "missing Waterfall review anchor {review_anchor}"
+        );
+    }
 
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
     assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
@@ -896,6 +918,7 @@ fn insert_stale_generated_resources(app: &mut App) {
         semantic_plan_fingerprint: Some(2),
         map_fingerprint: 3,
         metrics: TacticalMetrics::default(),
+        recipe_metrics: None,
         elapsed_micros: 4,
         notes: vec!["stale".to_owned()],
     });
@@ -1156,17 +1179,16 @@ fn v3_waterfall_rejects_liquid_and_support_edits_but_rebuilds_dry_terrain() {
         let support_position =
             TilePos::new(water_position.coord, water_position.level.saturating_sub(1));
         let support = map.get(support_position);
-        let dry_position = map
-            .columns()
-            .filter(|(coord, _column)| coord.y().abs() > 1)
-            .find_map(|(coord, column)| {
-                column.iter().enumerate().find_map(|(index, substance)| {
-                    let level = i32::try_from(index).ok()?;
-                    (level > 0 && table.is_solid(substance) && table.is_diggable(substance))
-                        .then_some(TilePos::new(coord, level))
-                })
+        let dry_position = world
+            .resource::<BiomeRegions>()
+            .iter()
+            .map(|(position, _region)| position)
+            .find(|position| {
+                position.coord.y().abs() > 3
+                    && table.is_solid(map.get(*position))
+                    && table.is_diggable(map.get(*position))
             })
-            .expect("Waterfall should contain dry diggable terrain");
+            .expect("Waterfall should contain a classified dry diggable surface");
         (
             water_position,
             support_position,
@@ -1218,6 +1240,13 @@ fn v3_waterfall_rejects_liquid_and_support_edits_but_rebuilds_dry_terrain() {
         .resource::<VoxelMap>()
         .get(dry_position)
         .is_air());
+    assert!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .get(dry_position)
+            .is_none(),
+        "clearing a generated surface must remove its stale exact biome membership"
+    );
 }
 
 #[test]

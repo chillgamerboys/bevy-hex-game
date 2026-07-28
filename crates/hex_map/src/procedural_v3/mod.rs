@@ -12,7 +12,10 @@ use hex_core::{
     TraversalBlockers,
 };
 
-use crate::procedural::{GenerationReport, TacticalMetrics};
+use crate::procedural::{
+    GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
+};
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
 use crate::voxel::VoxelMap;
@@ -287,6 +290,9 @@ fn finish_waterfall_build(
         semantic_plan_fingerprint: Some(semantic_fingerprint),
         map_fingerprint: materialized_fingerprint,
         metrics: waterfall_report_metrics(&metrics),
+        recipe_metrics: Some(ProceduralRecipeMetrics::Waterfall(
+            waterfall_recipe_metrics(&metrics),
+        )),
         elapsed_micros,
         notes: candidate_notes(notes),
     };
@@ -305,27 +311,40 @@ fn finish_waterfall_build(
 }
 
 fn waterfall_report_metrics(metrics: &waterfall::WaterfallMetrics) -> TacticalMetrics {
-    let relief = i32::try_from(metrics.fall_height).unwrap_or(i32::MAX);
-    let environment_signature_percent = if metrics.ordinary_surfaces == 0 {
-        0
-    } else {
-        metrics
-            .raised_terrain
-            .saturating_mul(100)
-            .checked_div(metrics.ordinary_surfaces)
-            .unwrap_or_default()
-    };
+    let alternate_detour_percent = metrics
+        .alternate_bypass_steps
+        .saturating_sub(metrics.bypass_steps)
+        .saturating_mul(100)
+        .checked_div(metrics.bypass_steps)
+        .unwrap_or_default();
     TacticalMetrics {
-        relief,
+        relief: i32::try_from(metrics.dry_relief).unwrap_or(i32::MAX),
         barrier_cells: metrics.water_nodes,
         critical_route_steps: metrics.bypass_steps,
-        spawn_height_difference: relief,
-        bank_high_ground_difference: relief,
+        spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
+        bank_high_ground_difference: i32::try_from(metrics.bank_high_ground_difference)
+            .unwrap_or(i32::MAX),
         reachable_surfaces: metrics.ordinary_surfaces,
         reachable_elevation_levels: metrics.reachable_elevation_levels,
-        alternate_detour_percent: 0,
+        alternate_detour_percent,
         river_sinuosity_percent: 0,
-        environment_signature_percent,
+        environment_signature_percent: metrics.grass_surface_percent,
+    }
+}
+
+fn waterfall_recipe_metrics(metrics: &waterfall::WaterfallMetrics) -> WaterfallReportMetrics {
+    WaterfallReportMetrics {
+        water_nodes: metrics.water_nodes,
+        still_nodes: metrics.calm_nodes,
+        current_nodes: metrics.current_nodes,
+        rapid_nodes: metrics.rapid_nodes,
+        fall_nodes: metrics.fall_nodes,
+        fall_height: i32::try_from(metrics.fall_height).unwrap_or(i32::MAX),
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        bypass_steps: metrics.bypass_steps,
+        alternate_bypass_steps: metrics.alternate_bypass_steps,
+        raised_terrain: metrics.raised_terrain,
     }
 }
 

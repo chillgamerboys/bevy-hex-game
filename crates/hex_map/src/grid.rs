@@ -11,6 +11,8 @@
 //! gameplay. A richer map means producing different voxels in the terrain builder;
 //! it does not change what a tile *is* to anyone else.
 
+use std::collections::BTreeSet;
+
 use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
@@ -29,7 +31,7 @@ use crate::procedural_v3::MapPresentationProjection;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
-use crate::GenerationReport;
+use crate::{GenerationReport, ProceduralRecipeMetrics, WaterfallReportMetrics};
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -45,6 +47,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<CutawayOccluder>()
         .register_type::<TerrainReady>()
         .register_type::<GenerationReport>()
+        .register_type::<ProceduralRecipeMetrics>()
+        .register_type::<WaterfallReportMetrics>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -484,16 +488,19 @@ fn apply_terrain_edits(
     liquid_visual_time: Res<LiquidVisualTime>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
+    mut biome_regions: Option<ResMut<BiomeRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
     let mut changed = false;
+    let mut changed_coords = BTreeSet::new();
     for edit in edits.read() {
         let liquid_protected = presentation
             .as_deref()
             .is_some_and(|projection| projection.protects_liquid_edit(edit.pos()));
         if apply_terrain_edit(&mut map, &table, edit, liquid_protected) {
             changed = true;
+            changed_coords.insert(edit.pos().coord);
             if let Some(interiors) = interiors.as_deref_mut() {
                 // A replacement is new material, not part of the authored roof even
                 // when it remains solid. Removing only this voxel keeps both original
@@ -526,6 +533,18 @@ fn apply_terrain_edits(
             )
         });
         interiors.retain_roof_voxels(|position, _| table.is_solid(map.get(position)));
+    }
+    if let Some(biome_regions) = biome_regions.as_deref_mut() {
+        let removed: Vec<_> = biome_regions
+            .iter()
+            .filter_map(|(position, _region)| {
+                (changed_coords.contains(&position.coord) && !table.is_solid(map.get(position)))
+                    .then_some(position)
+            })
+            .collect();
+        for position in removed {
+            let _previous = biome_regions.remove(position);
+        }
     }
 
     let rebuilt = build_grid(

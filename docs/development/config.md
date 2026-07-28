@@ -279,8 +279,9 @@ Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations le
 the previous valid hot-reloaded settings active.
 
 **Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
-single-patch layout. Its liquid topology, three-wide flow, fall bounds, and two-wide
-dry bypass are structural recipe invariants rather than extra tuning fields:
+single-patch layout. Its liquid topology, widened basin, boundary outlet, three-wide
+flow, fall bounds, short two-wide dry bypass, and longer alternate terrace are
+structural recipe invariants rather than extra tuning fields:
 
 ```ron
 terrain: Procedural((

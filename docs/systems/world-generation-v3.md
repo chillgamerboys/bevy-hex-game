@@ -145,13 +145,17 @@ as live movement.
 Plan a directed, acyclic, steady-state water graph before carving terrain. Its flow
 states are `Still`, `Current`, `Rapid`, and edge-aligned `Fall`. The graph establishes
 a calm elevated inlet, rapids, a contiguous fall, a plunge basin or lake, and an
-outlet. Terrain is then fitted to that graph.
+outlet. The basin widens before a three-lane outlet reaches its resolved world
+boundary. Terrain is then fitted to that graph.
 
 Water remains an opaque non-solid fill. The renderer animates the authored direction
 and flow state, but water does not redistribute after terrain edits, push characters,
-slow movement, or deal damage. The critical land network includes a two-wide bypass
-around the hazard. Until topology-aware rebuilding exists, the conservative V3 edit
-policy above protects each authored liquid run and every lower voxel in its column.
+slow movement, or deal damage. The critical land network includes a short two-wide
+bypass around the hazard and a longer, independently climbable terrace on the
+opposite bank. The second route has a broader irregular apron and remains usable if
+the critical route is excluded. Until topology-aware rebuilding exists, the
+conservative V3 edit policy above protects each authored liquid run and every lower
+voxel in its column.
 
 ### Forest
 
