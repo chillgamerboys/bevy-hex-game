@@ -80,6 +80,7 @@ pub fn plugin(app: &mut App) {
             Update,
             resolve_illumination
                 .in_set(PerceptionSystems::ResolveIllumination)
+                .after(MovementSystems::Reconcile)
                 .run_if(in_state(Screen::Gameplay))
                 .run_if(resource_exists::<TerrainReady>)
                 .run_if(not(resource_exists::<GameplaySetupFailure>)),
@@ -704,10 +705,18 @@ mod tests {
                 .insert_surface(position, region);
         }
         spawn_unit(&mut app, 0, Faction::Player, observer);
-        let lamp = app
-            .world_mut()
-            .spawn((observer, GameplayLight::new(IlluminationLevel::Bright, 4)))
-            .id();
+        app.world_mut()
+            .spawn((observer, GameplayLight::new(IlluminationLevel::Bright, 4)));
+        app.insert_resource(MoveLightOnce {
+            destination: exterior,
+            move_now: false,
+        });
+        app.add_systems(
+            Update,
+            reconcile_test_light_move
+                .in_set(MovementSystems::Reconcile)
+                .run_if(in_state(Screen::Gameplay)),
+        );
 
         enter(&mut app, Screen::Gameplay);
         assert_eq!(
@@ -719,7 +728,7 @@ mod tests {
             IlluminationLevel::Bright
         );
 
-        app.world_mut().entity_mut(lamp).insert(exterior);
+        app.world_mut().resource_mut::<MoveLightOnce>().move_now = true;
         app.update();
 
         assert_eq!(
@@ -737,6 +746,25 @@ mod tests {
                 .state(cave_target),
             KnowledgeState::Remembered
         );
+    }
+
+    #[derive(Resource)]
+    struct MoveLightOnce {
+        destination: TilePos,
+        move_now: bool,
+    }
+
+    fn reconcile_test_light_move(
+        mut request: ResMut<MoveLightOnce>,
+        mut lights: Query<&mut TilePos, With<GameplayLight>>,
+    ) {
+        if !request.move_now {
+            return;
+        }
+        for mut position in &mut lights {
+            *position = request.destination;
+        }
+        request.move_now = false;
     }
 
     #[derive(Resource)]
