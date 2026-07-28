@@ -21,7 +21,7 @@ use hex_core::{
     TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
-use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError};
+use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
 use crate::procedural_v2;
 use crate::procedural_v3;
@@ -237,6 +237,7 @@ fn spawn_grid(
     map: Res<VoxelMap>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    liquid_visual_time: Res<LiquidVisualTime>,
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
 ) {
@@ -249,6 +250,7 @@ fn spawn_grid(
         &map,
         &table,
         &settings,
+        liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
     ) {
@@ -267,6 +269,7 @@ fn build_grid(
     map: &VoxelMap,
     table: &SubstanceTable,
     settings: &MapSettings,
+    liquid_phase_seconds: f32,
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
 ) -> Result<(), LiquidPresentationError> {
@@ -279,6 +282,7 @@ fn build_grid(
         map,
         table,
         settings.level_height,
+        liquid_phase_seconds,
         presentation,
     )?;
 
@@ -451,6 +455,7 @@ fn apply_terrain_edits(
     mut liquid_materials: ResMut<Assets<LiquidMaterial>>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    liquid_visual_time: Res<LiquidVisualTime>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
@@ -506,6 +511,7 @@ fn apply_terrain_edits(
         &map,
         &table,
         &settings,
+        liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
     );

@@ -25,7 +25,9 @@ use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresen
 use crate::voxel::{runs, SubstanceRun, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
-const PHASE_WRAP_SECONDS: f32 = 4_096.0;
+const PHASE_WRAP_SECONDS: f32 = 400.0;
+#[cfg(test)]
+const AUTHORED_TEMPORAL_RATES: [f32; 4] = [0.22, 0.55, 0.85, 0.025];
 const LIQUID_CAP_BIAS_RATIO: f32 = 0.02;
 const LIQUID_CAP_BIAS_MAX: f32 = 0.002 * HEX_CIRCUMRADIUS;
 const LIQUID_CURTAIN_EDGE_BIAS: f32 = 0.002 * HEX_CIRCUMRADIUS;
@@ -333,6 +335,7 @@ pub(crate) fn spawn_presentations(
     map: &VoxelMap,
     table: &SubstanceTable,
     level_height: f32,
+    phase_seconds: f32,
     projection: Option<&MapPresentationProjection>,
 ) -> Result<Vec<Entity>, LiquidPresentationError> {
     let plan = build_presentation_plan(map, table, level_height, projection)?;
@@ -351,7 +354,7 @@ pub(crate) fn spawn_presentations(
     let mut material_sets = Vec::with_capacity(role_colors.len());
     let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(4));
     for (role, color) in role_colors {
-        let set = MaterialSet::create(role, color, materials);
+        let set = MaterialSet::create(role, color, phase_seconds, materials);
         set.extend_registry(&mut registered_handles);
         material_sets.push(set);
     }
@@ -661,6 +664,7 @@ impl MaterialSet {
     fn create(
         role: FillMaterialRole,
         color: Color,
+        phase_seconds: f32,
         materials: &mut Assets<LiquidMaterial>,
     ) -> Self {
         let foam_scale = match role {
@@ -672,24 +676,28 @@ impl MaterialSet {
             still: materials.add(liquid_material(
                 color,
                 Vec2::ZERO,
+                phase_seconds,
                 Vec4::new(0.08, 0.0, 0.04, 0.65),
                 false,
             )),
             current: materials.add(liquid_material(
                 color,
                 Vec2::new(0.0, 0.22),
+                phase_seconds,
                 Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
                 false,
             )),
             rapid: materials.add(liquid_material(
                 color,
                 Vec2::new(0.0, 0.55),
+                phase_seconds,
                 Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
                 false,
             )),
             fall: materials.add(liquid_material(
                 color,
                 Vec2::new(0.0, 0.85),
+                phase_seconds,
                 Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
                 true,
             )),
@@ -728,6 +736,7 @@ fn material_handle(
 fn liquid_material(
     color: Color,
     flow_velocity: Vec2,
+    phase_seconds: f32,
     modulation: Vec4,
     double_sided: bool,
 ) -> LiquidMaterial {
@@ -744,7 +753,12 @@ fn liquid_material(
         },
         extension: LiquidExtension {
             params: LiquidMaterialParams {
-                flow_phase_scale: Vec4::new(flow_velocity.x, flow_velocity.y, 0.0, 3.0),
+                flow_phase_scale: Vec4::new(
+                    flow_velocity.x,
+                    flow_velocity.y,
+                    wrap_phase(phase_seconds),
+                    3.0,
+                ),
                 modulation,
             },
         },
@@ -970,6 +984,39 @@ mod tests {
         assert!((time.advance(100.0) - 0.25).abs() < f32::EPSILON);
         assert!(!time.freeze(f32::NEG_INFINITY));
         assert!((time.phase_seconds() - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn phase_wrap_is_a_common_period_for_every_authored_rate() {
+        for rate in AUTHORED_TEMPORAL_RATES {
+            let cycles = rate * PHASE_WRAP_SECONDS;
+            assert_f32_near(cycles, cycles.round());
+        }
+    }
+
+    #[test]
+    fn replacement_materials_start_at_the_current_wrapped_phase() {
+        let mut materials = Assets::<LiquidMaterial>::default();
+        let phase = PHASE_WRAP_SECONDS + 17.25;
+        let set = MaterialSet::create(
+            FillMaterialRole::Water,
+            Color::srgb(0.08, 0.32, 0.65),
+            phase,
+            &mut materials,
+        );
+        let mut handles = Vec::new();
+        set.extend_registry(&mut handles);
+
+        assert_eq!(handles.len(), 4);
+        for handle in handles {
+            let material = materials
+                .get(&handle)
+                .expect("new liquid material must remain present");
+            assert_f32_near(
+                material.extension.params.flow_phase_scale.z,
+                wrap_phase(phase),
+            );
+        }
     }
 
     #[test]
