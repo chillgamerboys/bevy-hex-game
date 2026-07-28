@@ -45,13 +45,22 @@ pub(super) fn apply(
     if decider != unit {
         return Err("that answer is not from the unit the decision is waiting on");
     }
-    if cells.len() != usize::from(count) {
-        return Err("the answer names the wrong number of hexes");
-    }
-
     let Ok((spec, mut state)) = lattices.get_mut(entity) else {
         return Err("the deciding unit has no lattice");
     };
+
+    // The count is what the hit *asked* for; a lattice with less left than that gives
+    // everything it has. Demanding an exact match would deadlock precisely at the moment
+    // a unit is about to go down — the answer could never be satisfied, and resolution
+    // would park forever on a decision nobody can meet.
+    let live = spec
+        .cells()
+        .filter(|&(coord, _)| !state.is_disabled(coord))
+        .count();
+    let owed = usize::from(count).min(live);
+    if cells.len() != owed {
+        return Err("the answer names the wrong number of hexes");
+    }
     // Every cell has to be one of this lattice's own, and distinct. Without the first
     // check an answer could name coordinates that are not in the drawing at all, which
     // `apply_disables` would treat as no-ops — turning a hit into nothing. Without the

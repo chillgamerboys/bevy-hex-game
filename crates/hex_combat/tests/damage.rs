@@ -250,3 +250,101 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
         "and stay registered, because a restoring spell needs something to target"
     );
 }
+
+/// A defender with fewer live hexes than the hit demands gives everything it has.
+///
+/// **The deadlock this guards.** The auto-policy can only offer hexes that exist, so a
+/// two-hex hit on a lattice with one hex left produces a one-cell answer. An applier
+/// demanding an exact match would refuse it, the policy would re-offer the same answer,
+/// and resolution would park forever — precisely at the moment a unit is about to go
+/// down, which is the moment it matters most.
+#[test]
+fn a_short_answer_is_accepted_when_the_lattice_has_no_more_to_give() {
+    let mut app = test_app();
+    let defender = spawn(&mut app, UnitId(1), Faction::Hostile, HexCoord::ORIGIN);
+
+    // One hex already gone, so only one remains.
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 1,
+        source: UnitId(0),
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        });
+    app.update();
+
+    // Now ask for two when only one is left.
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 2,
+        source: UnitId(0),
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseDisables {
+                unit: UnitId(1),
+                cells: vec![LatticeCoord::new(1, 0)],
+            },
+        });
+    app.update();
+
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "a short answer from a spent lattice must close the decision, not deadlock it"
+    );
+    let state = app
+        .world()
+        .entity(defender)
+        .get::<LatticeState>()
+        .expect("the defender kept its lattice");
+    assert!(
+        state.is_disabled(LatticeCoord::new(1, 0)),
+        "the last hex goes"
+    );
+}
+
+/// A downed unit's lattice is still reachable, or nothing could ever revive it.
+///
+/// Filtering the applier's lattice query by `Downed` would have been the obvious thing
+/// and would have quietly made the design's stated recovery impossible: downed exists
+/// *instead of* despawning precisely so a restoring spell has something to target.
+#[test]
+fn a_downed_units_lattice_can_still_be_restored() {
+    let mut app = test_app();
+    let defender = spawn(&mut app, UnitId(1), Faction::Hostile, HexCoord::ORIGIN);
+
+    {
+        let mut entity = app.world_mut().entity_mut(defender);
+        let mut state = entity.get_mut::<LatticeState>().expect("a lattice");
+        hex_lattice::apply_disables(&mut state, &[LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)]);
+    }
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+    app.update();
+    assert!(
+        app.world().entity(defender).contains::<Downed>(),
+        "a spent lattice should put its unit down"
+    );
+
+    // The engine's restore reaches it, which is what a revival spell will do.
+    let mut entity = app.world_mut().entity_mut(defender);
+    let mut state = entity
+        .get_mut::<LatticeState>()
+        .expect("a downed unit keeps its lattice");
+    assert_eq!(
+        hex_lattice::restore(&mut state, &[LatticeCoord::ORIGIN]),
+        1,
+        "a downed unit's hexes must still be restorable"
+    );
+}

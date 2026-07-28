@@ -23,7 +23,7 @@ use bevy::prelude::*;
 use hex_assets::{Effect, TargetShape};
 use hex_core::{Busy, LatticeCoord, PendingDecision, TilePos, UnitId};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
-use hex_units::{targeting, volumes, Downed};
+use hex_units::{targeting, volumes};
 
 use super::{ActorQuery, Verb};
 
@@ -93,9 +93,9 @@ pub(super) fn apply(
     }
     // `SelfCast` is the one shape whose range is not a question.
     if !matches!(spec.targeting.shape, TargetShape::SelfCast) {
-        let levels = ctx
-            .settings
-            .map_or(DEFAULT_LEVELS_PER_BONUS, |_| DEFAULT_LEVELS_PER_BONUS);
+        let levels = ctx.combat.map_or(DEFAULT_LEVELS_PER_BONUS, |settings| {
+            settings.levels_per_bonus_range
+        });
         if !targeting::in_reach(
             standing.pos,
             target,
@@ -216,12 +216,13 @@ pub(super) fn apply(
     Ok(())
 }
 
-/// How many levels of height buy one hex of extra range.
+/// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
-/// The combat knob is `levels_per_bonus_range`, and this mirrors its shipped value.
-/// Casting inherits high-ground-buys-range for free because it goes through the same
-/// [`targeting::in_reach`] engagement uses — that rule was written for spells and has
-/// had exactly one consumer until now.
+/// The real value is `CombatSettings::levels_per_bonus_range`; this is only the fallback
+/// for a headless harness with no settings, and it matches the shipped number so the two
+/// cannot disagree in the case that matters. Casting inherits high-ground-buys-range for
+/// free by going through the same [`targeting::in_reach`] engagement uses — the rule was
+/// written for spells and has had exactly one consumer until now.
 const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 
 /// The caster's cell holding `spell`, lowest coordinate first.
@@ -291,5 +292,10 @@ fn unit_standing_on(ctx: &Verb, actors: &ActorQuery, pos: TilePos) -> Option<(Un
 /// lattice and writes the target's, and Bevy will not hand out two mutable borrows of
 /// one query at once. Keeping them apart makes each access a short scope rather than a
 /// lifetime puzzle.
+///
+/// **Deliberately unfiltered by `Downed`.** Filtering it would have been the obvious
+/// thing and would have quietly broken the design: a downed unit is revivable by a
+/// restoring spell, and a spell cannot restore a lattice it cannot reach. Being downed
+/// stops a unit *acting*, which is the turn order's job, not its lattice's.
 pub(super) type LatticeQuery<'w, 's> =
-    Query<'w, 's, (&'static LatticeSpec, &'static mut LatticeState), Without<Downed>>;
+    Query<'w, 's, (&'static LatticeSpec, &'static mut LatticeState)>;
