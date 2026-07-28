@@ -22,6 +22,14 @@ use serde::{Deserialize, Deserializer};
 
 pub(crate) const MAX_PROCEDURAL_LEVEL: Level = 128;
 const SKY_UPPER_VERTICAL_BUDGET: Level = 20;
+const CUBE_NEIGHBORS: [(i32, i32, i32); 6] = [
+    (1, -1, 0),
+    (1, 0, -1),
+    (0, 1, -1),
+    (-1, 1, 0),
+    (-1, 0, 1),
+    (0, -1, 1),
+];
 
 /// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
@@ -1052,6 +1060,36 @@ impl V3Ring7Settings {
                 "V3 Ring7 Explicit masks must cover all {expected_columns} world columns exactly"
             ));
         }
+        self.validate_explicit_mask_adjacency()?;
+        Ok(())
+    }
+
+    fn validate_explicit_mask_adjacency(&self) -> Result<(), String> {
+        for (label, first, second) in [
+            ("center / mountains", &self.center, &self.mountains),
+            ("center / waterfall", &self.center, &self.waterfall),
+            ("center / forest", &self.center, &self.forest),
+            ("center / fort", &self.center, &self.fort),
+            ("center / caves", &self.center, &self.caves),
+            ("center / sky_islands", &self.center, &self.sky_islands),
+            ("mountains / waterfall", &self.mountains, &self.waterfall),
+            ("waterfall / forest", &self.waterfall, &self.forest),
+            ("forest / fort", &self.forest, &self.fort),
+            ("fort / caves", &self.fort, &self.caves),
+            ("caves / sky_islands", &self.caves, &self.sky_islands),
+            (
+                "sky_islands / mountains",
+                &self.sky_islands,
+                &self.mountains,
+            ),
+        ] {
+            if !explicit_masks_touch(&first.mask, &second.mask) {
+                return Err(format!(
+                    "V3 Ring7 Explicit masks for {label} must share at least one adjacent \
+                     boundary pair"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -1246,16 +1284,8 @@ impl PatchMaskSettings {
         };
         let mut visited = BTreeSet::from([start]);
         let mut frontier = VecDeque::from([start]);
-        const NEIGHBORS: [(i32, i32, i32); 6] = [
-            (1, -1, 0),
-            (1, 0, -1),
-            (0, 1, -1),
-            (-1, 1, 0),
-            (-1, 0, 1),
-            (0, -1, 1),
-        ];
         while let Some((x, y, z)) = frontier.pop_front() {
-            for (dx, dy, dz) in NEIGHBORS {
+            for (dx, dy, dz) in CUBE_NEIGHBORS {
                 let neighbor = (x + dx, y + dy, z + dz);
                 if unique.contains(&neighbor) && visited.insert(neighbor) {
                     frontier.push_back(neighbor);
@@ -1267,6 +1297,22 @@ impl PatchMaskSettings {
         }
         Ok(())
     }
+}
+
+fn explicit_masks_touch(first: &PatchMaskSettings, second: &PatchMaskSettings) -> bool {
+    let (PatchMaskSettings::Explicit(first), PatchMaskSettings::Explicit(second)) = (first, second)
+    else {
+        return false;
+    };
+    let second: BTreeSet<_> = second
+        .iter()
+        .map(|coord| (coord.x, coord.y, coord.z))
+        .collect();
+    first.iter().any(|coord| {
+        CUBE_NEIGHBORS
+            .iter()
+            .any(|(dx, dy, dz)| second.contains(&(coord.x + dx, coord.y + dy, coord.z + dz)))
+    })
 }
 
 impl PatchEdgesSettings {
@@ -2232,6 +2278,54 @@ mod tests {
         ring
     }
 
+    fn valid_explicit_ring7() -> V3Ring7Settings {
+        const RADIUS: u32 = 33;
+        const OFFSET: i32 = 22;
+
+        let centers = [
+            HexCoord::ORIGIN,
+            HexCoord::new_cubic(OFFSET, -OFFSET, 0),
+            HexCoord::new_cubic(OFFSET, 0, -OFFSET),
+            HexCoord::new_cubic(0, OFFSET, -OFFSET),
+            HexCoord::new_cubic(-OFFSET, OFFSET, 0),
+            HexCoord::new_cubic(-OFFSET, 0, OFFSET),
+            HexCoord::new_cubic(0, -OFFSET, OFFSET),
+        ];
+        let mut masks: [Vec<CubeCoord>; 7] = std::array::from_fn(|_| Vec::new());
+        for coord in HexCoord::ORIGIN.within_radius(RADIUS) {
+            let owner = centers
+                .iter()
+                .enumerate()
+                .min_by_key(|(index, center)| (coord.distance(**center), *index))
+                .map(|(index, _)| index)
+                .expect("the fixed Ring7 has patch centers");
+            masks
+                .get_mut(owner)
+                .expect("a selected patch center has a matching mask")
+                .push(CubeCoord {
+                    x: coord.x(),
+                    y: coord.y(),
+                    z: coord.z(),
+                });
+        }
+
+        let mut ring = valid_ring7();
+        for (index, mask) in masks.into_iter().enumerate() {
+            let patch = match index {
+                0 => &mut ring.center,
+                1 => &mut ring.mountains,
+                2 => &mut ring.waterfall,
+                3 => &mut ring.forest,
+                4 => &mut ring.fort,
+                5 => &mut ring.caves,
+                6 => &mut ring.sky_islands,
+                _ => unreachable!("fixed Ring7 patch count"),
+            };
+            patch.mask = PatchMaskSettings::Explicit(mask);
+        }
+        ring
+    }
+
     fn showcase_settings() -> MapSettings {
         ron::from_str(WORLD_RON).expect("the shipped world settings should parse")
     }
@@ -2694,6 +2788,35 @@ mod tests {
             .expect_err("both sides of a seam must consume the same contract");
         assert!(
             error.to_string().contains("mismatched shared settings"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn v3_ring7_explicit_masks_preserve_fixed_patch_adjacency() {
+        let mut ring = valid_explicit_ring7();
+        MapSettings {
+            grid_radius: 33,
+            level_height: 0.4,
+            terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+                layout: V3LayoutSettings::Ring7(ring.clone()),
+            })),
+        }
+        .validate()
+        .expect("generated-equivalent Explicit masks should validate");
+
+        std::mem::swap(&mut ring.mountains.mask, &mut ring.fort.mask);
+        let error = MapSettings {
+            grid_radius: 33,
+            level_height: 0.4,
+            terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+                layout: V3LayoutSettings::Ring7(ring),
+            })),
+        }
+        .validate()
+        .expect_err("rearranged Explicit masks must fail before layout resolution");
+        assert!(
+            error.contains("must share at least one adjacent boundary pair"),
             "unexpected error: {error}"
         );
     }

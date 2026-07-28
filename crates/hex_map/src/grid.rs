@@ -104,8 +104,6 @@ fn generate_world(
         commands.insert_resource(MapAnchors::new());
         commands.insert_resource(SpecialMovementRegions::new());
         commands.insert_resource(InteriorRegions::new());
-        commands.insert_resource(TraversalBlockers::new());
-        commands.insert_resource(BiomeRegions::new());
         commands.insert_resource(TerrainReady);
         return;
     };
@@ -154,8 +152,6 @@ fn generate_world(
             }
             commands.insert_resource(generated.map);
             commands.insert_resource(anchors);
-            commands.insert_resource(TraversalBlockers::new());
-            commands.insert_resource(BiomeRegions::new());
             commands.insert_resource(generated.report);
         }
         crate::settings::ProceduralSettings::V2(v2) => {
@@ -187,8 +183,6 @@ fn generate_world(
             commands.insert_resource(generated.anchors);
             commands.insert_resource(generated.special_regions);
             commands.insert_resource(generated.interiors);
-            commands.insert_resource(TraversalBlockers::new());
-            commands.insert_resource(BiomeRegions::new());
             commands.insert_resource(generated.view_hint);
             commands.insert_resource(generated.report);
             commands.insert_resource(TerrainReady);

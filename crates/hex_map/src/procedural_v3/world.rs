@@ -283,12 +283,42 @@ impl GeneratedWorldPlan {
             .values()
             .map(|patch| patch.biome_region)
             .collect();
+        let owning_regions: BTreeMap<_, _> = self
+            .layout
+            .patches
+            .values()
+            .flat_map(|patch| {
+                patch
+                    .mask
+                    .iter()
+                    .copied()
+                    .map(|coord| (coord, patch.biome_region))
+            })
+            .collect();
         for (position, region) in &self.biome_regions {
             if !declared_regions.contains(region) {
                 issues.push(WorldValidationIssue::new(
                     WorldIssueCode::Biome,
                     format!("surface {position:?} names undeclared biome region {region:?}"),
                 ));
+            }
+            match owning_regions.get(&position.coord) {
+                Some(expected) if expected != region => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Biome,
+                        format!(
+                            "surface {position:?} names biome region {region:?}, but its patch \
+                             owns region {expected:?}"
+                        ),
+                    ));
+                }
+                None => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Biome,
+                        format!("surface {position:?} is not owned by any resolved patch"),
+                    ));
+                }
+                Some(_) => {}
             }
         }
     }
@@ -660,5 +690,42 @@ mod tests {
                 "expected {expected:?}, got {issues:?}"
             );
         }
+    }
+
+    #[test]
+    fn stacked_surfaces_must_use_their_owning_patch_biome() {
+        let mut plan = complete_stacked_plan();
+        let foreign_coord = hex_core::HexCoord::new_cubic(1, -1, 0);
+        let template = plan
+            .layout
+            .patches
+            .get(&PatchId(0))
+            .cloned()
+            .expect("fixture has one patch");
+        plan.layout.patches.insert(
+            PatchId(1),
+            ResolvedPatch {
+                biome_region: BiomeRegionId(1),
+                mask: BTreeSet::from([foreign_coord]),
+                edges: template.edges,
+            },
+        );
+        for region in plan.biome_regions.values_mut() {
+            *region = BiomeRegionId(1);
+        }
+
+        let mut issues = Vec::new();
+        plan.validate_biomes(&mut issues);
+
+        let wrong_owner_count = issues
+            .iter()
+            .filter(|issue| {
+                issue.code == WorldIssueCode::Biome && issue.detail.contains("its patch owns")
+            })
+            .count();
+        assert_eq!(
+            wrong_owner_count, 2,
+            "both stacked surfaces must retain the horizontal patch's biome: {issues:?}"
+        );
     }
 }

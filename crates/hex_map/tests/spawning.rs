@@ -1429,8 +1429,6 @@ fn leaving_v2_hills_removes_all_generated_resources() {
     assert!(app.world().contains_resource::<TerrainReady>());
     assert!(app.world().contains_resource::<MapViewHint>());
     assert!(app.world().contains_resource::<GenerationReport>());
-    assert!(app.world().contains_resource::<TraversalBlockers>());
-    assert!(app.world().contains_resource::<BiomeRegions>());
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
