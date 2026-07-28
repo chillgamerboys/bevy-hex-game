@@ -141,10 +141,16 @@ pub fn column(anchor: TilePos, height: u32) -> Vec<TilePos> {
 /// is the price of a thickening rule that cannot disagree with itself in six
 /// directions.
 ///
-/// The near end is where that rounding has to be overruled: at `width` 2 the first
-/// spine hex's disc reaches back over the caster, so a designer who widened a line
-/// would have quietly aimed it at themselves. The caster's voxel is excluded
-/// explicitly. It is the origin of the rotation, so removing it costs no congruence.
+/// The near end is where that rounding bites, and excluding the caster's own voxel
+/// covers only the first hex of it. The spine starts one hex ahead, so at `width` 2
+/// that hex's disc reaches back *past* the caster and takes in **every** neighbour,
+/// the one directly behind included — a flamethrower that spares the hand holding it
+/// and burns the ally standing behind it. Subtracting the rear arc is a decision about
+/// what a thick line is rather than a patch to how it is built, so it belongs to the
+/// ticket that first wants one. Until then `SpellFile` caps authored `width` at 1,
+/// whose near cap reaches the caster's voxel and no further. **A caller passing 2 or
+/// more directly still gets the rear arc** — nothing here clamps, because a silently
+/// narrowed line is the worse failure.
 ///
 /// The line is planar. Vertical extent belongs to [`column()`] and [`path`], which say
 /// so in their parameters.

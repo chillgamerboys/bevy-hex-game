@@ -260,6 +260,20 @@ const MAX_PATH_VOXELS: usize = 64;
 /// Sectors of cone spread beyond which the cone is already a full disc.
 const MAX_CONE_SPREAD: u8 = 3;
 
+/// The widest line content may author, until a wide line's near end is decided.
+///
+/// `width` is a half-thickness around the spine, and the spine starts one hex ahead
+/// of the caster — so at `width` 2 the first spine hex's disc reaches back past the
+/// caster and covers *every* neighbour, including the one directly behind. A line
+/// that burns the ally standing behind you is not what the word means, and the fix is
+/// a decision about the near cap rather than a bug in the thickening: either the rear
+/// arc is subtracted, or the shape is renamed for what it is. Width 1 is safe — its
+/// near cap reaches the caster's voxel and no further, and that voxel is already
+/// excluded — so content is held there until [HEX-19b] settles the wider case.
+///
+/// [HEX-19b]: https://linear.app/hex-game/issue/HEX-19/terrain-magic
+const MAX_LINE_WIDTH: u8 = 1;
+
 /// The raw file, before names are turned into ids.
 ///
 /// `Deserialize` is hand-written (via `UnvalidatedSpellFile`) so tier bounds, mana
@@ -364,8 +378,12 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
             if u32::from(*length) > extent {
                 return Err(over("Line.length", u32::from(*length), extent));
             }
-            if u32::from(*width) > extent {
-                return Err(over("Line.width", u32::from(*width), extent));
+            if *width > MAX_LINE_WIDTH {
+                return Err(over(
+                    "Line.width",
+                    u32::from(*width),
+                    u32::from(MAX_LINE_WIDTH),
+                ));
             }
         }
         TargetShape::Cone { length, spread } => {
@@ -787,6 +805,37 @@ mod tests {
         assert!(
             file.validate().is_err(),
             "radius 200 is a typo, not a spell"
+        );
+    }
+
+    /// A width-2 line's near end rounds back past the caster and takes in every
+    /// neighbour, the one directly behind included. Whether to subtract that rear arc
+    /// or rename the shape is a design call; until it is made, content may not express
+    /// the case. Width 1 stops at the caster's own voxel, which is excluded anyway.
+    #[test]
+    fn validate_rejects_a_line_wide_enough_to_reach_behind_the_caster() {
+        let mut file = test_file();
+        let mut wide = ember();
+        wide.targeting.shape = TargetShape::Line {
+            length: 4,
+            width: 2,
+        };
+        file.spells.insert("Backdraft".to_owned(), wide);
+        assert!(
+            file.validate().is_err(),
+            "a line that burns the ally behind you is not a line"
+        );
+
+        let mut narrow = ember();
+        narrow.targeting.shape = TargetShape::Line {
+            length: 4,
+            width: 1,
+        };
+        let mut ok = test_file();
+        ok.spells.insert("Lance".to_owned(), narrow);
+        assert!(
+            ok.validate().is_ok(),
+            "width 1 reaches no further than the caster's own voxel"
         );
     }
 

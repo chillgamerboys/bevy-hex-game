@@ -595,6 +595,72 @@ fn an_omnidirectional_shape_resolves_without_a_facing() {
     }
 }
 
+/// Every shape is planted on the origin its resolver expects.
+///
+/// `resolve` is the one place `caster` and `anchor` are dispatched, they are the same
+/// type, and the six arms make three different choices between them — so a swap
+/// compiles silently. Nothing else here would catch it: the `Line` and `Cone` tests
+/// all call the resolvers directly, so `Line { .. } => line(anchor, ..)` would fire a
+/// flamethrower from the clicked tile and leave the suite green. Pinning both origins
+/// against a `caster` that is nowhere near the `anchor` is what makes the swap fail.
+#[test]
+fn every_shape_resolves_against_the_right_origin() {
+    let caster = at(0, 0, 0, 5);
+    let anchor = at(4, -4, 0, 9);
+    let facing = Sextant::C;
+
+    // Directed shapes fire from the caster; the anchor is not theirs to read.
+    assert_eq!(
+        resolve(
+            &TargetShape::Line {
+                length: 3,
+                width: 1
+            },
+            caster,
+            anchor,
+            Some(facing)
+        ),
+        Some(line(caster, facing, 3, 1)),
+    );
+    assert_eq!(
+        resolve(
+            &TargetShape::Cone {
+                length: 2,
+                spread: 1
+            },
+            caster,
+            anchor,
+            Some(facing)
+        ),
+        Some(cone(caster, facing, 2, 1)),
+    );
+
+    // Anchored shapes land where the cast pointed, whatever the caster's own voxel.
+    assert_eq!(
+        resolve(&TargetShape::Sphere { radius: 2 }, caster, anchor, None),
+        Some(sphere(anchor, 2)),
+    );
+    assert_eq!(
+        resolve(&TargetShape::Column { height: 3 }, caster, anchor, None),
+        Some(column(anchor, 3)),
+    );
+    let offsets = vec![VoxelOffset {
+        coord: HexCoord::from_axial(1, 0),
+        level: 1,
+    }];
+    assert_eq!(
+        resolve(
+            &TargetShape::Path {
+                offsets: offsets.clone()
+            },
+            caster,
+            anchor,
+            Some(facing)
+        ),
+        Some(path(anchor, facing, &offsets)),
+    );
+}
+
 /// `SelfCast` is the one shape resolved against the caster rather than the anchor —
 /// the distinction that makes passing both worth it.
 #[test]
