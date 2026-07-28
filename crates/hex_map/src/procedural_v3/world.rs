@@ -1042,9 +1042,11 @@ mod tests {
             state: LiquidFlowState::Still,
             downstream: None,
         };
-        assert!(seam_issues(&missing)
-            .iter()
-            .any(|issue| issue.detail.contains("does not realize exact port lane")));
+        assert!(
+            seam_issues(&missing)
+                .iter()
+                .any(|issue| issue.detail.contains("does not realize exact port lane"))
+        );
 
         let mut outside_port = plan;
         let first_low = hex_core::HexCoord::ORIGIN;
@@ -1061,9 +1063,11 @@ mod tests {
             state: LiquidFlowState::Still,
             downstream: None,
         };
-        assert!(seam_issues(&outside_port)
-            .iter()
-            .any(|issue| issue.detail.contains("outside its exact directed port")));
+        assert!(
+            seam_issues(&outside_port)
+                .iter()
+                .any(|issue| issue.detail.contains("outside its exact directed port"))
+        );
 
         let mut stacked = two_patch_liquid_plan();
         for coord in [first_low, second_low] {
@@ -1096,9 +1100,11 @@ mod tests {
             state: LiquidFlowState::Current,
             downstream: Some(first_low),
         };
-        assert!(seam_issues(&reversed)
-            .iter()
-            .any(|issue| issue.detail.contains("outside its exact directed port")));
+        assert!(
+            seam_issues(&reversed)
+                .iter()
+                .any(|issue| issue.detail.contains("outside its exact directed port"))
+        );
 
         let mut extra = plan.clone();
         let first_high = TilePos::new(hex_core::HexCoord::new_cubic(0, 1, -1), 3);
@@ -1106,9 +1112,11 @@ mod tests {
             state: LiquidFlowState::Current,
             downstream: Some(second_low),
         };
-        assert!(seam_issues(&extra)
-            .iter()
-            .any(|issue| issue.detail.contains("outside its exact directed port")));
+        assert!(
+            seam_issues(&extra)
+                .iter()
+                .any(|issue| issue.detail.contains("outside its exact directed port"))
+        );
 
         let mut dry = plan;
         let Some(edge) = dry.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
@@ -1128,10 +1136,64 @@ mod tests {
             panic!("the seam fixture should contain its edge");
         };
         edge.boundary_pairs.clear();
+        for body in uncontracted.liquids.bodies.values_mut() {
+            for node in body.nodes.values_mut() {
+                node.state = LiquidFlowState::Still;
+                node.downstream = None;
+            }
+        }
         let uncontracted_issues = seam_issues(&uncontracted);
-        assert!(uncontracted_issues
-            .iter()
-            .any(|issue| issue.detail.contains("uncontracted patch boundary")));
+        assert!(uncontracted_issues.iter().any(|issue| {
+            issue.detail.contains("liquid runs")
+                && issue.detail.contains("uncontracted patch boundary")
+        }));
+    }
+
+    #[test]
+    fn directed_liquid_seams_support_reverse_patch_orientation() {
+        let mut plan = two_patch_liquid_plan();
+        let first_low = TilePos::new(hex_core::HexCoord::ORIGIN, 3);
+        let first_high = TilePos::new(hex_core::HexCoord::new_cubic(0, 1, -1), 3);
+        let second_low = TilePos::new(HexSide::East.neighbor(first_low.coord), 3);
+        let second_high = TilePos::new(HexSide::East.neighbor(first_high.coord), 3);
+        let Some(edge) = plan.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
+            panic!("the seam fixture should contain its edge");
+        };
+        let ResolvedLiquidPort::Directed { source, sink, .. } = &mut edge.liquid else {
+            panic!("the seam fixture should contain a directed port");
+        };
+        (*source, *sink) = (*sink, *source);
+        for (source, target) in [(second_low, first_low), (second_high, first_high)] {
+            *liquid_node_mut(&mut plan, source) = LiquidNode {
+                state: LiquidFlowState::Current,
+                downstream: Some(target),
+            };
+            *liquid_node_mut(&mut plan, target) = LiquidNode {
+                state: LiquidFlowState::Still,
+                downstream: None,
+            };
+        }
+
+        assert_eq!(seam_issues(&plan), Vec::new());
+    }
+
+    #[test]
+    fn directed_liquid_seams_enforce_the_resolved_elevation_band() {
+        let mut plan = two_patch_liquid_plan();
+        let Some(edge) = plan.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
+            panic!("the seam fixture should contain its edge");
+        };
+        edge.elevation = ResolvedElevationBand {
+            preferred: 2,
+            min: 2,
+            max: 2,
+        };
+
+        assert!(
+            seam_issues(&plan)
+                .iter()
+                .any(|issue| issue.detail.contains("leaves elevation band 2..=2"))
+        );
     }
 
     #[test]
