@@ -4,7 +4,9 @@
 //! Authored objects must remain meaningful when a palette or style catalog is
 //! reordered, and their references must be readable in review diffs.
 
+use bevy::prelude::{Asset, Color, Resource, TypePath};
 use serde::{Deserialize, Deserializer, Serialize};
+use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -71,6 +73,12 @@ macro_rules! stable_id {
 
         impl AsRef<str> for $name {
             fn as_ref(&self) -> &str {
+                self.as_str()
+            }
+        }
+
+        impl Borrow<str> for $name {
+            fn borrow(&self) -> &str {
                 self.as_str()
             }
         }
@@ -200,6 +208,12 @@ impl SrgbColor {
         [self.red, self.green, self.blue]
     }
 
+    /// Converts this authored sRGB value directly into a Bevy colour.
+    #[must_use]
+    pub fn to_bevy_color(self) -> Color {
+        Color::srgb(self.red, self.green, self.blue)
+    }
+
     fn oklab(self) -> [f32; 3] {
         let [red, green, blue] = self.to_array().map(srgb_to_linear);
         let long =
@@ -226,6 +240,12 @@ impl SrgbColor {
                 0.782_771_77f32.mul_add(medium_root, -0.808_675_77 * short_root),
             ),
         ]
+    }
+}
+
+impl From<SrgbColor> for Color {
+    fn from(color: SrgbColor) -> Self {
+        color.to_bevy_color()
     }
 }
 
@@ -340,7 +360,7 @@ pub struct SwatchMatch {
 }
 
 /// Versioned shared art palette.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Asset, Resource, TypePath, Debug, Clone, PartialEq, Serialize)]
 pub struct ArtPalette {
     schema_version: u32,
     swatches: BTreeMap<SwatchId, PaletteSwatch>,
@@ -372,6 +392,12 @@ impl ArtPalette {
     /// Looks up one swatch by stable id.
     #[must_use]
     pub fn get(&self, id: &SwatchId) -> Option<&PaletteSwatch> {
+        self.swatches.get(id)
+    }
+
+    /// Looks up one swatch from its borrowed stable-id string without allocating.
+    #[must_use]
+    pub fn get_str(&self, id: &str) -> Option<&PaletteSwatch> {
         self.swatches.get(id)
     }
 
@@ -1064,6 +1090,26 @@ mod tests {
     }
 
     #[test]
+    fn srgb_converts_directly_to_bevy_color() {
+        let authored = color(0.12, 0.34, 0.56);
+        let converted = authored.to_bevy_color().to_srgba();
+        for (actual, expected) in [
+            converted.red,
+            converted.green,
+            converted.blue,
+            converted.alpha,
+        ]
+        .into_iter()
+        .zip([0.12, 0.34, 0.56, 1.0])
+        {
+            assert!((actual - expected).abs() <= f32::EPSILON);
+        }
+
+        let converted_from: Color = authored.into();
+        assert_eq!(converted_from, authored.to_bevy_color());
+    }
+
+    #[test]
     fn signed_zero_is_canonicalized_before_semantic_fingerprinting() {
         let positive = SrgbColor::new(0.0, 0.0, 0.0).expect("positive zero should be valid");
         let negative = SrgbColor::new(-0.0, -0.0, -0.0).expect("negative zero should be valid");
@@ -1169,6 +1215,23 @@ mod tests {
         assert_eq!(palette.swatches().len(), 19);
         assert!(styles.styles().is_empty());
         assert!(styles.validate(&palette).is_ok());
+    }
+
+    #[test]
+    fn palette_is_a_runtime_asset_resource_with_borrowed_lookup() {
+        fn assert_asset_resource<T: Asset + Resource>() {}
+        assert_asset_resource::<ArtPalette>();
+
+        let palette = shipped_palette();
+        let id = id::<SwatchId>("terrain/grass");
+        let typed = palette.get(&id).expect("typed lookup should resolve");
+        let borrowed = palette
+            .get_str("terrain/grass")
+            .expect("borrowed lookup should resolve");
+
+        assert!(std::ptr::eq(typed, borrowed));
+        assert_eq!(borrowed.display_name(), "Grass Terrain");
+        assert!(palette.get_str("terrain/missing").is_none());
     }
 
     #[test]
