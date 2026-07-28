@@ -12,6 +12,7 @@ use hex_core::{BiomeRegionId, HexCoord, Level};
 use crate::settings::{
     EdgeLiquidSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings,
     PatchSpec, ProceduralV3Settings, SharedEdgeSettings, V3LayoutSettings, V3Ring7Settings,
+    MAX_SEAM_PORT_WIDTH, MAX_WALKER_PORT_COUNT,
 };
 
 const RING_RADIUS: u32 = 33;
@@ -107,6 +108,10 @@ pub(crate) struct ResolvedPort {
 /// Exact ordinary route ports on one shared edge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ResolvedWalkerPorts {
+    /// Authored number of distinct ordinary-walker apertures.
+    pub(crate) count: u8,
+    /// Authored uniform width of every ordinary-walker aperture.
+    pub(crate) width: u32,
     pub(crate) ports: Vec<ResolvedPort>,
 }
 
@@ -243,6 +248,7 @@ impl ResolvedLayoutPlan {
             }
             validate_resolved_edge(*edge_id, edge, &self.patches, &mut issues);
         }
+        validate_liquid_graph(&self.patches, &self.shared_edges, &mut issues);
         for edge_id in references.into_keys() {
             issues.push(LayoutIssue::MissingSharedEdge(edge_id));
         }
@@ -458,7 +464,24 @@ fn resolve_shared_edge(
             LayoutIssue::MismatchedSharedEdge(first_id, second_id),
         ));
     }
+    if first.walker.count > MAX_WALKER_PORT_COUNT
+        || (first.walker.count == 0 && first.walker.width != 0)
+        || (first.walker.count > 0 && !(2..=MAX_SEAM_PORT_WIDTH).contains(&first.walker.width))
+    {
+        return Err(LayoutValidationError::one(LayoutIssue::InvalidPortRequest(
+            first_id, second_id,
+        )));
+    }
     let liquid_request = resolve_liquid_request(first_id, first, second_id, second)?;
+    if matches!(
+        liquid_request,
+        LiquidRequest::Directed { width, .. }
+            if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width)
+    ) {
+        return Err(LayoutValidationError::one(LayoutIssue::InvalidPortRequest(
+            first_id, second_id,
+        )));
+    }
     let first_mask = masks.get(&first_id).cloned().unwrap_or_default();
     let second_mask = masks.get(&second_id).cloned().unwrap_or_default();
     let boundary_pairs = boundary_pairs(&first_mask, &second_mask);
@@ -472,6 +495,26 @@ fn resolve_shared_edge(
         .copied()
         .filter(|(first, second)| first_side.neighbor(*first) == *second)
         .collect();
+    let Some(ordered_lanes) = ordered_lane_path(&oriented_pairs) else {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::NonSimpleOrientedSeam(first_id, second_id),
+        ));
+    };
+    if !lane_approaches_are_independent(
+        ordered_lanes.iter().map(|(first, _)| *first),
+        &first_mask,
+        first_side.opposite(),
+        first.approach_depth,
+    ) || !lane_approaches_are_independent(
+        ordered_lanes.iter().map(|(_, second)| *second),
+        &second_mask,
+        second_side.opposite(),
+        first.approach_depth,
+    ) {
+        return Err(LayoutValidationError::one(
+            LayoutIssue::AmbiguousPortApproaches(first_id, second_id),
+        ));
+    }
     let mut requests =
         vec![PortRequest::Walker(first.walker.width); usize::from(first.walker.count)];
     if let LiquidRequest::Directed { width, .. } = liquid_request {
@@ -525,6 +568,8 @@ fn resolve_shared_edge(
             max: first.elevation.max,
         },
         walker: ResolvedWalkerPorts {
+            count: first.walker.count,
+            width: first.walker.width,
             ports: walker_ports,
         },
         liquid,
@@ -556,6 +601,13 @@ impl PortRequest {
             Self::Walker(width) | Self::Liquid(width) => width,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct PortCandidate {
+    start: usize,
+    end: usize,
+    port: ResolvedPort,
 }
 
 fn resolve_liquid_request(
@@ -609,18 +661,31 @@ fn select_ports(
     if requests.is_empty() {
         return Some(Vec::new());
     }
+    if requests.len() > usize::from(MAX_WALKER_PORT_COUNT) + 1
+        || requests
+            .iter()
+            .any(|request| !(2..=MAX_SEAM_PORT_WIDTH).contains(&request.width()))
+    {
+        return None;
+    }
+    let ordered_lanes = ordered_lane_path(boundary_pairs)?;
     let required_lanes = requests
         .iter()
         .try_fold(0_u32, |total, request| total.checked_add(request.width()))?;
-    if usize::try_from(required_lanes).ok()? > boundary_pairs.len() {
+    let required_gaps = requests.len().saturating_sub(1);
+    if usize::try_from(required_lanes)
+        .ok()?
+        .checked_add(required_gaps)?
+        > ordered_lanes.len()
+    {
         return None;
     }
 
-    let mut candidates = BTreeMap::<u32, Vec<ResolvedPort>>::new();
+    let mut candidates = BTreeMap::<u32, Vec<PortCandidate>>::new();
     for width in requests.iter().map(|request| request.width()) {
         candidates.entry(width).or_insert_with(|| {
             port_candidates(
-                boundary_pairs,
+                &ordered_lanes,
                 first_mask,
                 second_mask,
                 first_side,
@@ -637,53 +702,106 @@ fn select_ports(
         return None;
     }
 
-    let mut selected = Vec::with_capacity(requests.len());
     let seam_leaves = seam_leaves(boundary_pairs);
-    if choose_ports(requests, &candidates, &seam_leaves, 0, &mut selected) {
-        Some(selected)
-    } else {
-        None
+    let mut solutions = Vec::new();
+    if let Some(greedy) = score_greedy_ports(requests, &candidates, &seam_leaves) {
+        solutions.push(greedy);
+    }
+    let mut order: Vec<_> = (0..requests.len()).collect();
+    let mut permutations = Vec::new();
+    collect_permutations(&mut order, 0, &mut permutations);
+    for permutation in permutations {
+        if let Some(solution) = earliest_ports_for_order(requests, &candidates, &permutation) {
+            solutions.push(solution);
+        }
+    }
+    solutions.into_iter().max_by(|first, second| {
+        port_set_score(first, &seam_leaves)
+            .cmp(&port_set_score(second, &seam_leaves))
+            .then_with(|| second.cmp(first))
+    })
+}
+
+fn score_greedy_ports(
+    requests: &[PortRequest],
+    candidates: &BTreeMap<u32, Vec<PortCandidate>>,
+    seam_leaves: &BTreeSet<HexCoord>,
+) -> Option<Vec<ResolvedPort>> {
+    let mut selected = Vec::with_capacity(requests.len());
+    for request in requests {
+        let candidate = candidates
+            .get(&request.width())?
+            .iter()
+            .filter(|candidate| {
+                selected
+                    .iter()
+                    .all(|existing| ports_are_disjoint(existing, &candidate.port))
+            })
+            .max_by(|first, second| {
+                port_option_score(&first.port, &selected, seam_leaves)
+                    .cmp(&port_option_score(&second.port, &selected, seam_leaves))
+                    .then_with(|| second.port.cmp(&first.port))
+            })?;
+        selected.push(candidate.port.clone());
+    }
+    Some(selected)
+}
+
+fn collect_permutations(order: &mut [usize], index: usize, results: &mut Vec<Vec<usize>>) {
+    if index == order.len() {
+        results.push(order.to_vec());
+        return;
+    }
+    for swap_index in index..order.len() {
+        order.swap(index, swap_index);
+        collect_permutations(order, index + 1, results);
+        order.swap(index, swap_index);
     }
 }
 
-fn choose_ports(
+fn earliest_ports_for_order(
     requests: &[PortRequest],
-    candidates: &BTreeMap<u32, Vec<ResolvedPort>>,
-    seam_leaves: &BTreeSet<HexCoord>,
-    request_index: usize,
-    selected: &mut Vec<ResolvedPort>,
-) -> bool {
-    let Some(request) = requests.get(request_index) else {
-        return true;
-    };
-    let Some(options) = candidates.get(&request.width()) else {
-        return false;
-    };
-    let mut ordered: Vec<_> = options.iter().collect();
-    ordered.sort_by(|first, second| {
-        port_option_score(second, selected, seam_leaves)
-            .cmp(&port_option_score(first, selected, seam_leaves))
-            .then_with(|| first.cmp(second))
-    });
-    for candidate in ordered {
-        if selected
-            .iter()
-            .all(|existing| ports_are_disjoint(existing, candidate))
-        {
-            selected.push(candidate.clone());
-            if choose_ports(
-                requests,
-                candidates,
-                seam_leaves,
-                request_index + 1,
-                selected,
-            ) {
-                return true;
-            }
-            selected.pop();
-        }
+    candidates: &BTreeMap<u32, Vec<PortCandidate>>,
+    order: &[usize],
+) -> Option<Vec<ResolvedPort>> {
+    let mut selected = vec![None; requests.len()];
+    let mut previous_end: Option<usize> = None;
+    for request_index in order {
+        let request = requests.get(*request_index)?;
+        let candidate = candidates.get(&request.width())?.iter().find(|candidate| {
+            previous_end.is_none_or(|end| candidate.start > end.saturating_add(1))
+        })?;
+        previous_end = Some(candidate.end);
+        *selected.get_mut(*request_index)? = Some(candidate.port.clone());
     }
-    false
+    selected.into_iter().collect()
+}
+
+fn port_set_score(ports: &[ResolvedPort], seam_leaves: &BTreeSet<HexCoord>) -> (u32, u32) {
+    let cells: Vec<Vec<_>> = ports
+        .iter()
+        .map(|port| port.lanes.iter().map(|(first, _)| *first).collect())
+        .collect();
+    let separation = cells
+        .iter()
+        .enumerate()
+        .flat_map(|(index, first)| {
+            cells.iter().skip(index + 1).flat_map(move |second| {
+                first
+                    .iter()
+                    .flat_map(move |first| second.iter().map(move |second| (*first, *second)))
+            })
+        })
+        .map(|(first, second)| first.distance(second))
+        .min()
+        .unwrap_or(0);
+    let margin = cells
+        .iter()
+        .flatten()
+        .flat_map(|cell| seam_leaves.iter().map(move |leaf| cell.distance(*leaf)))
+        .min()
+        .unwrap_or(0);
+    (separation, margin)
 }
 
 fn seam_leaves(boundary_pairs: &BTreeSet<(HexCoord, HexCoord)>) -> BTreeSet<HexCoord> {
@@ -750,90 +868,114 @@ fn ports_are_disjoint(first: &ResolvedPort, second: &ResolvedPort) -> bool {
 }
 
 fn port_candidates(
-    boundary_pairs: &BTreeSet<(HexCoord, HexCoord)>,
+    ordered_lanes: &[(HexCoord, HexCoord)],
     first_mask: &BTreeSet<HexCoord>,
     second_mask: &BTreeSet<HexCoord>,
     first_side: HexSide,
     second_side: HexSide,
     width: u32,
     approach_depth: u32,
-) -> Vec<ResolvedPort> {
+) -> Vec<PortCandidate> {
     let Ok(width) = usize::try_from(width) else {
         return Vec::new();
     };
-    if width == 0 || width > boundary_pairs.len() {
+    if width == 0 || width > ordered_lanes.len() {
         return Vec::new();
     }
-    let lanes: Vec<_> = boundary_pairs.iter().copied().collect();
-    let lane_by_first: BTreeMap<_, _> = lanes.iter().copied().collect();
-    let mut lane_sets = BTreeSet::new();
-    for lane in &lanes {
-        let mut path = vec![*lane];
-        let mut visited = BTreeSet::from([lane.0]);
-        collect_lane_paths(
-            *lane,
-            width,
-            &lane_by_first,
-            &mut path,
-            &mut visited,
-            &mut lane_sets,
-        );
-    }
-    lane_sets
-        .into_iter()
-        .filter_map(|lanes: BTreeSet<_>| {
+    ordered_lanes
+        .windows(width)
+        .enumerate()
+        .filter_map(|(start, window)| {
+            let lanes: BTreeSet<_> = window.iter().copied().collect();
             let first_boundary = lanes.iter().map(|(coord, _)| *coord).collect();
             let second_boundary = lanes.iter().map(|(_, coord)| *coord).collect();
-            Some(ResolvedPort {
-                lanes,
-                first_approach: approach_corridor(
-                    &first_boundary,
-                    first_mask,
-                    first_side.opposite(),
-                    approach_depth,
-                )?,
-                second_approach: approach_corridor(
-                    &second_boundary,
-                    second_mask,
-                    second_side.opposite(),
-                    approach_depth,
-                )?,
+            Some(PortCandidate {
+                start,
+                end: start + width - 1,
+                port: ResolvedPort {
+                    lanes,
+                    first_approach: approach_corridor(
+                        &first_boundary,
+                        first_mask,
+                        first_side.opposite(),
+                        approach_depth,
+                    )?,
+                    second_approach: approach_corridor(
+                        &second_boundary,
+                        second_mask,
+                        second_side.opposite(),
+                        approach_depth,
+                    )?,
+                },
             })
         })
         .collect()
 }
 
-fn collect_lane_paths(
-    current: (HexCoord, HexCoord),
-    width: usize,
-    lane_by_first: &BTreeMap<HexCoord, HexCoord>,
-    path: &mut Vec<(HexCoord, HexCoord)>,
-    visited: &mut BTreeSet<HexCoord>,
-    results: &mut BTreeSet<BTreeSet<(HexCoord, HexCoord)>>,
-) {
-    if path.len() == width {
-        results.insert(path.iter().copied().collect());
-        return;
+fn ordered_lane_path(lanes: &BTreeSet<(HexCoord, HexCoord)>) -> Option<Vec<(HexCoord, HexCoord)>> {
+    if lanes.is_empty() {
+        return None;
     }
-    for first_neighbor in current.0.neighbors() {
-        let Some(second_neighbor) = lane_by_first.get(&first_neighbor).copied() else {
-            continue;
+    let by_first: BTreeMap<_, _> = lanes.iter().copied().collect();
+    if by_first.len() != lanes.len()
+        || lanes
+            .iter()
+            .map(|(_, second)| *second)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != lanes.len()
+    {
+        return None;
+    }
+    if lanes.len() == 1 {
+        return Some(lanes.iter().copied().collect());
+    }
+
+    let neighbors = |first: HexCoord| {
+        first
+            .neighbors()
+            .into_iter()
+            .filter(|candidate| {
+                by_first.get(candidate).is_some_and(|candidate_second| {
+                    by_first
+                        .get(&first)
+                        .is_some_and(|second| second.distance(*candidate_second) == 1)
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let endpoints: Vec<_> = by_first
+        .keys()
+        .copied()
+        .filter(|first| neighbors(*first).len() == 1)
+        .collect();
+    if endpoints.len() != 2
+        || by_first
+            .keys()
+            .any(|first| !matches!(neighbors(*first).len(), 1 | 2))
+    {
+        return None;
+    }
+
+    let mut ordered = Vec::with_capacity(lanes.len());
+    let mut previous = None;
+    let mut current = *endpoints.first()?;
+    loop {
+        ordered.push((current, *by_first.get(&current)?));
+        let next = neighbors(current)
+            .into_iter()
+            .filter(|neighbor| Some(*neighbor) != previous)
+            .min();
+        let Some(next) = next else {
+            break;
         };
-        if current.1.distance(second_neighbor) != 1 || !visited.insert(first_neighbor) {
-            continue;
+        previous = Some(current);
+        current = next;
+        if ordered.len() > lanes.len() {
+            return None;
         }
-        path.push((first_neighbor, second_neighbor));
-        collect_lane_paths(
-            (first_neighbor, second_neighbor),
-            width,
-            lane_by_first,
-            path,
-            visited,
-            results,
-        );
-        path.pop();
-        visited.remove(&first_neighbor);
     }
+    (ordered.len() == lanes.len()).then_some(ordered)
 }
 
 fn generated_ring_masks(footprint: &BTreeSet<HexCoord>) -> BTreeMap<PatchId, BTreeSet<HexCoord>> {
@@ -1046,6 +1188,25 @@ fn approach_corridor(
     Some(corridor)
 }
 
+fn lane_approaches_are_independent(
+    boundary: impl IntoIterator<Item = HexCoord>,
+    mask: &BTreeSet<HexCoord>,
+    inward: HexSide,
+    depth: u32,
+) -> bool {
+    let mut occupied = BTreeSet::new();
+    for cell in boundary {
+        let Some(corridor) = approach_corridor(&BTreeSet::from([cell]), mask, inward, depth) else {
+            return false;
+        };
+        if !occupied.is_disjoint(&corridor) {
+            return false;
+        }
+        occupied.extend(corridor);
+    }
+    true
+}
+
 fn connected(mask: &BTreeSet<HexCoord>) -> bool {
     let Some(start) = mask.first().copied() else {
         return false;
@@ -1080,6 +1241,24 @@ fn validate_resolved_edge(
     if edge.boundary_pairs.is_empty() || edge.boundary_pairs != expected_pairs {
         issues.push(LayoutIssue::InvalidBoundaryPairs(id));
     }
+    let oriented_pairs: BTreeSet<_> = expected_pairs
+        .iter()
+        .copied()
+        .filter(|(first, second)| edge.first.1.neighbor(*first) == *second)
+        .collect();
+    let seam_geometry_valid = ordered_lane_path(&oriented_pairs).is_some_and(|ordered_lanes| {
+        lane_approaches_are_independent(
+            ordered_lanes.iter().map(|(first, _)| *first),
+            &first.mask,
+            edge.first.1.opposite(),
+            edge.approach_depth,
+        ) && lane_approaches_are_independent(
+            ordered_lanes.iter().map(|(_, second)| *second),
+            &second.mask,
+            edge.second.1.opposite(),
+            edge.approach_depth,
+        )
+    });
     let all_ports: Vec<_> = edge
         .walker
         .ports
@@ -1112,10 +1291,24 @@ fn validate_resolved_edge(
             issues.push(LayoutIssue::InvalidProtectedApproach(id, patch));
         }
     }
+    let walker_count_matches = usize::from(edge.walker.count) == edge.walker.ports.len();
+    let walker_width_matches = if edge.walker.count == 0 {
+        edge.walker.width == 0
+    } else {
+        (2..=MAX_SEAM_PORT_WIDTH).contains(&edge.walker.width)
+            && edge
+                .walker
+                .ports
+                .iter()
+                .all(|port| u32::try_from(port.lanes.len()).ok() == Some(edge.walker.width))
+    };
     if edge.first.1.opposite() != edge.second.1
         || edge.elevation.min > edge.elevation.preferred
         || edge.elevation.preferred > edge.elevation.max
-        || edge.walker.ports.iter().any(|port| port.lanes.len() < 2)
+        || edge.walker.count > MAX_WALKER_PORT_COUNT
+        || !walker_count_matches
+        || !walker_width_matches
+        || !seam_geometry_valid
         || !ports_valid
     {
         issues.push(LayoutIssue::InvalidResolvedContract(id));
@@ -1129,6 +1322,63 @@ fn validate_resolved_edge(
         {
             issues.push(LayoutIssue::InvalidResolvedContract(id));
         }
+    }
+}
+
+fn validate_liquid_graph(
+    patches: &BTreeMap<PatchId, ResolvedPatch>,
+    edges: &BTreeMap<ResolvedEdgeId, ResolvedEdgeContract>,
+    issues: &mut Vec<LayoutIssue>,
+) {
+    let mut outgoing = patches
+        .keys()
+        .copied()
+        .map(|patch| (patch, BTreeSet::new()))
+        .collect::<BTreeMap<_, _>>();
+    for edge in edges.values() {
+        let ResolvedLiquidPort::Directed { source, sink, .. } = edge.liquid else {
+            continue;
+        };
+        if source == sink || !patches.contains_key(&source) || !patches.contains_key(&sink) {
+            continue;
+        }
+        if let Some(sinks) = outgoing.get_mut(&source) {
+            sinks.insert(sink);
+        }
+    }
+
+    let mut indegree = patches
+        .keys()
+        .copied()
+        .map(|patch| (patch, 0_usize))
+        .collect::<BTreeMap<_, _>>();
+    for sinks in outgoing.values() {
+        for sink in sinks {
+            if let Some(degree) = indegree.get_mut(sink) {
+                *degree += 1;
+            }
+        }
+    }
+    let mut ready: VecDeque<_> = indegree
+        .iter()
+        .filter_map(|(patch, degree)| (*degree == 0).then_some(*patch))
+        .collect();
+    let mut visited = 0;
+    while let Some(patch) = ready.pop_front() {
+        visited += 1;
+        if let Some(sinks) = outgoing.get(&patch) {
+            for sink in sinks {
+                if let Some(degree) = indegree.get_mut(sink) {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        ready.push_back(*sink);
+                    }
+                }
+            }
+        }
+    }
+    if visited != patches.len() {
+        issues.push(LayoutIssue::CyclicLiquidGraph);
     }
 }
 
@@ -1152,8 +1402,7 @@ fn valid_resolved_port(
     let second_boundary: BTreeSet<_> = port.lanes.iter().map(|(_, coord)| *coord).collect();
     first_boundary.len() == port.lanes.len()
         && second_boundary.len() == port.lanes.len()
-        && connected(&first_boundary)
-        && connected(&second_boundary)
+        && ordered_lane_path(&port.lanes).is_some()
         && approach_corridor(
             &first_boundary,
             first_mask,
@@ -1202,7 +1451,11 @@ pub(crate) enum LayoutIssue {
     MismatchedSharedEdge(PatchId, PatchId),
     MismatchedLiquid(PatchId, PatchId),
     NonAdjacentSharedPatches(PatchId, PatchId),
+    NonSimpleOrientedSeam(PatchId, PatchId),
+    AmbiguousPortApproaches(PatchId, PatchId),
+    InvalidPortRequest(PatchId, PatchId),
     InsufficientPortCapacity(PatchId, PatchId),
+    CyclicLiquidGraph,
     UnexpectedEdgeKind(PatchId, HexSide),
 }
 
@@ -1381,6 +1634,26 @@ mod tests {
         }
     }
 
+    fn set_liquid_flow(
+        ring: &mut V3Ring7Settings,
+        source: PatchId,
+        source_side: HexSide,
+        sink: PatchId,
+        sink_side: HexSide,
+        width: u32,
+    ) {
+        set_edge(
+            &mut spec_mut(ring, source).edges,
+            source_side,
+            shared(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width })),
+        );
+        set_edge(
+            &mut spec_mut(ring, sink).edges,
+            sink_side,
+            shared(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width })),
+        );
+    }
+
     #[test]
     fn single_whole_world_resolves_exactly_once() {
         let settings = ProceduralV3Settings {
@@ -1457,6 +1730,8 @@ mod tests {
             assert_eq!(references, 2);
             assert_eq!(edge.first.1.opposite(), edge.second.1);
             assert_eq!(edge.protected_approaches.len(), 2);
+            assert_eq!(edge.walker.count, 2);
+            assert_eq!(edge.walker.width, 2);
             assert_eq!(edge.walker.ports.len(), 2);
             for port in &edge.walker.ports {
                 assert_eq!(port.lanes.len(), 2);
@@ -1522,11 +1797,12 @@ mod tests {
             let PatchEdgeContractSettings::Shared(shared) = edge else {
                 unreachable!();
             };
-            shared.walker.width = 8;
+            shared.walker.count = 4;
+            shared.walker.width = 4;
         }
 
         let error = resolve_layout(33, &settings)
-            .expect_err("two eight-wide ports cannot fit a fifteen-lane seam");
+            .expect_err("four four-wide ports cannot fit a fifteen-lane seam");
         assert!(error
             .issues()
             .contains(&LayoutIssue::InsufficientPortCapacity(
@@ -1536,7 +1812,24 @@ mod tests {
     }
 
     #[test]
-    fn resolved_port_corruption_is_rejected() {
+    fn deleted_resolved_walker_port_is_rejected() {
+        let mut resolved = resolve_layout(33, &ring_settings()).expect("valid Ring7 layout");
+        let edge = resolved
+            .shared_edges
+            .get_mut(&ResolvedEdgeId(0))
+            .expect("the first fixed seam exists");
+        edge.walker.ports.pop();
+
+        let error = resolved
+            .validate()
+            .expect_err("the exact ports must retain the requested count");
+        assert!(error
+            .issues()
+            .contains(&LayoutIssue::InvalidResolvedContract(ResolvedEdgeId(0))));
+    }
+
+    #[test]
+    fn nonuniform_resolved_walker_port_is_rejected() {
         let mut resolved = resolve_layout(33, &ring_settings()).expect("valid Ring7 layout");
         let edge = resolved
             .shared_edges
@@ -1556,6 +1849,97 @@ mod tests {
         assert!(error
             .issues()
             .contains(&LayoutIssue::InvalidResolvedContract(ResolvedEdgeId(0))));
+    }
+
+    #[test]
+    fn cyclic_resolved_liquid_graph_is_rejected() {
+        let mut settings = ring_settings();
+        let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+            unreachable!();
+        };
+        set_liquid_flow(
+            ring,
+            PatchId(0),
+            HexSide::East,
+            PatchId(2),
+            HexSide::West,
+            2,
+        );
+        set_liquid_flow(
+            ring,
+            PatchId(2),
+            HexSide::SouthWest,
+            PatchId(3),
+            HexSide::NorthEast,
+            2,
+        );
+        set_liquid_flow(
+            ring,
+            PatchId(3),
+            HexSide::NorthWest,
+            PatchId(0),
+            HexSide::SouthEast,
+            2,
+        );
+
+        let error =
+            resolve_layout(33, &settings).expect_err("patch-level liquid flow must be acyclic");
+        assert!(error.issues().contains(&LayoutIssue::CyclicLiquidGraph));
+    }
+
+    #[test]
+    fn branching_oriented_lane_graph_is_rejected_before_enumeration() {
+        let center = HexCoord::ORIGIN;
+        let first_cells = [
+            center,
+            HexSide::East.neighbor(center),
+            HexSide::SouthWest.neighbor(center),
+            HexSide::NorthWest.neighbor(center),
+        ];
+        let lanes = first_cells
+            .into_iter()
+            .map(|first| (first, HexSide::East.neighbor(first)))
+            .collect();
+
+        assert!(
+            ordered_lane_path(&lanes).is_none(),
+            "a branch cannot be treated as a bounded one-dimensional seam"
+        );
+    }
+
+    #[test]
+    fn bounded_port_selection_finds_a_feasible_maximum_request() {
+        let lanes: BTreeSet<_> = (-9..=9)
+            .map(|offset| {
+                let first = HexCoord::new_cubic(0, offset, -offset);
+                (first, HexSide::East.neighbor(first))
+            })
+            .collect();
+        let first_mask = lanes.iter().map(|(first, _)| *first).collect();
+        let second_mask = lanes.iter().map(|(_, second)| *second).collect();
+        let requests =
+            vec![PortRequest::Walker(MAX_SEAM_PORT_WIDTH); usize::from(MAX_WALKER_PORT_COUNT)];
+
+        let selected = select_ports(
+            &requests,
+            &lanes,
+            &first_mask,
+            &second_mask,
+            HexSide::East,
+            HexSide::West,
+            1,
+        )
+        .expect("four width-four ports exactly fit nineteen lanes with required gaps");
+        assert_eq!(selected.len(), usize::from(MAX_WALKER_PORT_COUNT));
+        assert!(selected
+            .iter()
+            .all(|port| port.lanes.len() == usize::try_from(MAX_SEAM_PORT_WIDTH).unwrap()));
+        assert!(selected.iter().enumerate().all(|(index, port)| {
+            selected
+                .iter()
+                .skip(index + 1)
+                .all(|other| ports_are_disjoint(port, other))
+        }));
     }
 
     #[test]

@@ -434,6 +434,8 @@ fn encode_resolved_edge(
     encoder.i32(edge.elevation.preferred);
     encoder.i32(edge.elevation.min);
     encoder.i32(edge.elevation.max);
+    encoder.u8(edge.walker.count);
+    encoder.u32(edge.walker.width);
     encoder.collection_count(edge.walker.ports.len())?;
     for port in &edge.walker.ports {
         encode_resolved_port(encoder, port)?;
@@ -1127,6 +1129,8 @@ mod tests {
                 max: 16,
             },
             walker: ResolvedWalkerPorts {
+                count: 1,
+                width: 1,
                 ports: vec![port.clone()],
             },
             liquid: ResolvedLiquidPort::Dry,
@@ -1138,6 +1142,13 @@ mod tests {
             ]),
         };
         let dry_fingerprint = fingerprint_edge(&baseline);
+
+        baseline.walker.count = 2;
+        assert_ne!(fingerprint_edge(&baseline), dry_fingerprint);
+        baseline.walker.count = 1;
+        baseline.walker.width = 2;
+        assert_ne!(fingerprint_edge(&baseline), dry_fingerprint);
+        baseline.walker.width = 1;
 
         baseline.liquid = ResolvedLiquidPort::Directed {
             source: PatchId(0),
