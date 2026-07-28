@@ -107,7 +107,11 @@ impl EncounterFaction {
 ///
 /// [`Self::Fixed`] and [`Self::Anchor`] each place **one** unit on one surface;
 /// [`Self::Formation`] is the form that places a group.
+// `Formation` is the only struct variant in the schema, so it is the only place a
+// misspelling can land in a field name rather than a variant name. Without this, a
+// stray `radius: 4` beside `spread` parses and does nothing at all.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum EncounterPlacement {
     /// An exact coordinate on an authored map, whose landmarks never move.
     ///
@@ -196,6 +200,7 @@ impl EncounterPlacement {
 /// formation on a coordinate, a generated one on a published anchor, and neither should
 /// need a different vocabulary because a group rather than one unit is arriving.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum FormationCenter {
     /// An exact coordinate on an authored map.
     Fixed(CubeCoord),
@@ -304,6 +309,26 @@ impl Encounter {
                     exact.push((placement, side));
                 }
             }
+        }
+
+        // Last, so a malformed roster is reported as what it is rather than as this.
+        //
+        // The scaffold this replaced asserted exactly one player, which was a claim
+        // about a *count*, and retiring it took the *existence* guarantee with it. Only
+        // the count deserved to go: an encounter of hostiles alone passes every check
+        // above, enters gameplay, and leaves nothing to select, nothing to command and
+        // no camera target — a screen that renders perfectly and cannot be played, with
+        // no log line anywhere.
+        if !self
+            .rosters
+            .iter()
+            .any(|roster| roster.faction == EncounterFaction::Player)
+        {
+            return Err(format!(
+                "encounter {:?} rosters no player side, so it would start a map with \
+                 nothing to command",
+                self.name
+            ));
         }
         Ok(())
     }
@@ -644,6 +669,51 @@ mod tests {
         assert!(error.contains("loot"), "unexpected error: {error}");
     }
 
+    /// `Formation` is the schema's only struct variant, so it is the only place a
+    /// misspelling lands in a field name. The top-level check above does not reach it.
+    #[test]
+    fn an_unknown_field_inside_a_formation_is_rejected_too() {
+        let error = parse(
+            r#"(
+                name: "Sprawl",
+                rosters: [
+                    (
+                        faction: Player,
+                        placement: Formation(center: Anchor("party_start"), spread: 2, radius: 4),
+                        units: [(archetype: "hedge-mage")],
+                    ),
+                ],
+            )"#,
+        )
+        .expect_err("a stray formation field should be rejected")
+        .to_string();
+        assert!(error.contains("radius"), "unexpected error: {error}");
+    }
+
+    /// Retiring "exactly one player" retired the count *and* the existence guarantee.
+    /// Only the count deserved to go: hostiles alone is a map with nothing to command.
+    #[test]
+    fn an_encounter_with_no_player_side_is_rejected() {
+        let error = parse(
+            r#"(
+                name: "Ambush",
+                rosters: [
+                    (
+                        faction: Hostile,
+                        placement: Anchor("enemy_start"),
+                        units: [(archetype: "raider")],
+                    ),
+                ],
+            )"#,
+        )
+        .expect_err("an encounter with no player side should be rejected")
+        .to_string();
+        assert!(
+            error.contains("nothing to command"),
+            "unexpected error: {error}"
+        );
+    }
+
     /// Two hostile groups holding different ground need no second mechanism: a
     /// faction may appear in more than one roster.
     #[test]
@@ -662,6 +732,11 @@ mod tests {
                         placement: Formation(center: Anchor("alternate_crossing"), spread: 1),
                         units: [(archetype: "raider")],
                     ),
+                    (
+                        faction: Player,
+                        placement: Formation(center: Anchor("party_start"), spread: 1),
+                        units: [(archetype: "hedge-mage")],
+                    ),
                 ],
             )"#,
         )
@@ -670,7 +745,7 @@ mod tests {
         assert_eq!(encounter.unit_count(EncounterFaction::Hostile), 2);
         assert_eq!(
             encounter.factions().collect::<Vec<_>>(),
-            vec![EncounterFaction::Hostile],
+            vec![EncounterFaction::Hostile, EncounterFaction::Player],
             "a faction rostered twice is still one side"
         );
     }
