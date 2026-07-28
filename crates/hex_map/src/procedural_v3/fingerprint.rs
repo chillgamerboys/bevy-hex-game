@@ -17,14 +17,15 @@ use crate::settings::{
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort,
+    ResolvedLiquidPort, ResolvedPort,
 };
+use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::volume::{
     FillMaterialRole, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeatureKind, GeneratedWorldPlan, LiquidFlowState, PlannedGameplayLight, PlannedInterior,
-    PlannedLiquid, PlannedStructure, StructureKind,
+    FeatureKind, GeneratedWorldPlan, PlannedGameplayLight, PlannedInterior, PlannedStructure,
+    StructureKind,
 };
 
 const SETTINGS_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/settings";
@@ -198,7 +199,7 @@ pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64
     encoder.u32(3);
     encode_layout_plan(&mut encoder, &plan.layout)?;
     encode_volume_plan(&mut encoder, &plan.volume)?;
-    encode_liquids(&mut encoder, &plan.liquids.by_voxel)?;
+    encode_liquids(&mut encoder, &plan.liquids)?;
     encode_features(&mut encoder, &plan.features.by_id)?;
     encode_structures(&mut encoder, &plan.structures.by_id)?;
     encode_tile_set(&mut encoder, &plan.blockers)?;
@@ -435,17 +436,17 @@ fn encode_resolved_edge(
     encoder.i32(edge.elevation.max);
     encoder.u8(edge.walker.count);
     encoder.u32(edge.walker.width);
-    match edge.liquid {
+    encoder.collection_count(edge.walker.ports.len())?;
+    for port in &edge.walker.ports {
+        encode_resolved_port(encoder, port)?;
+    }
+    match &edge.liquid {
         ResolvedLiquidPort::Dry => encoder.tag(0),
-        ResolvedLiquidPort::Directed {
-            source,
-            sink,
-            width,
-        } => {
+        ResolvedLiquidPort::Directed { source, sink, port } => {
             encoder.tag(1);
             encoder.u32(source.0);
             encoder.u32(sink.0);
-            encoder.u32(width);
+            encode_resolved_port(encoder, port)?;
         }
     }
     encoder.u32(edge.approach_depth);
@@ -459,6 +460,20 @@ fn encode_resolved_edge(
         encoder.u32(patch.0);
         encode_coord_set(encoder, cells)?;
     }
+    Ok(())
+}
+
+fn encode_resolved_port(
+    encoder: &mut FingerprintEncoder,
+    port: &ResolvedPort,
+) -> Result<(), String> {
+    encoder.collection_count(port.lanes.len())?;
+    for (first, second) in &port.lanes {
+        encoder.hex_coord(*first);
+        encoder.hex_coord(*second);
+    }
+    encode_coord_set(encoder, &port.first_approach)?;
+    encode_coord_set(encoder, &port.second_approach)?;
     Ok(())
 }
 
@@ -553,25 +568,26 @@ const fn fill_material_tag(material: FillMaterialRole) -> u8 {
     }
 }
 
-fn encode_liquids(
-    encoder: &mut FingerprintEncoder,
-    liquids: &std::collections::BTreeMap<TilePos, PlannedLiquid>,
-) -> Result<(), String> {
-    encoder.collection_count(liquids.len())?;
-    for (position, liquid) in liquids {
-        encoder.tile_pos(*position);
-        encoder.tag(fill_material_tag(liquid.material));
-        encoder.tag(match liquid.flow {
-            LiquidFlowState::Still => 0,
-            LiquidFlowState::Current => 1,
-            LiquidFlowState::Rapid => 2,
-            LiquidFlowState::Fall => 3,
-        });
-        match liquid.direction {
-            None => encoder.tag(0),
-            Some(side) => {
-                encoder.tag(1);
-                encoder.tag(hex_side_tag(side));
+fn encode_liquids(encoder: &mut FingerprintEncoder, liquids: &LiquidPlan) -> Result<(), String> {
+    encoder.collection_count(liquids.bodies.len())?;
+    for (body_id, body) in &liquids.bodies {
+        encoder.u32(body_id.0);
+        encoder.tag(fill_material_tag(body.material));
+        encoder.collection_count(body.nodes.len())?;
+        for (position, node) in &body.nodes {
+            encoder.tile_pos(*position);
+            encoder.tag(match node.state {
+                LiquidFlowState::Still => 0,
+                LiquidFlowState::Current => 1,
+                LiquidFlowState::Rapid => 2,
+                LiquidFlowState::Fall => 3,
+            });
+            match node.downstream {
+                None => encoder.tag(0),
+                Some(downstream) => {
+                    encoder.tag(1);
+                    encoder.tile_pos(downstream);
+                }
             }
         }
     }
@@ -715,11 +731,13 @@ mod tests {
     use hex_core::{BiomeRegionId, InteriorRegionId};
 
     use super::*;
-    use crate::procedural_v3::layout::{ResolvedEdgeReference, ResolvedPatch};
+    use crate::procedural_v3::layout::{
+        ResolvedEdgeReference, ResolvedElevationBand, ResolvedPatch, ResolvedWalkerPorts,
+    };
+    use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{LevelInterval, SolidMass, SurfaceMetadata, VolumeColumn};
     use crate::procedural_v3::world::{
-        FeatureId, FeaturePlan, InteriorPlan, LightId, LiquidPlan, PlannedFeature, StructureId,
-        StructurePlan,
+        FeatureId, FeaturePlan, InteriorPlan, LightId, PlannedFeature, StructureId, StructurePlan,
     };
     use crate::settings::{
         CubeCoord, NamedOverlaySettings, PatchEdgeContractSettings, PatchEdgesSettings,
@@ -1047,6 +1065,181 @@ mod tests {
     }
 
     #[test]
+    fn resolved_port_identity_covers_exact_lanes_and_approaches() {
+        fn fingerprint_port(port: &ResolvedPort) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_resolved_port(&mut encoder, port).expect("the port encodes");
+            encoder.finish_semantic_plan()
+        }
+
+        let first = HexCoord::ORIGIN;
+        let second = HexSide::East.neighbor(first);
+        let baseline = ResolvedPort {
+            lanes: BTreeSet::from([(first, second)]),
+            first_approach: BTreeSet::from([first]),
+            second_approach: BTreeSet::from([second]),
+        };
+        let baseline_fingerprint = fingerprint_port(&baseline);
+
+        let mut moved_lane = baseline.clone();
+        let moved_first = HexCoord::from_axial(0, 1);
+        moved_lane.lanes = BTreeSet::from([(moved_first, HexSide::East.neighbor(moved_first))]);
+        assert_ne!(fingerprint_port(&moved_lane), baseline_fingerprint);
+
+        let mut changed_first_approach = baseline.clone();
+        changed_first_approach
+            .first_approach
+            .insert(HexCoord::from_axial(-1, 0));
+        assert_ne!(
+            fingerprint_port(&changed_first_approach),
+            baseline_fingerprint
+        );
+
+        let mut changed_second_approach = baseline.clone();
+        changed_second_approach
+            .second_approach
+            .insert(HexCoord::from_axial(2, 0));
+        assert_ne!(
+            fingerprint_port(&changed_second_approach),
+            baseline_fingerprint
+        );
+    }
+
+    #[test]
+    fn resolved_edge_identity_covers_walker_and_liquid_port_topology() {
+        fn fingerprint_edge(edge: &ResolvedEdgeContract) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_resolved_edge(&mut encoder, edge).expect("the edge encodes");
+            encoder.finish_semantic_plan()
+        }
+
+        let first = HexCoord::ORIGIN;
+        let second = HexSide::East.neighbor(first);
+        let port = ResolvedPort {
+            lanes: BTreeSet::from([(first, second)]),
+            first_approach: BTreeSet::from([first]),
+            second_approach: BTreeSet::from([second]),
+        };
+        let mut baseline = ResolvedEdgeContract {
+            first: (PatchId(0), HexSide::East),
+            second: (PatchId(1), HexSide::West),
+            elevation: ResolvedElevationBand {
+                preferred: 15,
+                min: 14,
+                max: 16,
+            },
+            walker: ResolvedWalkerPorts {
+                count: 1,
+                width: 1,
+                ports: vec![port.clone()],
+            },
+            liquid: ResolvedLiquidPort::Dry,
+            approach_depth: 2,
+            boundary_pairs: BTreeSet::from([(first, second)]),
+            protected_approaches: BTreeMap::from([
+                (PatchId(0), BTreeSet::from([first])),
+                (PatchId(1), BTreeSet::from([second])),
+            ]),
+        };
+        let dry_fingerprint = fingerprint_edge(&baseline);
+
+        baseline.walker.count = 2;
+        assert_ne!(fingerprint_edge(&baseline), dry_fingerprint);
+        baseline.walker.count = 1;
+        baseline.walker.width = 2;
+        assert_ne!(fingerprint_edge(&baseline), dry_fingerprint);
+        baseline.walker.width = 1;
+
+        baseline.liquid = ResolvedLiquidPort::Directed {
+            source: PatchId(0),
+            sink: PatchId(1),
+            port: port.clone(),
+        };
+        let directed_fingerprint = fingerprint_edge(&baseline);
+        assert_ne!(directed_fingerprint, dry_fingerprint);
+
+        let ResolvedLiquidPort::Directed { port, .. } = &mut baseline.liquid else {
+            unreachable!("the fixture has a directed port");
+        };
+        port.first_approach.insert(HexCoord::from_axial(-1, 0));
+        assert_ne!(fingerprint_edge(&baseline), directed_fingerprint);
+    }
+
+    #[test]
+    fn liquid_identity_covers_body_material_nodes_state_and_downstream() {
+        fn fingerprint_liquid(liquid: &LiquidPlan) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_liquids(&mut encoder, liquid).expect("the liquid plan encodes");
+            encoder.finish_semantic_plan()
+        }
+
+        let upstream = TilePos::new(HexCoord::ORIGIN, 4);
+        let downstream = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        let baseline = LiquidPlan {
+            bodies: BTreeMap::from([(
+                LiquidBodyId(7),
+                LiquidBodyPlan {
+                    material: FillMaterialRole::Water,
+                    nodes: BTreeMap::from([
+                        (
+                            upstream,
+                            LiquidNode {
+                                state: LiquidFlowState::Current,
+                                downstream: Some(downstream),
+                            },
+                        ),
+                        (
+                            downstream,
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        ),
+                    ]),
+                },
+            )]),
+        };
+        let baseline_fingerprint = fingerprint_liquid(&baseline);
+
+        let mut changed_id = baseline.clone();
+        let body = changed_id
+            .bodies
+            .remove(&LiquidBodyId(7))
+            .expect("the body exists");
+        changed_id.bodies.insert(LiquidBodyId(8), body);
+        assert_ne!(fingerprint_liquid(&changed_id), baseline_fingerprint);
+
+        let mut changed_material = baseline.clone();
+        changed_material
+            .bodies
+            .get_mut(&LiquidBodyId(7))
+            .expect("the body exists")
+            .material = FillMaterialRole::Lava;
+        assert_ne!(fingerprint_liquid(&changed_material), baseline_fingerprint);
+
+        let mut changed_state = baseline.clone();
+        changed_state
+            .bodies
+            .get_mut(&LiquidBodyId(7))
+            .and_then(|body| body.nodes.get_mut(&upstream))
+            .expect("the node exists")
+            .state = LiquidFlowState::Rapid;
+        assert_ne!(fingerprint_liquid(&changed_state), baseline_fingerprint);
+
+        let mut changed_downstream = baseline.clone();
+        changed_downstream
+            .bodies
+            .get_mut(&LiquidBodyId(7))
+            .and_then(|body| body.nodes.get_mut(&upstream))
+            .expect("the node exists")
+            .downstream = None;
+        assert_ne!(
+            fingerprint_liquid(&changed_downstream),
+            baseline_fingerprint
+        );
+    }
+
+    #[test]
     fn semantic_identity_covers_every_top_level_layer() {
         fn mutate_layout(plan: &mut GeneratedWorldPlan) {
             plan.layout.grid_radius = 13;
@@ -1061,12 +1254,17 @@ mod tests {
             mass.material = SolidMaterialRole::Dirt;
         }
         fn mutate_liquids(plan: &mut GeneratedWorldPlan) {
-            plan.liquids.by_voxel.insert(
-                TilePos::new(HexCoord::ORIGIN, 1),
-                PlannedLiquid {
+            plan.liquids.bodies.insert(
+                LiquidBodyId(1),
+                LiquidBodyPlan {
                     material: FillMaterialRole::Water,
-                    flow: LiquidFlowState::Still,
-                    direction: None,
+                    nodes: BTreeMap::from([(
+                        TilePos::new(HexCoord::ORIGIN, 1),
+                        LiquidNode {
+                            state: LiquidFlowState::Still,
+                            downstream: None,
+                        },
+                    )]),
                 },
             );
         }
