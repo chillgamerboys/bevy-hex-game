@@ -35,7 +35,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Blast, needs_los: true),
+            targeting: (range: 4, shape: Sphere(radius: 2), needs_los: true),
             effects: [
                 DisableHexes(count: 3, targeted: false),
                 Displace(distance: 1),
@@ -52,7 +52,7 @@
             casting: Evocation,
             mana: Variable,
             co_castable: true,
-            targeting: (range: 2, shape: Line, needs_los: true),
+            targeting: (range: 2, shape: Line(length: 2, width: 0), needs_los: true),
             effects: [Burn(amount: 2)],
         ),
 
@@ -115,7 +115,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Blast, needs_los: false),
+            targeting: (range: 3, shape: Sphere(radius: 3), needs_los: false),
             effects: [Illuminate(radius: 3)],
         ),
 

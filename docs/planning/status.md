@@ -120,6 +120,15 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 build. **Nothing casts a spell today** — `GameCommand::Cast` parses and is rejected
 with a reason.
 
+One piece of it is now built. **The shape vocabulary resolves to exact voxels**
+(`hex_units::volumes`): `SelfCast`, `Single`, `Sphere`, `Column`, `Line`, `Cone` and
+`Path`, over `TilePos` in the grid-space metric where hexes and levels count equally,
+handing back the sorted, deduplicated form an announcement requires. `spells.ron`'s
+`TargetShape` carries the matching extents — `Blast` is now `Sphere(radius: N)` — and
+validation caps them. It is pure geometry with no consumer: nothing announces a
+volume, nothing checks legality against one, and nothing clips one to what a caster
+can see. Those are the rest of terrain magic.
+
 The binding parts are:
 
 - **Friendly fire remains enabled.** Unit effects include allies, enemies, and the
@@ -136,7 +145,7 @@ The binding parts are:
 
 The first implementation also ships with explicit limitations:
 
-- **Blast volumes will be geometric, not obstruction-aware.** A sphere next to a cave
+- **Volumes are geometric, not obstruction-aware.** A sphere next to a cave
   wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
   same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
   and `needs_los` on spell content is parsed but unenforced until then.
