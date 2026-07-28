@@ -36,6 +36,16 @@ click routing, command validation, spawning, review relocation, and enemy pathfi
 all consume the same exact blocker projection through a separate adapter now awaiting
 gameplay-owner review.
 
+Authoritative spatial perception now runs headlessly every gameplay frame.
+`hex_world` publishes a renderer-independent Bright or Dim exterior tier;
+`hex_perception` derives exact exterior/interior domains, maximum-tier public local
+lights, pooled faction sight, and independent faction memory over stacked `TilePos`
+surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
+edits, unseen units disappear immediately, and the player-side traversal projection
+is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
+live in `perception.ron`. Fog/picking presentation, generated cave lamps/crystals,
+unknown-frontier routing, and combat/AI consumers are not wired yet.
+
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
 reachable set and the route before a click commits to either.
@@ -168,9 +178,9 @@ The first implementation also ships with explicit limitations:
   and `needs_los` on spell content is parsed but unenforced until then.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
-  so a chamber you blow open still counts as inside. Nothing is wrong today — light
-  domains have no producer yet — but the two facts disagree the moment perception
-  lands ([boundary.md](boundary.md) ask I).
+  so a chamber you blow open still counts as inside. Live perception therefore
+  continues to classify the chamber as Interior and does not admit daylight
+  ([boundary.md](boundary.md) ask I).
 - **Casting is provisionally combat-only**, because out-of-combat mana regeneration
   has no answer yet, and **channelling and rituals are deferred** — `co_castable`
   parses and labels rituals in the demo, but has no mechanical effect.

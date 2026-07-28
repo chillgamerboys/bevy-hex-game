@@ -48,7 +48,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | V3 procedural foundation | `generator_version: 3`; private `GeneratedWorldPlan`; `Single` and radius-33 `Ring7` layouts; patch masks, edge contracts, named streams, validation, scoring, repair, fallback, and diagnostics | map |
 | Steady-state liquids and Waterfall | directed water topology; still/current/rapid/fall rendering; elevated inlet, rapids, fall, basin, outlet, and ordinary-walker bypass | map |
-| Authoritative spatial perception | new headless `hex_perception`: validated `perception.ron`, illumination domains, pooled faction sight, Unknown/Remembered/Observed knowledge, deterministic visibility, and cave-local lights | perception |
+| Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
 | Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
 | Surface features and Forest | deterministic low-poly trees and grass, exact root blockers, protected routes, clearings, prairie, and composable canopy cutaway | map |
@@ -61,27 +61,27 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 ## Sequencing — independent lanes behind one contract
 
-The V3 program begins with a small contract PR: documentation, shared
+The V3 program began with a small contract PR: documentation, shared
 `hex_core` vocabulary, headless tests, and a reserved `GameplaySetup::Perception`
-phase. It changes no behavior or existing `hex_units`/`hex_combat` systems; test
+phase. It changed no behavior or existing `hex_units`/`hex_combat` systems; test
 harnesses only mirror the expanded shared setup chain. Both implementation lanes
-branch from updated `dev` only after that contract merges.
+branched from updated `dev` after that contract merged.
 
 **Map lane:** V3 foundation → liquid topology → opaque renderer → Waterfall →
 Forest → Fort → `Ring7` → remaining recipe migration → V1/V2 removal. The map
 owner keeps semantic plans private and publishes exact shared consequences.
 Recipe PRs do not edit gameplay-owned crates.
 
-**Perception lane:** headless illumination and faction knowledge → fog
+**Perception lane:** headless illumination and faction knowledge (delivered) → fog
 presentation and cave lights → movement adapter → engagement/targeting/AI
 adapters. `hex_perception` may observe unit positions, while `hex_units` reads
 only `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned
 crate is isolated and reviewed by that owner.
 
-Waterfall and headless perception can run concurrently after the foundation
-contract. Forest and Fort do not depend on combat integration. `Ring7` waits
-for Waterfall, Forest, and Fort semantic plans; V3 migration waits for the
-composite contracts but not for final combat tuning.
+Headless perception remains independent of the map lane. Forest and Fort do not
+depend on combat integration. `Ring7` waits for Waterfall, Forest, and Fort semantic
+plans; V3 migration waits for the composite contracts but not for final combat
+tuning.
 
 The first liquid implementation also records an explicit terrain-edit policy for
 support removal and stale flow topology. Until topology-aware rebuilding exists, V3
@@ -116,8 +116,8 @@ and ship hygiene are on `dev`.
 - **Wave 4 — combat feel and casting UX.** Casting UX, Outcome flow, Combat
   readability, Trajectories and lingering effects, Magic outside combat, Channelling
   and co-casting — plus **Movement and combat perception adapters**, the gameplay half
-  of the perception lane, which is planned rather than scheduled: it starts when
-  `hex_perception` lands, on the world lane's clock.
+  of the perception lane. It can now start from the live `hex_perception` boundary
+  but remains scheduled and reviewed by the gameplay owner.
 - **Wave 5 — productization.** Save and load, Settings/persistence/audio, Steam
   packaging and crash reporting, Engine upkeep (pinned to the Bevy 0.20 window).
 
@@ -315,11 +315,11 @@ Physical scene lighting remains presentation. A headless `hex_perception`
 crate deterministically combines exterior illumination, interior darkness,
 public local lights, unit positions, and per-faction knowledge. It owns
 Unknown/Remembered/Observed state and publishes the smaller
-`LocalMapKnowledge` view consumed by movement.
+`LocalMapKnowledge` view for the pending movement adapter.
 
 Fog rendering, unknown exploration, engagement, targeting, AI, and
-last-known-position behavior arrive as separate adapters after the headless
-rules pass. The existing Knowledge and divination epic remains responsible
+last-known-position behavior remain separate pending adapters now that the headless
+rules are live. The existing Knowledge and divination epic remains responsible
 for hidden lattice contents; it consumes spatial observation rather than
 duplicating it.
 

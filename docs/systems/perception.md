@@ -1,14 +1,15 @@
 # Perception
 
 The contract for deciding what a faction can see, what it remembers, and what the
-renderer may disclose. The shared vocabulary and setup ordering exist before the
-runtime system on purpose: map, unit, combat, and presentation work can compile
-against one boundary without reaching into one another's crates.
+renderer may disclose. The shared vocabulary and setup ordering were established
+before the runtime system on purpose: map, unit, combat, and presentation work can
+compile against one boundary without reaching into one another's crates.
 
-> **Status:** this is the normative contract for the staged perception work. The
-> first contracts PR reserves the shared types and ordering only; no live system
-> changes movement, combat, AI, picking, or rendering until the later perception
-> PRs land.
+> **Status:** authoritative headless illumination, pooled faction sight, and
+> Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
+> Fog/picking presentation, generated cave lights, unknown-frontier movement, and
+> combat/AI adapters remain later isolated PRs; movement and combat behavior is
+> unchanged by the headless milestone.
 
 ## Four facts, not one
 
@@ -22,12 +23,13 @@ separate:
 
 A physically bright pixel does not make a tile observed. A remembered tile may be
 drawn without being observed. Hiding a cave roof for the camera does not illuminate
-the cave below it. Combat reads faction knowledge, never Bevy's `Visibility` or the
-PBR light list.
+the cave below it. No gameplay rule may infer knowledge from Bevy's `Visibility` or
+the PBR light list.
 
 Enemy lattice knowledge is a fifth, independent information channel. Observing an
 enemy establishes its position; it does not reveal its lattice or intent. Divination
-owns those facts.
+owns those facts. The combat adapter will read faction knowledge, never Bevy's
+`Visibility` or the PBR light list.
 
 ## Illumination
 
@@ -67,10 +69,10 @@ Gameplay lights are public world facts. The same lamp, crystal, or future carrie
 light illuminates a place for every faction; there are no faction-private light
 volumes. Overlapping sources take the maximum level rather than adding brightness.
 
-Generated caves place fixed crystals or lamps with radii from four through seven.
-They cover the entrance, the required route, and critical chambers. Optional branches
-may remain dark. Their emissive meshes and optional physical lights communicate the
-rule but do not implement it.
+The cave-light retrofit will place fixed crystals or lamps with radii from four
+through seven. They will cover the entrance, the required route, and critical
+chambers. Optional branches may remain dark. Their emissive meshes and optional
+physical lights communicate the rule but do not implement it.
 
 ## Sight
 
@@ -112,45 +114,49 @@ illumination, and knowledge.
 
 ## Faction knowledge
 
-The future `FactionMapKnowledge` is the authoritative full state for one faction and
-never passes knowledge between hostile factions. `LocalMapKnowledge` is only the
-local faction's compact, traversal-facing projection for exact surfaces; richer
-terrain and unit memory remains owned by the future perception crate.
+`FactionMapKnowledge` owns separate authoritative `FactionKnowledge` slots for Player
+and Hostile and never passes facts between them. `LocalMapKnowledge` is only the local
+faction's compact, traversal-facing projection for exact surfaces; richer terrain and
+unit memory remains owned by `hex_perception`.
 
 | State | What the faction may know |
 |---|---|
 | `Unknown` | No terrain, surface, feature, unit, occupancy, or edit information |
 | `Remembered` | The exact terrain snapshot from the last observation, but no units or later changes |
-| `Observed` | Current authoritative terrain, features, occupancy, and units |
+| `Observed` | Current exposed-surface snapshot, blocker state, and currently observed units |
 
 The first observation changes Unknown to Observed. When sight leaves, the last
 observed terrain snapshot becomes Remembered. Terrain edits and unit movement that
 happen afterward do not update it. Re-observation replaces the snapshot with current
 truth. Remembered state is therefore useful but never an oracle.
 
-Static map features that form part of the observed place may be remembered with its
-terrain. Units and other transient objects disappear immediately when no longer
-observed. Whether knowledge survives a saved game is deferred; the first
-implementation is gameplay-session state.
+The blocker state of a static map feature may be remembered with its terrain. Units
+and other transient objects disappear immediately when no longer observed. Whether
+knowledge survives a saved game is deferred; the first implementation is
+gameplay-session state.
 
 ### Exploring an unknown frontier
 
-Normal route planning uses Observed and Remembered exact surfaces and the shared
+The movement adapter will use Observed and Remembered exact surfaces and the shared
 traversal predicate. It may append at most one horizontally adjacent Unknown
 coordinate to the end of an otherwise known route.
 
-Unknown terrain itself remains unpickable. Presentation supplies a generic frontier
-affordance rather than exposing a hidden tile entity, level, material, headroom, or
-passability. Execution resolves the attempted final step against the authoritative
-map. A rejected step leaves the unit at the known frontier and must not disclose
-which hidden condition rejected it. A planner never searches through several Unknown
-coordinates or uses failed probes to reveal an alternate route.
+Once fog and picking land, Unknown terrain will remain unpickable. Presentation will
+supply a generic frontier affordance rather than exposing a hidden tile entity, level,
+material, headroom, or passability. Execution resolves the attempted final step
+against the authoritative map. A rejected step leaves the unit at the known frontier
+and must not disclose which hidden condition rejected it. A planner never searches
+through several Unknown coordinates or uses failed probes to reveal an alternate
+route.
 
 The movement owner decides the action cost of a rejected exploration step when that
 turn rule is implemented. Perception's contract is only that the preview and result
 do not leak hidden geometry.
 
 ## Combat contact
+
+This is the binding contract for the pending combat adapter; current combat does not
+consume perception.
 
 Observation gates the existing reach trigger; it does not replace it. Combat begins
 when either faction currently observes a hostile **and** that hostile pair satisfies
@@ -187,7 +193,7 @@ Losing contact again later starts a new search on the same rule.
 
 ## Presentation without state collisions
 
-Fog presentation consumes faction knowledge:
+The fog adapter will consume faction knowledge:
 
 - Unknown places are featureless, unpickable, and disclose no underlying geometry.
 - Remembered terrain is visually distinct from current observation and cannot show
@@ -199,16 +205,16 @@ presentation and combat logs filter every outcome through the receiving faction'
 current knowledge. An acknowledgment may exist for simulation, replay, or saving
 without disclosing its hidden position, material, resistance, occupancy, or damage.
 
-Fog, cave roof cutaway, and future canopy cutaway all need to affect presentation.
-They must contribute independent occlusion reasons to one composed result. No system
-may set `Visibility::Visible` to undo another system's hide, or treat a camera
-cutaway as a knowledge change. Picking, shadows, overlays, units, terrain, and props
-derive their final state from the same composition.
+Fog will join the live cave-roof and canopy cutaways by contributing its own
+independent occlusion reason to one composed result. No system may set
+`Visibility::Visible` to undo another system's hide, or treat a camera cutaway as a
+knowledge change. Picking, shadows, overlays, units, terrain, and props derive their
+final state from the same composition.
 
 `GameplaySetup::Perception` runs after actors exist and before generated view framing.
-The future `hex_perception` crate owns illumination, sight, faction knowledge, and
+The `hex_perception` crate owns illumination, sight, faction knowledge, and
 their authoritative queries. It may read units and shared map projections.
-`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`;
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`;
 `hex_combat` may use the richer perception API for engagement and target validation.
 
 ## Verification gate
@@ -220,9 +226,9 @@ party sight; downhill caps; exact stacked surfaces; and the alternative `24/8/1`
 
 Knowledge tests must prove Unknown contains no snapshot, Remembered retains the exact
 last-seen terrain and blockers, unseen terrain edits and feature changes do not leak,
-units vanish outside observation, and re-observation replaces stale facts. Route
-tests cover the one-step Unknown frontier without exposing hidden level, headroom,
-material, or rejection reason.
+units vanish outside observation, and re-observation replaces stale facts. Movement
+adapter tests must cover the one-step Unknown frontier without exposing hidden level,
+headroom, material, or rejection reason.
 
 Combat adapters require observation-gated engage reach, asymmetric detection,
 independent disengage-margin and lost-contact behavior, full one-round search,

@@ -105,7 +105,7 @@ every UI root pointed at the redirected camera.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
-hex_core → hex_units → hex_perception → hex_combat  (planned)
+hex_core → {hex_assets, hex_units} → hex_perception → hex_game
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
@@ -121,15 +121,15 @@ See `crates/hex_lattice`.
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
-The planned **`hex_perception`** crate owns authoritative illumination, faction sight,
-and map knowledge. It may depend on `hex_units` to observe unit positions.
-`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`,
+**`hex_perception`** owns authoritative illumination, faction sight, and map
+knowledge. It depends on `hex_units` to observe unit positions.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`,
 while `hex_combat` may consume the richer perception API. Neither gameplay crate may
 import map-generator internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
-content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
 modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is

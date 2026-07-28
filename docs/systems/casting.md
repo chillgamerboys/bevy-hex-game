@@ -156,9 +156,9 @@ designed, and Unknown positions are unpickable by design so there would be nothi
 name anyway. If one is ever specified, the exception is one condition in this ladder
 and changes nothing about the boundary with the world owner.
 
-The observation rung returns `true` until fog exists because every current target
-genuinely is Observed. It becomes a real query when `hex_perception` lands, and that is
-a one-function change inside `hex_combat`.
+The observation rung retains its compatibility `true` until the combat perception
+adapter lands. `hex_perception` now publishes the authoritative query that adapter
+will consume in one isolated `hex_combat` change.
 
 ### Occupancy
 

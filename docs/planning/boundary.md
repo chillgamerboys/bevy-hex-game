@@ -45,7 +45,7 @@ semantics. `GeneratedWorldPlan`, patch masks, edge contracts, liquid graphs,
 feature plans, structure plans, recipe names, and repair metadata remain private
 to `hex_map`.
 
-The contracts-first PR reserves the exact projections V3 may publish:
+The contracts-first PR introduced the exact projections V3 may publish:
 
 - `BiomeRegions` maps exact `TilePos` values to map-local `BiomeRegionId`s;
 - `TraversalBlockers` names exact otherwise-standable surfaces occupied by
@@ -62,9 +62,9 @@ map how that tree was sampled, which candidate produced the region, or how to re
 the liquid graph.
 
 V3 implementation and delivery are specified in
-[world-generation-v3.md](../systems/world-generation-v3.md). The map publishes
-these resources only when the corresponding V3 layer lands; the contracts-first
-PR itself changes no runtime behavior.
+[world-generation-v3.md](../systems/world-generation-v3.md). V3 now publishes biome
+membership and feature blockers; generated gameplay-light entities remain pending
+the cave-light retrofit.
 
 ## Delivered by the procedural map pipeline — nothing left to ask
 
@@ -312,9 +312,9 @@ nothing says so. To be precise about what already happens: `apply_terrain_edits`
 (`crates/hex_map/src/grid.rs`) does maintain `InteriorRegions` across an edit by
 calling `remove_roof_voxel` for each applied edit — so the *roof* projection stays
 current. What is never re-derived is interior **membership**: the chamber's surfaces
-keep the region they were generated with. `LightDomain` has no producer at all yet, so
-there is nothing to correct there today — it is a reserved type waiting on the
-perception lane.
+keep the region they were generated with. `hex_perception` derives each surface and
+source `LightDomain` from that exact current membership every frame. A breached
+chamber therefore continues to resolve as Interior even after its roof changes.
 
 The correct gameplay meaning of a breach remains unresolved. Removing one roof voxel
 must not automatically convert an entire connected chamber to exterior illumination,
@@ -324,8 +324,9 @@ region-wide daylight, and whether a repaired roof can restore the domain.
 
 **Open question, not an accepted rebuild contract**: V3 keeps interior membership and
 ambient-domain derivation private, but does not promise to reclassify a whole chamber
-after an edit. Resolve the breach rule before terrain impact and perception are joined;
-until then, edits update the existing roof projection only.
+after an edit. Resolve the breach rule before `TerrainImpact` begins mutating worlds
+observed by live perception; until then, edits update the existing roof projection
+only.
 
 **Fallback until then**: documented in [status.md](status.md) — a breached roof does
 not admit daylight, and gameplay will not pretend otherwise.
@@ -336,17 +337,17 @@ not admit daylight, and gameplay will not pretend otherwise.
 `hex_core`. Every other tunable in the game lives in `assets/config/*.ron`, validated
 at load and hot-reloadable, which is what makes playtesting a file edit.
 
-**Accepted scheduling**: `perception.ron` lands with the authoritative spatial
-perception epic, on the same validated and hot-reloadable loader pattern as
-`combat.ron`. The world owner owns the values and the gameplay owner reviews any
-shared loader-infrastructure change. **The numbers stay yours** — this is about where
-they live, not what they are.
+**Delivered**: `perception.ron` provides three validated, hot-reloadable profiles on
+the same loader pattern as `combat.ron`. The world owner owns the values and the
+gameplay owner reviews any shared loader-infrastructure change. **The numbers stay
+yours** — this is about where they live, not what they are.
 
 Note also that sight and spell range deliberately use *different* elevation rules:
 sight gains one hex per four levels capped at six, spell range gains one per five,
 uncapped. Sight is not reach, and they should be tuned apart.
 
-Until that epic lands, the constants remain the compatibility default in code.
+`SightProfile::DEFAULT` remains the headless-test compatibility fallback; gameplay
+uses the validated active profile.
 
 ## K — Liquid edit policy (accepted conservative admission rule)
 
@@ -363,11 +364,10 @@ retained authored liquid run remains above. Its private classifier is keyed by e
 occupancy nor current/fall metadata changes, and liquid never redistributes.
 
 This does not make water or lava globally non-diggable. Legacy and non-topological
-liquids remain governed by their existing `diggable` material behavior. The
-classifier lands with the semantic topology; runtime enforcement waits for the first
-runnable V3 recipe, because no current gameplay map can yet carry that topology.
-Topology-aware clearing or rebuilding may replace this conservative rule later, but
-must update occupancy and all derived flow metadata in one operation.
+liquids remain governed by their existing `diggable` material behavior. The exact
+classifier and conservative runtime admission are live for authored V3 liquid
+topology. Topology-aware clearing or rebuilding may replace this conservative rule
+later, but must update occupancy and all derived flow metadata in one operation.
 
 ## L — Conjurable substance admission
 

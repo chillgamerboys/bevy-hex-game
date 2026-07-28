@@ -11,6 +11,7 @@ something reserved for later, or something still being asked for?*
 | Status | Meaning |
 |---|---|
 | **live** | Published and consumed in the shipped build |
+| **partial** | One side is live, while the row names the required producer or consumer still pending |
 | **agreed** | Both owners accept the contract and sequencing, but it is not live yet |
 | **reserved** | Type and ordering exist; nothing produces or consumes it yet |
 | **asked** | Proposed in [planning/boundary.md](planning/boundary.md), not yet agreed |
@@ -33,8 +34,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `CanopyOccluder` — exact tree-root identity for local canopy cutaway | world | presentation | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `ResolvedMapSeed` — the seed a session actually used | game | world | live | [development/config.md](development/config.md) |
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
-| `BiomeRegions` — biome membership by exact `TilePos` | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `TraversalBlockers` — surfaces occupied by generated features | world | gameplay | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| `TraversalBlockers` — exact feature-occupied surfaces consumed by validation, perception, and movement | world | perception / `hex_units` | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `RunBottom(Level)` — each run's lowest voxel; prerequisite to wave 3 terrain casting | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) H |
@@ -45,20 +46,21 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | reserved | [systems/perception.md](systems/perception.md) |
-| `GameplayLight` + `LightDomain` — public radial light sources | world | perception | reserved | [systems/perception.md](systems/perception.md) |
-| `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | reserved | [systems/perception.md](systems/perception.md) |
-| `LocalMapKnowledge` — the compact traversal projection | perception | `hex_units` | reserved | [systems/perception.md](systems/perception.md) |
-| Richer faction-knowledge API — observation queries | perception | `hex_combat` | reserved | [systems/perception.md](systems/perception.md) |
-| `PresentationOcclusion` — composed hide reasons, no single owner of `Visibility` | shared | presentation | reserved | [systems/perception.md](systems/perception.md) |
-| `perception.ron` — sight tunables as designer-facing settings | world | perception | **agreed** | [planning/boundary.md](planning/boundary.md) J |
+| `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
+| `GameplayLight` + derived `LightDomain` — consumer live; generated cave sources pending | world | perception | **partial** | [systems/perception.md](systems/perception.md) |
+| `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
+| `LocalMapKnowledge` — publisher live; movement adapter pending | perception | `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
+| Richer faction-knowledge API — publisher live; combat adapter pending | perception | `hex_combat` | **partial** | [systems/perception.md](systems/perception.md) |
+| `PresentationOcclusion` — live for cave/canopy; fog reason pending | shared | presentation | live | [systems/perception.md](systems/perception.md) |
+| `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 
 ## Ordering
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `GameplaySetup` — `Resources → Terrain → Actors → Perception → View → Finalize` | core | all | live (`Perception` reserved) | [`CLAUDE.md`](../CLAUDE.md) |
-| `PerceptionSystems` — `PublishAmbient → ResolveIllumination → ResolveObservation → PublishKnowledge → ApplyPresentation` | core | perception | reserved | [systems/perception.md](systems/perception.md) |
+| `GameplaySetup` — `Resources → Terrain → Actors → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
+| `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
+| `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | `CombatSystems` — `Act → Apply → Advance` | gameplay | gameplay | live | [`hex_combat/src/lib.rs`](../crates/hex_combat/src/lib.rs) |
 
