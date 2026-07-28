@@ -16,6 +16,7 @@ Rust, and you do not need to recompile the game.
 | `player.ron` | Player piece size, movement speed and colour |
 | `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
+| `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
 
@@ -44,6 +45,7 @@ How quickly you *see* the change depends on which file:
 | `player.ron` | Speed on the next movement started; scale and colour on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
 | `encounters/*.ron` | On the next world rebuild |
+| `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
@@ -587,6 +589,66 @@ A scenario is also checked against the world it names: procedural terrain requir
 placement to resolve through an anchor, and authored terrain requires every placement to
 be fixed. That pairing is checked once both files have loaded, and a mismatch returns to
 the title screen rather than starting a fight with a unit missing.
+
+## Writing a lattice
+
+`lattices.ron` is where enemies are designed. **An enemy's lattice is its entire stat
+block** — there is no separate stats system, no hit points, and no difficulty slider. A
+wolf is four hexes and a bite. A raider is eight around a metal shield. A hedge-mage is
+twelve with a fusion chain. Difficulty is the size and complexity of the drawing.
+
+An archetype named here is what `archetype: "raider"` in an encounter roster looks up.
+
+Four kinds of cell:
+
+| Cell | What it does |
+|---|---|
+| `Gem("Fire")` | Holds mana of one element, and powers **adjacent** spells |
+| `Fusion("Lightning")` | Combines *its own* adjacent gems into a higher-order element, which adjacent spells may then draw on |
+| `Spell("Ember")` | Castable, if its adjacent cells can pay the requirements |
+| `Blank` | Part of the lattice, holds nothing — still takes a hit |
+
+**Adjacency is the entire power mechanism.** There is no action at a distance inside a
+lattice: a spell draws only from the six cells touching it. Laying one out *is* the design
+problem, and a spell whose neighbours cannot pay is simply offline — it is not an error,
+it is a lattice that cannot cast that spell.
+
+That is also the mistake worth knowing about, because nothing at runtime will tell you.
+A spell cell one hex too far from the gems meant to fund it parses, loads and spawns
+perfectly, and the unit stands there never casting. **A test catches it** — every shipped
+archetype must be able to cast everything it inscribes, checked on a fresh lattice — so a
+misplaced cell fails `cargo test` rather than a playtest.
+
+```ron
+"raider": (
+    cells: [
+        (at: (q: 0, r: 0), kind: Spell("Metal Shield")),
+        (at: (q: 1, r: 0), kind: Gem("Metal")),
+        (at: (q: 1, r: -1), kind: Gem("Metal")),
+        // …five more
+    ],
+    attunement: {"Metal": 3, "Earth": 2},
+    channelling: {"Metal": 2, "Earth": 1},
+),
+```
+
+Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
+matters, not where it sits.
+
+`attunement` is how much mana one gem of that element holds when full. `channelling` is
+how much a channel action puts back per turn. An element with no attunement entry resolves
+to **zero**, which makes a gem of it inert — a legal way to say "this thing does not
+cast", which is exactly what the wolf does. Every shipped spell costs 1 mana per required
+gem, so an attunement of 3 is three casts before that gem needs channelling back up.
+
+Which cells to break is the interesting part of a fight. The two Metal gems touching a
+raider's shield are what fund it, so taking either down drops the shield *and* burns the
+mana locked in it. A hedge-mage's fusion holds nothing itself, so its feeder gems are
+worth more than their own hexes: kill one and everything downstream dies with it.
+
+A name that does not resolve — an element not in `elements.ron`, a spell not in
+`spells.ron`, or a `Fusion` naming something with no recipe — fails to load with the
+archetype and the name in the message.
 
 ## Elements and spells
 
