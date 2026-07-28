@@ -24,6 +24,11 @@ const ART_PATH: &str = "assets/art";
 const PALETTE_FILE: &str = "palette.ron";
 const STYLE_FILE: &str = "voxel_styles.ron";
 const OBJECT_DIRECTORY: &str = "objects";
+const OBJECT_CATEGORIES: [ObjectCategory; 3] = [
+    ObjectCategory::Plant,
+    ObjectCategory::Effect,
+    ObjectCategory::Prop,
+];
 
 /// One object affected by a shared style or swatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -601,11 +606,7 @@ impl AssetProject {
 
 fn load_objects(art_root: &Path) -> Result<BTreeMap<ObjectAssetId, ObjectBlueprint>, ProjectError> {
     let mut objects = BTreeMap::new();
-    for category in [
-        ObjectCategory::Plant,
-        ObjectCategory::Effect,
-        ObjectCategory::Prop,
-    ] {
+    for category in OBJECT_CATEGORIES {
         let directory = art_root
             .join(OBJECT_DIRECTORY)
             .join(category_directory(category));
@@ -877,11 +878,7 @@ fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Proje
         }
     }
 
-    for category in [
-        ObjectCategory::Plant,
-        ObjectCategory::Effect,
-        ObjectCategory::Prop,
-    ] {
+    for category in OBJECT_CATEGORIES {
         let relative_directory = PathBuf::from(OBJECT_DIRECTORY).join(category_directory(category));
         let directory = art_root.join(&relative_directory);
         if !directory

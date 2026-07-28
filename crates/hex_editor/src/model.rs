@@ -1132,10 +1132,18 @@ impl EditorModel {
         ) -> Result<(), EditorModelError>,
     ) -> Result<bool, EditorModelError> {
         if self.history.is_transaction_open() {
-            // Every command closure validates all fallible conditions before its
-            // first mutation. The transaction baseline therefore provides rollback
-            // without cloning and sorting the complete object for every painted cell.
-            operation(&mut self.object, &mut self.selection)?;
+            #[cfg(debug_assertions)]
+            let before = self.snapshot();
+            let result = operation(&mut self.object, &mut self.selection);
+            #[cfg(debug_assertions)]
+            if result.is_err() {
+                debug_assert_eq!(
+                    self.snapshot(),
+                    before,
+                    "transaction command mutated editor state before returning an error"
+                );
+            }
+            result?;
             return Ok(true);
         }
         let before = self.snapshot();
@@ -1733,6 +1741,21 @@ mod tests {
         assert_eq!(editor.cancel_transaction(), Ok(()));
         assert_eq!(editor.object(), &original);
         assert!(!editor.is_transaction_open());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "transaction command mutated editor state before returning an error")]
+    fn transaction_command_that_mutates_before_failure_violates_debug_invariant() {
+        let mut editor = editor();
+        assert!(editor.begin_transaction("Paint stroke").is_ok());
+
+        let _result = editor.edit("Deliberately failing edit", |object, selection| {
+            object.display_name = "Leaked partial mutation".to_owned();
+            object.placements.clear();
+            selection.cells.clear();
+            Err(EditorModelError::new("deliberate test failure"))
+        });
     }
 
     #[test]

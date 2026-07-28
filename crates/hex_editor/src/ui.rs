@@ -26,6 +26,7 @@ const RIGHT_PANEL_WIDTH: f32 = 310.0;
 const STATUS_HEIGHT: f32 = 28.0;
 const TOOLBAR_HEIGHT: f32 = 42.0;
 const SEARCH_HEIGHT: f32 = 28.0;
+const STATUS_SUMMARY_ID: &str = "workshop_status_summary";
 
 const PANEL_FILL: egui::Color32 = egui::Color32::from_rgb(31, 34, 38);
 const TOOLBAR_FILL: egui::Color32 = egui::Color32::from_rgb(25, 28, 31);
@@ -1193,7 +1194,7 @@ fn draw_status_bar(
                     let Some(editor) = &snapshot.editor else {
                         return;
                     };
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    status_summary_ui(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} voxels  |  {} selected",
@@ -1223,7 +1224,7 @@ fn draw_status_bar(
                     });
                 } else if let (Some(palette), Some(styles)) = (&snapshot.palette, &snapshot.styles)
                 {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    status_summary_ui(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} swatches  |  {} styles",
@@ -1236,6 +1237,18 @@ fn draw_status_bar(
                 }
             });
         });
+}
+
+fn status_summary_ui<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id(egui::Id::new(STATUS_SUMMARY_ID))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        add_contents,
+    )
 }
 
 fn draw_left_browser(
@@ -3197,6 +3210,40 @@ mod tests {
             true,
         ));
         assert!(viewport_pointer_is_suppressed(viewport, None, false, false));
+    }
+
+    #[test]
+    fn status_summary_widget_ids_ignore_conditional_left_content() {
+        let context = egui::Context::default();
+
+        let run_pass = |include_hover: bool| {
+            let mut response = None;
+            drop(context.run_ui(egui::RawInput::default(), |ui| {
+                response = Some(
+                    ui.horizontal(|ui| {
+                        ui.label("Ready");
+                        if include_hover {
+                            ui.separator();
+                            ui.label("q 0  r 0  level 0");
+                        }
+                        status_summary_ui(ui, |ui| {
+                            let mut level = 0;
+                            ui.add(egui::DragValue::new(&mut level).prefix("Level "))
+                        })
+                        .inner
+                    })
+                    .inner,
+                );
+            }));
+            let response = response.expect("pass should produce a response");
+            (response.id, response.rect)
+        };
+
+        let first = run_pass(false);
+        let second = run_pass(true);
+
+        assert_eq!(first.0, second.0);
+        assert_eq!(first.1, second.1);
     }
 
     #[test]
