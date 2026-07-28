@@ -16,13 +16,14 @@ use hex_core::{
 
 use super::fingerprint::{semantic_plan_fingerprint, FingerprintEncoder};
 use super::layout::HexSide;
+use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::selection::ValidatedWorldPlan;
 use super::volume::{
     FillMaterialRole, MaterializedVolume, SurfaceAccess, VolumeMaterializationError,
 };
 use super::world::{
-    FeatureId, FeatureKind, GeneratedWorldPlan, LightId, LiquidFlowState, PlannedFeature,
-    PlannedGameplayLight, PlannedLiquid, PlannedStructure, StructureId, StructureKind,
+    FeatureId, FeatureKind, GeneratedWorldPlan, LightId, PlannedFeature, PlannedGameplayLight,
+    PlannedStructure, StructureId, StructureKind,
 };
 use crate::terrain::TerrainPalette;
 use crate::voxel::VoxelMap;
@@ -48,10 +49,18 @@ pub(crate) struct MaterializedV3World {
 /// These semantic descriptors remain private to the V3 map pipeline.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(super) struct MapPresentationProjection {
-    pub(super) liquids: BTreeMap<TilePos, PlannedLiquid>,
+    pub(super) liquids: BTreeMap<TilePos, MaterializedLiquidVoxel>,
     pub(super) features: BTreeMap<FeatureId, PlannedFeature>,
     pub(super) structures: BTreeMap<StructureId, PlannedStructure>,
     pub(super) lights: BTreeMap<LightId, PlannedGameplayLight>,
+}
+
+/// Presentation metadata expanded to every occupied voxel in one liquid run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct MaterializedLiquidVoxel {
+    pub(super) material: FillMaterialRole,
+    pub(super) flow: LiquidFlowState,
+    pub(super) direction: Option<HexSide>,
 }
 
 /// Failure after selection admitted a semantic plan but before runtime publication.
@@ -127,25 +136,32 @@ pub(crate) fn materialize(
         .materialize(palette, is_solid)
         .map_err(MaterializationError::Volume)?;
 
-    verify_materialized_consequences(&plan, &map, &interiors, &special_regions, is_solid)?;
+    let materialized_liquids = project_liquids(&plan.liquids, &plan.volume)?;
+    verify_materialized_consequences(
+        &plan,
+        &map,
+        &interiors,
+        &special_regions,
+        &materialized_liquids,
+        is_solid,
+    )?;
 
     let anchors = project_anchors(&plan.anchors);
     let blockers = project_blockers(&plan.blockers);
     let biome_regions = project_biomes(&plan.biome_regions);
     verify_public_resources(&plan, &anchors, &blockers, &biome_regions)?;
 
-    let materialized_fingerprint =
-        fingerprint_materialized(&plan, &map).map_err(MaterializationError::Fingerprint)?;
+    let materialized_fingerprint = fingerprint_materialized(&plan, &map, &materialized_liquids)
+        .map_err(MaterializationError::Fingerprint)?;
     let view_hint = plan.view_hint;
     let GeneratedWorldPlan {
-        liquids,
         features,
         structures,
         lights,
         ..
     } = plan;
     let presentation = MapPresentationProjection {
-        liquids: liquids.by_voxel,
+        liquids: materialized_liquids,
         features: features.by_id,
         structures: structures.by_id,
         lights,
@@ -188,11 +204,83 @@ fn project_biomes(source: &BTreeMap<TilePos, BiomeRegionId>) -> BiomeRegions {
     projected
 }
 
+fn project_liquids(
+    liquids: &LiquidPlan,
+    volume: &super::volume::VolumePlan,
+) -> Result<BTreeMap<TilePos, MaterializedLiquidVoxel>, MaterializationError> {
+    let fill_runs = volume.fill_runs_by_top();
+    let mut projected = BTreeMap::new();
+    let mut projected_runs = BTreeSet::new();
+
+    for (body_id, body) in &liquids.bodies {
+        for (run_top, node) in &body.nodes {
+            if !projected_runs.insert(*run_top) {
+                return Err(MaterializationError::Projection(format!(
+                    "multiple liquid bodies own fill run {run_top:?}"
+                )));
+            }
+            let fill = fill_runs.get(run_top).ok_or_else(|| {
+                MaterializationError::Projection(format!(
+                    "liquid body {body_id:?} node {run_top:?} has no owning fill run"
+                ))
+            })?;
+            if fill.material != body.material {
+                return Err(MaterializationError::Projection(format!(
+                    "liquid body {body_id:?} node {run_top:?} material {:?} disagrees with its {:?} fill",
+                    body.material, fill.material
+                )));
+            }
+            let direction = node
+                .downstream
+                .map(|downstream| {
+                    hex_side_between(run_top.coord, downstream.coord).ok_or_else(|| {
+                        MaterializationError::Projection(format!(
+                            "liquid body {body_id:?} node {run_top:?} has non-adjacent downstream {downstream:?}"
+                        ))
+                    })
+                })
+                .transpose()?;
+            let descriptor = MaterializedLiquidVoxel {
+                material: body.material,
+                flow: node.state,
+                direction,
+            };
+
+            for level in fill.levels.bottom..fill.levels.top {
+                let position = TilePos::new(run_top.coord, level);
+                if projected.insert(position, descriptor).is_some() {
+                    return Err(MaterializationError::Projection(format!(
+                        "multiple liquid nodes project onto occupied voxel {position:?}"
+                    )));
+                }
+            }
+        }
+    }
+    if projected_runs.len() != fill_runs.len() {
+        let missing = fill_runs
+            .keys()
+            .find(|position| !projected_runs.contains(position))
+            .expect("unequal exact fill-run sets contain a missing semantic node");
+        return Err(MaterializationError::Projection(format!(
+            "fill run {missing:?} has no liquid node"
+        )));
+    }
+
+    Ok(projected)
+}
+
+fn hex_side_between(source: HexCoord, target: HexCoord) -> Option<HexSide> {
+    HexSide::ALL
+        .into_iter()
+        .find(|side| side.neighbor(source) == target)
+}
+
 fn verify_materialized_consequences(
     plan: &GeneratedWorldPlan,
     map: &VoxelMap,
     interiors: &InteriorRegions,
     special_regions: &SpecialMovementRegions,
+    liquids: &BTreeMap<TilePos, MaterializedLiquidVoxel>,
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<(), MaterializationError> {
     for position in plan.volume.surfaces.keys().copied() {
@@ -211,7 +299,7 @@ fn verify_materialized_consequences(
         }
     }
 
-    for (position, liquid) in &plan.liquids.by_voxel {
+    for (position, liquid) in liquids {
         let substance = map.get(*position);
         if substance.is_air() || is_solid(substance) {
             return Err(MaterializationError::Projection(format!(
@@ -407,7 +495,11 @@ fn verify_public_resources(
     Ok(())
 }
 
-fn fingerprint_materialized(plan: &GeneratedWorldPlan, map: &VoxelMap) -> Result<u64, String> {
+fn fingerprint_materialized(
+    plan: &GeneratedWorldPlan,
+    map: &VoxelMap,
+    liquids: &BTreeMap<TilePos, MaterializedLiquidVoxel>,
+) -> Result<u64, String> {
     let mut encoder = FingerprintEncoder::new();
     encoder.u32(3);
 
@@ -450,7 +542,7 @@ fn fingerprint_materialized(plan: &GeneratedWorldPlan, map: &VoxelMap) -> Result
     encode_view_hint(&mut encoder, plan.view_hint)?;
 
     encoder.tag(7);
-    encode_liquids(&mut encoder, &plan.liquids.by_voxel)?;
+    encode_liquids(&mut encoder, liquids)?;
     encoder.tag(8);
     encode_features(&mut encoder, &plan.features.by_id)?;
     encoder.tag(9);
@@ -563,7 +655,7 @@ fn encode_view_hint(
 
 fn encode_liquids(
     encoder: &mut FingerprintEncoder,
-    liquids: &BTreeMap<TilePos, PlannedLiquid>,
+    liquids: &BTreeMap<TilePos, MaterializedLiquidVoxel>,
 ) -> Result<(), String> {
     encoder.collection_count(liquids.len())?;
     for (position, liquid) in liquids {
@@ -660,13 +752,12 @@ mod tests {
     use crate::procedural_v3::layout::{
         LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
     };
+    use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{
         FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole,
         SurfaceMetadata, VolumeElement, VolumePlan,
     };
-    use crate::procedural_v3::world::{
-        FeaturePlan, InteriorPlan, LiquidPlan, PlannedInterior, StructurePlan,
-    };
+    use crate::procedural_v3::world::{FeaturePlan, InteriorPlan, PlannedInterior, StructurePlan};
 
     fn palette() -> TerrainPalette {
         TerrainPalette {
@@ -686,6 +777,85 @@ mod tests {
 
     fn is_solid(substance: SubstanceId) -> bool {
         matches!(substance.0, 1 | 2 | 3 | 4 | 5 | 7 | 8 | 9 | 10)
+    }
+
+    #[test]
+    fn expands_a_fall_run_and_derives_its_exact_horizontal_direction() {
+        let source_coord = HexCoord::ORIGIN;
+        let target_coord = HexSide::East.neighbor(source_coord);
+        let source = TilePos::new(source_coord, 5);
+        let target = TilePos::new(target_coord, 3);
+        let mut volume = VolumePlan::new(BTreeSet::from([source_coord, target_coord]));
+        volume.columns.get_mut(&source_coord).unwrap().elements =
+            vec![VolumeElement::Fill(NonSolidFill {
+                levels: LevelInterval::new(1, 6),
+                material: FillMaterialRole::Water,
+            })];
+        volume.columns.get_mut(&target_coord).unwrap().elements =
+            vec![VolumeElement::Fill(NonSolidFill {
+                levels: LevelInterval::new(3, 4),
+                material: FillMaterialRole::Water,
+            })];
+        let liquids = LiquidPlan {
+            bodies: BTreeMap::from([(
+                LiquidBodyId(4),
+                LiquidBodyPlan {
+                    material: FillMaterialRole::Water,
+                    nodes: BTreeMap::from([
+                        (
+                            source,
+                            LiquidNode {
+                                state: LiquidFlowState::Fall,
+                                downstream: Some(target),
+                            },
+                        ),
+                        (
+                            target,
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        ),
+                    ]),
+                },
+            )]),
+        };
+
+        let projected =
+            project_liquids(&liquids, &volume).expect("valid liquid runs project exactly");
+        assert_eq!(projected.len(), 6);
+        for level in 1..=5 {
+            assert_eq!(
+                projected.get(&TilePos::new(source_coord, level)),
+                Some(&MaterializedLiquidVoxel {
+                    material: FillMaterialRole::Water,
+                    flow: LiquidFlowState::Fall,
+                    direction: Some(HexSide::East),
+                })
+            );
+        }
+        assert_eq!(
+            projected.get(&target),
+            Some(&MaterializedLiquidVoxel {
+                material: FillMaterialRole::Water,
+                flow: LiquidFlowState::Still,
+                direction: None,
+            })
+        );
+    }
+
+    #[test]
+    fn resolves_every_horizontal_downstream_side() {
+        for side in HexSide::ALL {
+            assert_eq!(
+                hex_side_between(HexCoord::ORIGIN, side.neighbor(HexCoord::ORIGIN)),
+                Some(side)
+            );
+        }
+        assert_eq!(
+            hex_side_between(HexCoord::ORIGIN, HexCoord::new_cubic(2, 0, -2)),
+            None
+        );
     }
 
     fn mass(
@@ -815,12 +985,17 @@ mod tests {
             layout,
             volume,
             liquids: LiquidPlan {
-                by_voxel: BTreeMap::from([(
-                    water,
-                    PlannedLiquid {
+                bodies: BTreeMap::from([(
+                    LiquidBodyId(0),
+                    LiquidBodyPlan {
                         material: FillMaterialRole::Water,
-                        flow: LiquidFlowState::Still,
-                        direction: None,
+                        nodes: BTreeMap::from([(
+                            water,
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        )]),
                     },
                 )]),
             },
@@ -931,6 +1106,29 @@ mod tests {
             first.materialized_fingerprint,
             changed.materialized_fingerprint
         );
+    }
+
+    #[test]
+    fn body_identity_changes_semantics_without_changing_materialized_voxels() {
+        let first = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the first world materializes");
+        let mut renumbered = valid_plan(5);
+        let body = renumbered
+            .liquids
+            .bodies
+            .pop_first()
+            .expect("the fixture has one liquid body")
+            .1;
+        renumbered.liquids.bodies.insert(LiquidBodyId(99), body);
+        let changed = materialize(validated(renumbered), &palette(), &is_solid)
+            .expect("the renumbered world materializes");
+
+        assert_ne!(first.semantic_fingerprint, changed.semantic_fingerprint);
+        assert_eq!(
+            first.materialized_fingerprint,
+            changed.materialized_fingerprint
+        );
+        assert_eq!(first.presentation.liquids, changed.presentation.liquids);
     }
 
     #[test]
