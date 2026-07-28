@@ -1,10 +1,10 @@
-//! Persistent effects: the five facts that describe one lasting effect.
+//! Persistent effects: the six facts that describe one lasting effect.
 //!
 //! Damage over time, enchantment upkeep and decaying divination are the same system
 //! wearing three hats, so `docs/systems/casting.md` builds it once, around one shape:
 //!
 //! ```text
-//! { source, target, payload, start, end }
+//! { source, target, payload, start, end, ticks }
 //! ```
 //!
 //! The vocabulary is here, the runtime is `hex_combat::effects`, and lattice payloads
@@ -13,17 +13,25 @@
 //! burning *means* can be redefined without touching the framework, which is the point
 //! of having one.
 //!
-//! # Nothing here counts down
+//! # The record is the whole effect
 //!
-//! No type in this module holds a remaining-turns counter, and that is deliberate
-//! rather than incidental. A persistent effect's payload almost always has a store of
-//! its own — a burn lives in the target's `hex_lattice::LatticeState`, an enchantment
-//! in the same place — and a second counter beside it is a drift waiting to happen:
-//! two numbers meaning the same thing, updated by two code paths, disagreeing the
-//! first time one of them is missed.
+//! Everything needed to decide whether an effect is still running is on the record. That
+//! is worth stating because it was briefly built the other way: a burn's remaining turns
+//! lived in the target's `hex_lattice::LatticeState` on the theory that a payload's own
+//! store should own its countdown, and a second counter beside it would be drift waiting
+//! to happen.
 //!
-//! So [`EffectEnd`] states the *condition*, and the runtime evaluates it by asking live
-//! state. `start` is the round the effect began, which is a fact rather than a counter.
+//! It was the wrong seam. An effect names a *source*, and the payload's store has no
+//! vocabulary for one, so half the effect lived here regardless — two stores describing a
+//! single fact between them, which is the drift the split was meant to avoid. Worse, a
+//! rules engine has no turn order, so it could not tick at the point the design
+//! specifies. `hex_lattice` now holds hexes, mana and enchantments; nothing else.
+//!
+//! So [`PersistentEffect`]'s `ticks` counts what has happened and [`EffectEnd`] states the
+//! condition, and comparing them is a total function of the record. Both `start` and
+//! `ticks` only ever go up, which is what makes them safe against a repeated frame.
+//! [`EffectEnd::WithEnchantment`] is the one condition that still asks the world, because
+//! an enchantment genuinely is somebody else's fact.
 
 use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -87,7 +95,7 @@ pub enum EffectPayload {
 pub enum EffectEnd {
     /// Ends after this many of the **target's own turns** have ticked it.
     ///
-    /// Counted against [`PersistentEffect::ticks`], which the runtime increments as it
+    /// Counted against [`PersistentEffect`]'s `ticks`, which the runtime increments as it
     /// ticks — so the countdown lives with the effect rather than in whatever the
     /// payload happens to touch. That matters more than it sounds: an earlier design
     /// kept a burn's remaining turns inside the target's `LatticeState` and asked the

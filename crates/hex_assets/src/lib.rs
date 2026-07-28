@@ -34,7 +34,10 @@ pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
     RosteredUnit,
 };
-pub use lattices::{Archetype, LatticeError, LatticeFile, LatticeLibrary};
+pub use lattices::{
+    Archetype, AxialPair, LatticeError, LatticeFile, LatticeLibrary, UnvalidatedArchetype,
+    UnvalidatedCell, UnvalidatedEntry,
+};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };

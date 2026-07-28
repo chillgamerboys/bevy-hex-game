@@ -151,10 +151,24 @@ pub enum Effect {
         /// Whether the caster picks which hexes, rather than an arbitrary count.
         targeted: bool,
     },
-    /// Burn locked mana out of the target.
+    /// Set the target alight, disabling one hex at the start of each of its own turns.
+    ///
+    /// Burn **ignores armour** — fire's identity is beating defences rather than
+    /// overpowering them — but still goes through the defender's choice of which hexes.
     Burn {
-        /// How much mana to burn.
-        amount: u16,
+        /// How many of the target's own turns it burns for.
+        ///
+        /// Each of those turns costs the target one hex, so `turns: 3` is three hexes
+        /// spread over three of its turns rather than three at once — which is the whole
+        /// difference between burn and a direct hit, and why it can be survived by
+        /// finishing the fight quickly.
+        ///
+        /// **Named `turns` rather than `amount` deliberately.** It was `amount` and
+        /// documented as locked mana; nothing ever implemented that reading, and a
+        /// designer could not tell from the schema whether `2` meant mana, hexes per
+        /// tick, or duration. Saves do not exist yet, so the rename is free now and
+        /// content-compatibility debt later.
+        turns: u16,
     },
     /// Restore a number of the target's disabled hexes.
     RestoreHexes {
@@ -437,7 +451,7 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             Effect::DisableHexes { count, .. } if *count == 0 => {
                 return Err(zero("DisableHexes.count"));
             }
-            Effect::Burn { amount } if *amount == 0 => return Err(zero("Burn.amount")),
+            Effect::Burn { turns } if *turns == 0 => return Err(zero("Burn.turns")),
             Effect::RestoreHexes { count } if *count == 0 => {
                 return Err(zero("RestoreHexes.count"));
             }
@@ -623,7 +637,7 @@ mod tests {
                     },
                     needs_los: true,
                 },
-                effects: vec![Effect::Burn { amount: 2 }],
+                effects: vec![Effect::Burn { turns: 2 }],
             },
         );
         SpellFile { spells }
@@ -658,7 +672,7 @@ mod tests {
                 count: 1,
                 targeted: false,
             },
-            Effect::Burn { amount: 1 },
+            Effect::Burn { turns: 1 },
             Effect::RestoreHexes { count: 1 },
             Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Reveal { tier: 1 },

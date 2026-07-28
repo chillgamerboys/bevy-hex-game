@@ -70,7 +70,7 @@ fn spells(burn_turns: u16) -> SpellBook {
             mana: ManaAxis::Fixed,
             co_castable: false,
             targeting: single.clone(),
-            effects: vec![Effect::Burn { amount: burn_turns }],
+            effects: vec![Effect::Burn { turns: burn_turns }],
         },
     );
     by_name.insert(
@@ -665,9 +665,10 @@ fn the_ledger_is_cleared_on_leaving_gameplay() {
 /// A fight ending drops undelivered ticks but not the fires themselves.
 ///
 /// The two halves differ. A due hit has nobody left to answer it once the auto-policy
-/// stops running, exactly like the open decision the funnel drops beside it — but
-/// nothing in the design puts a fire out because the party walked away, and the
-/// countdown on the unit's own lattice survives the mode flip regardless.
+/// stops running, exactly like the open decision the funnel drops beside it — but nothing
+/// in the design puts a fire out because the party walked away. A burn is measured in the
+/// target's own turns, which mean the same thing in any fight, so every turn it is owed
+/// survives. Only round-bounded effects cannot, and this asserts the turn-bounded half.
 #[test]
 fn a_fight_ending_keeps_the_fires_it_started() {
     let mut app = test_app(3);
@@ -688,5 +689,130 @@ fn a_fight_ending_keeps_the_fires_it_started() {
         burn_turns_left(&app, fight.defender),
         3,
         "with all three turns still owed — a fight ending does not spend them"
+    );
+}
+
+/// A burn on a unit with no lattice must not park a decision nobody can answer.
+///
+/// This is the deadlock the seam makes possible, and it is worth the fixture. A unit
+/// spawned from an archetype `lattices.ron` does not define has no lattice — `hex_units`
+/// warns and spawns it inert — and it still joins the turn order. The seam holds one
+/// decision at a time and has exactly one answerer, which needs the decider's lattice to
+/// pick hexes from. Park a choice for a unit that has none and nothing ever clears it: no
+/// unit acts, every later cast and strike is refused, and the only escape is walking far
+/// enough away to end the fight.
+///
+/// Two guards are checked here, in the two places the fire can start. The cast refuses by
+/// name so the caster is not charged for damage with nowhere to land; and the tick drops
+/// the hit rather than parking it, because a ledger entry can outlive the components it
+/// was made against.
+#[test]
+fn a_burn_on_a_lattice_less_unit_never_parks_an_unanswerable_decision() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+
+    // The inert unit: no `LatticeSpec`, no `LatticeState`, but registered and standing.
+    let inert_coord = HexCoord::new_cubic(-1, 1, 0);
+    let inert_pos = TilePos::new(inert_coord, GROUND);
+    let inert = app
+        .world_mut()
+        .spawn((
+            Faction::Hostile,
+            UnitId(3),
+            StandsOn(Standing {
+                pos: inert_pos,
+                span: HexSpan::new(0.0, 1.0),
+            }),
+            Initiative(5),
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<UnitRegistry>()
+        .register(UnitId(3), inert);
+
+    kindle(&mut app, UnitId(1), inert_pos);
+
+    assert!(
+        app.world().resource::<PersistentEffects>().is_empty(),
+        "a fire on something that cannot burn must not reach the ledger at all"
+    );
+
+    // Now the other half: a fire booked against a lattice the unit later loses. The
+    // ledger entry is legitimate when it is made, so only the seam can catch this one.
+    // `kindle` yields the caster's turn, so the order has to come back round first.
+    run_until_acting(&mut app, UnitId(1));
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    assert_eq!(
+        app.world().resource::<PersistentEffects>().len(),
+        1,
+        "precondition: the defender did take the fire"
+    );
+    app.world_mut()
+        .entity_mut(fight.defender)
+        .remove::<LatticeState>();
+
+    run_until_acting(&mut app, UnitId(2));
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the tick must drop a hit nobody can answer rather than park the fight on it"
+    );
+}
+
+/// A unit does not burn twice in one round because somebody else went down.
+///
+/// `TurnOrder::remove` wraps `current` to the front **without** counting a round when the
+/// unit going down was last in the order, so the front unit gets a second turn inside a
+/// round it has already had one in. A cursor holding only the most recent `(round, unit)`
+/// compares that second turn against the *downed* unit's key, sees a difference, and
+/// ticks again — so every surviving burn takes an extra hex and its countdown runs down
+/// twice as fast, in the round it was supposed to sit out.
+///
+/// The wrap is forced directly rather than played out through a real downing: what is
+/// under test is the tick cursor, and driving it through combat would make the test
+/// depend on the AI, on strike damage and on how many hexes a fixture lattice has.
+#[test]
+fn a_second_turn_from_a_downing_wrap_does_not_tick_a_burn_twice() {
+    let mut app = test_app(4);
+    let fight = two_casters(&mut app);
+
+    // The caster sets *itself* alight, so the burn sits on the unit at the front of the
+    // order — the one the wrap hands a second turn to.
+    kindle(&mut app, UnitId(1), TilePos::new(HexCoord::ORIGIN, GROUND));
+    assert_eq!(
+        burn_turns_left(&app, fight.caster),
+        4,
+        "precondition: four turns booked, none spent"
+    );
+
+    run_until_acting(&mut app, UnitId(1));
+    app.update();
+    app.update();
+    let after_first = burn_turns_left(&app, fight.caster);
+    assert_eq!(after_first, 3, "precondition: its own turn spent one");
+    let round = app.world().resource::<TurnOrder>().round;
+
+    // Hand the turn on, then drop the unit holding it — the wrap that grants the front
+    // unit a second turn without counting a round.
+    run_until_acting(&mut app, UnitId(2));
+    app.world_mut()
+        .resource_mut::<TurnOrder>()
+        .remove(UnitId(2));
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().round,
+        round,
+        "precondition: the wrap does not count a round, which is what makes this a trap"
+    );
+    assert_eq!(
+        burn_turns_left(&app, fight.caster),
+        after_first,
+        "a repeat of a turn already taken this round must not spend another"
     );
 }

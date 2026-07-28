@@ -5,12 +5,22 @@
 //! blocked reason from `castable`, and the spell's **name** on the button, since entity
 //! order is not stable across the wholesale rebuilds this kind of readout does.
 //!
-//! # Everything here is deaf to picking
+//! # The frame absorbs clicks; everything inside it is deaf
 //!
-//! The panel floats over the map, and the map is clicked. Every layer of it therefore
-//! carries `Pickable::IGNORE` except the buttons themselves — without that the panel
-//! swallows tile clicks and click-to-move silently stops working underneath it, which
-//! is a bug this codebase has already shipped once with the HUD.
+//! The panel floats over the map, and the map is clicked, so the instinct is to make the
+//! whole thing `Pickable::IGNORE` the way the HUD is. That is wrong **here**, and the
+//! difference is worth stating because the two look alike.
+//!
+//! The HUD is a thin transparent strip with nothing to click. This is a 396px column of
+//! opaque chrome with buttons in it, and roughly two thirds of its area is padding, gaps,
+//! swatches and labels. A click that lands there — a few pixels off a Cast button — is a
+//! click the player aimed *at the panel*. Falling through to the tile behind it issues a
+//! move: the unit walks somewhere the player never saw, `Busy` lands, and the aim they
+//! were setting up is dropped. So [`FRAME`] blocks, and the click stops at the panel.
+//!
+//! Everything inside keeps `Pickable::IGNORE`, which now means "fall through to the
+//! frame" rather than "fall through to the map" — the buttons are the only children that
+//! handle anything, and the frame catches the rest.
 //!
 //! The text helpers in [`widgets`](crate::menus::widgets) already carry that marker, so
 //! only the raw nodes here add it. Adding it twice is not harmless: a bundle with two
@@ -41,6 +51,16 @@ const CONTROL_WIDTH: f32 = 112.0;
 
 /// Width of the colour bar carrying a spell's element.
 const SWATCH_WIDTH: f32 = 5.0;
+
+/// Picking for the panel frame: swallow the click, but do not light up under the cursor.
+///
+/// `should_block_lower` is the whole point — see the module docs. `is_hoverable` stays
+/// false because the frame is not a control and nothing should respond to it; only the
+/// buttons inside do, and they carry their own default `Pickable`.
+const FRAME: Pickable = Pickable {
+    should_block_lower: true,
+    is_hoverable: false,
+};
 
 /// The stable container the rows are rebuilt under.
 #[derive(Component)]
@@ -77,9 +97,7 @@ pub(super) fn spawn_panel(
             },
             BorderColor::all(EDGE),
             BackgroundColor(PANEL_BG),
-            // Without this the panel swallows clicks on any tile behind it, and
-            // click-to-move silently stops working across a quarter of the screen.
-            Pickable::IGNORE,
+            FRAME,
             DespawnOnExit(Screen::Gameplay),
         ))
         .with_children(|panel| {
@@ -354,35 +372,49 @@ mod tests {
         app
     }
 
-    /// Every layer of the panel except its buttons must let world picks through.
+    /// The frame swallows a click; everything inside it defers to the frame.
     ///
-    /// Pickability is per entity, so ignoring only the backing node still leaves a row,
-    /// a swatch or a line of text able to swallow a tile click — and the panel covers a
-    /// quarter of the screen. The HUD shipped exactly this bug once.
+    /// Pickability is per entity, so this has to hold for every node, not just the
+    /// backing one. Two different failures are in scope. A frame that stopped blocking
+    /// would send a near-miss on a Cast button to the tile behind it, walking the unit
+    /// somewhere the player never picked and dropping the aim they were mid-way through
+    /// setting up. An *inner* node that blocked would be worse in the other direction:
+    /// it would shadow whatever sits under it, so a button's own label could eat the
+    /// press meant for the button.
     #[test]
-    fn the_casting_panel_does_not_block_tile_clicks() {
+    fn the_frame_absorbs_clicks_and_nothing_inside_it_does() {
         let mut app = drawn_panel(true);
         let mut nodes = app
             .world_mut()
             .query_filtered::<(Entity, Option<&Pickable>, Has<Button>, Option<&Name>), With<Node>>(
             );
-        let mut checked = 0;
+        let mut frames = 0;
+        let mut inner = 0;
         for (entity, pickable, is_button, name) in nodes.iter(app.world()) {
             if is_button {
                 continue;
             }
-            checked += 1;
+            let named = name.map(Name::as_str);
+            if named == Some("Casting Panel") {
+                frames += 1;
+                assert_eq!(
+                    pickable,
+                    Some(&FRAME),
+                    "the frame must absorb the click rather than pass it to the map"
+                );
+                continue;
+            }
+            inner += 1;
             assert_eq!(
                 pickable,
                 Some(&Pickable::IGNORE),
-                "{:?} ({:?}) blocks world picks",
-                name.map(Name::as_str),
-                entity
+                "{named:?} ({entity:?}) shadows what is under it"
             );
         }
+        assert_eq!(frames, 1, "exactly one frame, and it was found");
         // Otherwise a panel that stopped drawing anything would pass this by checking
         // nothing at all, which is the failure it exists to prevent one level up.
-        assert!(checked >= 8, "only {checked} non-button nodes were checked");
+        assert!(inner >= 8, "only {inner} inner nodes were checked");
     }
 
     /// A castable spell gets a button whose `Name` a walk script can find, and a

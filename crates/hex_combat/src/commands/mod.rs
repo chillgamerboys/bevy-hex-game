@@ -47,7 +47,8 @@ use hex_units::{Body, Faction, MovingTo, StandsOn, UnitRegistry};
 
 use crate::turns::TurnOrder;
 
-mod cast;
+pub(crate) mod cast;
+pub use cast::{delivers_anything, UNDELIVERABLE};
 mod choose_disables;
 mod end_turn;
 mod move_along;

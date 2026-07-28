@@ -7,8 +7,8 @@
 //!
 //! # Two hooks, because tick point is per payload
 //!
-//! [`tick_turn_effects`] runs at the **start of the acting unit's turn** and is where
-//! personal payloads come due. [`expire_round_effects`] runs on `RoundElapsed` and is
+//! `tick_turn_effects` runs at the **start of the acting unit's turn** and is where
+//! personal payloads come due. `expire_round_effects` runs on `RoundElapsed` and is
 //! where the round-boundary work lives. Burn is personal, so it ticks in the first —
 //! the design words fire's damage over time as "at the start of the target's turn", and
 //! a burn that ticked on the round boundary would hit a unit that had just acted and one
@@ -28,7 +28,7 @@
 //! actually specifies; a sandbox with no turn order could tick it at all. Splitting the
 //! countdown from the record also meant every liveness question had to consult both.
 //!
-//! [`PersistentEffect::ticks`] closes it: one store, and [`is_live`] is a total function
+//! [`hex_core::PersistentEffect`]'s `ticks` closes it: one store, and `is_live` is a total function
 //! of the record. There is nothing to drift against.
 //!
 //! # Burn ignores armour, but not the defender
@@ -36,12 +36,12 @@
 //! A due burn does **not** go through [`hex_lattice::resolve_incoming`] — fire's
 //! identity is beating defences by ignoring them rather than overpowering them, and the
 //! design says so outright. It *does* go through the defender-chooses seam, exactly as a
-//! spell's damage does: the count is named, [`PendingDecision::ChooseDisables`] is
+//! spell's damage does: the count is named, `PendingDecision::ChooseDisables` is
 //! parked, and something answers with a `ChooseDisables` command that lands in the
 //! replay log. Bypassing the subtraction is not the same as bypassing the choice, and
 //! conflating the two would make burn the one damage source a fight could not replay.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bevy::prelude::*;
 
@@ -56,9 +56,10 @@ use crate::turns::TurnOrder;
 
 /// A tick's worth of damage waiting for the decision seam to be free.
 ///
-/// Everything needed to park a [`PendingDecision::ChooseDisables`], captured at the
-/// moment the effect came due rather than re-derived when the seam opens — by then the
-/// burn has already been taken off the lattice's counter and the count is gone.
+/// Everything needed to park a `PendingDecision::ChooseDisables`, captured at the
+/// moment the effect came due rather than re-derived when the seam opens. By then the
+/// tick has already been spent against the effect's countdown, so the count cannot be
+/// recomputed — and the effect may have expired out of the ledger entirely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DueHit {
     /// Whose hexes go down.
@@ -85,21 +86,28 @@ pub struct PersistentEffects {
     effects: BTreeMap<EffectId, PersistentEffect>,
     /// The next handle. Monotonic, never reused within a session.
     next: u64,
-    /// The turn whose personal effects have already ticked, as `(round, unit)`.
+    /// The round the set below is denominated in.
+    ticked_round: u32,
+    /// Everyone whose personal effects have already ticked **in `ticked_round`**.
     ///
-    /// A turn is identified by the round it falls in and who is acting, which is unique
-    /// because the order advances between turns and the round counter moves when it
-    /// wraps. Recording it is what makes the tick happen **exactly once** per turn no
-    /// matter how many frames a turn lasts — a turn is many frames long, so anything
-    /// keyed on "the acting unit is burning" would empty a lattice in about a second.
+    /// This is what makes the tick happen exactly once per unit per round no matter how
+    /// many frames a turn lasts — a turn is many frames long, so anything keyed on "the
+    /// acting unit is burning" would empty a lattice in about a second.
     ///
-    /// One case slips through, deliberately in the safe direction. `TurnOrder::remove`
-    /// wraps to the front **without** counting a round when the last unit in the order
-    /// goes down, so whoever is at the front can get a second turn under a key that has
-    /// already ticked, and their burn sits that one out. Skipping a tick is recoverable;
-    /// the alternative reading — treat a repeated key as a new turn — would double every
-    /// burn in the fight on every frame a turn lasts.
-    last_ticked: Option<(u32, UnitId)>,
+    /// **A set rather than the last turn alone**, and that is the whole point. A single
+    /// `(round, unit)` cursor cannot suppress a *repeat of an earlier turn in the same
+    /// round*, and that case is reachable: when the acting unit is last in the order and
+    /// goes down on its own turn, `TurnOrder::remove` wraps `current` to the front
+    /// **without** counting a round, so whoever is at the front gets a second turn under
+    /// a round that has already ticked them. A cursor compares that against the *downed*
+    /// unit's key, sees a difference, and burns the front unit twice — once for a turn it
+    /// already took. A set answers the question actually being asked: has this unit
+    /// ticked in this round.
+    ///
+    /// `BTreeSet` rather than `HashSet` because everything in resolution is ordered by
+    /// construction; membership does not depend on it, but nothing here gets to be the
+    /// one collection that iterates differently per run.
+    ticked: BTreeSet<UnitId>,
     /// Ticks that have come due but have not yet been handed to the decision seam.
     due: VecDeque<DueHit>,
 }
@@ -128,7 +136,6 @@ impl PersistentEffects {
         self.effects.is_empty()
     }
 
-    /// Registers a running effect and hands back its handle.
     /// Advances every live personal effect on `target` and returns how many hexes they
     /// take between them.
     ///
@@ -138,19 +145,26 @@ impl PersistentEffects {
     /// Ticking *then* counting matters at the boundary: a burn with one turn left still
     /// takes its hex on the turn it expires, so `AfterTurns(1)` means one hex rather
     /// than none.
+    ///
+    /// **Whether a payload is personal is a property of the payload, not of how the
+    /// effect ends.** The match below is on `payload` for that reason: a burn bound to an
+    /// enchantment rather than a turn count is still a burn, and an earlier shape that
+    /// keyed the whole tick on `AfterTurns` would have skipped it silently forever. The
+    /// end condition only decides whether there is anything left to spend.
     fn tick_personal(&mut self, target: UnitId) -> u16 {
         let mut due: u16 = 0;
         for effect in self.effects.values_mut() {
             if effect.target != target {
                 continue;
             }
-            let EffectEnd::AfterTurns(turns) = effect.end else {
-                continue;
-            };
-            if effect.ticks >= turns {
-                continue;
+            // A turn-bounded effect spends one of its turns; anything else has no
+            // per-turn budget to spend, and ticking it is free.
+            if let EffectEnd::AfterTurns(turns) = effect.end {
+                if effect.ticks >= turns {
+                    continue;
+                }
+                effect.ticks = effect.ticks.saturating_add(1);
             }
-            effect.ticks = effect.ticks.saturating_add(1);
             match effect.payload {
                 EffectPayload::Burn => due = due.saturating_add(1),
             }
@@ -158,6 +172,11 @@ impl PersistentEffects {
         due
     }
 
+    /// Registers a running effect and hands back its handle.
+    ///
+    /// Handles are dealt from a monotonic counter and **never reused within a session**,
+    /// which is what lets `burn_source` blame the first fire lit deterministically
+    /// rather than whichever record happened to land in a freed slot.
     fn insert(&mut self, effect: PersistentEffect) -> EffectId {
         let id = EffectId(self.next);
         self.next = self.next.saturating_add(1);
@@ -167,9 +186,9 @@ impl PersistentEffects {
 
     /// Drops every effect whose end condition has come.
     ///
-    /// Takes a lookup rather than a query so both hooks can share it: the turn hook
-    /// holds a mutable lattice query and the round hook a read-only one, and neither can
-    /// be spelled as the other's type.
+    /// Takes a lookup rather than a query so both hooks can share it: the two hooks hold
+    /// differently-shaped lattice queries, and neither can be spelled as the other's
+    /// type.
     fn expire<'a>(
         &mut self,
         round: u32,
@@ -179,11 +198,25 @@ impl PersistentEffects {
             .retain(|_, effect| is_live(effect, round, lattice_of(effect.target)));
     }
 
-    /// Forgets everything. Session teardown — see [`clear_session_effects`].
+    /// Drops every effect whose end condition is denominated in rounds.
+    ///
+    /// See `clear_undelivered`, which is the only caller and carries the reasoning.
+    fn drop_round_bounded(&mut self) {
+        self.effects.retain(|id, effect| {
+            let keep = !matches!(effect.end, EffectEnd::AfterRounds(_));
+            if !keep {
+                info!("effects: dropping {id:?}, measured in a finished fight's rounds");
+            }
+            keep
+        });
+    }
+
+    /// Forgets everything. Session teardown — see `clear_session_effects`.
     fn clear(&mut self) {
         self.effects.clear();
         self.next = 0;
-        self.last_ticked = None;
+        self.ticked_round = 0;
+        self.ticked.clear();
         self.due.clear();
     }
 }
@@ -216,8 +249,8 @@ fn is_live(effect: &PersistentEffect, round: u32, lattice: Option<&LatticeState>
 /// told — it holds hexes and mana, and a fire is neither.
 ///
 /// A zero-turn burn is dropped rather than recorded as an effect that ends immediately.
-/// `hex_assets` already rejects `Burn(amount: 0)` at load, so this is the belt to that
-/// file's braces; recording it would leave an entry [`is_live`] drops on the next pass,
+/// `hex_assets` already rejects `Burn(turns: 0)` at load, so this is the belt to that
+/// file's braces; recording it would leave an entry `is_live` drops on the next pass,
 /// having attributed a burn that never took a hex.
 pub(crate) fn apply_burn(
     effects: &mut PersistentEffects,
@@ -275,15 +308,19 @@ fn tick_turn_effects(
     let Some(current) = order.current() else {
         return;
     };
-    let turn = (order.round, current);
-    if effects.last_ticked == Some(turn) {
-        return;
+    // A new round retires the whole set at once, so the bookkeeping is one comparison
+    // rather than a sweep, and a fight cannot accumulate a set the size of its history.
+    if effects.ticked_round != order.round {
+        effects.ticked_round = order.round;
+        effects.ticked.clear();
     }
     // Recorded before the tick rather than after it, and unconditionally. A turn that
     // ticked twice would double every burn in the fight; a turn that recorded only on
     // success would re-tick every frame for a unit whose lattice is momentarily
     // unreachable. Once, or not at all, is the only safe pair.
-    effects.last_ticked = Some(turn);
+    if !effects.ticked.insert(current) {
+        return;
+    }
 
     // The tick is entirely a ledger operation now: every live burn on this unit
     // advances by one and contributes one hex. Nothing consults the lattice, because
@@ -316,20 +353,47 @@ fn tick_turn_effects(
 
 /// Hands the next due tick to the defender-chooses seam.
 ///
-/// Separate from [`tick_turn_effects`] because the seam holds **one** decision at a
+/// Separate from `tick_turn_effects` because the seam holds **one** decision at a
 /// time and a tick must not be lost waiting for it. The tick always happens on
 /// schedule and queues what it found; this drains that queue as fast as the seam
 /// allows, which in the ordinary case is the same frame.
 ///
 /// **No [`hex_lattice::resolve_incoming`].** Burn ignores armour, so the count parked
 /// here is the count the tick produced. It still goes through the defender's choice.
-fn open_due_decision(mut effects: ResMut<PersistentEffects>, mut pending: ResMut<PendingDecision>) {
+///
+/// # Never park a decision nobody can answer
+///
+/// The seam has exactly one answerer, `ai::answer_disable_decision`, and it needs the
+/// decider's [`LatticeState`] to pick hexes from. A unit spawned from an archetype
+/// `lattices.ron` does not define has no lattice — `hex_units` warns and spawns it inert —
+/// and it still joins the turn order. Parking its choice would deadlock the entire fight:
+/// nothing answers, so nothing clears `pending`, so no unit acts and every later cast and
+/// strike is refused, until the player walks far enough away to end combat.
+///
+/// So the hit is **dropped, loudly**, rather than parked. A fire on something that cannot
+/// burn is content that needs fixing, and the log says which unit.
+fn open_due_decision(
+    registry: Res<UnitRegistry>,
+    lattices: Query<&LatticeState>,
+    mut effects: ResMut<PersistentEffects>,
+    mut pending: ResMut<PendingDecision>,
+) {
     if pending.is_open() {
         return;
     }
     let Some(hit) = effects.due.pop_front() else {
         return;
     };
+    let answerable = registry
+        .entity_of(hit.target)
+        .is_some_and(|entity| lattices.contains(entity));
+    if !answerable {
+        warn!(
+            "burn: {:?} has no lattice to take {} hex(es) from; the tick is dropped",
+            hit.target, hit.count
+        );
+        return;
+    }
     *pending = PendingDecision::ChooseDisables {
         decider: hit.target,
         count: hit.count,
@@ -344,7 +408,7 @@ fn open_due_decision(mut effects: ResMut<PersistentEffects>, mut pending: ResMut
 /// Expires effects at the round boundary.
 ///
 /// The round half of "tick point is per payload". No payload ticks globally yet — burn
-/// is personal and ticks in [`tick_turn_effects`] — so what this hook does today is
+/// is personal and ticks in `tick_turn_effects` — so what this hook does today is
 /// evaluate end conditions, which is real work: [`EffectEnd::AfterRounds`] can only come
 /// due here, and a burn whose lattice counter emptied gets dropped here as well as on
 /// its target's next turn.
@@ -382,20 +446,31 @@ fn clear_session_effects(mut effects: ResMut<PersistentEffects>) {
     effects.clear();
 }
 
-/// Drops undelivered ticks and the turn cursor when a fight ends.
+/// Ends the fight's half of the ledger: undelivered ticks, the tick cursor, and anything
+/// measured in rounds.
 ///
 /// A due hit that never reached the seam has nobody left to answer it, exactly like the
-/// open decision `commands::clear_pending_decision` drops beside it. The cursor goes too
-/// because the next fight restarts the round counter, and a stale `(round, unit)` would
-/// match the first turn of that fight and silently skip its tick.
+/// open decision `commands::clear_pending_decision` drops beside it. It is a real loss —
+/// the tick that produced it was already spent against its effect's countdown — but the
+/// alternative is holding damage for a fight that is over.
 ///
-/// **The effects themselves stay.** Nothing in the design puts a fire out because the
-/// party walked away from it, and the lattice's own burn counter survives the mode flip
-/// regardless — it is a component on the unit. Clearing the ledger here would leave
-/// those burns ticking with no record of who lit them.
+/// The cursor goes because the next fight restarts the round counter, and a stale entry
+/// would match the first turn of that fight and silently skip its tick.
+///
+/// # Turn-bounded effects survive; round-bounded ones cannot
+///
+/// Nothing in the design puts a fire out because the party walked away from it, so a burn
+/// keeps every turn it is owed: a unit's turns are its own and mean the same thing in any
+/// fight. **A round does not.** `TurnOrder::clear` resets the counter to zero, so a
+/// [`PersistentEffect::start`] recorded at round 7 of a finished fight would be compared
+/// against a new fight's clock and read as eight rounds of life left instead of the one
+/// it had. Rounds are a unit of *this fight's* time and do not survive it. Dropping them
+/// here is the only reading that cannot silently make an effect permanent.
 fn clear_undelivered(mut effects: ResMut<PersistentEffects>) {
     effects.due.clear();
-    effects.last_ticked = None;
+    effects.ticked_round = 0;
+    effects.ticked.clear();
+    effects.drop_round_bounded();
 }
 
 /// Registers the runtime.

@@ -26,13 +26,13 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use hex_core::{ElementId, LatticeCoord, Screen};
+use hex_core::{ElementId, LatticeCoord, Screen, SpellId};
 use hex_lattice::{CellKind, LatticeSpec, LatticeStats};
 use serde::Deserialize;
 use thiserror::Error;
 
 use crate::elements::ElementCatalog;
-use crate::spells::SpellBook;
+use crate::spells::{Effect, SpellBook, TargetShape};
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// A name in `lattices.ron` that resolves to nothing.
@@ -83,6 +83,27 @@ pub enum LatticeError {
     Empty {
         /// Which archetype.
         archetype: String,
+    },
+    /// A spell cell holding an area spell whose effects reach units.
+    ///
+    /// **This is a temporary refusal, and it names what it waits on.** `hex_units::volumes`
+    /// resolves a shape to an exact voxel set and the interface paints all of it, but
+    /// `hex_combat`'s applier still routes every unit-affecting effect through the single
+    /// unit standing on the anchor. Inscribing a `Sphere` or a `Line` damage spell today
+    /// would light up a dozen surfaces and hurt exactly one of them, which is a lie the
+    /// player cannot see through and cannot be told about.
+    ///
+    /// Refusing at load is the honest reading while that gap is open: the content that
+    /// would be misapplied does not load, and the message says why. It lifts the day the
+    /// applier iterates the volume — see `docs/planning/status.md`.
+    #[error(
+        "archetype '{archetype}' inscribes '{spell}', whose shape reaches more than one          surface while the applier still affects only the unit on the anchor — area          effects wait on the applier iterating the resolved volume"
+    )]
+    AreaEffectUnapplied {
+        /// Which archetype.
+        archetype: String,
+        /// The spell whose shape outruns the applier.
+        spell: String,
     },
     /// A file that defines nobody.
     #[error("lattices.ron defines no archetypes, so every unit would spawn inert")]
@@ -275,7 +296,14 @@ fn resolve_archetype(
                 })
             }
             UnvalidatedCell::Spell(spell) => match spells.id(spell) {
-                Some(spell) => Some(CellKind::Spell { spell }),
+                Some(id) if area_effect_is_unapplied(spells, id) => {
+                    errors.push(LatticeError::AreaEffectUnapplied {
+                        archetype: name.to_owned(),
+                        spell: spell.clone(),
+                    });
+                    None
+                }
+                Some(id) => Some(CellKind::Spell { spell: id }),
                 None => {
                     errors.push(LatticeError::UnknownSpell {
                         archetype: name.to_owned(),
@@ -308,6 +336,33 @@ fn resolve_archetype(
     } else {
         Err(errors)
     }
+}
+
+/// Whether `spell` would have the interface promise more than the applier delivers.
+///
+/// True when the shape covers more than the anchor **and** at least one effect reaches a
+/// unit. Both halves matter. A terrain-shaping area spell is fine — it has no per-unit
+/// application to get wrong — and a `Single` damage spell is fine, because the anchor's
+/// occupant is the whole volume. It is only their combination that lies.
+///
+/// See [`LatticeError::AreaEffectUnapplied`] for why this is refused rather than clamped.
+fn area_effect_is_unapplied(spells: &SpellBook, spell: SpellId) -> bool {
+    let Some(spell) = spells.spell(spell) else {
+        return false;
+    };
+    if matches!(spell.targeting.shape, TargetShape::Single) {
+        return false;
+    }
+    spell.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::DisableHexes { .. }
+                | Effect::Burn { .. }
+                | Effect::RestoreHexes { .. }
+                | Effect::ModifyIncomingDisables { .. }
+                | Effect::Reveal { .. }
+        )
+    })
 }
 
 /// Resolves one element name, recording the failure and yielding `None` if it is unknown.

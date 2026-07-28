@@ -20,9 +20,21 @@
 //! While a spell is aimed, every legal anchor carries a clickable marker, and a marker
 //! is a picking blocker — so a click on a lit surface aims, and never also moves. Off
 //! the lit set there is no marker, the click reaches the tile underneath, and it means
-//! what a click has always meant: walk there. Repositioning to get into range is part
-//! of aiming rather than an escape from it, and the anchors are recomputed from
-//! wherever the caster ends up.
+//! what a click has always meant: walk there.
+//!
+//! Repositioning to get into range is part of aiming rather than an escape from it: the
+//! aim survives the walk and its anchors are recomputed from wherever the caster ends up.
+//!
+//! That takes distinguishing two things the panel says in the same voice. Being `Busy`
+//! mid-walk, or waiting on somebody else's decision, **suspends** casting — you will be
+//! able to in a moment, and the spell you picked is still the spell you want. Your turn
+//! ending, or your action being spent, **ends** it. `keeps_the_aim` draws that line, and
+//! without it the `Busy` a walk sets would put the aim down one frame after the click
+//! that started the walk, which is the opposite of the sentence above.
+//!
+//! The aim is still dropped when it stops being castable, and after a walk the check that
+//! earns its keep is range: stepping away can carry an anchor out of reach exactly as
+//! stepping toward it brings one in.
 
 use bevy::prelude::*;
 use hex_assets::{
@@ -258,11 +270,28 @@ fn refresh_readout(
     // An aim outlives the frame it was made in, so it is re-checked against the readout
     // rather than trusted: the turn can end, a funding gem can be struck, or the unit
     // can go down between choosing a spell and casting it.
+    //
+    // **Re-anchored, not dropped, when the caster moves.** Walking sets `Busy`, which is
+    // a transient reason — the spell is still the spell — so the aim is kept and the
+    // anchor is re-measured from wherever the caster now stands. It is put down only when
+    // it has actually stopped being castable: the range check below is the one that
+    // matters after a walk, because stepping *away* can carry the anchor out of reach
+    // just as stepping toward it brings one in.
     let valid = aiming.0.as_ref().is_some_and(|aim| {
-        readout.unavailable.is_none()
-            && readout
-                .row(&aim.spell)
-                .is_some_and(|row| row.blocked.is_none())
+        let survives = readout.unavailable.is_none_or(keeps_the_aim);
+        let Some(row) = readout.row(&aim.spell) else {
+            return false;
+        };
+        let reachable = matches!(row.shape, TargetShape::SelfCast)
+            || readout.caster.is_some_and(|caster| {
+                in_range(
+                    caster.standing,
+                    aim.anchor,
+                    row.range,
+                    readout.levels_per_bonus,
+                )
+            });
+        survives && row.blocked.is_none() && reachable
     });
     if aiming.0.is_some() && !valid {
         aiming.0 = None;
@@ -337,9 +366,20 @@ fn build_readout(
             let name = spells.name(spell)?;
             let definition = spells.spell(spell)?;
             let cell = casting_cell(spec, state, spell)?;
-            let blocked = castable(spec, state, cell, &tables)
-                .err()
-                .map(|reason| blocked_reason(&reason));
+            // Deliverability first, and it outranks payment. A spell whose every effect
+            // is still waiting on another lane is a legal cast, so the applier charges
+            // for it: the mana goes, the turn goes, and the only trace is a log line a
+            // release build does not show. Saying "not built yet" here is the difference
+            // between an interface that is honest about what is finished and one that
+            // eats your turn. `hex_combat` owns the answer so both sides give the same
+            // one — see `hex_combat::delivers_anything`.
+            let blocked = if hex_combat::delivers_anything(definition) {
+                castable(spec, state, cell, &tables)
+                    .err()
+                    .map(|reason| blocked_reason(&reason))
+            } else {
+                Some(hex_combat::UNDELIVERABLE)
+            };
             Some(spell_row(name, definition, blocked, elements))
         })
         .collect();
@@ -384,26 +424,58 @@ fn unavailable_reason(
     busy: bool,
 ) -> Option<&'static str> {
     if !in_combat {
-        return Some("casting is combat-only for now");
+        return Some(OUT_OF_COMBAT);
     }
     if acting != Some(unit) {
-        return Some("not this unit's turn");
+        return Some(NOT_YOUR_TURN);
     }
     // Rung 1 is "action available", and a cast is an action. Without this the panel
     // keeps offering casts for a turn that has already spent its one.
     match turn {
-        None => return Some("no turn to take the action from"),
-        Some(turn) if turn.acted => return Some("action already spent this turn"),
+        None => return Some(NO_TURN),
+        Some(turn) if turn.acted => return Some(ACTION_SPENT),
         Some(_) => {}
     }
     if busy {
-        return Some("still finishing the last action");
+        return Some(BUSY);
     }
     if decision_open {
-        return Some("a decision is still open");
+        return Some(DECISION_OPEN);
     }
     None
 }
+
+/// Whether an aim survives this reason, or is put down by it.
+///
+/// **Two kinds of "you cannot cast right now" wear the same sentence**, and collapsing
+/// them is what made walking-while-aiming impossible. A unit that is mid-walk or waiting
+/// on somebody else's decision will be able to cast again in a moment, and the spell it
+/// had chosen is still the spell it wants; a unit whose turn is over, or that is no
+/// longer the one acting, has nothing left to aim with.
+///
+/// Matched on the named constants rather than the literals so a reworded message cannot
+/// quietly flip an aim from surviving to not.
+fn keeps_the_aim(reason: &'static str) -> bool {
+    matches!(reason, BUSY | DECISION_OPEN)
+}
+
+/// Casting is combat-only in wave 3; see `docs/systems/casting.md`.
+const OUT_OF_COMBAT: &str = "casting is combat-only for now";
+
+/// Somebody else is acting.
+const NOT_YOUR_TURN: &str = "not this unit's turn";
+
+/// The unit holds no turn at all.
+const NO_TURN: &str = "no turn to take the action from";
+
+/// The turn's one action is gone.
+const ACTION_SPENT: &str = "action already spent this turn";
+
+/// Mid-walk or mid-animation. **Transient** — see [`keeps_the_aim`].
+const BUSY: &str = "still finishing the last action";
+
+/// Resolution is parked on a defender's choice. **Transient** — see [`keeps_the_aim`].
+const DECISION_OPEN: &str = "a decision is still open";
 
 /// The distinct spells a lattice inscribes, in lattice order.
 fn inscribed_spells(spec: &LatticeSpec) -> Vec<SpellId> {
@@ -1131,5 +1203,92 @@ mod tests {
             &caster,
             &aim
         ));
+    }
+
+    /// A walk suspends casting without putting the aim down; the turn ending ends it.
+    ///
+    /// The distinction this asserts is the whole of `keeps_the_aim`, and collapsing it is
+    /// what made the module's advertised "reposition, then cast" flow impossible: the
+    /// `Busy` a walk sets arrives one frame after the click that started it, so an aim
+    /// dropped on any unavailability is an aim dropped by the act of walking.
+    #[test]
+    fn transient_unavailability_suspends_an_aim_and_a_finished_turn_ends_it() {
+        assert!(keeps_the_aim(BUSY), "mid-walk, and about to arrive");
+        assert!(keeps_the_aim(DECISION_OPEN), "waiting on somebody else");
+        assert!(!keeps_the_aim(ACTION_SPENT), "the action is gone");
+        assert!(!keeps_the_aim(NOT_YOUR_TURN));
+        assert!(!keeps_the_aim(NO_TURN));
+        assert!(!keeps_the_aim(OUT_OF_COMBAT));
+    }
+
+    /// Walking carries the aim, and the anchor is re-measured from where the caster lands.
+    ///
+    /// Both directions matter, and only the second is obvious. Stepping *toward* a target
+    /// brings an out-of-reach anchor into range, which is the point of repositioning.
+    /// Stepping *away* carries a chosen anchor out of it, and an aim that survived that
+    /// would let the player confirm a cast the applier then refuses — the one direction
+    /// of disagreement this module's header calls a bug.
+    #[test]
+    fn an_aim_is_re_measured_from_wherever_the_caster_lands() {
+        let (mut readout, _) = readout_of(&["Ember"]);
+        let range = readout.row("Ember").expect("Ember is offered").range;
+        let levels = readout.levels_per_bonus;
+
+        // An anchor just inside Ember's range from the origin.
+        let anchor = at(i32::try_from(range).expect("a small range"), 0, 4);
+        let reachable = |from: TilePos| in_range(from, anchor, range, levels);
+        assert!(
+            reachable(at(0, 0, 4)),
+            "precondition: in reach to begin with"
+        );
+
+        // Walking one hex further away puts it out, and the aim goes with it.
+        let retreated = at(-1, 0, 4);
+        assert!(
+            !reachable(retreated),
+            "precondition: the fixture must actually leave range"
+        );
+
+        // And being Busy alone — the state a walk leaves behind — does not.
+        readout.unavailable = Some(BUSY);
+        assert!(
+            readout.unavailable.is_none_or(keeps_the_aim),
+            "a walk in progress must not be a reason to drop the aim"
+        );
+        readout.unavailable = Some(ACTION_SPENT);
+        assert!(
+            !readout.unavailable.is_none_or(keeps_the_aim),
+            "a spent action must be"
+        );
+    }
+
+    /// A spell whose every effect is unbuilt is offered as blocked, never as a button.
+    ///
+    /// The failure without this is invisible and expensive: the cast is *legal*, so the
+    /// applier charges for it — the mana goes, the turn goes — and the only trace is a
+    /// `warn!` a release build does not show a console for. Several shipped spells are in
+    /// that state, so this is the live case rather than a hypothetical one.
+    #[test]
+    fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
+        let (_, spells) = shipped_content();
+        let undeliverable = ["Renewal", "Earthen Wall", "Stone Shaper", "Daylight"];
+        for name in undeliverable {
+            let id = spells.id(name).expect("the test names a shipped spell");
+            let definition = spells.spell(id).expect("a shipped spell has a definition");
+            assert!(
+                !hex_combat::delivers_anything(definition),
+                "{name} has nothing built, so the panel must not offer it"
+            );
+        }
+        // The control, and the reason this is not just a ban on everything: the spells
+        // the wave actually delivers stay castable.
+        for name in ["Ember", "Kindle"] {
+            let Some(id) = spells.id(name) else { continue };
+            let definition = spells.spell(id).expect("a shipped spell has a definition");
+            assert!(
+                hex_combat::delivers_anything(definition),
+                "{name} lands damage today and must stay offered"
+            );
+        }
     }
 }

@@ -123,11 +123,21 @@ pub struct AimVolume {
 /// `from` and `terrain` are in the key for the same reasons the movement preview keeps
 /// them: the caster can walk while aiming, and an accepted terrain edit despawns and
 /// respawns the entire grid, so every surface a marker was placed on may be gone.
+///
+/// `range` and `levels_per_bonus` are in it because **both come from hot-reloadable
+/// content** — `spells.ron` and `combat.ron` — and neither changes the aim, the caster's
+/// position or the terrain. Edit `levels_per_bonus_range` mid-fight and without them the
+/// key still matches: the markers stay where the old rule put them while the applier
+/// measures with the new one, so the interface offers a cast that is then refused. That
+/// is the one direction of disagreement this module's header calls a bug.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DrawKey {
     aim: Aim,
     from: TilePos,
     terrain: u64,
+    range: u32,
+    levels_per_bonus: u32,
+    shape: TargetShape,
 }
 
 /// What is currently on the ground.
@@ -157,6 +167,11 @@ pub(super) fn redraw_preview(
             aim: aim.clone(),
             from: caster.standing,
             terrain: revision.0,
+            range: readout.row(&aim.spell).map_or(0, |row| row.range),
+            levels_per_bonus: readout.levels_per_bonus,
+            shape: readout
+                .row(&aim.spell)
+                .map_or(TargetShape::Single, |row| row.shape.clone()),
         });
     if drawn_key.0 == wanted {
         return;
@@ -309,12 +324,21 @@ fn legal_anchors(
 ///
 /// The pause guard is the one `hex_units`'s click observer carries, for the same
 /// reason: a click through the pause overlay must mean nothing at all.
+///
+/// **Left button only.** `Pointer<Click>` fires for every button, including the right one
+/// the camera orbits with — and while a spell is aimed these markers blanket the whole
+/// near field the player orbits *around*. Without the check, a short right-drag that
+/// begins and ends over the same marker silently re-aims the spell, and the next Confirm
+/// casts at a voxel nobody chose.
 pub(super) fn on_anchor_clicked(
     click: On<Pointer<Click>>,
     markers: Query<&TilePos, With<AnchorMarker>>,
     mut aiming: ResMut<Aiming>,
     pause: Option<Res<State<Pause>>>,
 ) {
+    if click.button != PointerButton::Primary {
+        return;
+    }
     if pause.is_some_and(|pause| pause.get().0) {
         return;
     }

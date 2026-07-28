@@ -41,6 +41,7 @@ pub mod knowledge;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
+pub use commands::{delivers_anything, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
 pub use knowledge::{BaseVisibility, FactionKnowledge, KnownCell, LatticeKnowledge, RevealAll};

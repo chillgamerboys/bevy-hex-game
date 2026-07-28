@@ -66,7 +66,7 @@
             mana: Variable,
             co_castable: true,
             targeting: (range: 2, shape: Line(length: 2, width: 0), needs_los: true),
-            effects: [Burn(amount: 2)],
+            effects: [Burn(turns: 2)],
         ),
 
         // Defensive enchantment: ties up Metal mana to subtract from incoming disables.
