@@ -10,7 +10,8 @@ use std::fmt;
 use hex_assets::{
     ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectAssetId,
     ObjectBlueprint, ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart,
-    VoxelStyleCatalog, VoxelStyleId, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
+    VoxelStyleCatalog, VoxelStyleId, MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS,
+    OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
 use serde::{Deserialize, Serialize};
 
@@ -266,6 +267,84 @@ impl EditorModel {
         Ok(editor)
     }
 
+    /// Creates a validated unsaved document for one object category.
+    ///
+    /// Plants and effects require their fixed connectivity policy. Props may be
+    /// grounded or free; free documents use a signed vertical canvas.
+    pub fn blank(
+        category: ObjectCategory,
+        connectivity: ConnectivityPolicy,
+        style: VoxelStyleId,
+    ) -> Result<Self, EditorModelError> {
+        match (category, connectivity) {
+            (ObjectCategory::Plant, ConnectivityPolicy::Grounded)
+            | (ObjectCategory::Effect, ConnectivityPolicy::Free)
+            | (ObjectCategory::Prop, _) => {}
+            (ObjectCategory::Plant, ConnectivityPolicy::Free) => {
+                return Err(EditorModelError::new(
+                    "new plant documents must be grounded",
+                ));
+            }
+            (ObjectCategory::Effect, ConnectivityPolicy::Grounded) => {
+                return Err(EditorModelError::new(
+                    "new effect documents must use free connectivity",
+                ));
+            }
+        }
+        let (id, display_name, part, blockers) = match category {
+            ObjectCategory::Plant => (
+                "plant/untitled",
+                "Untitled Plant",
+                ObjectPart::Plant(PlantPart::Root),
+                vec![LocalAxialCoord::new(0, 0)],
+            ),
+            ObjectCategory::Effect => (
+                "effect/untitled",
+                "Untitled Effect",
+                ObjectPart::Effect(EffectPart::Core),
+                Vec::new(),
+            ),
+            ObjectCategory::Prop => (
+                "prop/untitled",
+                "Untitled Prop",
+                ObjectPart::Prop(hex_assets::PropPart::Structure),
+                Vec::new(),
+            ),
+        };
+        let id =
+            ObjectAssetId::new(id).map_err(|error| EditorModelError::new(error.to_string()))?;
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        let bounds = if connectivity == ConnectivityPolicy::Free {
+            ObjectBounds {
+                radius: ObjectBounds::DEFAULT.radius,
+                min_level: -18,
+                height: ObjectBounds::DEFAULT.height,
+            }
+        } else {
+            ObjectBounds::DEFAULT
+        };
+        let object = ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id,
+            display_name: display_name.to_owned(),
+            category,
+            bounds,
+            connectivity,
+            origin,
+            placements: vec![ObjectPlacement {
+                position: origin,
+                style: style.clone(),
+                part,
+            }],
+            blocker_footprint: blockers,
+            canopy_occluders: Vec::new(),
+        };
+        let mut editor = Self::from_blueprint(object)?;
+        editor.active_style = Some(style);
+        editor.saved_object.placements.clear();
+        Ok(editor)
+    }
+
     /// Current workshop mode.
     #[must_use]
     pub const fn mode(&self) -> WorkshopMode {
@@ -372,6 +451,140 @@ impl EditorModel {
         self.saved_object = self.object.clone();
     }
 
+    /// Adopts the immutable identity assigned by a successful Save As operation.
+    ///
+    /// This is a persistence checkpoint rather than an undoable content edit.
+    pub fn mark_saved_as(&mut self, id: ObjectAssetId) {
+        self.object.id = id;
+        self.mark_saved();
+        self.history.clear();
+    }
+
+    /// Assigns a proposed identity and name to a document that has not been saved.
+    ///
+    /// The identity does not become immutable until persistence succeeds.
+    pub fn set_unsaved_identity(
+        &mut self,
+        id: ObjectAssetId,
+        display_name: impl Into<String>,
+    ) -> Result<(), EditorModelError> {
+        let display_name = display_name.into();
+        if display_name.trim().is_empty() {
+            return Err(EditorModelError::new(
+                "object display name must contain visible text",
+            ));
+        }
+        self.object.id = id;
+        self.object.display_name = display_name;
+        self.saved_object.placements.clear();
+        self.history.clear();
+        Ok(())
+    }
+
+    /// Changes the editable display name as one undoable operation.
+    pub fn set_display_name(
+        &mut self,
+        display_name: impl Into<String>,
+    ) -> Result<bool, EditorModelError> {
+        let display_name = display_name.into();
+        if display_name.trim().is_empty() {
+            return Err(EditorModelError::new(
+                "object display name must contain visible text",
+            ));
+        }
+        self.edit("Rename object", move |object, _selection| {
+            object.display_name = display_name;
+            Ok(())
+        })
+    }
+
+    /// Changes the authoring canvas when every existing cell and mask still fits.
+    pub fn set_bounds(&mut self, bounds: ObjectBounds) -> Result<bool, EditorModelError> {
+        validate_bounds(bounds)?;
+        let changed = self.edit("Change object bounds", move |object, _selection| {
+            if !bounds.contains(object.origin) {
+                return Err(EditorModelError::new(format!(
+                    "origin {:?} lies outside the requested bounds",
+                    object.origin
+                )));
+            }
+            if let Some(placement) = object
+                .placements
+                .iter()
+                .find(|placement| !bounds.contains(placement.position))
+            {
+                return Err(EditorModelError::new(format!(
+                    "occupied cell {:?} lies outside the requested bounds",
+                    placement.position
+                )));
+            }
+            if let Some(blocker) = object
+                .blocker_footprint
+                .iter()
+                .find(|blocker| !bounds.contains_axial(**blocker))
+            {
+                return Err(EditorModelError::new(format!(
+                    "blocker cell {blocker:?} lies outside the requested bounds"
+                )));
+            }
+            object.bounds = bounds;
+            Ok(())
+        })?;
+        let maximum = bounds
+            .min_level
+            .saturating_add(i32::from(bounds.height))
+            .saturating_sub(1);
+        self.active_level = self.active_level.clamp(bounds.min_level, maximum);
+        Ok(changed)
+    }
+
+    /// Moves the object pivot/root to an occupied category-valid cell.
+    pub fn set_origin(&mut self, origin: LocalVoxelCoord) -> Result<bool, EditorModelError> {
+        self.edit("Move object origin", move |object, _selection| {
+            validate_position(object, origin)?;
+            let part = placement_at(object, origin)
+                .map(|placement| placement.part)
+                .ok_or_else(|| {
+                    EditorModelError::new(format!("origin {origin:?} must name an occupied cell"))
+                })?;
+            validate_origin_part(object.category, object.connectivity, origin, part)?;
+            object.origin = origin;
+            Ok(())
+        })
+    }
+
+    /// Changes a prop between grounded and free connectivity.
+    ///
+    /// Plant and effect connectivity is fixed by their category contract.
+    pub fn set_connectivity(
+        &mut self,
+        connectivity: ConnectivityPolicy,
+    ) -> Result<bool, EditorModelError> {
+        self.edit("Change connectivity", move |object, _selection| {
+            match (object.category, connectivity) {
+                (ObjectCategory::Plant, ConnectivityPolicy::Grounded)
+                | (ObjectCategory::Effect, ConnectivityPolicy::Free)
+                | (ObjectCategory::Prop, _) => {}
+                (ObjectCategory::Plant, ConnectivityPolicy::Free) => {
+                    return Err(EditorModelError::new("plant objects must remain grounded"));
+                }
+                (ObjectCategory::Effect, ConnectivityPolicy::Grounded) => {
+                    return Err(EditorModelError::new("effect objects must remain free"));
+                }
+            }
+            validate_origin_part(
+                object.category,
+                connectivity,
+                object.origin,
+                placement_at(object, object.origin)
+                    .map(|placement| placement.part)
+                    .ok_or_else(|| EditorModelError::new("object origin is not occupied"))?,
+            )?;
+            object.connectivity = connectivity;
+            Ok(())
+        })
+    }
+
     /// Checks whether the current draft is intrinsically complete.
     pub fn validate_draft(&self) -> Result<(), EditorModelError> {
         self.object
@@ -399,6 +612,7 @@ impl EditorModel {
 
     /// Commits all commands since [`Self::begin_transaction`] as one undo step.
     pub fn commit_transaction(&mut self) -> Result<bool, EditorModelError> {
+        normalize_collections(&mut self.object);
         let snapshot = self.snapshot();
         self.history.commit(&snapshot).map_err(Into::into)
     }
@@ -428,6 +642,24 @@ impl EditorModel {
         };
         self.restore(snapshot);
         Ok(true)
+    }
+
+    /// Label of the next object edit that Undo would restore.
+    #[must_use]
+    pub fn undo_label(&self) -> Option<&str> {
+        self.history.undo_label()
+    }
+
+    /// Label of the next object edit that Redo would reapply.
+    #[must_use]
+    pub fn redo_label(&self) -> Option<&str> {
+        self.history.redo_label()
+    }
+
+    /// Whether an object paint/transform transaction is currently open.
+    #[must_use]
+    pub const fn is_transaction_open(&self) -> bool {
+        self.history.is_transaction_open()
     }
 
     /// Places an occupied cell with the active style and semantic part.
@@ -682,11 +914,17 @@ impl EditorModel {
 
         let mut blocker_offsets = BTreeSet::new();
         for blocker in blockers {
-            if self
-                .selection
-                .cells
+            let occupied_column: Vec<_> = self
+                .object
+                .placements
                 .iter()
-                .any(|position| position.axial() == blocker)
+                .map(|placement| placement.position)
+                .filter(|position| position.axial() == blocker)
+                .collect();
+            if !occupied_column.is_empty()
+                && occupied_column
+                    .iter()
+                    .all(|position| self.selection.cells.contains(position))
             {
                 blocker_offsets.insert(checked_axial_difference(blocker, anchor.axial())?);
             }
@@ -735,6 +973,15 @@ impl EditorModel {
                 }
                 staged.push((position, voxel.clone()));
             }
+            let staged_blockers = if object.category == ObjectCategory::Prop {
+                clipboard
+                    .blocker_offsets
+                    .iter()
+                    .map(|offset| checked_translate_axial(target.axial(), offset.q, offset.r))
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
 
             for (position, voxel) in &staged {
                 object.placements.push(ObjectPlacement {
@@ -746,11 +993,8 @@ impl EditorModel {
                     object.canopy_occluders.push(*position);
                 }
             }
-            if object.category == ObjectCategory::Prop {
-                for offset in &clipboard.blocker_offsets {
-                    let blocker = checked_translate_axial(target.axial(), offset.q, offset.r)?;
-                    set_membership(&mut object.blocker_footprint, blocker, true);
-                }
+            for blocker in staged_blockers {
+                set_membership(&mut object.blocker_footprint, blocker, true);
             }
             repair_masks_after_content_change(object);
             selection.replace_with(staged.iter().map(|(position, _)| *position));
@@ -793,7 +1037,7 @@ impl EditorModel {
         }
         self.edit(label, move |object, selection| {
             validate_transform(object, &selected, &mapping)?;
-            let previous = object.clone();
+            let transformed_blockers = transformed_prop_blockers(object, &selected, &mapping)?;
 
             for placement in &mut object.placements {
                 if let Some(target) = mapping.get(&placement.position) {
@@ -808,7 +1052,9 @@ impl EditorModel {
                     *canopy = *target;
                 }
             }
-            transform_prop_blockers(object, &previous, &selected, &mapping)?;
+            if let Some(blockers) = transformed_blockers {
+                object.blocker_footprint = blockers;
+            }
             repair_masks_after_content_change(object);
             selection.replace_with(mapping.values().copied());
             Ok(())
@@ -823,6 +1069,13 @@ impl EditorModel {
             &mut ObjectSelection,
         ) -> Result<(), EditorModelError>,
     ) -> Result<bool, EditorModelError> {
+        if self.history.is_transaction_open() {
+            // Every command closure validates all fallible conditions before its
+            // first mutation. The transaction baseline therefore provides rollback
+            // without cloning and sorting the complete object for every painted cell.
+            operation(&mut self.object, &mut self.selection)?;
+            return Ok(true);
+        }
         let before = self.snapshot();
         if let Err(error) = operation(&mut self.object, &mut self.selection) {
             self.restore(before);
@@ -887,6 +1140,51 @@ fn validate_part_for_position(
             "plant root {position:?} must remain at level 0"
         )));
     }
+    Ok(())
+}
+
+fn validate_origin_part(
+    category: ObjectCategory,
+    connectivity: ConnectivityPolicy,
+    origin: LocalVoxelCoord,
+    part: ObjectPart,
+) -> Result<(), EditorModelError> {
+    let valid_part = match category {
+        ObjectCategory::Plant => part == ObjectPart::Plant(PlantPart::Root),
+        ObjectCategory::Effect => part == ObjectPart::Effect(EffectPart::Core),
+        ObjectCategory::Prop => part == ObjectPart::Prop(hex_assets::PropPart::Structure),
+    };
+    if !valid_part {
+        return Err(EditorModelError::new(format!(
+            "{category:?} origin must use its root/core/structure part"
+        )));
+    }
+    let grounded = matches!(category, ObjectCategory::Plant)
+        || matches!(category, ObjectCategory::Prop) && connectivity == ConnectivityPolicy::Grounded;
+    if grounded && origin.level != 0 {
+        return Err(EditorModelError::new(
+            "grounded object origin must remain at level 0",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bounds(bounds: ObjectBounds) -> Result<(), EditorModelError> {
+    if bounds.radius > MAX_OBJECT_RADIUS {
+        return Err(EditorModelError::new(format!(
+            "bounds radius {} exceeds the maximum {MAX_OBJECT_RADIUS}",
+            bounds.radius
+        )));
+    }
+    if bounds.height == 0 || bounds.height > MAX_OBJECT_HEIGHT {
+        return Err(EditorModelError::new(format!(
+            "bounds height must be within 1..={MAX_OBJECT_HEIGHT}"
+        )));
+    }
+    bounds
+        .min_level
+        .checked_add(i32::from(bounds.height))
+        .ok_or_else(|| EditorModelError::new("bounds level range overflows i32"))?;
     Ok(())
 }
 
@@ -1007,23 +1305,22 @@ fn validate_transform(
     Ok(())
 }
 
-fn transform_prop_blockers(
-    object: &mut ObjectBlueprint,
-    previous: &ObjectBlueprint,
+fn transformed_prop_blockers(
+    object: &ObjectBlueprint,
     selected: &BTreeSet<LocalVoxelCoord>,
     mapping: &BTreeMap<LocalVoxelCoord, LocalVoxelCoord>,
-) -> Result<(), EditorModelError> {
+) -> Result<Option<Vec<LocalAxialCoord>>, EditorModelError> {
     if object.category != ObjectCategory::Prop {
-        return Ok(());
+        return Ok(None);
     }
     let mut blockers = BTreeSet::new();
-    for blocker in &previous.blocker_footprint {
+    for blocker in &object.blocker_footprint {
         let selected_in_column: Vec<_> = selected
             .iter()
             .filter(|position| position.axial() == *blocker)
             .copied()
             .collect();
-        let has_unselected = previous.placements.iter().any(|placement| {
+        let has_unselected = object.placements.iter().any(|placement| {
             placement.position.axial() == *blocker && !selected.contains(&placement.position)
         });
         if selected_in_column.is_empty() || has_unselected {
@@ -1040,8 +1337,7 @@ fn transform_prop_blockers(
         };
         blockers.insert(target.axial());
     }
-    object.blocker_footprint = blockers.into_iter().collect();
-    Ok(())
+    Ok(Some(blockers.into_iter().collect()))
 }
 
 fn checked_translate(
@@ -1182,6 +1478,114 @@ mod tests {
         assert!(editor.is_dirty());
         assert_eq!(editor.object().bounds, ObjectBounds::DEFAULT);
         assert_eq!(editor.object().placements.len(), 1);
+    }
+
+    #[test]
+    fn blank_documents_cover_every_supported_category_policy() {
+        for (category, connectivity) in [
+            (ObjectCategory::Plant, ConnectivityPolicy::Grounded),
+            (ObjectCategory::Effect, ConnectivityPolicy::Free),
+            (ObjectCategory::Prop, ConnectivityPolicy::Grounded),
+            (ObjectCategory::Prop, ConnectivityPolicy::Free),
+        ] {
+            let created =
+                EditorModel::blank(category, connectivity, style_id("calibration/neutral"));
+            let Ok(created) = created else {
+                unreachable!("supported blank document should be valid")
+            };
+            assert_eq!(created.object().category, category);
+            assert_eq!(created.object().connectivity, connectivity);
+            assert!(created.validate_draft().is_ok());
+            assert!(created.is_dirty());
+            if connectivity == ConnectivityPolicy::Free {
+                assert!(created.object().bounds.min_level < 0);
+            }
+        }
+        assert!(EditorModel::blank(
+            ObjectCategory::Plant,
+            ConnectivityPolicy::Free,
+            style_id("calibration/neutral"),
+        )
+        .is_err());
+        assert!(EditorModel::blank(
+            ObjectCategory::Effect,
+            ConnectivityPolicy::Grounded,
+            style_id("calibration/neutral"),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn metadata_edits_are_validated_and_undoable() {
+        let mut editor = editor();
+        assert_eq!(editor.set_display_name("Young Oak"), Ok(true));
+        assert_eq!(editor.object().display_name, "Young Oak");
+        assert_eq!(
+            editor.set_bounds(ObjectBounds {
+                radius: 4,
+                min_level: 0,
+                height: 20,
+            }),
+            Ok(true)
+        );
+        assert_eq!(editor.object().bounds.radius, 4);
+        assert_eq!(editor.undo(), Ok(true));
+        assert_eq!(editor.object().bounds, ObjectBounds::DEFAULT);
+        assert_eq!(editor.undo(), Ok(true));
+        assert_eq!(editor.object().display_name, "Calibration Scene");
+
+        assert!(editor.set_active_level(35).is_ok());
+        assert_eq!(
+            editor.set_bounds(ObjectBounds {
+                radius: 6,
+                min_level: 0,
+                height: 1,
+            }),
+            Ok(true)
+        );
+        assert_eq!(editor.active_level(), 0);
+
+        assert!(editor.set_display_name("  ").is_err());
+        assert!(editor
+            .set_bounds(ObjectBounds {
+                radius: MAX_OBJECT_RADIUS + 1,
+                min_level: 0,
+                height: 1,
+            })
+            .is_err());
+        assert_eq!(editor.object().display_name, "Calibration Scene");
+    }
+
+    #[test]
+    fn save_as_adopts_the_persistent_identity_without_an_undo_step() {
+        let mut editor = editor();
+        assert_eq!(editor.set_display_name("Young Oak"), Ok(true));
+        let Ok(saved_id) = ObjectAssetId::new("plant/young-oak") else {
+            unreachable!("test object id should be valid")
+        };
+        editor.mark_saved_as(saved_id.clone());
+        assert_eq!(&editor.object().id, &saved_id);
+        assert!(!editor.is_dirty());
+        assert_eq!(editor.undo(), Ok(false));
+    }
+
+    #[test]
+    fn origin_and_connectivity_follow_category_contracts() {
+        let mut editor = editor();
+        let trunk = LocalVoxelCoord::new(0, 0, 1);
+        assert_eq!(
+            editor.place(
+                trunk,
+                style_id("calibration/neutral"),
+                ObjectPart::Plant(PlantPart::Trunk),
+            ),
+            Ok(true)
+        );
+        assert!(editor.set_origin(trunk).is_err());
+        assert!(editor.set_connectivity(ConnectivityPolicy::Free).is_err());
+        assert_eq!(editor.object().origin, LocalVoxelCoord::new(0, 0, 0));
+        assert_eq!(editor.undo(), Ok(true));
+        assert!(placement(&editor, trunk).is_none());
     }
 
     #[test]
@@ -1397,5 +1801,57 @@ mod tests {
             [LocalAxialCoord::new(1, 0)]
         );
         assert_eq!(editor.object().origin, LocalVoxelCoord::new(1, 0, 0));
+    }
+
+    #[test]
+    fn prop_clipboard_carries_a_blocker_only_for_a_fully_selected_column() {
+        let Ok(id) = ObjectAssetId::new("calibration/prop") else {
+            unreachable!("test object id should be valid")
+        };
+        let origin = LocalVoxelCoord::new(0, 0, 0);
+        let detail = LocalVoxelCoord::new(0, 0, 1);
+        let object = ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id,
+            display_name: "Calibration Prop".to_owned(),
+            category: ObjectCategory::Prop,
+            bounds: ObjectBounds::DEFAULT,
+            connectivity: ConnectivityPolicy::Grounded,
+            origin,
+            placements: vec![
+                ObjectPlacement {
+                    position: origin,
+                    style: style_id("calibration/neutral"),
+                    part: ObjectPart::Prop(PropPart::Structure),
+                },
+                ObjectPlacement {
+                    position: detail,
+                    style: style_id("calibration/neutral"),
+                    part: ObjectPart::Prop(PropPart::Detail),
+                },
+            ],
+            blocker_footprint: vec![origin.axial()],
+            canopy_occluders: Vec::new(),
+        };
+        let Ok(mut editor) = EditorModel::from_blueprint(object) else {
+            unreachable!("test prop should be valid")
+        };
+
+        assert!(editor.select(detail, false));
+        assert_eq!(editor.copy_selection(), Ok(1));
+        assert_eq!(editor.paste_at(LocalVoxelCoord::new(1, 0, 1)), Ok(true));
+        assert!(!editor
+            .object()
+            .blocker_footprint
+            .contains(&LocalAxialCoord::new(1, 0)));
+
+        assert!(editor.select(origin, false));
+        assert!(editor.select(detail, true));
+        assert_eq!(editor.copy_selection(), Ok(2));
+        assert_eq!(editor.paste_at(LocalVoxelCoord::new(2, 0, 0)), Ok(true));
+        assert!(editor
+            .object()
+            .blocker_footprint
+            .contains(&LocalAxialCoord::new(2, 0)));
     }
 }

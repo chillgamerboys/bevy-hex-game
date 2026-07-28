@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use atomic_write_file::AtomicWriteFile;
 use hex_assets::{
     ArtPalette, ObjectAssetId, ObjectBlueprint, ObjectCategory, PaletteSwatch, SwatchId,
     VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
@@ -22,9 +22,6 @@ const ART_PATH: &str = "assets/art";
 const PALETTE_FILE: &str = "palette.ron";
 const STYLE_FILE: &str = "voxel_styles.ron";
 const OBJECT_DIRECTORY: &str = "objects";
-const TEMP_WRITE_ATTEMPTS: usize = 32;
-
-static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// One object affected by a shared style or swatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,17 +207,90 @@ impl AssetProject {
         Ok(())
     }
 
+    /// Validates and explicitly saves coherent palette and style drafts.
+    ///
+    /// When both files change, the method chooses an order whose intermediate graph
+    /// remains valid. An I/O failure on the second file atomically restores the first
+    /// file before returning and never advances the in-memory project.
+    pub fn save_catalogs(
+        &mut self,
+        palette: ArtPalette,
+        styles: VoxelStyleCatalog,
+    ) -> Result<(), ProjectError> {
+        validate_graph(&palette, &styles, &self.objects)?;
+        let palette_changed = palette != self.palette;
+        let styles_changed = styles != self.styles;
+        match (palette_changed, styles_changed) {
+            (false, false) => return Ok(()),
+            (true, false) => return self.save_palette(palette),
+            (false, true) => return self.save_styles(styles),
+            (true, true) => {}
+        }
+
+        let palette_path = self.art_root.join(PALETTE_FILE);
+        let style_path = self.art_root.join(STYLE_FILE);
+        let old_palette = self.palette.clone();
+        let old_styles = self.styles.clone();
+        let palette_first = validate_graph(&palette, &old_styles, &self.objects).is_ok();
+        let styles_first = validate_graph(&old_palette, &styles, &self.objects).is_ok();
+
+        if palette_first {
+            write_ron_atomically(&palette_path, &palette)?;
+            if let Err(error) = write_ron_atomically(&style_path, &styles) {
+                return Err(with_rollback(
+                    error,
+                    write_ron_atomically(&palette_path, &old_palette),
+                    "palette",
+                ));
+            }
+        } else if styles_first {
+            write_ron_atomically(&style_path, &styles)?;
+            if let Err(error) = write_ron_atomically(&palette_path, &palette) {
+                return Err(with_rollback(
+                    error,
+                    write_ron_atomically(&style_path, &old_styles),
+                    "voxel styles",
+                ));
+            }
+        } else {
+            return Err(ProjectError::new(
+                "save art catalogs",
+                None,
+                "palette and style changes have no valid intermediate graph; save additions before migrating references, then remove obsolete entries",
+            ));
+        }
+
+        self.palette = palette;
+        self.styles = styles;
+        Ok(())
+    }
+
     /// Saves changes to an existing object without changing its stable id.
     ///
     /// Use [`Self::save_object_as`] for an unsaved draft or an identity change.
-    pub fn save_object(&mut self, blueprint: ObjectBlueprint) -> Result<(), ProjectError> {
-        if !self.objects.contains_key(&blueprint.id) {
+    pub fn save_object(
+        &mut self,
+        expected_id: &ObjectAssetId,
+        blueprint: ObjectBlueprint,
+    ) -> Result<(), ProjectError> {
+        if &blueprint.id != expected_id {
+            return Err(ProjectError::new(
+                "save object",
+                None,
+                format!(
+                    "open object identity is '{}' but the draft attempted to save as '{}'; use Save As for identity changes",
+                    expected_id.as_str(),
+                    blueprint.id.as_str()
+                ),
+            ));
+        }
+        if !self.objects.contains_key(expected_id) {
             return Err(ProjectError::new(
                 "save object",
                 None,
                 format!(
                     "object '{}' is not saved; use Save As for a new id",
-                    blueprint.id.as_str()
+                    expected_id.as_str()
                 ),
             ));
         }
@@ -574,6 +644,31 @@ fn format_object_usage(usage: &[ObjectUsage]) -> String {
         .join(", ")
 }
 
+fn with_rollback(
+    original: ProjectError,
+    rollback: Result<(), ProjectError>,
+    restored_asset: &str,
+) -> ProjectError {
+    match rollback {
+        Ok(()) => ProjectError::new(
+            original.operation(),
+            original.path().map(Path::to_path_buf),
+            format!(
+                "{}; the previous {restored_asset} file was restored",
+                original.detail()
+            ),
+        ),
+        Err(rollback_error) => ProjectError::new(
+            "restore art catalogs",
+            rollback_error.path().map(Path::to_path_buf),
+            format!(
+                "{}; restoring the previous {restored_asset} file also failed: {}",
+                original, rollback_error
+            ),
+        ),
+    }
+}
+
 fn write_ron_atomically<T>(path: &Path, value: &T) -> Result<(), ProjectError>
 where
     T: Serialize + DeserializeOwned,
@@ -591,129 +686,15 @@ where
     })?;
     fs::create_dir_all(parent)
         .map_err(|error| ProjectError::at("create asset directory", parent, error))?;
-    let (temporary_path, mut temporary_file) = create_sibling_temp(path)?;
-    let mut guard = TemporaryFileGuard::new(temporary_path.clone());
-
-    let write_result = (|| -> io::Result<()> {
-        temporary_file.write_all(encoded.as_bytes())?;
-        temporary_file.sync_all()
-    })();
-    drop(temporary_file);
-    write_result
-        .map_err(|error| ProjectError::at("write temporary asset", &temporary_path, error))?;
-
-    if let Ok(metadata) = fs::metadata(path) {
-        fs::set_permissions(&temporary_path, metadata.permissions()).map_err(|error| {
-            ProjectError::at("preserve asset permissions", &temporary_path, error)
-        })?;
-    }
-
-    install_temporary(&temporary_path, path)?;
-    guard.disarm();
+    let mut file = AtomicWriteFile::open(path)
+        .map_err(|error| ProjectError::at("create atomic asset", path, error))?;
+    file.write_all(encoded.as_bytes())
+        .map_err(|error| ProjectError::at("write temporary asset", path, error))?;
+    file.sync_all()
+        .map_err(|error| ProjectError::at("sync temporary asset", path, error))?;
+    file.commit()
+        .map_err(|error| ProjectError::at("atomically replace asset", path, error))?;
     Ok(())
-}
-
-#[cfg(windows)]
-fn install_temporary(temporary: &Path, destination: &Path) -> Result<(), ProjectError> {
-    install_with_backup(temporary, destination)
-}
-
-#[cfg(not(windows))]
-fn install_temporary(temporary: &Path, destination: &Path) -> Result<(), ProjectError> {
-    fs::rename(temporary, destination)
-        .map_err(|error| ProjectError::at("atomically replace asset", destination, error))
-}
-
-/// Windows cannot replace an existing file with `std::fs::rename`. Move the last
-/// valid file aside, install the fully written temporary file, and restore the old
-/// file if installation fails.
-#[cfg(any(windows, test))]
-fn install_with_backup(temporary: &Path, destination: &Path) -> Result<(), ProjectError> {
-    if !destination
-        .try_exists()
-        .map_err(|error| ProjectError::at("inspect atomic destination", destination, error))?
-    {
-        return fs::rename(temporary, destination)
-            .map_err(|error| ProjectError::at("install new asset", destination, error));
-    }
-
-    let backup = move_destination_to_backup(destination)?;
-    match fs::rename(temporary, destination) {
-        Ok(()) => {
-            // The new file is installed. A stale hidden backup is preferable to
-            // reporting failure after disk and memory have already diverged.
-            drop(fs::remove_file(backup));
-            Ok(())
-        }
-        Err(install_error) => match fs::rename(&backup, destination) {
-            Ok(()) => Err(ProjectError::at(
-                "install asset",
-                destination,
-                format!(
-                    "installation failed and the previous file was restored: {install_error}"
-                ),
-            )),
-            Err(restore_error) => Err(ProjectError::at(
-                "restore asset",
-                destination,
-                format!(
-                    "installation failed ({install_error}); previous file remains at '{}' because restoration also failed ({restore_error})",
-                    backup.display()
-                ),
-            )),
-        },
-    }
-}
-
-#[cfg(any(windows, test))]
-fn move_destination_to_backup(destination: &Path) -> Result<PathBuf, ProjectError> {
-    let parent = destination.parent().ok_or_else(|| {
-        ProjectError::at(
-            "prepare asset backup",
-            destination,
-            "destination has no parent directory",
-        )
-    })?;
-    let filename = destination.file_name().ok_or_else(|| {
-        ProjectError::at(
-            "prepare asset backup",
-            destination,
-            "destination has no filename",
-        )
-    })?;
-    let filename = filename.to_string_lossy();
-
-    for _ in 0..TEMP_WRITE_ATTEMPTS {
-        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let backup = parent.join(format!(
-            ".{filename}.{}.{}.backup",
-            std::process::id(),
-            sequence
-        ));
-        if backup
-            .try_exists()
-            .map_err(|error| ProjectError::at("inspect asset backup", &backup, error))?
-        {
-            continue;
-        }
-        match fs::rename(destination, &backup) {
-            Ok(()) => return Ok(backup),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(ProjectError::at(
-                    "preserve previous asset",
-                    destination,
-                    error,
-                ));
-            }
-        }
-    }
-
-    Err(ProjectError::at(
-        "preserve previous asset",
-        destination,
-        format!("could not reserve a sibling backup after {TEMP_WRITE_ATTEMPTS} attempts"),
-    ))
 }
 
 fn pretty_ron<T: Serialize>(value: &T) -> Result<String, ProjectError> {
@@ -724,76 +705,6 @@ fn pretty_ron<T: Serialize>(value: &T) -> Result<String, ProjectError> {
         .map_err(|error| ProjectError::new("serialize RON asset", None, error.to_string()))?;
     encoded.push('\n');
     Ok(encoded)
-}
-
-fn create_sibling_temp(destination: &Path) -> Result<(PathBuf, File), ProjectError> {
-    let parent = destination.parent().ok_or_else(|| {
-        ProjectError::at(
-            "prepare atomic save",
-            destination,
-            "destination has no parent directory",
-        )
-    })?;
-    let filename = destination.file_name().ok_or_else(|| {
-        ProjectError::at(
-            "prepare atomic save",
-            destination,
-            "destination has no filename",
-        )
-    })?;
-    let filename = filename.to_string_lossy();
-
-    for _ in 0..TEMP_WRITE_ATTEMPTS {
-        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let temporary_path = parent.join(format!(
-            ".{filename}.{}.{}.tmp",
-            std::process::id(),
-            sequence
-        ));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary_path)
-        {
-            Ok(file) => return Ok((temporary_path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => {
-                return Err(ProjectError::at(
-                    "create temporary asset",
-                    &temporary_path,
-                    error,
-                ));
-            }
-        }
-    }
-
-    Err(ProjectError::at(
-        "create temporary asset",
-        destination,
-        format!("could not reserve a unique sibling after {TEMP_WRITE_ATTEMPTS} attempts"),
-    ))
-}
-
-struct TemporaryFileGuard {
-    path: Option<PathBuf>,
-}
-
-impl TemporaryFileGuard {
-    const fn new(path: PathBuf) -> Self {
-        Self { path: Some(path) }
-    }
-
-    fn disarm(&mut self) {
-        self.path = None;
-    }
-}
-
-impl Drop for TemporaryFileGuard {
-    fn drop(&mut self) {
-        if let Some(path) = self.path.take() {
-            drop(fs::remove_file(path));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1027,7 +938,9 @@ mod tests {
             .cloned()
             .expect("saved oak should be indexed");
         oak.display_name = "Old Oak".to_owned();
-        project.save_object(oak).expect("Save should replace oak");
+        project
+            .save_object(&object_id("plant/oak"), oak)
+            .expect("Save should replace oak");
         project
             .duplicate_object(
                 &object_id("plant/oak"),
@@ -1093,7 +1006,9 @@ mod tests {
             .cloned()
             .expect("oak should be indexed");
         invalid_oak.placements.clear();
-        assert!(project.save_object(invalid_oak).is_err());
+        assert!(project
+            .save_object(&object_id("plant/oak"), invalid_oak)
+            .is_err());
         assert_eq!(
             fs::read(&oak_path).expect("oak should remain readable"),
             oak_before
@@ -1104,6 +1019,87 @@ mod tests {
                 .map(|object| object.placements.len()),
             Some(2)
         );
+    }
+
+    #[test]
+    fn ordinary_save_cannot_overwrite_another_objects_identity() {
+        let directory = prepare_project();
+        write_object_fixture(&directory, &tree("plant/oak", "Oak"));
+        write_object_fixture(&directory, &tree("plant/ash", "Ash"));
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let ash_path = directory
+            .art_root()
+            .join("objects")
+            .join("plant")
+            .join("ash.ron");
+        let ash_before = fs::read(&ash_path).expect("ash should be readable");
+        let mut disguised = project
+            .object(&object_id("plant/ash"))
+            .cloned()
+            .expect("ash should be indexed");
+        disguised.display_name = "Not Oak".to_owned();
+
+        let error = project
+            .save_object(&object_id("plant/oak"), disguised)
+            .expect_err("ordinary Save cannot change the open identity");
+        assert!(error.detail().contains("use Save As"));
+        assert_eq!(
+            fs::read(&ash_path).expect("ash should remain readable"),
+            ash_before
+        );
+    }
+
+    #[test]
+    fn catalog_save_orders_additions_and_removals_without_invalid_intermediates() {
+        let directory = prepare_project();
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let accent_id = swatch_id("plant/accent");
+        let accent = PaletteSwatch::new(
+            "Plant Accent",
+            hex_assets::SrgbColor::new(0.88, 0.12, 0.25).expect("fixture colour should be valid"),
+            BTreeSet::new(),
+        )
+        .expect("fixture swatch should be valid");
+        let mut palette = project.palette().clone();
+        drop(
+            palette
+                .insert(accent_id.clone(), accent)
+                .expect("fixture palette edit should be valid"),
+        );
+        let mut styles = project.styles().clone();
+        drop(
+            styles
+                .insert(
+                    style_id("plant/accent"),
+                    VoxelStyle::new(
+                        "Plant Accent",
+                        accent_id,
+                        VoxelSurfaceMode::Opaque,
+                        1.0,
+                        None,
+                    )
+                    .expect("fixture style should be valid"),
+                )
+                .expect("fixture catalog edit should be valid"),
+        );
+        project
+            .save_catalogs(palette, styles)
+            .expect("additions should save palette first");
+
+        let mut palette = project.palette().clone();
+        assert!(palette
+            .remove(&swatch_id("plant/trunk"))
+            .expect("fixture removal should be valid")
+            .is_some());
+        let mut styles = project.styles().clone();
+        assert!(styles.remove(&style_id("plant/trunk")).is_some());
+        project
+            .save_catalogs(palette, styles)
+            .expect("removals should save styles first");
+        let reloaded = AssetProject::load(&directory.path).expect("catalogs should reload");
+        assert!(reloaded.palette().contains(&swatch_id("plant/accent")));
+        assert!(reloaded.styles().contains(&style_id("plant/accent")));
+        assert!(!reloaded.palette().contains(&swatch_id("plant/trunk")));
     }
 
     #[test]
@@ -1193,29 +1189,5 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(names, ["oak.ron"]);
-    }
-
-    #[test]
-    fn backup_installer_replaces_and_restores_portably() {
-        let directory = TestDirectory::new();
-        let destination = directory.path.join("asset.ron");
-        let temporary = directory.path.join("asset.tmp");
-        fs::write(&destination, "old").expect("old asset should be written");
-        fs::write(&temporary, "new").expect("temporary asset should be written");
-
-        install_with_backup(&temporary, &destination).expect("replacement should succeed");
-        assert_eq!(
-            fs::read_to_string(&destination).expect("replacement should be readable"),
-            "new"
-        );
-        assert!(!temporary.exists());
-
-        fs::write(&destination, "last-valid").expect("last-valid asset should be written");
-        let missing_temporary = directory.path.join("missing.tmp");
-        assert!(install_with_backup(&missing_temporary, &destination).is_err());
-        assert_eq!(
-            fs::read_to_string(&destination).expect("old asset should be restored"),
-            "last-valid"
-        );
     }
 }
