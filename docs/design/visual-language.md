@@ -29,6 +29,13 @@ ASCII letters, digits, hyphens, or underscores without path separators. Renaming
 display name is harmless; changing an id is a reference migration, not an ordinary
 edit.
 
+The catalogs are machine-written documents. Workshop saves replace their complete
+serialized contents, so comments inside the RON files are not durable; visual policy
+and migration notes belong in this document. The initial `legacy` tag means the live
+renderer still owns that colour literal and is removed when the renderer resolves the
+swatch directly. The initially empty style catalog does not promote runtime substance
+or temporary-feature materials into reviewed Workshop styles.
+
 ## Strict for new work, staged for old work
 
 The palette has two adoption rules on purpose:

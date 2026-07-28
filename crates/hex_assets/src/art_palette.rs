@@ -448,10 +448,18 @@ impl ArtPalette {
     }
 
     /// Finds all entries close enough to trigger the editor's duplicate warning.
+    ///
+    /// `excluded` lets an editor compare an updated swatch against the rest of the
+    /// catalog without reporting the swatch's previous value as its own duplicate.
     #[must_use]
-    pub fn near_duplicates(&self, color: SrgbColor) -> Vec<SwatchMatch> {
+    pub fn near_duplicates(
+        &self,
+        color: SrgbColor,
+        excluded: Option<&SwatchId>,
+    ) -> Vec<SwatchMatch> {
         self.nearest_swatches(color, self.swatches.len())
             .into_iter()
+            .filter(|candidate| excluded != Some(&candidate.id))
             .take_while(|candidate| candidate.distance <= DEFAULT_NEAR_COLOR_THRESHOLD)
             .collect()
     }
@@ -1181,6 +1189,14 @@ mod tests {
         assert_eq!(second.id.as_str(), "test/b");
         assert!(first.distance <= DEFAULT_NEAR_COLOR_THRESHOLD);
         assert_eq!(palette.nearest_swatches(color(0.2, 0.4, 0.2), 0), []);
+        assert_eq!(
+            palette
+                .near_duplicates(color(0.2, 0.4, 0.2), Some(&id("test/a")))
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect::<Vec<_>>(),
+            ["test/b"]
+        );
     }
 
     #[test]

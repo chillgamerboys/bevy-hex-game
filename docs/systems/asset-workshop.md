@@ -48,6 +48,9 @@ whitespace or comments. An object fingerprint includes referenced ids, not the
 transitive RGB values behind those ids, so changing a shared swatch reports affected
 objects without pretending their geometry changed.
 
+Tracked Workshop RON files are machine-written. Explicit saves replace the complete
+document and do not preserve comments; contract rationale belongs in the documentation.
+
 Each file carries an explicit schema version. Unknown versions and unknown fields fail
 closed; an older tool must not erase data it does not understand.
 

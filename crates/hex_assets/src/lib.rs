@@ -15,12 +15,10 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
-/// Canonical authored colours and reusable voxel surface styles.
 pub mod art_palette;
 pub mod content_index;
 pub mod elements;
 pub mod loader;
-/// Durable static voxel-object blueprints.
 pub mod object_blueprint;
 /// The scenarios offered on the title screen.
 pub mod scenario;

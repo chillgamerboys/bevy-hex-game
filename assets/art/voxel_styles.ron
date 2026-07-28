@@ -1,8 +1,3 @@
-// Shared authored voxel surfaces.
-//
-// Intentionally empty until an author saves the first reviewed style. Runtime
-// substance and temporary feature materials do not become production Workshop
-// styles merely because their colours are inventoried in palette.ron.
 (
     schema_version: 1,
     styles: {},
