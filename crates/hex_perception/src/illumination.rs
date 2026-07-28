@@ -47,6 +47,8 @@ impl ResolvedIllumination {
         exterior: ExteriorIllumination,
         lights: &[LightSourceSnapshot],
     ) -> Result<Self, PerceptionError> {
+        let mut targets = targets.into_iter().collect::<Vec<_>>();
+        targets.sort_by_key(|(pos, _)| *pos);
         let mut by_surface = BTreeMap::new();
         for (pos, domain) in targets {
             let resolved = ResolvedLight {

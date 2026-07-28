@@ -203,6 +203,8 @@ pub fn resolve_observations(
 fn index_units(
     units: impl IntoIterator<Item = ObservedUnit>,
 ) -> Result<BTreeMap<UnitId, ObservedUnit>, PerceptionError> {
+    let mut units = units.into_iter().collect::<Vec<_>>();
+    units.sort_by_key(|unit| unit.id);
     let mut indexed = BTreeMap::new();
     for unit in units {
         if indexed.insert(unit.id, unit).is_some() {
@@ -564,6 +566,41 @@ mod tests {
         )
         .expect_err("duplicate stable identity must fail");
         assert_eq!(error, PerceptionError::DuplicateUnit(duplicate));
+    }
+
+    #[test]
+    fn duplicate_unit_error_selects_the_lowest_id_in_any_input_order() {
+        let position = pos(0, 0, 5);
+        let illumination = ResolvedIllumination::try_resolve(
+            [(position, LightDomain::Exterior)],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let units = |first, second| {
+            [
+                unit(first, Faction::Player, position),
+                unit(second, Faction::Hostile, position),
+                unit(first, Faction::Hostile, position),
+                unit(second, Faction::Player, position),
+            ]
+        };
+        let resolve = |units| {
+            resolve_observations(
+                units,
+                &illumination,
+                &FactionMapKnowledge::new(),
+                ExteriorIllumination::new(IlluminationLevel::Bright),
+                &[],
+                SightProfile::default(),
+            )
+            .expect_err("duplicates must fail")
+        };
+
+        let forward = resolve(units(9, 2));
+        let reverse = resolve(units(2, 9));
+        assert_eq!(forward, PerceptionError::DuplicateUnit(UnitId(2)));
+        assert_eq!(reverse, forward);
     }
 
     #[test]

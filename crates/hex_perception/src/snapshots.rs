@@ -69,6 +69,8 @@ impl SurfaceSnapshots {
     pub fn try_from_iter(
         snapshots: impl IntoIterator<Item = SurfaceSnapshot>,
     ) -> Result<Self, PerceptionError> {
+        let mut snapshots = snapshots.into_iter().collect::<Vec<_>>();
+        snapshots.sort_by_key(|snapshot| snapshot.pos);
         let mut by_pos = BTreeMap::new();
         for snapshot in snapshots {
             if by_pos.insert(snapshot.pos, snapshot).is_some() {
@@ -149,6 +151,29 @@ mod tests {
         let error = SurfaceSnapshots::try_from_iter([surface(pos), surface(pos)])
             .expect_err("duplicate must fail");
         assert_eq!(error, PerceptionError::DuplicateSurface(pos));
+    }
+
+    #[test]
+    fn duplicate_error_selects_the_lowest_position_in_any_input_order() {
+        let low = TilePos::new(HexCoord::ORIGIN, 5);
+        let high = TilePos::new(HexCoord::ORIGIN, 15);
+        let forward = SurfaceSnapshots::try_from_iter([
+            surface(high),
+            surface(low),
+            surface(high),
+            surface(low),
+        ])
+        .expect_err("duplicates must fail");
+        let reverse = SurfaceSnapshots::try_from_iter([
+            surface(low),
+            surface(high),
+            surface(low),
+            surface(high),
+        ])
+        .expect_err("duplicates must fail");
+
+        assert_eq!(forward, PerceptionError::DuplicateSurface(low));
+        assert_eq!(reverse, forward);
     }
 
     #[test]
