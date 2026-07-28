@@ -2,8 +2,8 @@
 //!
 //! This module deliberately consumes complete, resolved snapshots. It knows nothing
 //! about project files, undo history, editor tools, or mutable object drafts. The UI
-//! translates those concerns into [`ViewportContent`](crate::viewport::ViewportContent)
-//! and consumes the picking messages published here.
+//! translates those concerns into [`ViewportContent`] and consumes the picking
+//! messages published here.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -320,7 +320,31 @@ struct ViewportRenderAssets {
     hex_mesh: Handle<Mesh>,
     guide_material: Handle<StandardMaterial>,
     missing_material: Handle<StandardMaterial>,
-    content_materials: Vec<Handle<StandardMaterial>>,
+    content_materials: BTreeMap<VoxelStyleId, CachedViewportMaterial>,
+}
+
+struct CachedViewportMaterial {
+    source: ViewportStyle,
+    rig: ViewportPreviewRig,
+    handle: Handle<StandardMaterial>,
+}
+
+#[derive(Resource, Default)]
+struct ViewportSceneCache {
+    voxels: BTreeMap<LocalVoxelCoord, CachedVoxelEntity>,
+    grid: BTreeMap<LocalVoxelCoord, Entity>,
+}
+
+struct CachedVoxelEntity {
+    entity: Entity,
+    style: VoxelStyleId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VoxelSceneAction {
+    Despawn(LocalVoxelCoord),
+    Spawn(RenderedVoxel),
+    Restyle(RenderedVoxel),
 }
 
 #[derive(Default)]
@@ -339,6 +363,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<ViewportPreviewRig>()
         .init_resource::<ViewportInputEnabled>()
         .init_resource::<ViewportContent>()
+        .init_resource::<ViewportSceneCache>()
         .init_resource::<HoveredFaceTarget>()
         .insert_resource(GlobalAmbientLight::default())
         .insert_resource(ClearColor(Color::srgb(0.035, 0.04, 0.045)))
@@ -407,7 +432,7 @@ fn spawn_viewport(
         hex_mesh,
         guide_material,
         missing_material,
-        content_materials: Vec::new(),
+        content_materials: BTreeMap::new(),
     });
 
     let camera = ViewportCamera::default();
@@ -448,8 +473,8 @@ fn rebuild_viewport(
     content: Res<ViewportContent>,
     mode: Res<ViewportMode>,
     rig: Res<ViewportPreviewRig>,
-    managed: Query<Entity, With<ViewportManaged>>,
     assets: Option<ResMut<ViewportRenderAssets>>,
+    mut scene: ResMut<ViewportSceneCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     if !content.is_changed() && !mode.is_changed() && !rig.is_changed() {
@@ -459,22 +484,52 @@ fn rebuild_viewport(
         return;
     };
 
-    for entity in &managed {
-        commands.entity(entity).despawn();
+    let stale_materials: Vec<_> = assets
+        .content_materials
+        .keys()
+        .filter(|id| !content.styles.contains_key(*id))
+        .cloned()
+        .collect();
+    let mut rebind_styles = BTreeSet::new();
+    for id in stale_materials {
+        if let Some(cached) = assets.content_materials.remove(&id) {
+            drop(materials.remove(cached.handle.id()));
+            rebind_styles.insert(id);
+        }
     }
-    for handle in assets.content_materials.drain(..) {
-        drop(materials.remove(handle.id()));
-    }
-
-    let mut style_materials = BTreeMap::new();
     for (id, style) in &content.styles {
-        let handle = materials.add(material_for(*style, *rig));
-        assets.content_materials.push(handle.clone());
-        style_materials.insert(id.clone(), handle);
+        match assets.content_materials.get_mut(id) {
+            Some(cached) if cached.source == *style && cached.rig == *rig => {}
+            Some(cached) => {
+                let reused_handle =
+                    if let Some(material) = materials.get_mut_untracked(&cached.handle) {
+                        *material = material_for(*style, *rig);
+                        true
+                    } else {
+                        false
+                    };
+                if !reused_handle {
+                    cached.handle = materials.add(material_for(*style, *rig));
+                    rebind_styles.insert(id.clone());
+                }
+                cached.source = *style;
+                cached.rig = *rig;
+            }
+            None => {
+                rebind_styles.insert(id.clone());
+                assets.content_materials.insert(
+                    id.clone(),
+                    CachedViewportMaterial {
+                        source: *style,
+                        rig: *rig,
+                        handle: materials.add(material_for(*style, *rig)),
+                    },
+                );
+            }
+        }
     }
 
-    let mut missing_styles = BTreeSet::new();
-    let mut voxels: Vec<&RenderedVoxel> = content
+    let desired_voxels: BTreeMap<_, _> = content
         .voxels
         .iter()
         .filter(|voxel| {
@@ -482,49 +537,76 @@ fn rebuild_viewport(
                 || *mode == ViewportMode::StylePreview
                 || voxel.position.level == content.active_level
         })
+        .map(|voxel| (voxel.position, voxel.style.clone()))
         .collect();
-    voxels.sort_by(|left, right| {
-        left.position
-            .cmp(&right.position)
-            .then_with(|| left.style.cmp(&right.style))
-    });
-
-    for voxel in voxels {
-        let material = style_materials
-            .get(&voxel.style)
-            .cloned()
-            .unwrap_or_else(|| {
-                missing_styles.insert(voxel.style.clone());
-                assets.missing_material.clone()
-            });
-        commands.spawn((
-            Mesh3d(assets.hex_mesh.clone()),
-            MeshMaterial3d(material),
-            voxel_transform(voxel.position),
-            voxel.clone(),
-            ViewportPickCell {
-                cell: voxel.position,
-                source: ViewportPickSource::Voxel,
-            },
-            ViewportManaged,
-            Name::new(format!(
-                "Voxel ({}, {}, {})",
-                voxel.position.q, voxel.position.r, voxel.position.level
-            )),
-        ));
+    let actions = plan_voxel_reconciliation(&scene.voxels, &desired_voxels, &rebind_styles);
+    let mut missing_styles = BTreeSet::new();
+    for action in actions {
+        match action {
+            VoxelSceneAction::Despawn(position) => {
+                if let Some(cached) = scene.voxels.remove(&position) {
+                    commands.entity(cached.entity).despawn();
+                }
+            }
+            VoxelSceneAction::Spawn(voxel) => {
+                let material = material_handle(&assets, &voxel.style, &mut missing_styles);
+                let entity = commands
+                    .spawn((
+                        Mesh3d(assets.hex_mesh.clone()),
+                        MeshMaterial3d(material),
+                        voxel_transform(voxel.position),
+                        voxel.clone(),
+                        ViewportPickCell {
+                            cell: voxel.position,
+                            source: ViewportPickSource::Voxel,
+                        },
+                        ViewportManaged,
+                        Name::new(voxel_name(voxel.position)),
+                    ))
+                    .id();
+                scene.voxels.insert(
+                    voxel.position,
+                    CachedVoxelEntity {
+                        entity,
+                        style: voxel.style,
+                    },
+                );
+            }
+            VoxelSceneAction::Restyle(voxel) => {
+                let material = material_handle(&assets, &voxel.style, &mut missing_styles);
+                if let Some(cached) = scene.voxels.get_mut(&voxel.position) {
+                    commands.entity(cached.entity).insert((
+                        MeshMaterial3d(material),
+                        voxel.clone(),
+                        Name::new(voxel_name(voxel.position)),
+                    ));
+                    cached.style = voxel.style;
+                }
+            }
+        }
     }
     for id in missing_styles {
         warn!("viewport content references missing style '{id}'");
     }
 
-    if content.show_grid {
-        let radius = match *mode {
-            ViewportMode::StylePreview => 0,
-            ViewportMode::Object => content.grid_radius.min(MAX_OBJECT_RADIUS),
-        };
-        for axial in axial_cells(radius) {
-            let cell = LocalVoxelCoord::new(axial.q, axial.r, content.active_level);
-            commands.spawn((
+    let desired_grid = desired_grid_cells(&content, *mode, &desired_voxels);
+    let stale_grid: Vec<_> = scene
+        .grid
+        .keys()
+        .filter(|cell| !desired_grid.contains(*cell))
+        .copied()
+        .collect();
+    for cell in stale_grid {
+        if let Some(entity) = scene.grid.remove(&cell) {
+            commands.entity(entity).despawn();
+        }
+    }
+    for cell in desired_grid {
+        if scene.grid.contains_key(&cell) {
+            continue;
+        }
+        let entity = commands
+            .spawn((
                 Mesh3d(assets.hex_mesh.clone()),
                 MeshMaterial3d(assets.guide_material.clone()),
                 guide_transform(cell),
@@ -535,9 +617,77 @@ fn rebuild_viewport(
                 },
                 ViewportManaged,
                 Name::new(format!("Grid ({}, {}, {})", cell.q, cell.r, cell.level)),
-            ));
+            ))
+            .id();
+        scene.grid.insert(cell, entity);
+    }
+}
+
+fn plan_voxel_reconciliation(
+    existing: &BTreeMap<LocalVoxelCoord, CachedVoxelEntity>,
+    desired: &BTreeMap<LocalVoxelCoord, VoxelStyleId>,
+    rebind_styles: &BTreeSet<VoxelStyleId>,
+) -> Vec<VoxelSceneAction> {
+    let mut actions = Vec::new();
+    for position in existing.keys() {
+        if !desired.contains_key(position) {
+            actions.push(VoxelSceneAction::Despawn(*position));
         }
     }
+    for (position, style) in desired {
+        match existing.get(position) {
+            None => actions.push(VoxelSceneAction::Spawn(RenderedVoxel {
+                position: *position,
+                style: style.clone(),
+            })),
+            Some(cached) if cached.style != *style || rebind_styles.contains(style) => {
+                actions.push(VoxelSceneAction::Restyle(RenderedVoxel {
+                    position: *position,
+                    style: style.clone(),
+                }));
+            }
+            Some(_) => {}
+        }
+    }
+    actions
+}
+
+fn desired_grid_cells(
+    content: &ViewportContent,
+    mode: ViewportMode,
+    occupied: &BTreeMap<LocalVoxelCoord, VoxelStyleId>,
+) -> BTreeSet<LocalVoxelCoord> {
+    if !content.show_grid {
+        return BTreeSet::new();
+    }
+    let radius = match mode {
+        ViewportMode::StylePreview => 0,
+        ViewportMode::Object => content.grid_radius.min(MAX_OBJECT_RADIUS),
+    };
+    axial_cells(radius)
+        .into_iter()
+        .map(|axial| LocalVoxelCoord::new(axial.q, axial.r, content.active_level))
+        .filter(|cell| !occupied.contains_key(cell))
+        .collect()
+}
+
+fn material_handle(
+    assets: &ViewportRenderAssets,
+    style: &VoxelStyleId,
+    missing_styles: &mut BTreeSet<VoxelStyleId>,
+) -> Handle<StandardMaterial> {
+    assets
+        .content_materials
+        .get(style)
+        .map(|cached| cached.handle.clone())
+        .unwrap_or_else(|| {
+            missing_styles.insert(style.clone());
+            assets.missing_material.clone()
+        })
+}
+
+fn voxel_name(position: LocalVoxelCoord) -> String {
+    format!("Voxel ({}, {}, {})", position.q, position.r, position.level)
 }
 
 fn material_for(style: ViewportStyle, rig: ViewportPreviewRig) -> StandardMaterial {
@@ -1192,6 +1342,75 @@ mod tests {
         assert_eq!(axial_cells(6).len(), 127);
         let unique: BTreeSet<_> = axial_cells(6).into_iter().collect();
         assert_eq!(unique.len(), 127);
+    }
+
+    #[test]
+    fn active_level_grid_omits_occupied_pick_cells() {
+        let Ok(style) = VoxelStyleId::new("test/opaque") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let occupied_cell = LocalVoxelCoord::new(0, 0, 3);
+        let occupied = BTreeMap::from([(occupied_cell, style)]);
+        let content = ViewportContent {
+            grid_radius: 1,
+            active_level: 3,
+            show_grid: true,
+            ..default()
+        };
+
+        let grid = desired_grid_cells(&content, ViewportMode::Object, &occupied);
+
+        assert_eq!(grid.len(), 6);
+        assert!(!grid.contains(&occupied_cell));
+    }
+
+    #[test]
+    fn max_size_one_cell_edit_plans_one_entity_update() {
+        let Ok(original_style) = VoxelStyleId::new("test/original") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let Ok(repainted_style) = VoxelStyleId::new("test/repainted") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let mut desired = BTreeMap::new();
+        'levels: for level in 0..64 {
+            for axial in axial_cells(MAX_OBJECT_RADIUS) {
+                desired.insert(
+                    LocalVoxelCoord::new(axial.q, axial.r, level),
+                    original_style.clone(),
+                );
+                if desired.len() == hex_assets::MAX_OBJECT_VOXELS {
+                    break 'levels;
+                }
+            }
+        }
+        assert_eq!(desired.len(), hex_assets::MAX_OBJECT_VOXELS);
+
+        let existing: BTreeMap<_, _> = desired
+            .iter()
+            .map(|(position, style)| {
+                (
+                    *position,
+                    CachedVoxelEntity {
+                        entity: Entity::PLACEHOLDER,
+                        style: style.clone(),
+                    },
+                )
+            })
+            .collect();
+        assert!(plan_voxel_reconciliation(&existing, &desired, &BTreeSet::new()).is_empty());
+
+        let Some(position) = desired.keys().nth(desired.len() / 2).copied() else {
+            unreachable!("max-size fixture should not be empty")
+        };
+        desired.insert(position, repainted_style.clone());
+        assert_eq!(
+            plan_voxel_reconciliation(&existing, &desired, &BTreeSet::new()),
+            [VoxelSceneAction::Restyle(RenderedVoxel {
+                position,
+                style: repainted_style,
+            })]
+        );
     }
 
     #[test]
