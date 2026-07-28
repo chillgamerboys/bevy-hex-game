@@ -5,8 +5,8 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, GameCommand, HexCoord, IssuedCommand, PlayerSeat, Sextant, SimSeeds, SubstanceId,
-    TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PlayerSeat, Sextant,
+    SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -168,7 +168,16 @@ fn issued_commands_round_trip() {
             mana: None,
         },
         GameCommand::Channel { unit },
-        GameCommand::ChooseDisables { unit },
+        // The defender's answer is part of the log, or a replay would re-derive it and
+        // could choose differently.
+        GameCommand::ChooseDisables {
+            unit,
+            cells: vec![LatticeCoord::new(0, 0), LatticeCoord::new(1, -1)],
+        },
+        GameCommand::ChooseDisables {
+            unit,
+            cells: Vec::new(),
+        },
     ];
     for command in commands {
         assert_round_trips!(IssuedCommand {

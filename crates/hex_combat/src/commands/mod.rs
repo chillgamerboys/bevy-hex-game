@@ -103,6 +103,10 @@ struct Verb<'a> {
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<CommandQueue>()
+        // A resource rather than a marker component since it carries a payload, so it
+        // needs initialising as well as registering. Nothing sets it to anything but
+        // `None` until the damage model lands.
+        .init_resource::<PendingDecision>()
         .register_type::<GameCommand>()
         .register_type::<IssuedCommand>()
         .register_type::<Busy>()

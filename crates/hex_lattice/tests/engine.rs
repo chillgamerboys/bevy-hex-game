@@ -10,9 +10,9 @@ use std::collections::BTreeMap;
 
 use hex_core::{ElementId, LatticeCoord, SpellId};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, resolve_incoming, tick_burns, CastBlocked,
-    Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement,
-    SpellTable,
+    apply_cast, apply_disables, castable, channel, resolve_incoming, restore, tick_burns,
+    CastBlocked, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
+    Requirement, SpellTable,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -263,6 +263,61 @@ fn disabling_a_locked_gem_breaks_its_enchantment_and_burns_the_mana() {
     assert_eq!(record.trigger, fire);
     assert_eq!(state.enchantment_count(), 0, "the enchantment is gone");
     assert_eq!(state.total_locked_mana(), 0);
+}
+
+/// Restoring undoes the disable and nothing else.
+///
+/// A restoring spell brings a hex back; it does not rebuild the shield that broke when
+/// that hex went down, and it does not refund the mana the break consumed. Breaking is
+/// what the design charges for a hit that cracks a defence, and an inverse that undid
+/// it would make healing quietly cheaper than the hit that caused it.
+#[test]
+fn restoring_a_hex_leaves_the_broken_enchantment_broken() {
+    let spell = LatticeCoord::new(0, 0);
+    let [fire, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(fire, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("the shield can be raised");
+    apply_cast(&mut state, &plan, &Content);
+    let mana_before = state.mana(fire);
+    apply_disables(&mut state, &[fire]);
+    assert!(state.is_disabled(fire));
+    assert_eq!(state.enchantment_count(), 0);
+
+    assert_eq!(restore(&mut state, &[fire]), 1, "one hex was down");
+    assert!(!state.is_disabled(fire), "the hex is live again");
+    assert_eq!(
+        state.mana(fire),
+        mana_before,
+        "restoring hands back no mana — disabling never spent any"
+    );
+    assert_eq!(
+        state.enchantment_count(),
+        0,
+        "the shield stays broken; restoring a hex is not an undo"
+    );
+    assert!(!state.is_locked(fire), "and its lock stays cleared");
+}
+
+/// The count is what a caller reports, so it must be what actually happened.
+#[test]
+fn restoring_counts_only_the_hexes_that_were_down() {
+    let spell = LatticeCoord::new(0, 0);
+    let [one, two, three, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(one, gem(FIRE))
+        .with(two, gem(FIRE))
+        .with(three, gem(FIRE));
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    apply_disables(&mut state, &[one]);
+
+    // `RestoreHexes { count: 2 }` against one downed hex restores one.
+    assert_eq!(restore(&mut state, &[one, two]), 1);
+    // Idempotent, exactly as applying a cell list is.
+    assert_eq!(restore(&mut state, &[one, two, three]), 0);
 }
 
 // --- property 4: serde round-trips are identity ---------------------------

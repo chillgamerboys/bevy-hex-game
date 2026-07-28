@@ -50,6 +50,22 @@ pub fn apply_disables(state: &mut LatticeState, cells: &[LatticeCoord]) -> Vec<B
     broken
 }
 
+/// Re-enables the chosen cells, returning how many were actually restored.
+///
+/// The inverse of [`apply_disables`] for the hexes themselves, and **deliberately not
+/// its inverse for anything else**. An enchantment broken when its funding gem went
+/// down stays broken and its locked mana stays spent: breaking is what the design
+/// charges for a hit that cracks a shield, and undoing it here would make a restoring
+/// spell quietly refund mana it never paid for. Restoring a live cell is a no-op, so a
+/// cell list is idempotent the same way disabling one is.
+///
+/// The count is the caller's honesty check — `RestoreHexes { count: 2 }` against a
+/// lattice with one hex down restores one, and the caller needs to be able to say so
+/// rather than report two.
+pub fn restore(state: &mut LatticeState, cells: &[LatticeCoord]) -> usize {
+    cells.iter().filter(|&&coord| state.restore(coord)).count()
+}
+
 /// Advances every burn one of the target's turns and returns how many hexes the
 /// burns disable this turn.
 ///

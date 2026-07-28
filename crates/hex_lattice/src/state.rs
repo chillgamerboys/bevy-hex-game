@@ -15,7 +15,13 @@ use crate::spec::{CellKind, LatticeSpec};
 /// element can hold (Attunement); `channelling` is how much a channel action
 /// restores across that element's gems (Channelling). Unattuned elements resolve
 /// to zero.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// A `Component` alongside [`LatticeSpec`] and [`LatticeState`], because all three are
+/// per-unit and a unit that carries a lattice carries its own mana rules — an enemy's
+/// lattice is its entire stat block, and Attunement is part of that block rather than a
+/// global constant. Serde for the same reason [`LatticeState`] has it: a save has to
+/// restore the numbers a unit's mana was resolved against, not re-derive them.
+#[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct LatticeStats {
     capacity: BTreeMap<ElementId, u16>,
     channelling: BTreeMap<ElementId, u16>,
@@ -228,6 +234,16 @@ impl LatticeState {
     /// Disables the cell at `coord`, returning whether it was newly disabled.
     pub(crate) fn disable(&mut self, coord: LatticeCoord) -> bool {
         self.disabled.insert(coord)
+    }
+
+    /// Re-enables the cell at `coord`, returning whether it had been disabled.
+    ///
+    /// **Mana is untouched.** Disabling never spent a gem's mana — `disabled` and
+    /// `mana` are separate stores — so restoring cannot hand any back. A recovered gem
+    /// holds exactly what it held when it went down, and refilling it is
+    /// [`channel`](crate::channel)'s job.
+    pub(crate) fn restore(&mut self, coord: LatticeCoord) -> bool {
+        self.disabled.remove(&coord)
     }
 
     /// Removes the enchantment `id` and all of its gem locks, returning it.
