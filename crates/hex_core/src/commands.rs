@@ -32,6 +32,7 @@ use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::hex::Sextant;
+use crate::lattice_ids::LatticeCoord;
 use crate::unit_ids::{PlayerSeat, UnitId};
 use crate::voxel::TilePos;
 
@@ -101,11 +102,26 @@ pub enum GameCommand {
         /// Who channels.
         unit: UnitId,
     },
-    /// Choose which lattice hexes damage disables. **Not built** — waits on
-    /// the damage model.
+    /// Answer an open [`PendingDecision`]: which of a unit's hexes a hit takes down.
+    ///
+    /// **Not built** — waits on the damage model. The payload is settled ahead of it
+    /// for the same reason [`Self::Cast`]'s was: this is the one command whose *absence*
+    /// would break replay. Damage does not choose its own hexes — the defender does —
+    /// so if the choice were made inside the applier and never written down, replaying
+    /// the log would re-derive it and could pick differently. Recording the exact cells
+    /// is what keeps a fight reproducible, and it is the same seam a second player
+    /// answers through in co-op.
     ChooseDisables {
-        /// Who chooses.
+        /// Whose lattice — **the unit taking the damage**, not the one dealing it.
         unit: UnitId,
+        /// The exact cells to disable, as many as the decision asked for.
+        ///
+        /// Serde-defaulted like [`Self::Cast`]'s optional fields, per this type's own
+        /// rule: a field added to a shipped variant decodes an older line as empty
+        /// rather than failing it. An empty answer is meaningful anyway — it is what a
+        /// decision for zero hexes looks like.
+        #[serde(default)]
+        cells: Vec<LatticeCoord>,
     },
 }
 
@@ -119,7 +135,7 @@ impl GameCommand {
             | Self::EndTurn { unit }
             | Self::Cast { unit, .. }
             | Self::Channel { unit }
-            | Self::ChooseDisables { unit } => unit,
+            | Self::ChooseDisables { unit, .. } => unit,
         }
     }
 }
@@ -206,13 +222,57 @@ pub struct Busy;
 
 /// The sim is waiting on a decision from a seat before resolution continues.
 ///
-/// **Placeholder.** Defined now so the vocabulary is stable: choosing which
-/// lattice hexes damage disables (the design's one mid-resolution decision)
-/// will park the sim behind this marker. Nothing inserts it until the damage
-/// model exists.
-#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
-#[reflect(Component)]
-pub struct PendingDecision;
+/// **Nothing sets this yet** — the damage model does. It is defined here so the
+/// vocabulary is stable, and it is an **enum behind a resource** rather than the marker
+/// component it started as, for two reasons.
+///
+/// A decision has a payload — who chooses, how many hexes, and who is hitting them —
+/// and a marker cannot carry one. And there is at most one open decision at a time by
+/// construction, which is a fact about the sim rather than about any one entity, so a
+/// resource states it and a per-entity marker only implies it.
+///
+/// It will grow. Simultaneous burns, co-cast joins and reactions are all decisions the
+/// design already anticipates, and each arrives as a new variant rather than a new
+/// mechanism — which is the whole reason for an enum rather than a struct.
+#[derive(Resource, Reflect, Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[reflect(Resource)]
+pub enum PendingDecision {
+    /// Resolution is not waiting on anybody.
+    #[default]
+    None,
+    /// A unit must choose which of its own hexes an incoming hit takes down.
+    ///
+    /// The design's one mid-resolution decision: damage names a count, and **the
+    /// defender picks which hexes** — except for the rare abilities that target hexes
+    /// directly. An auto-policy answers this today; another player answers it in co-op,
+    /// through the same seam and the same [`GameCommand::ChooseDisables`].
+    ChooseDisables {
+        /// Who chooses — the unit taking the damage.
+        decider: UnitId,
+        /// How many hexes go down, **after** defensive subtraction. Burn arrives here
+        /// too, having bypassed that subtraction rather than skipped this decision.
+        count: u16,
+        /// Who dealt it. The combat log and presentation need it; the rules do not.
+        source: UnitId,
+    },
+}
+
+impl PendingDecision {
+    /// Whether resolution is parked waiting on somebody.
+    #[must_use]
+    pub fn is_open(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// Who owes an answer, if anybody does.
+    #[must_use]
+    pub fn decider(&self) -> Option<UnitId> {
+        match *self {
+            Self::None => None,
+            Self::ChooseDisables { decider, .. } => Some(decider),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -257,10 +317,41 @@ mod tests {
                 mana: None,
             },
             GameCommand::Channel { unit },
-            GameCommand::ChooseDisables { unit },
+            GameCommand::ChooseDisables {
+                unit,
+                cells: vec![crate::LatticeCoord::new(0, 0)],
+            },
         ];
         for command in commands {
             assert_eq!(command.unit(), unit);
         }
+    }
+
+    /// `ChooseDisables` names the unit whose hexes go down, not the one hitting it —
+    /// the only command whose `unit` is the *target*. `unit()` feeds the applier's
+    /// whose-turn-is-it gate and the queue's same-frame dedupe, so getting this
+    /// backwards would let a defender's answer be refused for not being their turn.
+    #[test]
+    fn choose_disables_names_the_defender() {
+        let defender = UnitId(2);
+        let command = GameCommand::ChooseDisables {
+            unit: defender,
+            cells: vec![crate::LatticeCoord::new(0, 0)],
+        };
+        assert_eq!(command.unit(), defender);
+    }
+
+    #[test]
+    fn a_pending_decision_reports_who_owes_an_answer() {
+        assert!(!PendingDecision::None.is_open());
+        assert_eq!(PendingDecision::None.decider(), None);
+
+        let waiting = PendingDecision::ChooseDisables {
+            decider: UnitId(2),
+            count: 3,
+            source: UnitId(1),
+        };
+        assert!(waiting.is_open());
+        assert_eq!(waiting.decider(), Some(UnitId(2)));
     }
 }

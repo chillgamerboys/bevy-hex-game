@@ -61,7 +61,7 @@ pub mod tables;
 
 pub use cast::{apply_cast, castable, CastBlocked, CastPlan};
 pub use channel::channel;
-pub use disable::{apply_disables, resolve_incoming, tick_burns};
+pub use disable::{apply_disables, resolve_incoming, restore, tick_burns};
 pub use spec::{CellKind, LatticeSpec};
 pub use state::{ActiveEnchantment, BrokenEnchantment, Burn, LatticeState, LatticeStats};
 pub use tables::{Casting, FusionTable, Requirement, SpellTable, Tables};

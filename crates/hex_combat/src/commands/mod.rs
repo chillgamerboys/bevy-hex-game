@@ -103,6 +103,10 @@ struct Verb<'a> {
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<CommandQueue>()
+        // A resource rather than a marker component since it carries a payload, so it
+        // needs initialising as well as registering. Nothing sets it to anything but
+        // `None` until the damage model lands.
+        .init_resource::<PendingDecision>()
         .register_type::<GameCommand>()
         .register_type::<IssuedCommand>()
         .register_type::<Busy>()
@@ -126,11 +130,19 @@ pub(crate) fn plugin(app: &mut App) {
     );
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
-    app.add_systems(OnExit(Screen::Gameplay), clear_queue);
+    app.add_systems(OnExit(Screen::Gameplay), clear_session_state);
 }
 
-fn clear_queue(mut queue: ResMut<CommandQueue>) {
+/// Forgets everything naming a unit, on the way out of a session.
+///
+/// Both of these outlive the screen — that is what being a resource means, and it is
+/// exactly the property a per-entity marker did not have. Unit ids restart each
+/// session, so a queued command or an unanswered decision held across one names
+/// somebody else's unit next launch: the queue would apply to a stranger, and the
+/// decision would park resolution forever on an answer nobody can give.
+fn clear_session_state(mut queue: ResMut<CommandQueue>, mut pending: ResMut<PendingDecision>) {
     queue.clear();
+    *pending = PendingDecision::None;
 }
 
 /// Keeps [`Busy`] equal to "presentation in flight".
