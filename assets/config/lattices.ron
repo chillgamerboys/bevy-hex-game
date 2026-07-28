@@ -28,7 +28,8 @@
 //   channelling   how much a channel action puts back into that element, per turn
 //
 // An element with no attunement entry resolves to zero, which means a gem of it is
-// inert. That is a legal way to say "this thing does not cast" — see the wolf.
+// inert — a legal way to say "this element is decoration on this archetype". The wolf
+// takes the blunter route: attunement 1 with no spell cell to spend it on.
 //
 // Every shipped spell costs 1 mana per required gem, so an attunement of 3 is three
 // casts before that gem needs channelling back up.

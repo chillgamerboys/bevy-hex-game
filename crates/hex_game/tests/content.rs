@@ -111,16 +111,29 @@ fn every_encounter_archetype_has_a_lattice() {
     )
     .expect("shipped lattices resolve");
 
-    let encounters = [
-        include_str!("../../../assets/config/encounters/anchored-skirmish.ron"),
-        include_str!("../../../assets/config/encounters/bridge-crossing.ron"),
-        include_str!("../../../assets/config/encounters/close-quarters.ron"),
-        include_str!("../../../assets/config/encounters/open-ground.ron"),
-    ];
+    // Read the directory rather than listing files: `include_str!` cannot glob, so a
+    // hardcoded list silently stops covering the fifth encounter somebody adds — and
+    // the whole point of this test is that an unlisted file is the dangerous case.
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/encounters");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", dir.display()))
+        .map(|entry| entry.expect("a directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ron"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no encounter files found under {}",
+        dir.display()
+    );
 
     let mut checked = 0;
-    for raw in encounters {
-        let encounter: Encounter = ron::from_str(raw).expect("an encounter parses");
+    for path in &files {
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        let encounter: Encounter = ron::from_str(&raw)
+            .unwrap_or_else(|error| panic!("{} does not parse: {error}", path.display()));
         for unit in encounter.entries() {
             assert!(
                 library.get(unit.archetype).is_some(),
@@ -133,8 +146,9 @@ fn every_encounter_archetype_has_a_lattice() {
         }
     }
     assert!(
-        checked >= 4,
-        "expected every shipped encounter to roster somebody, found {checked}"
+        checked >= files.len(),
+        "every encounter should roster at least one unit: {checked} units across {} files",
+        files.len()
     );
 }
 

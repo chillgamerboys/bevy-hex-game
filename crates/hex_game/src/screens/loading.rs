@@ -8,7 +8,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    ContentIndex, GameAssets, LatticeLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
+    ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
+    SubstanceFile, SubstanceTable,
 };
 use hex_core::Screen;
 
@@ -65,6 +66,8 @@ fn enter_gameplay_when_ready(
     scenario_contract: Option<Res<ScenarioContractStatus>>,
     content: Option<Res<ContentIndex>>,
     lattices: Option<Res<LatticeLibrary>>,
+    spells: Option<Res<SpellFile>>,
+    lattice_file: Option<Res<LatticeFile>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -76,19 +79,28 @@ fn enter_gameplay_when_ready(
         .as_deref()
         .is_some_and(|status| *status == ScenarioContractStatus::Ready);
 
-    // Both are absent until every cross-file reference resolves, and both now have real
-    // consumers: the cast path reads the index, and units spawn carrying what the
-    // library holds. Waiting on them here is the same rule the files already follow —
-    // a dangling reference must stall the gate rather than log and let gameplay start
-    // with content that half-exists. Before this, a spell naming a missing element left
-    // the index absent, logged once, and entered gameplay anyway.
-    let content_is_resolved = content.is_some() && lattices.is_some();
+    // Currency, not presence, for the same reason `substances_are_current` is: both
+    // builders keep the last valid value on failure and insert nothing, so after one
+    // success neither resource can ever go *absent* again. A presence check would stall
+    // only the very first load and wave every later bad edit straight through — a
+    // designer renaming a gem's element at the title screen would see the error in the
+    // log, press Play, and get a fight built from the pre-edit library with nothing
+    // on screen saying so.
+    //
+    // Comparing against the files means a failed rebuild leaves the source changed and
+    // the resolved value stale, which holds the gate until the file is fixed.
+    let content_is_current = spells
+        .as_ref()
+        .is_some_and(|file| !file.is_changed() && content.is_some())
+        && lattice_file
+            .as_ref()
+            .is_some_and(|file| !file.is_changed() && lattices.is_some());
 
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current
         && scenario_is_valid
-        && content_is_resolved
+        && content_is_current
     {
         next.set(Screen::Gameplay);
     }

@@ -4,29 +4,32 @@
 //! `elements.ron` / `spells.ron` and lets a human exercise every rule the
 //! content can currently reach: binary casting with live blocked-reasons, mana
 //! capacity versus channelling throughput, damage disables, and enchantment
-//! mana locking. Fusion resolution and burn ticks are wired but dormant until
-//! content demands them — no shipped spell requires a higher-order element
-//! yet, and burn *effects* are applied above the engine, which is HEX-12's
-//! job. Nothing persists — the lattice is rebuilt from content on every entry,
-//! and `Reset` rebuilds the battle state. Reset is deliberately the only way
-//! back from a strike: the engine has no un-disable, so neither does the demo.
+//! mana locking. Fusion resolution now has content behind it — the hedge-mage's
+//! Lightning Bolt is the one shipped spell requiring a higher-order element —
+//! though this demo's own fixture does not use it. Burn ticks stay dormant:
+//! burn *effects* are applied above the engine, which is HEX-12's job. Nothing
+//! persists — the lattice is rebuilt from content on every entry, and `Reset`
+//! rebuilds the battle state. Reset is no longer the *only* way back from a
+//! strike (`hex_lattice::restore` exists now), but it stays the demo's, because
+//! a restoring spell is a cast and the demo has no target but itself.
 //!
-//! # The tables adapter is demo-local by design
+//! # The tables adapter is no longer demo-local
 //!
-//! [`DemoTables`] maps `ContentIndex`/`ElementCatalog` onto the engine's
-//! `SpellTable`/`FusionTable` traits. The *permanent* wiring — where those
-//! implementations live, and how casts reach real combat — belongs to HEX-12;
-//! this screen only proves the mapping is 1:1, so it keeps its copy private
-//! rather than claiming the seam.
+//! This screen used to carry its own copy of the `SpellTable`/`FusionTable`
+//! adapter, because the permanent seat belonged to a ticket that had not
+//! landed. It has: [`ContentTables`] lives in
+//! `hex_assets` beside the content it reads, and the demo uses the same one
+//! the game does. Two copies of the unknown-spell fallback was one fix away
+//! from drifting apart.
 
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use hex_assets::{CastingAxis, ContentIndex, ElementCatalog, SpellBook};
+use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
     apply_cast, apply_disables, castable, channel, tick_burns, CastBlocked, Casting, CellKind,
-    FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement, SpellTable,
+    LatticeSpec, LatticeState, LatticeStats, SpellTable,
 };
 
 use crate::menus::widgets::{
@@ -124,59 +127,6 @@ struct EndsTurn;
 /// The button that rebuilds the battle state from the inscription.
 #[derive(Component)]
 struct ResetsDemo;
-
-/// Bridges the loaded content tables to the engine's lookup traits.
-///
-/// Demo-local on purpose — see the module docs. The `None` arms matter: an
-/// unknown spell id must stay *uncastable*, and an empty requirement list would
-/// instead read as a tier-0 spell that costs nothing, so the fallback is a
-/// single `u16::MAX`-mana requirement — beyond any capacity the demo's stats
-/// fabricate, since those top out at the largest single cost in content.
-struct DemoTables<'a> {
-    index: &'a ContentIndex,
-    elements: &'a ElementCatalog,
-}
-
-impl SpellTable for DemoTables<'_> {
-    fn requirements(&self, spell: hex_core::SpellId) -> Vec<Requirement> {
-        match self.index.requirements(spell) {
-            Some(requirements) => requirements
-                .iter()
-                .map(|&(element, mana)| Requirement { element, mana })
-                .collect(),
-            None => vec![Requirement {
-                element: poison_element(self.elements),
-                mana: u16::MAX,
-            }],
-        }
-    }
-
-    fn casting(&self, spell: hex_core::SpellId) -> Casting {
-        match self.index.casting(spell) {
-            Some(CastingAxis::Enchantment { defense }) => Casting::Enchantment { defense },
-            Some(CastingAxis::Evocation) | None => Casting::Evocation,
-        }
-    }
-}
-
-impl FusionTable for DemoTables<'_> {
-    fn recipe(&self, output: ElementId) -> Option<Vec<Requirement>> {
-        self.elements.recipe(output).map(|inputs| {
-            inputs
-                .iter()
-                .map(|&(element, mana)| Requirement { element, mana })
-                .collect()
-        })
-    }
-}
-
-/// An element for the unknown-spell fallback requirement.
-///
-/// Any real element works — the `u16::MAX` cost is what blocks the cast — and
-/// an empty catalog blocks everything anyway, so the default id is fine there.
-fn poison_element(elements: &ElementCatalog) -> ElementId {
-    elements.wheel().first().copied().unwrap_or_default()
-}
 
 fn spawn_demo_screen(mut commands: Commands, assets: Res<UiAssets>) {
     commands
@@ -360,10 +310,7 @@ fn handle_cell_clicks(
     let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
         return;
     };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
     for (interaction, cell) in &clicked {
         if *interaction != Interaction::Pressed {
             continue;
@@ -389,10 +336,7 @@ fn handle_cast_buttons(
     let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
         return;
     };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
     for (interaction, cast) in &clicked {
         if *interaction == Interaction::Pressed {
             try_cast(&mut demo, cast.0, &tables, &spells);
@@ -448,7 +392,12 @@ fn handle_action_buttons(
     }
 }
 
-fn try_cast(demo: &mut DemoLattice, cell: LatticeCoord, tables: &DemoTables, spells: &SpellBook) {
+fn try_cast(
+    demo: &mut DemoLattice,
+    cell: LatticeCoord,
+    tables: &ContentTables,
+    spells: &SpellBook,
+) {
     let name = match demo.spec.get(cell) {
         Some(CellKind::Spell { spell }) => spells.name(spell).unwrap_or("unknown spell").to_owned(),
         _ => return,
@@ -546,10 +495,7 @@ fn rebuild_readout(
         return;
     };
     let Ok(body) = bodies.single() else { return };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
 
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|panels| {
@@ -731,7 +677,7 @@ fn short_name(name: &str) -> String {
 fn spawn_control_panel(
     panels: &mut ChildSpawnerCommands,
     demo: &DemoLattice,
-    tables: &DemoTables,
+    tables: &ContentTables,
     spells: &SpellBook,
     assets: &UiAssets,
 ) {
@@ -911,10 +857,7 @@ mod tests {
 
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
 
         let spell_cells: Vec<LatticeCoord> = spec
             .cells()
@@ -939,10 +882,7 @@ mod tests {
         let (spec, _) = build_demo_spec(&elements, &spells, &index);
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let mut state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let ember = spells.id("Ember").expect("Ember ships");
         let cell = spec
             .cells()
@@ -973,10 +913,7 @@ mod tests {
         let (spec, _) = build_demo_spec(&elements, &spells, &index);
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let mut state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let shield = spells.id("Metal Shield").expect("Metal Shield ships");
         assert!(
             matches!(tables.casting(shield), Casting::Enchantment { .. }),
@@ -1014,10 +951,7 @@ mod tests {
     #[test]
     fn unknown_spells_are_blocked_not_free() {
         let (elements, spells, index) = real_content();
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let _ = &spells;
         let unknown = hex_core::SpellId(u16::MAX);
         let requirements = tables.requirements(unknown);

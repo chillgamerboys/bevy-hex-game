@@ -1821,3 +1821,95 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
     );
     assert_eq!(enemy_again, UnitId(1));
 }
+
+/// A unit spawns carrying the lattice its archetype names, and one whose archetype has
+/// no lattice spawns without one.
+///
+/// The content-level tests prove `lattices.ron` resolves and that the drawings work;
+/// **none of them touches the spawn path**, so deleting the insert in `spawn_unit`
+/// would leave every one of them green. This runs the real `GameplaySetup` chain with a
+/// real `LatticeLibrary` resource and asserts on the components that came out.
+///
+/// The negative half matters as much: an archetype the library does not define must
+/// still spawn a unit — walkable, strikeable, and merely inert — rather than failing
+/// setup, because that is the behaviour the loud CI check is allowed to rely on.
+#[test]
+fn a_unit_spawns_with_its_archetypes_lattice_and_without_one_it_lacks() {
+    let mut app = test_app();
+
+    // Two archetypes, one defined and one not. `known` is a single gem, which is the
+    // smallest thing that is still recognisably a lattice.
+    let mut cells = std::collections::BTreeMap::new();
+    cells.insert(
+        hex_core::LatticeCoord::ORIGIN,
+        hex_lattice::CellKind::Gem {
+            element: hex_core::ElementId(0),
+        },
+    );
+    let mut capacity = std::collections::BTreeMap::new();
+    capacity.insert(hex_core::ElementId(0), 3);
+    let mut library = hex_assets::LatticeLibrary::default();
+    library.insert(
+        "known".to_owned(),
+        hex_assets::Archetype {
+            spec: hex_lattice::LatticeSpec::new(cells),
+            stats: hex_lattice::LatticeStats::new(capacity, std::collections::BTreeMap::new()),
+        },
+    );
+    app.insert_resource(library);
+
+    app.insert_resource(Encounter {
+        name: "Lattices".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                fixed(HexCoord::ORIGIN),
+                &["known"],
+            ),
+            roster(
+                EncounterFaction::Hostile,
+                fixed(ENEMY_START),
+                &["undefined"],
+            ),
+        ],
+    });
+    enter_gameplay(&mut app);
+
+    let world = app.world_mut();
+    let mut query = world.query::<(
+        &hex_units::Archetype,
+        Option<&hex_lattice::LatticeSpec>,
+        Option<&hex_lattice::LatticeState>,
+        Option<&hex_lattice::LatticeStats>,
+    )>();
+    let mut seen: Vec<(String, bool, bool, bool)> = query
+        .iter(world)
+        .map(|(archetype, spec, state, stats)| {
+            (
+                archetype.0.clone(),
+                spec.is_some(),
+                state.is_some(),
+                stats.is_some(),
+            )
+        })
+        .collect();
+    seen.sort();
+
+    assert_eq!(
+        seen,
+        vec![
+            ("known".to_owned(), true, true, true),
+            ("undefined".to_owned(), false, false, false),
+        ],
+        "the defined archetype should carry all three components and the undefined one none"
+    );
+
+    // And the state was built against *this* spec: one gem, filled to its attunement.
+    let mut states = world.query::<&hex_lattice::LatticeState>();
+    let state = states.iter(world).next().expect("one unit has a lattice");
+    assert_eq!(
+        state.mana(hex_core::LatticeCoord::ORIGIN),
+        3,
+        "a fresh gem should hold its element's attunement, not zero"
+    );
+}

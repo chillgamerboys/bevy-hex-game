@@ -154,9 +154,15 @@ fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_com
     }
 }
 
-/// Your own lattice, as hexes still standing out of hexes total.
+/// Your party's hexes still standing, out of the hexes it started with.
 ///
-/// **Your own**, deliberately, and read straight off the component rather than through
+/// A **sum across the party**, not one unit's lattice, and the label says "party" for
+/// that reason: every shipped encounter fields one player unit today, so an unqualified
+/// count would read correctly by accident and then quietly become an aggregate the first
+/// time somebody adds a second line to a roster — which the encounter files openly invite.
+/// Per-unit readouts are the casting-UX ticket's, not this one's.
+///
+/// Read straight off the components rather than through
 /// [`FactionKnowledge`](hex_combat::FactionKnowledge): a faction's knowledge of *itself*
 /// is not the question that store answers. It exists to gate what you know about a
 /// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
@@ -183,7 +189,7 @@ fn lattice_readout(party: &Query<(&LatticeSpec, &LatticeState), With<Player>>) -
     if total == 0 {
         return String::new();
     }
-    format!("   ·   {live}/{total} hexes")
+    format!("   ·   party {live}/{total} hexes")
 }
 
 /// Entering gameplay always starts unpaused, so a pause left set from a previous

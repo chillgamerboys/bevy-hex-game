@@ -84,7 +84,51 @@ pub enum LatticeError {
         /// Which archetype.
         archetype: String,
     },
+    /// A file that defines nobody.
+    #[error("lattices.ron defines no archetypes, so every unit would spawn inert")]
+    NoArchetypes,
+    /// A gem holding a fusion output.
+    ///
+    /// The mirror of [`Self::NotAFusion`], and it matters for the same reason: a gem of
+    /// a higher-order element satisfies a requirement for it **directly**, so the fusion
+    /// that was supposed to be the expensive part of reaching that element is bypassed
+    /// entirely — silently, with the spell still castable.
+    #[error(
+        "archetype '{archetype}' holds '{element}' in a gem, but it is a fusion output — \
+         it has to be fused from its recipe, not held directly"
+    )]
+    NotAGem {
+        /// Which archetype.
+        archetype: String,
+        /// The higher-order element found in a gem.
+        element: String,
+    },
+    /// An attunement or channelling figure past what content can plausibly mean.
+    #[error(
+        "archetype '{archetype}' gives '{element}' {amount} {field}; the maximum is \
+         {MAX_ATTUNEMENT}"
+    )]
+    Implausible {
+        /// Which archetype.
+        archetype: String,
+        /// Which element.
+        element: String,
+        /// `attunement` or `channelling`.
+        field: &'static str,
+        /// What was written.
+        amount: u16,
+    },
 }
+
+/// The largest attunement or channelling an archetype may name.
+///
+/// A guard rail rather than balance, and one with a sharp edge behind it. The engine's
+/// unknown-spell fallback is a single requirement costing `u16::MAX`, which is
+/// uncastable only for as long as no gem can hold that much — so an attunement of
+/// `65535` would make **every unknown spell castable** from one gem of the wheel's first
+/// element. Capping well below that keeps the fallback the impossibility it claims to be,
+/// and a three-digit attunement is a typo in any case: every shipped spell costs 1.
+const MAX_ATTUNEMENT: u16 = 64;
 
 /// One archetype's lattice and the mana rules that go with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,8 +143,13 @@ pub struct Archetype {
 ///
 /// Absent until every name resolves; a failed reload keeps the previous value, matching
 /// the settings loader and [`ContentIndex`](crate::ContentIndex).
-#[derive(Resource, Debug, Clone, Default)]
+#[derive(Resource, Reflect, Debug, Clone, Default)]
+#[reflect(Resource)]
 pub struct LatticeLibrary {
+    // `LatticeSpec`/`LatticeStats` are `Reflect` but their maps are not registered, so
+    // the inspector shows the resource exists rather than its contents. Matches
+    // `ContentIndex`, which ignores its own map for the same reason.
+    #[reflect(ignore)]
     archetypes: BTreeMap<String, Archetype>,
 }
 
@@ -127,11 +176,26 @@ impl LatticeLibrary {
             }
         }
 
+        // The same reasoning as an archetype with no cells, one level up: a file that
+        // defines nobody satisfies the loading gate and puts a whole field of inert
+        // units on the map behind one warning each.
+        if archetypes.is_empty() && errors.is_empty() {
+            errors.push(LatticeError::NoArchetypes);
+        }
+
         if errors.is_empty() {
             Ok(Self { archetypes })
         } else {
             Err(errors)
         }
+    }
+
+    /// Adds one archetype, replacing any of the same name.
+    ///
+    /// For tests and tools that need a library without a file behind them. The game
+    /// builds its own with [`Self::build`], which is the path that validates.
+    pub fn insert(&mut self, name: String, archetype: Archetype) {
+        self.archetypes.insert(name, archetype);
     }
 
     /// The archetype `name` describes, if there is one.
@@ -179,8 +243,21 @@ fn resolve_archetype(
         let coord = LatticeCoord::new(entry.at.q, entry.at.r);
         let kind = match &entry.kind {
             UnvalidatedCell::Blank => Some(CellKind::Blank),
-            UnvalidatedCell::Gem(element) => element_id(name, element, elements, &mut errors)
-                .map(|element| CellKind::Gem { element }),
+            UnvalidatedCell::Gem(element) => {
+                element_id(name, element, elements, &mut errors).and_then(|id| {
+                    // A gem of a fusion output satisfies a requirement for it directly,
+                    // which quietly deletes the reason fusions are expensive.
+                    if elements.is_higher_order(id) {
+                        errors.push(LatticeError::NotAGem {
+                            archetype: name.to_owned(),
+                            element: element.clone(),
+                        });
+                        None
+                    } else {
+                        Some(CellKind::Gem { element: id })
+                    }
+                })
+            }
             UnvalidatedCell::Fusion(element) => {
                 element_id(name, element, elements, &mut errors).and_then(|output| {
                     // A fusion of an element with no recipe could never resolve, and
@@ -220,8 +297,8 @@ fn resolve_archetype(
         }
     }
 
-    let capacity = element_map(name, &raw.attunement, elements, &mut errors);
-    let channelling = element_map(name, &raw.channelling, elements, &mut errors);
+    let capacity = element_map(name, "attunement", &raw.attunement, elements, &mut errors);
+    let channelling = element_map(name, "channelling", &raw.channelling, elements, &mut errors);
 
     if errors.is_empty() {
         Ok(Archetype {
@@ -254,12 +331,22 @@ fn element_id(
 
 fn element_map(
     archetype: &str,
+    field: &'static str,
     raw: &BTreeMap<String, u16>,
     elements: &ElementCatalog,
     errors: &mut Vec<LatticeError>,
 ) -> BTreeMap<ElementId, u16> {
     raw.iter()
         .filter_map(|(element, &amount)| {
+            if amount > MAX_ATTUNEMENT {
+                errors.push(LatticeError::Implausible {
+                    archetype: archetype.to_owned(),
+                    element: element.clone(),
+                    field,
+                    amount,
+                });
+                return None;
+            }
             element_id(archetype, element, elements, errors).map(|id| (id, amount))
         })
         .collect()

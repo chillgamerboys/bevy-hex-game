@@ -375,8 +375,8 @@ fn reset(mut knowledge: ResMut<FactionKnowledge>, mut reveal: ResMut<RevealAll>)
 /// yet still has to be able to look at one, and keying the viewers off the
 /// subject query would silently deny it a view.
 ///
-/// Publishes nothing today, because nothing attaches [`LatticeSpec`] to a unit
-/// yet.
+/// Publishes for every unit carrying a [`LatticeSpec`], which since HEX-12's content
+/// PR is every unit an archetype resolved for.
 fn publish_base_visibility(
     mut knowledge: ResMut<FactionKnowledge>,
     viewers: Query<&Faction>,

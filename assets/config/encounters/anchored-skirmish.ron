@@ -13,7 +13,7 @@
 //     faction   Player or Hostile
 //     placement where this side's units come in, unless a unit names its own
 //     units     the units, in the order they spawn
-//       archetype  what kind of unit it is. Nothing resolves it yet — it is the name an
+//       archetype  what kind of unit it is — looked up in lattices.ron — it is the name an
 //                  archetype's lattice will be looked up by
 //       placement  OPTIONAL Some(...) for the one unit that must be somewhere exact
 //

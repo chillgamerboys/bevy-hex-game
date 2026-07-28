@@ -644,7 +644,10 @@ fn lattice_for<'a>(
     archetype: &str,
 ) -> Option<&'a hex_assets::Archetype> {
     let Some(library) = library else {
-        warn!("no lattice library: {archetype:?} spawns inert — it cannot cast or be damaged");
+        // Not a warning: no library at all means *every* unit on the field is inert, so
+        // the fight cannot be won or lost by anybody. That is a broken build rather than
+        // a content gap, and it is the one case here that is never a designer mid-edit.
+        error!("no lattice library at all — every unit spawns unable to cast or be damaged");
         return None;
     };
     let found = library.get(archetype);

@@ -553,9 +553,10 @@ there".
 roster** — that is how two hostile groups hold different ground, with no second
 mechanism for it.
 
-`archetype` is a name and nothing else today: nothing resolves it to stats, a mesh or a
-lattice. It is named now because it is the key an archetype's lattice will be looked up
-by when `lattices.ron` lands.
+`archetype` is looked up in [`lattices.ron`](#writing-a-lattice), which is where the
+unit's gems, fusions and spells come from — and, since a lattice *is* the stat block,
+most of what the unit is. It still resolves to no mesh and no body size; every unit is
+drawn the same and walks the same.
 
 ### The three placements
 
