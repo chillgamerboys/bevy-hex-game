@@ -318,18 +318,31 @@ fn disabled_count(app: &App, entity: Entity) -> usize {
         .count()
 }
 
-/// How many burns a unit's lattice is carrying.
+/// How many more turns of burn a unit is carrying, summed across its fires.
+///
+/// Turns *remaining*, not records held: a one-turn burn that has already bitten is still
+/// in the ledger until the next expiry sweep, and counting records would call that a fire
+/// still burning. The ledger is the only store — the lattice holds hexes and mana, and
+/// asking it about fire is what this suite used to do wrong.
 #[expect(
     clippy::expect_used,
     reason = "test helper outside a #[test] fn; see disabled_count"
 )]
-fn burns_on(app: &App, entity: Entity) -> usize {
-    app.world()
+fn burn_turns_left(app: &App, entity: Entity) -> u16 {
+    let unit = *app
+        .world()
         .entity(entity)
-        .get::<LatticeState>()
-        .expect("a lattice state")
-        .burns()
-        .len()
+        .get::<UnitId>()
+        .expect("a unit id");
+    app.world()
+        .resource::<PersistentEffects>()
+        .on(unit)
+        .filter(|(_, effect)| matches!(effect.payload, EffectPayload::Burn))
+        .map(|(_, effect)| match effect.end {
+            EffectEnd::AfterTurns(turns) => turns.saturating_sub(effect.ticks),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// Runs frames until `unit` is the one acting, yielding whoever holds the turn.
@@ -379,9 +392,9 @@ fn casting_a_burn_starts_a_countdown_rather_than_landing_damage() {
         "a burn must not disable anything on the turn it is cast"
     );
     assert_eq!(
-        burns_on(&app, fight.defender),
-        1,
-        "the countdown belongs on the target's lattice"
+        burn_turns_left(&app, fight.defender),
+        2,
+        "the countdown is booked in full, with none of the two turns elapsed"
     );
 
     let effects = app.world().resource::<PersistentEffects>();
@@ -498,7 +511,7 @@ fn a_due_burn_waits_for_an_occupied_seam_rather_than_being_dropped() {
         "and the burn that came due behind it still lands"
     );
     assert_eq!(
-        burns_on(&app, fight.defender),
+        burn_turns_left(&app, fight.defender),
         1,
         "having consumed exactly one of its turns"
     );
@@ -574,9 +587,9 @@ fn a_burn_ticks_once_per_turn_however_long_the_turn_lasts() {
         "one turn is one hex, no matter how many frames the turn takes"
     );
     assert_eq!(
-        burns_on(&app, fight.defender),
-        1,
-        "and the countdown should have advanced exactly once"
+        burn_turns_left(&app, fight.defender),
+        3,
+        "and the four-turn countdown should have advanced exactly once"
     );
 }
 
@@ -611,7 +624,11 @@ fn a_burn_expires_when_its_turns_are_spent() {
         1,
         "a spent burn must not take a second hex"
     );
-    assert_eq!(burns_on(&app, fight.defender), 0, "the countdown is empty");
+    assert_eq!(
+        burn_turns_left(&app, fight.defender),
+        0,
+        "the countdown is empty"
+    );
     assert!(
         app.world().resource::<PersistentEffects>().is_empty(),
         "and the ledger drops the record rather than keeping a fire that cannot burn"
@@ -668,8 +685,8 @@ fn a_fight_ending_keeps_the_fires_it_started() {
         "the fire keeps burning; only what could not be delivered is dropped"
     );
     assert_eq!(
-        burns_on(&app, fight.defender),
-        1,
-        "and the lattice agrees, because it is the same countdown"
+        burn_turns_left(&app, fight.defender),
+        3,
+        "with all three turns still owed — a fight ending does not spend them"
     );
 }

@@ -81,9 +81,11 @@ A crystal lattice is a structured arrangement of gems, which is what the thing i
 it carries the connectedness that adjacency-based power depends on. It reads correctly
 everywhere: a twelve-hex lattice, lattice damage, a lattice hex disabled.
 
-**The rules engine exists** as `hex_lattice`, and knowledge *about* a lattice
-exists as the store below. **No unit carries one yet** — that is HEX-12 — so the
-word is settled and the engine proven before either becomes load-bearing.
+**The rules engine exists** as `hex_lattice`, knowledge *about* a lattice exists as the
+store below, and **units now carry one**: `spawn_unit` looks the archetype up in
+`lattices.ron` and attaches a `LatticeSpec`, a `LatticeState` and the `LatticeStats` that
+say what its gems hold. An enemy's lattice is its entire stat block, so that one lookup
+is what makes a wolf a wolf.
 
 ## What a faction knows
 
@@ -200,14 +202,23 @@ The seam holds one decision at a time, so a tick that comes due while another de
 is open **queues** rather than skipping itself or overwriting the open one. Both
 alternatives lose damage silently.
 
-### One countdown, in the lattice
+### One countdown, and it is the ledger's
 
-A burn's remaining turns live in the target's `LatticeState`, where the rules engine put
-them. The ledger deliberately keeps no second copy: it holds the source, the start round
-and the end condition — facts the lattice has no room for — and derives liveness by
-asking live state rather than by decrementing anything of its own. Two counters meaning
-the same thing, updated by two paths, is the drift this shape exists to make
-unrepresentable.
+A burn is entirely a ledger entry — source, start round, end condition, and
+`PersistentEffect::ticks`, the count of personal ticks that have fired. `is_live` is a
+total function of the record; nothing else is consulted and nothing has to agree.
+
+It was briefly built the other way, with a `Vec<Burn>` inside `LatticeState` ticked by the
+rules engine, and the seam was wrong in both directions. A burn has a *source* and the
+lattice has no vocabulary for one, so attribution lived in the ledger regardless and the
+two stores described a single fact between them. The engine's counter also advanced per
+engine call rather than per the target's turn — the tick point this document specifies —
+which a sandbox with no turn order could drive at all. `hex_lattice` now holds hexes,
+mana and enchantments; fire is none of those.
+
+`ticks` counts up rather than down for the same reason `start` does: a number that only
+increases cannot be double-decremented by a repeated frame, and comparing it against the
+end condition is a total function of two facts.
 
 The ledger is cleared on leaving gameplay, because unit ids restart each session and
 nothing ever drains an effect: an inherited burn would tick on a stranger forever. A

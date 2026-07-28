@@ -201,30 +201,19 @@ pub(super) fn apply(
                     // a legal cast that set nothing alight, and it is already paid for.
                     continue;
                 };
-                let Ok((_, mut state)) = lattices.get_mut(defender.1) else {
-                    refusals.push("the target has no lattice to set alight");
-                    continue;
-                };
-                // **Nothing goes down now.** Burn's whole shape is that it arrives at
-                // the start of each of the target's own turns, so what a cast does is
-                // start a countdown; `crate::effects` is what collects on it and routes
-                // the result through the same defender-chooses seam as any other damage.
+                // **Nothing goes down now, and the lattice is not told.** Burn's whole
+                // shape is that it arrives at the start of each of the target's own
+                // turns, so what a cast does is open a ledger entry; `crate::effects`
+                // collects on it and routes the result through the same
+                // defender-chooses seam as any other damage.
                 //
                 // `amount` is **how many of the target's turns burn for**, which is the
                 // only reading the design supports: burn is "one additional hex disabled
-                // at the start of the target's turn, for some number of turns", and
-                // `LatticeState::add_burn` takes exactly that in exactly this width.
+                // at the start of the target's turn, for some number of turns".
                 // `hex_assets`' field doc still describes an older idea (burning locked
                 // mana) that nothing implements and that would make the shipped
                 // Flamethrower a no-op against any target without an enchantment.
-                crate::effects::apply_burn(
-                    ctx.effects,
-                    &mut state,
-                    round,
-                    unit,
-                    defender.0,
-                    *amount,
-                );
+                crate::effects::apply_burn(ctx.effects, round, unit, defender.0, *amount);
                 info!(
                     "cast: {unit:?} sets {:?} alight for {amount} of its turns",
                     defender.0

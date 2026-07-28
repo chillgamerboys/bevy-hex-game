@@ -135,9 +135,12 @@ ladder wait on `RunBottom` from the world lane. It refuses by name rather than s
 doing nothing.
 
 **A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
-(`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast starts a countdown on
-the target's lattice, and one hex goes down at the start of each of that target's own
-turns. The two settled rules hold — the tick point is **personal, not the round
+(`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
+the effect ledger, and one hex goes down at the start of each of that target's own turns.
+The countdown lives **only** there. An earlier shape parked a `Vec<Burn>` inside
+`LatticeState` and it was pulled back out before anything persisted it — a burn has a
+source the lattice has no vocabulary for, and a tick point a rules engine with no turn
+order cannot see. The two settled rules hold — the tick point is **personal, not the round
 boundary**, and burn **ignores armour** while still going through the defender's choice,
 so its damage lands in the replay log like every other hit. What that does *not* settle
 is anything about the negative spiral it accelerates: fight length, functional death, and

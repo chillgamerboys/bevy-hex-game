@@ -13,7 +13,7 @@
 //! [`LatticeSpec`] is the **inscription**: the fixed arrangement of cells, authored
 //! at level-up and shared with `lattices.ron` and the future in-game editor as a
 //! serde format. [`LatticeState`] is the **battle-mutable half**: mana, the
-//! disabled set, enchantment locks, and burns. They have different lifetimes, and
+//! disabled set and enchantment locks. They have different lifetimes, and
 //! cloning the small integer [`LatticeState`] is the AI's forward-simulation
 //! primitive.
 //!
@@ -61,7 +61,7 @@ pub mod tables;
 
 pub use cast::{apply_cast, castable, CastBlocked, CastPlan};
 pub use channel::channel;
-pub use disable::{apply_disables, resolve_incoming, restore, tick_burns};
+pub use disable::{apply_disables, resolve_incoming, restore};
 pub use spec::{CellKind, LatticeSpec};
-pub use state::{ActiveEnchantment, BrokenEnchantment, Burn, LatticeState, LatticeStats};
+pub use state::{ActiveEnchantment, BrokenEnchantment, LatticeState, LatticeStats};
 pub use tables::{Casting, FusionTable, Requirement, SpellTable, Tables};

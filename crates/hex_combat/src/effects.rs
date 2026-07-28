@@ -14,18 +14,22 @@
 //! a burn that ticked on the round boundary would hit a unit that had just acted and one
 //! that had not at the same moment.
 //!
-//! # One countdown, in the lattice
+//! # One countdown, here
 //!
-//! A burn's remaining turns live in the target's [`LatticeState`], where HEX-12 put
-//! them, and this ledger deliberately does **not** keep a second copy. The alternative —
-//! moving `Vec<Burn>` out of `LatticeState` and into here — is a breaking change to a
-//! type that is both a `Component` and the serde form of a unit's battle state, and it
-//! would strand the lattice demo, which ticks burns through the engine directly.
+//! A burn is **entirely** a ledger entry: who lit it, who carries it, how long it lasts,
+//! and how much of that has elapsed. The lattice holds hexes, mana and enchantments, and
+//! a fire is none of those.
 //!
-//! So the two stores hold different facts rather than the same one twice. The lattice
-//! answers *how many hexes burn takes this turn*; the ledger answers *who lit it, when,
-//! and under what end condition*. Neither can drift from the other, because neither
-//! restates the other: [`is_live`] derives every end condition from live state.
+//! It briefly lived the other way — a `Vec<Burn>` inside `LatticeState`, ticked by the
+//! engine — and the seam was wrong in both directions. A burn has a *source*, and the
+//! lattice has no vocabulary for one, so attribution had to live here anyway and the two
+//! stores described one fact between them. Worse, the engine's counter ticked per
+//! `advance` rather than per the target's turn, which is the tick point the design
+//! actually specifies; a sandbox with no turn order could tick it at all. Splitting the
+//! countdown from the record also meant every liveness question had to consult both.
+//!
+//! [`PersistentEffect::ticks`] closes it: one store, and [`is_live`] is a total function
+//! of the record. There is nothing to drift against.
 //!
 //! # Burn ignores armour, but not the defender
 //!
@@ -45,7 +49,7 @@ use hex_core::{
     AppSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems, PendingDecision,
     PersistentEffect, RoundElapsed, Screen, UnitId,
 };
-use hex_lattice::{tick_burns, LatticeState};
+use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
 
 use crate::turns::TurnOrder;
@@ -125,6 +129,35 @@ impl PersistentEffects {
     }
 
     /// Registers a running effect and hands back its handle.
+    /// Advances every live personal effect on `target` and returns how many hexes they
+    /// take between them.
+    ///
+    /// One hex per burn, which is the design's wording: "one additional hex disabled at
+    /// the start of the target's turn". Two fires burn twice as fast.
+    ///
+    /// Ticking *then* counting matters at the boundary: a burn with one turn left still
+    /// takes its hex on the turn it expires, so `AfterTurns(1)` means one hex rather
+    /// than none.
+    fn tick_personal(&mut self, target: UnitId) -> u16 {
+        let mut due: u16 = 0;
+        for effect in self.effects.values_mut() {
+            if effect.target != target {
+                continue;
+            }
+            let EffectEnd::AfterTurns(turns) = effect.end else {
+                continue;
+            };
+            if effect.ticks >= turns {
+                continue;
+            }
+            effect.ticks = effect.ticks.saturating_add(1);
+            match effect.payload {
+                EffectPayload::Burn => due = due.saturating_add(1),
+            }
+        }
+        due
+    }
+
     fn insert(&mut self, effect: PersistentEffect) -> EffectId {
         let id = EffectId(self.next);
         self.next = self.next.saturating_add(1);
@@ -157,21 +190,19 @@ impl PersistentEffects {
 
 /// Whether an effect is still running.
 ///
-/// **Every arm asks live state; none of them decrements a counter this crate holds.**
-/// That is the whole anti-drift device described in the module docs — a burn is over
-/// when the lattice says its burns are out, an enchantment-bound effect is over when the
-/// enchantment is gone, and a round-bounded one is over when the clock says so.
+/// **Every arm is a total function of facts this crate can see.** Two of them compare
+/// counters that only ever go up — the round clock, and the effect's own tick count —
+/// and the third asks the lattice a question only the lattice can answer: is that
+/// enchantment still there.
 ///
-/// A target with no lattice at all ends every lattice-derived effect: there is nothing
-/// left to burn and nothing left to hold an enchantment. A round count is not
-/// lattice-derived and survives that, so a future global payload on a unit that lost its
-/// lattice still expires on schedule rather than never.
+/// A target with no lattice ends an enchantment-bound effect, because there is nothing
+/// left to hold the enchantment. Turn- and round-bounded effects are not lattice-derived
+/// and survive that, so an effect on a unit that somehow lost its lattice still expires
+/// on schedule rather than never.
 fn is_live(effect: &PersistentEffect, round: u32, lattice: Option<&LatticeState>) -> bool {
     match effect.end {
         EffectEnd::AfterRounds(rounds) => round < effect.start.saturating_add(rounds),
-        EffectEnd::AfterTurns(_) => match effect.payload {
-            EffectPayload::Burn => lattice.is_some_and(|state| !state.burns().is_empty()),
-        },
+        EffectEnd::AfterTurns(turns) => effect.ticks < turns,
         EffectEnd::WithEnchantment(enchant) => {
             lattice.is_some_and(|state| state.enchantment(enchant).is_some())
         }
@@ -180,19 +211,16 @@ fn is_live(effect: &PersistentEffect, round: u32, lattice: Option<&LatticeState>
 
 /// Sets `target` alight for `turns` of its own turns, and records who did it.
 ///
-/// Two writes that are one fact: the burn goes onto the target's lattice, which is the
-/// countdown, and the ledger records the source and the end condition, which the lattice
-/// has no room for. There is no third place a burn can be added from — the cast path
-/// calls this — so the ledger can be trusted to know every fire in the fight.
+/// **One write, in one place.** The ledger holds everything a burn is: who lit it, who
+/// carries it, how long it lasts, and how much of that has elapsed. The lattice is not
+/// told — it holds hexes and mana, and a fire is neither.
 ///
-/// A zero-turn burn is dropped on both sides rather than recorded as an effect that ends
-/// immediately. `hex_assets` already rejects `Burn(amount: 0)` at load, so this is the
-/// belt to that file's braces; recording it would leave a ledger entry that
-/// [`is_live`] would drop on the next pass anyway, having attributed a burn that never
-/// took a hex.
+/// A zero-turn burn is dropped rather than recorded as an effect that ends immediately.
+/// `hex_assets` already rejects `Burn(amount: 0)` at load, so this is the belt to that
+/// file's braces; recording it would leave an entry [`is_live`] drops on the next pass,
+/// having attributed a burn that never took a hex.
 pub(crate) fn apply_burn(
     effects: &mut PersistentEffects,
-    state: &mut LatticeState,
     round: u32,
     source: UnitId,
     target: UnitId,
@@ -201,13 +229,13 @@ pub(crate) fn apply_burn(
     if turns == 0 {
         return;
     }
-    state.add_burn(turns);
     effects.insert(PersistentEffect {
         source,
         target,
         payload: EffectPayload::Burn,
         start: round,
         end: EffectEnd::AfterTurns(turns),
+        ticks: 0,
     });
 }
 
@@ -238,7 +266,11 @@ fn tick_turn_effects(
     order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     mut effects: ResMut<PersistentEffects>,
-    mut lattices: Query<&mut LatticeState>,
+    // Read-only, and deliberately so: the tick no longer writes to a lattice at all, and
+    // the only thing still asked of one is whether an enchantment an effect is bound to
+    // survives. A `&mut` here would keep this system serialized against every other
+    // lattice writer for a borrow it never uses.
+    lattices: Query<&LatticeState>,
 ) {
     let Some(current) = order.current() else {
         return;
@@ -253,18 +285,18 @@ fn tick_turn_effects(
     // unreachable. Once, or not at all, is the only safe pair.
     effects.last_ticked = Some(turn);
 
-    // Scoped so the mutable lattice borrow is over before the read-only one below.
-    let due = registry
-        .entity_of(current)
-        .and_then(|entity| lattices.get_mut(entity).ok())
-        .map_or(0, |mut state| tick_burns(&mut state));
+    // The tick is entirely a ledger operation now: every live burn on this unit
+    // advances by one and contributes one hex. Nothing consults the lattice, because
+    // the lattice no longer knows anything about fire.
+    let due = effects.tick_personal(current);
 
     if due > 0 {
         let source = burn_source(&effects, current).unwrap_or_else(|| {
-            // Burns reach a lattice only through `apply_burn`, which always records
-            // one. A burn with no record is a wiring bug, and it has to be loud —
-            // silently blaming somebody is how an unattributed hit becomes folklore.
-            warn!("{current:?} is burning with no effect record; blaming the target");
+            // The only writer is `apply_burn`, which always records a source, and the
+            // tick above only counts entries it just advanced — so this is unreachable
+            // short of a wiring bug. Loud rather than silent: an unattributed hit is
+            // how folklore about "random" damage starts.
+            warn!("{current:?} burned with no effect record; blaming the target");
             current
         });
         effects.due.push_back(DueHit {
@@ -410,23 +442,22 @@ mod tests {
             payload: EffectPayload::Burn,
             start: 0,
             end: EffectEnd::AfterTurns(turns),
+            ticks: 0,
         }
     }
 
-    /// A burn is live while the lattice still carries one, and dead the moment it does
-    /// not — the ledger never second-guesses the countdown it does not own.
+    /// A turn-bounded effect counts its own ticks and stops at the number it was given —
+    /// the countdown is the record's, and nothing else has to be asked.
     #[test]
-    fn a_burn_lives_exactly_as_long_as_the_lattice_says() {
-        let mut state = LatticeState::default();
-        state.add_burn(1);
-        let effect = burn_for(1);
+    fn a_turn_bounded_effect_lives_for_exactly_as_many_ticks_as_it_names() {
+        let mut effect = burn_for(2);
 
-        assert!(is_live(&effect, 0, Some(&state)), "the fire is lit");
-        assert_eq!(tick_burns(&mut state), 1, "precondition: it comes due once");
-        assert!(
-            !is_live(&effect, 0, Some(&state)),
-            "and the record goes with the last burn, not on a count of its own"
-        );
+        assert!(is_live(&effect, 0, None), "the fire is lit");
+        effect.ticks = 1;
+        assert!(is_live(&effect, 0, None), "one turn in, one to go");
+        effect.ticks = 2;
+        assert!(!is_live(&effect, 0, None), "and it is spent");
+        assert!(!is_live(&effect, 99, None), "rounds do not resurrect it");
     }
 
     /// A round-bounded effect expires on the clock, with no lattice consulted — so a
@@ -466,12 +497,18 @@ mod tests {
         );
     }
 
-    /// A lattice-derived effect on a unit with no lattice ends rather than hanging
-    /// around: there is nothing left to burn, and a record nothing can expire would
-    /// tick forever.
+    /// A burn on a unit with no lattice keeps its schedule rather than ending early or
+    /// hanging around: the countdown never depended on the lattice, so losing one cannot
+    /// change it. Only [`EffectEnd::WithEnchantment`] is lattice-derived.
     #[test]
-    fn a_burn_on_a_unit_with_no_lattice_ends() {
-        assert!(!is_live(&burn_for(2), 0, None));
+    fn a_burn_on_a_unit_with_no_lattice_keeps_its_own_schedule() {
+        let mut effect = burn_for(2);
+        assert!(is_live(&effect, 0, None), "still burning");
+        effect.ticks = 2;
+        assert!(
+            !is_live(&effect, 0, None),
+            "and still expires on its own count"
+        );
     }
 
     /// Blame is deterministic and does not consult insertion luck: the first fire lit
@@ -479,10 +516,9 @@ mod tests {
     #[test]
     fn blame_falls_on_the_first_fire_lit() {
         let mut effects = PersistentEffects::default();
-        let mut state = LatticeState::default();
-        apply_burn(&mut effects, &mut state, 0, UnitId(7), UnitId(2), 2);
-        apply_burn(&mut effects, &mut state, 0, UnitId(3), UnitId(2), 2);
-        apply_burn(&mut effects, &mut state, 0, UnitId(9), UnitId(5), 2);
+        apply_burn(&mut effects, 0, UnitId(7), UnitId(2), 2);
+        apply_burn(&mut effects, 0, UnitId(3), UnitId(2), 2);
+        apply_burn(&mut effects, 0, UnitId(9), UnitId(5), 2);
 
         assert_eq!(
             burn_source(&effects, UnitId(2)),
@@ -497,21 +533,55 @@ mod tests {
         );
     }
 
-    /// Applying a burn writes the countdown to the lattice and the attribution to the
-    /// ledger — the two facts the module docs say are kept apart.
+    /// Applying a burn writes the whole fire to the ledger in one place — countdown
+    /// included, and starting from nothing elapsed.
     #[test]
-    fn applying_a_burn_writes_the_countdown_to_the_lattice() {
+    fn applying_a_burn_writes_the_whole_fire_to_the_ledger() {
         let mut effects = PersistentEffects::default();
-        let mut state = LatticeState::default();
 
-        apply_burn(&mut effects, &mut state, 4, UnitId(1), UnitId(2), 3);
+        apply_burn(&mut effects, 4, UnitId(1), UnitId(2), 3);
 
-        assert_eq!(state.burns().len(), 1, "the lattice carries the countdown");
-        let (_, effect) = effects.iter().next().expect("and the ledger the record");
+        let (_, effect) = effects.iter().next().expect("the ledger holds the record");
         assert_eq!(effect.source, UnitId(1));
         assert_eq!(effect.target, UnitId(2));
         assert_eq!(effect.start, 4, "the round it began");
         assert_eq!(effect.end, EffectEnd::AfterTurns(3));
+        assert_eq!(effect.ticks, 0, "and none of it has elapsed");
+    }
+
+    /// A tick is *personal*: it advances the acting unit's fires and nobody else's. The
+    /// bug this forbids is the one the lattice-held design could not even express — a
+    /// burn on a unit that has not had its turn yet counting down anyway.
+    #[test]
+    fn a_tick_advances_only_the_acting_units_fires() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 2);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(3), 2);
+
+        assert_eq!(effects.tick_personal(UnitId(2)), 1, "one hex, once");
+        let ticked: Vec<_> = effects.iter().map(|(_, e)| (e.target, e.ticks)).collect();
+        assert_eq!(
+            ticked,
+            vec![(UnitId(2), 1), (UnitId(3), 0)],
+            "the bystander's fire is untouched"
+        );
+    }
+
+    /// Two fires on one target come due as one aggregated count, and a spent one stops
+    /// contributing — the count is what the defender is asked to answer for.
+    #[test]
+    fn several_fires_on_one_target_aggregate_and_then_run_out() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 0, UnitId(7), UnitId(2), 1);
+        apply_burn(&mut effects, 0, UnitId(3), UnitId(2), 2);
+
+        assert_eq!(effects.tick_personal(UnitId(2)), 2, "both fires bite");
+        assert_eq!(
+            effects.tick_personal(UnitId(2)),
+            1,
+            "the short one is spent"
+        );
+        assert_eq!(effects.tick_personal(UnitId(2)), 0, "and then both are");
     }
 
     /// A zero-turn burn is not a burn. Recording one would attribute a fire that never
@@ -519,12 +589,11 @@ mod tests {
     #[test]
     fn a_zero_turn_burn_is_not_recorded_anywhere() {
         let mut effects = PersistentEffects::default();
-        let mut state = LatticeState::default();
 
-        apply_burn(&mut effects, &mut state, 0, UnitId(1), UnitId(2), 0);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 0);
 
-        assert!(effects.is_empty(), "no record");
-        assert!(state.burns().is_empty(), "and no countdown");
+        assert!(effects.is_empty(), "no record, so nothing to come due");
+        assert_eq!(effects.tick_personal(UnitId(2)), 0);
     }
 
     /// Handles are never reused within a session, so a record cannot inherit the
@@ -532,16 +601,15 @@ mod tests {
     #[test]
     fn handles_are_not_reused_after_an_effect_expires() {
         let mut effects = PersistentEffects::default();
-        let mut state = LatticeState::default();
-        apply_burn(&mut effects, &mut state, 0, UnitId(1), UnitId(2), 1);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 1);
         let first = effects.iter().next().map(|(id, _)| id);
 
-        // Expire it the way a tick would: the lattice's counter empties.
-        tick_burns(&mut state);
-        effects.expire(0, |_| Some(&state));
+        // Expire it the way a turn would: its one tick fires, then the sweep runs.
+        effects.tick_personal(UnitId(2));
+        effects.expire(0, |_| None);
         assert!(effects.is_empty(), "precondition: the record went with it");
 
-        apply_burn(&mut effects, &mut state, 0, UnitId(1), UnitId(2), 1);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 1);
         let second = effects.iter().next().map(|(id, _)| id);
 
         assert_eq!(first, Some(EffectId(0)));
@@ -553,11 +621,10 @@ mod tests {
     #[test]
     fn clearing_forgets_the_handles_too() {
         let mut effects = PersistentEffects::default();
-        let mut state = LatticeState::default();
-        apply_burn(&mut effects, &mut state, 0, UnitId(1), UnitId(2), 1);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 1);
 
         effects.clear();
-        apply_burn(&mut effects, &mut state, 0, UnitId(1), UnitId(2), 1);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 1);
 
         assert_eq!(
             effects.iter().next().map(|(id, _)| id),

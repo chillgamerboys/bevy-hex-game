@@ -75,7 +75,6 @@ pub enum EffectPayload {
     /// disables hexes, and the defender still chooses which. Bypassing the defensive
     /// subtraction is not the same thing as bypassing the defender's choice.
     ///
-    /// The countdown lives in the target's lattice, not here; see the module docs.
     Burn,
 }
 
@@ -88,10 +87,12 @@ pub enum EffectPayload {
 pub enum EffectEnd {
     /// Ends after this many of the **target's own turns** have ticked it.
     ///
-    /// The turns are counted by the payload's own store — for [`EffectPayload::Burn`],
-    /// by the burn the target's lattice is carrying — so the number here is what the
-    /// effect was created with rather than what is left. Asking the store is what keeps
-    /// one countdown instead of two.
+    /// Counted against [`PersistentEffect::ticks`], which the runtime increments as it
+    /// ticks — so the countdown lives with the effect rather than in whatever the
+    /// payload happens to touch. That matters more than it sounds: an earlier design
+    /// kept a burn's remaining turns inside the target's `LatticeState` and asked the
+    /// lattice whether the effect was still alive, which left the runtime that owns
+    /// effects unable to answer the one question that decides their lifetime.
     AfterTurns(u16),
     /// Ends this many rounds after `start`, on the round boundary.
     ///
@@ -130,6 +131,14 @@ pub struct PersistentEffect {
     pub start: u32,
     /// When it stops.
     pub end: EffectEnd,
+    /// How many times a personal tick has fired for this effect.
+    ///
+    /// The countdown [`EffectEnd::AfterTurns`] is measured against, and the only mutable
+    /// field here. It is a count of what has happened rather than what is left, for the
+    /// same reason `start` is: a number that only goes up cannot be double-decremented
+    /// by a repeated frame, and comparing it to the end condition is a total function of
+    /// two facts.
+    pub ticks: u16,
 }
 
 #[cfg(test)]
@@ -156,6 +165,7 @@ mod tests {
             payload: EffectPayload::Burn,
             start: 3,
             end: EffectEnd::AfterTurns(2),
+            ticks: 1,
         };
 
         let encoded = serde_json::to_string(&effect).expect("a persistent effect should encode");

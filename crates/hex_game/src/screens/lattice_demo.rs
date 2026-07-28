@@ -6,8 +6,10 @@
 //! capacity versus channelling throughput, damage disables, and enchantment
 //! mana locking. Fusion resolution now has content behind it — the hedge-mage's
 //! Lightning Bolt is the one shipped spell requiring a higher-order element —
-//! though this demo's own fixture does not use it. Burn ticks stay dormant:
-//! burn *effects* are applied above the engine, which is HEX-12's job. Nothing
+//! though this demo's own fixture does not use it. **Burn is not here at all**: it
+//! stopped being something a lattice carries and now lives in `hex_combat`'s effect
+//! ledger, which this screen deliberately cannot see — a burn needs a turn order to
+//! tick against, and a sandbox has none. Nothing
 //! persists — the lattice is rebuilt from content on every entry, and `Reset`
 //! rebuilds the battle state. Reset is no longer the *only* way back from a
 //! strike (`hex_lattice::restore` exists now), but it stays the demo's, because
@@ -28,8 +30,8 @@ use bevy::prelude::*;
 use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, tick_burns, Casting, CellKind, LatticeSpec,
-    LatticeState, LatticeStats, SpellTable,
+    apply_cast, apply_disables, castable, channel, Casting, CellKind, LatticeSpec, LatticeState,
+    LatticeStats, SpellTable,
 };
 
 use crate::casting::blocked_reason;
@@ -121,7 +123,7 @@ struct DemoCell(LatticeCoord);
 #[derive(Component)]
 struct CastsSpell(LatticeCoord);
 
-/// The button that channels mana back and ticks burns.
+/// The button that channels mana back toward capacity.
 #[derive(Component)]
 struct EndsTurn;
 
@@ -362,18 +364,15 @@ fn handle_action_buttons(
             log,
         } = &mut *demo;
         channel(state, spec, stats);
-        let due = tick_burns(state);
-        if due == 0 {
-            push_log(
-                log,
-                "end of turn: channelled mana back toward capacity".to_owned(),
-            );
-        } else {
-            push_log(
-                log,
-                format!("end of turn: channelled, and {due} burn(s) came due"),
-            );
-        }
+        // No burn tick here any more. Burn stopped being something a lattice carries —
+        // it lives in `hex_combat`'s effect ledger, which this screen deliberately
+        // cannot see, because the demo is a sandbox for the *rules engine* rather than
+        // for the fight. A burn needs a turn order to tick against, and there is not one
+        // here.
+        push_log(
+            log,
+            "end of turn: channelled mana back toward capacity".to_owned(),
+        );
     }
     if resets
         .iter()
@@ -765,11 +764,10 @@ fn spawn_control_panel(
             controls.spawn(blurb(
                 assets,
                 format!(
-                    "free mana {}   ·   locked {}   ·   enchantments {}   ·   burns {}",
+                    "free mana {}   ·   locked {}   ·   enchantments {}",
                     demo.state.total_gem_mana(),
                     demo.state.total_locked_mana(),
                     demo.state.enchantment_count(),
-                    demo.state.burns().len(),
                 ),
             ));
 

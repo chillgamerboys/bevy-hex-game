@@ -76,13 +76,6 @@ pub struct ActiveEnchantment {
     pub defense: u16,
 }
 
-/// A fire burn: one hex disabled at the start of each of the target's turns.
-#[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Burn {
-    /// How many more of the target's turns this burn disables a hex at.
-    pub remaining_turns: u16,
-}
-
 /// The record of an enchantment that broke because a funding gem was disabled.
 ///
 /// Returned by [`apply_disables`](crate::apply_disables) so the caller can log the
@@ -99,8 +92,11 @@ pub struct BrokenEnchantment {
     pub trigger: LatticeCoord,
 }
 
-/// The battle-mutable half of a lattice: mana, disabled cells, enchantment locks,
-/// and burns.
+/// The battle-mutable half of a lattice: mana, disabled cells, and enchantment locks.
+///
+/// **Only those.** Lasting *effects* on a unit — burn above all — belong to
+/// `hex_combat`'s ledger, not here: they carry a source and a tick point, and a rules
+/// engine with no turn order and no notion of who cast what can represent neither.
 ///
 /// Small and integer-valued by construction, so cloning it is cheap — that clone
 /// is the AI's forward-simulation primitive. Every collection is ordered, so
@@ -111,13 +107,12 @@ pub struct LatticeState {
     disabled: BTreeSet<LatticeCoord>,
     locks: BTreeMap<LatticeCoord, EnchantId>,
     enchantments: BTreeMap<EnchantId, ActiveEnchantment>,
-    burns: Vec<Burn>,
     next_enchant: u32,
 }
 
 impl LatticeState {
     /// The opening state for `spec`: every gem full to its element's attunement
-    /// capacity, nothing disabled, no enchantments, no burns.
+    /// capacity, nothing disabled and no enchantments.
     #[must_use]
     pub fn new(spec: &LatticeSpec, stats: &LatticeStats) -> Self {
         let mut mana = BTreeMap::new();
@@ -186,22 +181,6 @@ impl LatticeState {
         self.enchantments.len()
     }
 
-    /// The burns currently ticking on this lattice.
-    #[must_use]
-    pub fn burns(&self) -> &[Burn] {
-        &self.burns
-    }
-
-    /// Adds a burn lasting `remaining_turns` of the target's turns.
-    ///
-    /// Fire effects on a target create these; `hex_lattice` itself only tracks and
-    /// ticks them (see [`tick_burns`](crate::tick_burns)).
-    pub fn add_burn(&mut self, remaining_turns: u16) {
-        if remaining_turns > 0 {
-            self.burns.push(Burn { remaining_turns });
-        }
-    }
-
     // --- writes, for the operation modules ---------------------------------
 
     /// Removes up to `amount` mana from the gem at `coord`.
@@ -260,19 +239,5 @@ impl LatticeState {
         let enchantment = self.enchantments.remove(&id)?;
         self.locks.retain(|_, &mut locked| locked != id);
         Some(enchantment)
-    }
-
-    /// Advances every burn one of the target's turns, dropping the expired ones,
-    /// and returns how many hexes the burns disable this turn.
-    pub(crate) fn advance_burns(&mut self) -> u16 {
-        let mut due: u16 = 0;
-        for burn in &mut self.burns {
-            if burn.remaining_turns > 0 {
-                due = due.saturating_add(1);
-                burn.remaining_turns -= 1;
-            }
-        }
-        self.burns.retain(|burn| burn.remaining_turns > 0);
-        due
     }
 }

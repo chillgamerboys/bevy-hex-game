@@ -1,4 +1,4 @@
-//! Damage bookkeeping: net incoming disables, applying chosen disables, and burns.
+//! Damage bookkeeping: net incoming disables, and applying the chosen ones.
 //!
 //! This module owns the *bookkeeping* half of damage. Who chooses which hexes are
 //! disabled — the defender-chooses suspension — belongs to the command funnel that
@@ -79,14 +79,4 @@ pub fn restore(state: &mut LatticeState, cells: &[LatticeCoord]) -> usize {
         }
     }
     restored
-}
-
-/// Advances every burn one of the target's turns and returns how many hexes the
-/// burns disable this turn.
-///
-/// The caller applies those disables — burn ignores armour, so it does *not* run
-/// them through [`resolve_incoming`] — via [`apply_disables`] once it (or the
-/// defender) has chosen which hexes. Expired burns are dropped.
-pub fn tick_burns(state: &mut LatticeState) -> u16 {
-    state.advance_burns()
 }
