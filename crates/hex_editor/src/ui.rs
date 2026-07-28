@@ -1176,25 +1176,40 @@ fn draw_status_bar(
                 .stroke(egui::Stroke::new(1.0_f32, BORDER)),
         )
         .show_inside(root_ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(status) = &snapshot.status {
-                    ui.colored_label(
-                        status_color(status.kind),
-                        format!("{}: {}", status_kind_label(status.kind), status.message),
-                    );
-                } else {
-                    ui.label(egui::RichText::new("Ready").color(MUTED));
-                }
-                if let Some(readout) = hover_readout(snapshot, hovered) {
-                    ui.separator();
-                    ui.label(egui::RichText::new(readout).monospace().color(MUTED));
-                }
-
-                if snapshot.mode == Some(WorkshopMode::Objects) {
-                    let Some(editor) = &snapshot.editor else {
-                        return;
+            status_bar_sides_ui(
+                ui,
+                |ui| {
+                    let add_status = |ui: &mut egui::Ui| {
+                        let text = if let Some(status) = &snapshot.status {
+                            egui::RichText::new(format!(
+                                "{}: {}",
+                                status_kind_label(status.kind),
+                                status.message
+                            ))
+                            .color(status_color(status.kind))
+                        } else {
+                            egui::RichText::new("Ready").color(MUTED)
+                        };
+                        ui.add(egui::Label::new(text).truncate())
                     };
-                    status_summary_ui(ui, |ui| {
+
+                    if let Some(readout) = hover_readout(snapshot, hovered) {
+                        egui::containers::Sides::new()
+                            .height(ui.available_height())
+                            .shrink_left()
+                            .truncate()
+                            .show(ui, add_status, |ui| {
+                                ui.label(egui::RichText::new(readout).monospace().color(MUTED));
+                            });
+                    } else {
+                        add_status(ui);
+                    }
+                },
+                |ui| {
+                    if snapshot.mode == Some(WorkshopMode::Objects) {
+                        let Some(editor) = &snapshot.editor else {
+                            return;
+                        };
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} voxels  |  {} selected",
@@ -1221,10 +1236,9 @@ fn draw_status_bar(
                         {
                             actions.push(WorkshopUiAction::SetActiveLevel(level));
                         }
-                    });
-                } else if let (Some(palette), Some(styles)) = (&snapshot.palette, &snapshot.styles)
-                {
-                    status_summary_ui(ui, |ui| {
+                    } else if let (Some(palette), Some(styles)) =
+                        (&snapshot.palette, &snapshot.styles)
+                    {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} swatches  |  {} styles",
@@ -1233,10 +1247,22 @@ fn draw_status_bar(
                             ))
                             .color(MUTED),
                         );
-                    });
-                }
-            });
+                    }
+                },
+            );
         });
+}
+
+fn status_bar_sides_ui<Left, Right>(
+    ui: &mut egui::Ui,
+    add_left: impl FnOnce(&mut egui::Ui) -> Left,
+    add_right: impl FnOnce(&mut egui::Ui) -> Right,
+) -> (Left, egui::InnerResponse<Right>) {
+    egui::containers::Sides::new()
+        .height(ui.available_height())
+        .shrink_left()
+        .truncate()
+        .show(ui, add_left, |ui| status_summary_ui(ui, add_right))
 }
 
 fn status_summary_ui<R>(
@@ -3213,37 +3239,51 @@ mod tests {
     }
 
     #[test]
-    fn status_summary_widget_ids_ignore_conditional_left_content() {
+    fn status_summary_stays_stable_and_separate_from_long_status_text() {
         let context = egui::Context::default();
 
-        let run_pass = |include_hover: bool| {
-            let mut response = None;
+        let run_pass = |status: &str, include_hover: bool| {
+            let mut responses = None;
             drop(context.run_ui(egui::RawInput::default(), |ui| {
-                response = Some(
-                    ui.horizontal(|ui| {
-                        ui.label("Ready");
+                ui.set_width(420.0);
+                ui.set_height(24.0);
+                let (left, right) = status_bar_sides_ui(
+                    ui,
+                    |ui| {
                         if include_hover {
-                            ui.separator();
-                            ui.label("q 0  r 0  level 0");
+                            egui::containers::Sides::new()
+                                .shrink_left()
+                                .truncate()
+                                .show(
+                                    ui,
+                                    |ui| ui.add(egui::Label::new(status).truncate()),
+                                    |ui| ui.label("q 0  r 0  level 0"),
+                                )
+                                .0
+                        } else {
+                            ui.add(egui::Label::new(status).truncate())
                         }
-                        status_summary_ui(ui, |ui| {
-                            let mut level = 0;
-                            ui.add(egui::DragValue::new(&mut level).prefix("Level "))
-                        })
-                        .inner
-                    })
-                    .inner,
+                    },
+                    |ui| {
+                        let mut level = 0;
+                        ui.add(egui::DragValue::new(&mut level).prefix("Level "))
+                    },
                 );
+                responses = Some((left, right));
             }));
-            let response = response.expect("pass should produce a response");
-            (response.id, response.rect)
+            let (left, right) = responses.expect("pass should produce responses");
+            (left, right.inner.id, right.response.rect)
         };
 
-        let first = run_pass(false);
-        let second = run_pass(true);
+        let first = run_pass("Ready", false);
+        let second = run_pass(
+            "Success: Review pack published under a/very/long/path/that/must/not/overlap",
+            true,
+        );
 
-        assert_eq!(first.0, second.0);
         assert_eq!(first.1, second.1);
+        assert_eq!(first.2, second.2);
+        assert!(second.0.rect.max.x <= second.2.min.x);
     }
 
     #[test]
