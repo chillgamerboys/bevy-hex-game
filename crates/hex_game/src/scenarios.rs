@@ -371,8 +371,8 @@ mod tests {
     use hex_core::{
         AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
         InteriorRegions, IssuedCommand, MapAnchorId, MapAnchors, MapViewHint, Mode,
-        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegions,
-        TerrainReady, TilePos, UnitId,
+        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegion,
+        SpecialMovementRegions, TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_units::{either_in_reach, Body, Enemy, Footing, Player, Reach, StandsOn};
@@ -1511,6 +1511,19 @@ mod tests {
                     "Sky Islands dropped its flight-gated upper layer"
                 ),
                 "Mountains" => {}
+                "Waterfall" => {
+                    assert_eq!(
+                        special_regions.len(),
+                        6,
+                        "Waterfall dropped a radius-12 mid-cliff shelf"
+                    );
+                    assert!(
+                        special_regions.iter().all(|(position, region)| {
+                            position.level == 21 && region == SpecialMovementRegion(0)
+                        }),
+                        "Waterfall changed its exact mid-cliff shelf contract"
+                    );
+                }
                 _ => assert!(
                     special_regions.is_empty(),
                     "{scenario_name} introduced an unexpected optional region"
