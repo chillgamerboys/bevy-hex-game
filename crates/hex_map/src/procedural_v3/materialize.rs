@@ -257,13 +257,17 @@ fn project_liquids(
         }
     }
     if projected_runs.len() != fill_runs.len() {
-        let missing = fill_runs
+        if let Some(missing) = fill_runs
             .keys()
             .find(|position| !projected_runs.contains(position))
-            .expect("unequal exact fill-run sets contain a missing semantic node");
-        return Err(MaterializationError::Projection(format!(
-            "fill run {missing:?} has no liquid node"
-        )));
+        {
+            return Err(MaterializationError::Projection(format!(
+                "fill run {missing:?} has no liquid node"
+            )));
+        }
+        return Err(MaterializationError::Projection(
+            "liquid run projection cardinality disagrees with occupied volume".to_owned(),
+        ));
     }
 
     Ok(projected)

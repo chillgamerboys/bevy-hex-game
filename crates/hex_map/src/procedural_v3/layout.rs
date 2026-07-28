@@ -499,18 +499,18 @@ fn resolve_shared_edge(
     }
     let liquid = match liquid_request {
         LiquidRequest::Dry => ResolvedLiquidPort::Dry,
-        LiquidRequest::Directed { source, sink, .. } => ResolvedLiquidPort::Directed {
-            source,
-            sink,
-            port: liquid_port.expect("a directed request selects one liquid port"),
-        },
+        LiquidRequest::Directed { source, sink, .. } => {
+            let Some(port) = liquid_port else {
+                return Err(LayoutValidationError::one(
+                    LayoutIssue::InsufficientPortCapacity(first_id, second_id),
+                ));
+            };
+            ResolvedLiquidPort::Directed { source, sink, port }
+        }
     };
     let mut first_approaches = BTreeSet::new();
     let mut second_approaches = BTreeSet::new();
-    for port in walker_ports
-        .iter()
-        .chain(liquid_port_ref(&liquid).into_iter())
-    {
+    for port in walker_ports.iter().chain(liquid_port_ref(&liquid)) {
         first_approaches.extend(port.first_approach.iter().copied());
         second_approaches.extend(port.second_approach.iter().copied());
     }
@@ -1467,10 +1467,10 @@ mod tests {
                     .iter()
                     .all(|(first, second)| edge.first.1.neighbor(*first) == *second));
             }
-            assert!(ports_are_disjoint(
-                &edge.walker.ports[0],
-                &edge.walker.ports[1]
-            ));
+            let [first, second] = edge.walker.ports.as_slice() else {
+                panic!("the test seam should contain exactly two walker ports");
+            };
+            assert!(ports_are_disjoint(first, second));
         }
     }
 
@@ -1542,12 +1542,13 @@ mod tests {
             .shared_edges
             .get_mut(&ResolvedEdgeId(0))
             .expect("the first fixed seam exists");
-        let lane = edge.walker.ports[0]
-            .lanes
-            .first()
-            .copied()
-            .expect("walker ports are non-empty");
-        edge.walker.ports[0].lanes.remove(&lane);
+        let Some(port) = edge.walker.ports.first_mut() else {
+            panic!("the test seam should contain a walker port");
+        };
+        let Some(lane) = port.lanes.first().copied() else {
+            panic!("walker ports should be non-empty");
+        };
+        port.lanes.remove(&lane);
 
         let error = resolved
             .validate()
