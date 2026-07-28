@@ -1271,6 +1271,22 @@ pub fn publish_review_pack(
     publish_review_pack_with_hook(repository_root, report, frames, |_| Ok(()))
 }
 
+pub(crate) fn publish_review_pack_with_pre_rename_check(
+    repository_root: &Path,
+    report: &ReviewReport,
+    frames: &[RgbaImage],
+    mut check: impl FnMut() -> Result<(), String>,
+) -> Result<ReviewPublishOutcome, ReviewError> {
+    publish_review_pack_with_hook(repository_root, report, frames, |checkpoint| {
+        if checkpoint == PublishCheckpoint::BeforeRename {
+            check().map_err(|detail| {
+                ReviewError::new("verify review sources before publication", None, detail)
+            })?;
+        }
+        Ok(())
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PublishCheckpoint {
     Frame(u8),

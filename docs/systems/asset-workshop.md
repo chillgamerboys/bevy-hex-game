@@ -306,8 +306,10 @@ same fingerprint is reported as a collision and never overwrites it. Review outp
 derived and untracked. A saved object remains the only source of truth.
 
 Request creation, renderer startup, and publication each verify the exact tracked
-source-byte revisions used to prepare the review. A source change at any of those
-points aborts the export before publication and requires a project reload.
+source-byte revisions used to prepare the review. Publication checks once before
+staging and again immediately before the atomic rename. A source change at any of
+those points aborts the export, removes its staging directory, and requires a project
+reload.
 
 ## Procedural follow-up
 

@@ -22,9 +22,9 @@ use image::RgbaImage;
 
 use crate::project::{current_project_revisions, ProjectRevisionSet};
 use crate::review::{
-    captured_rgba, publish_review_pack, ReviewPresentation, ReviewPublishOutcome, ReviewReport,
-    REVIEW_CLEAR_RGBA, REVIEW_FRAME_COUNT, REVIEW_FRAME_HEIGHT, REVIEW_FRAME_SPECS,
-    REVIEW_FRAME_WIDTH,
+    captured_rgba, publish_review_pack_with_pre_rename_check, ReviewPresentation,
+    ReviewPublishOutcome, ReviewReport, REVIEW_CLEAR_RGBA, REVIEW_FRAME_COUNT, REVIEW_FRAME_HEIGHT,
+    REVIEW_FRAME_SPECS, REVIEW_FRAME_WIDTH,
 };
 use crate::viewport::{
     HoveredFaceTarget, RenderedVoxel, ViewportContent, ViewportEmission, ViewportInputEnabled,
@@ -188,12 +188,36 @@ fn publish_review_pack_if_sources_current(
     report: &ReviewReport,
     frames: &[RgbaImage],
 ) -> Result<ReviewPublishOutcome, String> {
+    publish_review_pack_if_sources_current_with_hook(
+        repository_root,
+        expected_revisions,
+        report,
+        frames,
+        || Ok(()),
+    )
+}
+
+fn publish_review_pack_if_sources_current_with_hook(
+    repository_root: &Path,
+    expected_revisions: &ProjectRevisionSet,
+    report: &ReviewReport,
+    frames: &[RgbaImage],
+    mut before_final_revision_check: impl FnMut() -> Result<(), String>,
+) -> Result<ReviewPublishOutcome, String> {
     verify_project_revisions(
         repository_root,
         expected_revisions,
         RevisionCheckPoint::Publication,
     )?;
-    publish_review_pack(repository_root, report, frames).map_err(|error| error.to_string())
+    publish_review_pack_with_pre_rename_check(repository_root, report, frames, || {
+        before_final_revision_check()?;
+        verify_project_revisions(
+            repository_root,
+            expected_revisions,
+            RevisionCheckPoint::Publication,
+        )
+    })
+    .map_err(|error| error.to_string())
 }
 
 /// Completion result for one accepted capture request.
@@ -1369,6 +1393,79 @@ mod tests {
         assert!(error.contains("no review pack was published"));
         assert!(!root.join(".context/asset-workshop/reviews").exists());
         fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    #[test]
+    fn tracked_source_change_during_staging_blocks_atomic_publication() {
+        let (root, report, contents, _style_id) = fixture();
+        let art_root = root.join("assets/art");
+        fs::create_dir_all(&art_root).expect("fixture art root should be created");
+        let palette_path = art_root.join("palette.ron");
+        fs::write(&palette_path, b"version-a").expect("fixture source should be written");
+        let expected =
+            current_project_revisions(&root).expect("initial tracked source revisions should scan");
+        let request = ReviewCaptureRequest::new(root.clone(), expected, report, contents)
+            .expect("current source revisions should allow capture");
+        let frames = review_frame_set();
+
+        let error = publish_review_pack_if_sources_current_with_hook(
+            &root,
+            &request.expected_revisions,
+            &request.report,
+            &frames,
+            || {
+                fs::write(&palette_path, b"version-b").map_err(|error| {
+                    format!("fixture source should change during staging: {error}")
+                })
+            },
+        )
+        .expect_err("a source change during staging must block the final rename");
+
+        assert!(error.contains("while the review capture was running"));
+        assert!(error.contains("palette.ron (modified)"));
+        assert!(error.contains("no review pack was published"));
+        let final_path = crate::review::review_pack_path(&root, &request.report)
+            .expect("fixture review path should resolve");
+        assert!(!final_path.exists());
+        let review_parent = final_path
+            .parent()
+            .expect("fixture review path should have a parent");
+        assert_eq!(
+            fs::read_dir(review_parent)
+                .expect("review parent should remain readable")
+                .count(),
+            0,
+            "failed publication must remove its staging directory"
+        );
+        fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    fn review_frame_set() -> Vec<RgbaImage> {
+        (0..REVIEW_FRAME_COUNT)
+            .map(|index| {
+                let index =
+                    u8::try_from(index).expect("review frame index should fit in a single byte");
+                let mut frame = RgbaImage::from_pixel(
+                    REVIEW_FRAME_WIDTH,
+                    REVIEW_FRAME_HEIGHT,
+                    image::Rgba(REVIEW_CLEAR_RGBA),
+                );
+                let accent = image::Rgba([
+                    56_u8.saturating_add(index.saturating_mul(12)),
+                    110_u8.saturating_add(index.saturating_mul(7)),
+                    170_u8.saturating_sub(index.saturating_mul(6)),
+                    255,
+                ]);
+                let center_x = REVIEW_FRAME_WIDTH / 2;
+                let center_y = REVIEW_FRAME_HEIGHT / 2;
+                for y in center_y - 48..center_y + 48 {
+                    for x in center_x - 48..center_x + 48 {
+                        frame.put_pixel(x, y, accent);
+                    }
+                }
+                frame
+            })
+            .collect()
     }
 
     #[test]
