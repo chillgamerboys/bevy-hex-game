@@ -190,9 +190,11 @@ One piece of it is now built. **The shape vocabulary resolves to exact voxels**
 `Path`, over `TilePos` in the grid-space metric where hexes and levels count equally,
 handing back the sorted, deduplicated form an announcement requires. `spells.ron`'s
 `TargetShape` carries the matching extents — `Blast` is now `Sphere(radius: N)` — and
-validation caps them. It is pure geometry with no consumer: nothing announces a
-volume, nothing checks legality against one, and nothing clips one to what a caster
-can see. Those are the rest of terrain magic.
+validation caps them. **It has one consumer now** — the casting preview resolves the
+aimed shape and paints every surface in it, and the cast applier refuses a shape that
+cannot resolve. What is still missing is the other half: nothing announces a volume,
+nothing applies a unit effect across one, and nothing clips one to what a caster can
+see. Those are the rest of terrain magic.
 
 The binding parts are:
 
@@ -229,14 +231,23 @@ The first implementation also ships with explicit limitations:
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and remains revivable; functional death and permadeath remain open.
-- **A unit effect reaches the unit on the anchor, not everyone in the volume.**
-  `volumes::resolve` produces the full voxel list and the cast path checks that it
-  resolves, but `DisableHexes` and `Burn` both apply to whoever stands on the target
-  voxel. The friendly-fire contract above is unchanged and unweakened — nothing filters
-  by faction — but a fireball currently damages one unit rather than every unit inside
-  it, and a line spell burns whoever it is aimed at rather than everyone along it. This
-  is the same gap `RunBottom` and the announce path close for terrain, arriving at the
-  same seam.
+- **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
+  area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
+  list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever
+  stands on the target voxel. The friendly-fire contract above is unchanged and
+  unweakened — nothing filters by faction — but a fireball *would* damage one unit
+  rather than every unit inside it.
+
+  Rather than ship that as a silent lie, `lattices.ron` **rejects an inscribed spell
+  whose shape covers more than the anchor and whose effects reach units**
+  (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
+  cast, so the preview cannot promise what the applier will not deliver. The refusal
+  lifts the day the applier iterates the volume and queues one decision per unit inside
+  it; it is the same seam `RunBottom` and the announce path close for terrain.
+- **The HUD counts your own party's hexes, not the enemy's.** Damage you take is legible
+  — the count drops — and damage you deal is not. That is a presentation gap rather than
+  a rules one: `FactionKnowledge` already carries what a faction knows about an enemy
+  lattice, and nothing reads it into the HUD yet.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is
