@@ -71,7 +71,11 @@ leave stale current or fall descriptors behind.
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
 mask, and six directional edge contracts. A mask is a set of horizontal columns
 inside the world footprint. Masks are disjoint, cover the footprint exactly, and
-must not collapse vertically stacked surfaces.
+must not collapse vertically stacked surfaces. Explicit masks may have arbitrary
+connected interiors, but each declared shared side must expose exactly one oriented,
+simple, contiguous seam. Every seam lane must also retain an independent inward
+approach corridor for the contract's full `approach_depth`; branched, disjoint, or
+pinched seams are rejected while settings are validated, before candidate generation.
 
 An edge contract describes what neighboring patches must agree on:
 

@@ -11,7 +11,7 @@
 //! has picked one. `world.ron` is still the world the first scenario uses and still the
 //! file to edit while trying terrain out.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -32,6 +32,98 @@ const CUBE_NEIGHBORS: [(i32, i32, i32); 6] = [
     (-1, 0, 1),
     (0, -1, 1),
 ];
+
+/// Orders a bounded one-dimensional seam, rejecting branches, cycles, and gaps.
+///
+/// Settings validation and resolved-layout validation deliberately share this
+/// predicate so an authored mask cannot pass one boundary and fail the other.
+pub(crate) fn ordered_simple_seam_lanes(
+    lanes: &BTreeSet<(HexCoord, HexCoord)>,
+) -> Option<Vec<(HexCoord, HexCoord)>> {
+    if lanes.is_empty() {
+        return None;
+    }
+    let by_first: BTreeMap<_, _> = lanes.iter().copied().collect();
+    if by_first.len() != lanes.len()
+        || lanes
+            .iter()
+            .map(|(_, second)| *second)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != lanes.len()
+    {
+        return None;
+    }
+    if lanes.len() == 1 {
+        return Some(lanes.iter().copied().collect());
+    }
+
+    let neighbors = |first: HexCoord| {
+        first
+            .neighbors()
+            .into_iter()
+            .filter(|candidate| {
+                by_first.get(candidate).is_some_and(|candidate_second| {
+                    by_first
+                        .get(&first)
+                        .is_some_and(|second| second.distance(*candidate_second) == 1)
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let endpoints: Vec<_> = by_first
+        .keys()
+        .copied()
+        .filter(|first| neighbors(*first).len() == 1)
+        .collect();
+    if endpoints.len() != 2
+        || by_first
+            .keys()
+            .any(|first| !matches!(neighbors(*first).len(), 1 | 2))
+    {
+        return None;
+    }
+
+    let mut ordered = Vec::with_capacity(lanes.len());
+    let mut previous = None;
+    let mut current = *endpoints.first()?;
+    loop {
+        ordered.push((current, *by_first.get(&current)?));
+        let next = neighbors(current)
+            .into_iter()
+            .filter(|neighbor| Some(*neighbor) != previous)
+            .min();
+        let Some(next) = next else {
+            break;
+        };
+        previous = Some(current);
+        current = next;
+        if ordered.len() > lanes.len() {
+            return None;
+        }
+    }
+    (ordered.len() == lanes.len()).then_some(ordered)
+}
+
+/// Checks that every seam lane retains its own full-depth inward corridor.
+pub(crate) fn seam_approaches_are_independent(
+    boundary: impl IntoIterator<Item = HexCoord>,
+    mask: &BTreeSet<HexCoord>,
+    inward: impl Fn(HexCoord) -> HexCoord + Copy,
+    depth: u32,
+) -> bool {
+    let mut occupied = BTreeSet::new();
+    for boundary_cell in boundary {
+        let mut cell = boundary_cell;
+        for _ in 0..depth {
+            if !mask.contains(&cell) || !occupied.insert(cell) {
+                return false;
+            }
+            cell = inward(cell);
+        }
+    }
+    true
+}
 
 /// Registers map settings as loadable from RON.
 pub fn plugin(app: &mut App) {
@@ -1000,6 +1092,7 @@ impl V3Ring7Settings {
 
         self.validate_masks(grid_radius)?;
         self.validate_edges()?;
+        self.validate_explicit_seam_geometry()?;
         self.validate_liquid_graph()?;
         if !self.mountains.edges.all_liquids_dry() {
             return Err("V3 Ring7 Mountains edges must all be dry".to_owned());
@@ -1062,36 +1155,6 @@ impl V3Ring7Settings {
             return Err(format!(
                 "V3 Ring7 Explicit masks must cover all {expected_columns} world columns exactly"
             ));
-        }
-        self.validate_explicit_mask_adjacency()?;
-        Ok(())
-    }
-
-    fn validate_explicit_mask_adjacency(&self) -> Result<(), String> {
-        for (label, first, second) in [
-            ("center / mountains", &self.center, &self.mountains),
-            ("center / waterfall", &self.center, &self.waterfall),
-            ("center / forest", &self.center, &self.forest),
-            ("center / fort", &self.center, &self.fort),
-            ("center / caves", &self.center, &self.caves),
-            ("center / sky_islands", &self.center, &self.sky_islands),
-            ("mountains / waterfall", &self.mountains, &self.waterfall),
-            ("waterfall / forest", &self.waterfall, &self.forest),
-            ("forest / fort", &self.forest, &self.fort),
-            ("fort / caves", &self.fort, &self.caves),
-            ("caves / sky_islands", &self.caves, &self.sky_islands),
-            (
-                "sky_islands / mountains",
-                &self.sky_islands,
-                &self.mountains,
-            ),
-        ] {
-            if !explicit_masks_touch(&first.mask, &second.mask) {
-                return Err(format!(
-                    "V3 Ring7 Explicit masks for {label} must share at least one adjacent \
-                     boundary pair"
-                ));
-            }
         }
         Ok(())
     }
@@ -1182,6 +1245,132 @@ impl V3Ring7Settings {
             if !matches!(edge, PatchEdgeContractSettings::WorldBoundary) {
                 return Err(format!("V3 Ring7 outer edge {label} must be WorldBoundary"));
             }
+        }
+        Ok(())
+    }
+
+    fn validate_explicit_seam_geometry(&self) -> Result<(), String> {
+        if !self
+            .named_patches()
+            .iter()
+            .all(|(_, patch)| matches!(patch.mask, PatchMaskSettings::Explicit(_)))
+        {
+            return Ok(());
+        }
+
+        let center = explicit_hex_mask(&self.center.mask, "center")?;
+        let mountains = explicit_hex_mask(&self.mountains.mask, "mountains")?;
+        let waterfall = explicit_hex_mask(&self.waterfall.mask, "waterfall")?;
+        let forest = explicit_hex_mask(&self.forest.mask, "forest")?;
+        let fort = explicit_hex_mask(&self.fort.mask, "fort")?;
+        let caves = explicit_hex_mask(&self.caves.mask, "caves")?;
+        let sky_islands = explicit_hex_mask(&self.sky_islands.mask, "sky_islands")?;
+
+        const EAST: (i32, i32, i32) = (1, 0, -1);
+        const SOUTH_EAST: (i32, i32, i32) = (0, 1, -1);
+        const SOUTH_WEST: (i32, i32, i32) = (-1, 1, 0);
+        const WEST: (i32, i32, i32) = (-1, 0, 1);
+        const NORTH_WEST: (i32, i32, i32) = (0, -1, 1);
+        const NORTH_EAST: (i32, i32, i32) = (1, -1, 0);
+
+        for (label, first_mask, second_mask, outward, edge) in [
+            (
+                "center north_east / mountains south_west",
+                &center,
+                &mountains,
+                NORTH_EAST,
+                &self.center.edges.north_east,
+            ),
+            (
+                "center east / waterfall west",
+                &center,
+                &waterfall,
+                EAST,
+                &self.center.edges.east,
+            ),
+            (
+                "center south_east / forest north_west",
+                &center,
+                &forest,
+                SOUTH_EAST,
+                &self.center.edges.south_east,
+            ),
+            (
+                "center south_west / fort north_east",
+                &center,
+                &fort,
+                SOUTH_WEST,
+                &self.center.edges.south_west,
+            ),
+            (
+                "center west / caves east",
+                &center,
+                &caves,
+                WEST,
+                &self.center.edges.west,
+            ),
+            (
+                "center north_west / sky_islands south_east",
+                &center,
+                &sky_islands,
+                NORTH_WEST,
+                &self.center.edges.north_west,
+            ),
+            (
+                "mountains south_east / waterfall north_west",
+                &mountains,
+                &waterfall,
+                SOUTH_EAST,
+                &self.mountains.edges.south_east,
+            ),
+            (
+                "waterfall south_west / forest north_east",
+                &waterfall,
+                &forest,
+                SOUTH_WEST,
+                &self.waterfall.edges.south_west,
+            ),
+            (
+                "forest west / fort east",
+                &forest,
+                &fort,
+                WEST,
+                &self.forest.edges.west,
+            ),
+            (
+                "fort north_west / caves south_east",
+                &fort,
+                &caves,
+                NORTH_WEST,
+                &self.fort.edges.north_west,
+            ),
+            (
+                "caves north_east / sky_islands south_west",
+                &caves,
+                &sky_islands,
+                NORTH_EAST,
+                &self.caves.edges.north_east,
+            ),
+            (
+                "sky_islands east / mountains west",
+                &sky_islands,
+                &mountains,
+                EAST,
+                &self.sky_islands.edges.east,
+            ),
+        ] {
+            let PatchEdgeContractSettings::Shared(shared) = edge else {
+                return Err(format!(
+                    "V3 Ring7 internal seam {label} must be Shared on both sides"
+                ));
+            };
+            validate_explicit_simple_seam(
+                label,
+                first_mask,
+                second_mask,
+                outward,
+                shared.approach_depth,
+            )?;
         }
         Ok(())
     }
@@ -1374,20 +1563,65 @@ impl PatchMaskSettings {
     }
 }
 
-fn explicit_masks_touch(first: &PatchMaskSettings, second: &PatchMaskSettings) -> bool {
-    let (PatchMaskSettings::Explicit(first), PatchMaskSettings::Explicit(second)) = (first, second)
-    else {
-        return false;
+fn explicit_hex_mask(mask: &PatchMaskSettings, label: &str) -> Result<BTreeSet<HexCoord>, String> {
+    let PatchMaskSettings::Explicit(coords) = mask else {
+        return Err(format!("V3 Ring7 {label} mask must be Explicit"));
     };
-    let second: BTreeSet<_> = second
+    coords
         .iter()
-        .map(|coord| (coord.x, coord.y, coord.z))
+        .map(|coord| {
+            HexCoord::try_new_cubic(coord.x, coord.y, coord.z).ok_or_else(|| {
+                format!(
+                    "V3 Ring7 {label} mask contains invalid cube coordinate ({}, {}, {})",
+                    coord.x, coord.y, coord.z
+                )
+            })
+        })
+        .collect()
+}
+
+fn validate_explicit_simple_seam(
+    label: &str,
+    first_mask: &BTreeSet<HexCoord>,
+    second_mask: &BTreeSet<HexCoord>,
+    outward: (i32, i32, i32),
+    approach_depth: u32,
+) -> Result<(), String> {
+    let oriented_lanes = first_mask
+        .iter()
+        .filter_map(|first| {
+            let second = shift_hex(*first, outward);
+            second_mask.contains(&second).then_some((*first, second))
+        })
         .collect();
-    first.iter().any(|coord| {
-        CUBE_NEIGHBORS
-            .iter()
-            .any(|(dx, dy, dz)| second.contains(&(coord.x + dx, coord.y + dy, coord.z + dz)))
-    })
+    let ordered = ordered_simple_seam_lanes(&oriented_lanes).ok_or_else(|| {
+        format!("V3 Ring7 Explicit masks for {label} must form one oriented simple contiguous seam")
+    })?;
+    let inward = (-outward.0, -outward.1, -outward.2);
+    let first_approaches = seam_approaches_are_independent(
+        ordered.iter().map(|(first, _)| *first),
+        first_mask,
+        |coord| shift_hex(coord, inward),
+        approach_depth,
+    );
+    let second_approaches = seam_approaches_are_independent(
+        ordered.iter().map(|(_, second)| *second),
+        second_mask,
+        |coord| shift_hex(coord, outward),
+        approach_depth,
+    );
+    if !first_approaches || !second_approaches {
+        return Err(format!(
+            "V3 Ring7 Explicit masks for {label} must preserve independent depth-{approach_depth} \
+             seam approaches"
+        ));
+    }
+    Ok(())
+}
+
+fn shift_hex(coord: HexCoord, delta: (i32, i32, i32)) -> HexCoord {
+    let [x, y, z] = coord.to_cubic_array();
+    HexCoord::new_cubic(x + delta.0, y + delta.1, z + delta.2)
 }
 
 impl PatchEdgesSettings {
@@ -2973,7 +3207,44 @@ mod tests {
         .validate()
         .expect_err("rearranged Explicit masks must fail before layout resolution");
         assert!(
-            error.contains("must share at least one adjacent boundary pair"),
+            error.contains("must form one oriented simple contiguous seam"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn v3_ring7_rejects_disjoint_explicit_seams_during_settings_validation() {
+        let mut ring = valid_explicit_ring7();
+        let PatchMaskSettings::Explicit(center) = &mut ring.center.mask else {
+            panic!("the test Ring7 center mask should be Explicit");
+        };
+        let PatchMaskSettings::Explicit(waterfall) = &mut ring.waterfall.mask else {
+            panic!("the test Ring7 waterfall mask should be Explicit");
+        };
+        let protrusion = CubeCoord {
+            x: 12,
+            y: 0,
+            z: -12,
+        };
+        let index = waterfall
+            .iter()
+            .position(|coord| *coord == protrusion)
+            .expect("the generated-equivalent waterfall mask owns the test cell");
+        center.push(waterfall.remove(index));
+
+        let error = MapSettings {
+            grid_radius: 33,
+            level_height: 0.4,
+            terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+                layout: V3LayoutSettings::Ring7(ring),
+            })),
+        }
+        .validate()
+        .expect_err("a disjoint oriented seam must fail before layout resolution");
+        assert!(
+            error.contains(
+                "center east / waterfall west must form one oriented simple contiguous seam"
+            ),
             "unexpected error: {error}"
         );
     }
