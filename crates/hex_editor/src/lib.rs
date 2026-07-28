@@ -5,6 +5,8 @@ pub mod history;
 pub mod launch;
 pub mod model;
 pub mod project;
+pub mod recovery;
+pub mod review;
 pub mod ui;
 pub mod viewport;
 pub mod workshop;

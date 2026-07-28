@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::gltf::GltfAssetLabel;
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::{GlobalAmbientLight, NotShadowCaster};
 use bevy::picking::events::{Click, Move, Out, Over, Pointer};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
@@ -347,9 +347,15 @@ enum VoxelSceneAction {
     Restyle(RenderedVoxel),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraDragMode {
+    Orbit,
+    Pan,
+}
+
 #[derive(Default)]
 struct CameraDrag {
-    button: Option<MouseButton>,
+    mode: Option<CameraDragMode>,
     last_cursor: Option<Vec2>,
 }
 
@@ -819,38 +825,50 @@ fn control_camera(
     windows: Query<&Window, With<PrimaryWindow>>,
     input_enabled: Res<ViewportInputEnabled>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut cursor_events: MessageReader<CursorMoved>,
     mut wheel_events: MessageReader<MouseWheel>,
     mut drag: Local<CameraDrag>,
     mut cameras: Query<(&mut ViewportCamera, &mut Transform)>,
 ) {
     let cursor_positions: Vec<Vec2> = cursor_events.read().map(|event| event.position).collect();
-    let scroll: f32 = wheel_events.read().map(|event| event.y).sum();
+    let scroll: f32 = wheel_events
+        .read()
+        .map(|event| match event.unit {
+            MouseScrollUnit::Line => event.y,
+            MouseScrollUnit::Pixel => event.y / 48.0,
+        })
+        .sum();
     let Ok(window) = windows.single() else {
-        drag.button = None;
+        drag.mode = None;
         drag.last_cursor = None;
         return;
     };
     if !input_enabled.0 {
-        drag.button = None;
+        drag.mode = None;
         drag.last_cursor = None;
         return;
     }
 
-    let wanted_button = if buttons.pressed(MouseButton::Right) {
-        Some(MouseButton::Right)
-    } else if buttons.pressed(MouseButton::Middle) {
-        Some(MouseButton::Middle)
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let space = keys.pressed(KeyCode::Space);
+    let wanted_mode = if buttons.pressed(MouseButton::Middle)
+        || (space && buttons.pressed(MouseButton::Left))
+        || (shift && buttons.pressed(MouseButton::Right))
+    {
+        Some(CameraDragMode::Pan)
+    } else if buttons.pressed(MouseButton::Right) {
+        Some(CameraDragMode::Orbit)
     } else {
         None
     };
-    if drag.button != wanted_button {
-        drag.button = wanted_button;
+    if drag.mode != wanted_mode {
+        drag.mode = wanted_mode;
         drag.last_cursor = window.cursor_position();
     }
 
     let mut pointer_delta = Vec2::ZERO;
-    if wanted_button.is_some() {
+    if wanted_mode.is_some() {
         for position in cursor_positions {
             if let Some(previous) = drag.last_cursor {
                 pointer_delta += position - previous;
@@ -868,14 +886,14 @@ fn control_camera(
         return;
     };
 
-    match wanted_button {
-        Some(MouseButton::Right) => {
+    match wanted_mode {
+        Some(CameraDragMode::Orbit) => {
             let size = Vec2::new(window.width().max(1.0), window.height().max(1.0));
             camera.yaw -= pointer_delta.x / size.x * std::f32::consts::TAU * ORBIT_SENSITIVITY;
             camera.pitch += pointer_delta.y / size.y * std::f32::consts::PI * ORBIT_SENSITIVITY;
             camera.pitch = camera.pitch.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
         }
-        Some(MouseButton::Middle) => {
+        Some(CameraDragMode::Pan) => {
             let rotation = camera.transform().rotation;
             let right = rotation * Vec3::X;
             let up = rotation * Vec3::Y;
@@ -1278,11 +1296,34 @@ fn frame_for(content: &ViewportContent, mode: ViewportMode) -> (Vec3, f32) {
         return (Vec3::new(0.0, 0.5 * DEFAULT_LEVEL_HEIGHT, 0.0), 5.5);
     }
 
+    frame_object_positions(
+        content
+            .voxels
+            .iter()
+            .filter(|voxel| {
+                !content.isolate_active_level || voxel.position.level == content.active_level
+            })
+            .map(|voxel| voxel.position),
+    )
+    .unwrap_or_else(|| {
+        let radius = f32::from(content.grid_radius.min(MAX_OBJECT_RADIUS));
+        (
+            Vec3::new(0.0, grid_plane_y(content.active_level), 0.0),
+            (radius * HEX_SMALL_DIAMETER + 4.0).clamp(5.5, MAX_CAMERA_RADIUS),
+        )
+    })
+}
+
+/// Returns stable focus and radius values for occupied object-local cells.
+///
+/// `None` represents an empty iterator. Review capture reuses this calculation so
+/// its fixed views frame geometry exactly as the interactive viewport does.
+pub(crate) fn frame_object_positions(
+    positions: impl IntoIterator<Item = LocalVoxelCoord>,
+) -> Option<(Vec3, f32)> {
     let mut bounds: Option<(Vec3, Vec3)> = None;
-    for voxel in content.voxels.iter().filter(|voxel| {
-        !content.isolate_active_level || voxel.position.level == content.active_level
-    }) {
-        let center = voxel_world_center(voxel.position);
+    for position in positions {
+        let center = voxel_world_center(position);
         let half = Vec3::new(
             HEX_CIRCUMRADIUS,
             0.5 * DEFAULT_LEVEL_HEIGHT,
@@ -1296,18 +1337,12 @@ fn frame_for(content: &ViewportContent, mode: ViewportMode) -> (Vec3, f32) {
         });
     }
 
-    if let Some((minimum, maximum)) = bounds {
+    bounds.map(|(minimum, maximum)| {
         let focus = 0.5 * (minimum + maximum);
         let half_extent = 0.5 * (maximum - minimum);
         let radius = (2.7 * half_extent.length() + 2.0).clamp(MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
         (focus, radius)
-    } else {
-        let radius = f32::from(content.grid_radius.min(MAX_OBJECT_RADIUS));
-        (
-            Vec3::new(0.0, grid_plane_y(content.active_level), 0.0),
-            (radius * HEX_SMALL_DIAMETER + 4.0).clamp(5.5, MAX_CAMERA_RADIUS),
-        )
-    }
+    })
 }
 
 #[cfg(test)]

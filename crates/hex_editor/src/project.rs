@@ -17,7 +17,8 @@ use hex_assets::{
     VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::xxh3_64;
 
 const ART_PATH: &str = "assets/art";
 const PALETTE_FILE: &str = "palette.ron";
@@ -60,6 +61,24 @@ pub struct ExternalAssetChange {
     pub path: PathBuf,
     /// Nature of the byte-level change.
     pub kind: ExternalChangeKind,
+}
+
+/// Stable byte identity of one tracked source at a recovery checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ByteRevision {
+    /// Exact source byte count.
+    pub byte_len: u64,
+    /// Stable XXH3 digest of the complete source bytes.
+    pub fingerprint: u64,
+}
+
+/// Complete tracked art-source identity stored with a recovery draft.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRevisionSet {
+    /// Revisions keyed by normalized `assets/art`-relative path.
+    pub files: BTreeMap<String, ByteRevision>,
 }
 
 /// Actionable failure from loading or persisting an asset project.
@@ -214,6 +233,26 @@ impl AssetProject {
     pub fn external_changes(&self) -> Result<Vec<ExternalAssetChange>, ProjectError> {
         let current = scan_art_sources(&self.art_root)?;
         Ok(compare_sources(&self.loaded_sources, &current))
+    }
+
+    /// Captures the exact loaded byte revisions for crash-recovery conflict checks.
+    #[must_use]
+    pub fn revision_snapshot(&self) -> ProjectRevisionSet {
+        ProjectRevisionSet {
+            files: self
+                .loaded_sources
+                .iter()
+                .map(|(path, source)| {
+                    (
+                        normalized_relative_path(path),
+                        ByteRevision {
+                            byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
+                            fingerprint: xxh3_64(source),
+                        },
+                    )
+                })
+                .collect(),
+        }
     }
 
     /// Discards the loaded project snapshot and reloads the complete art graph.
@@ -952,6 +991,13 @@ fn relative_art_path(art_root: &Path, path: &Path) -> Result<PathBuf, ProjectErr
     path.strip_prefix(art_root)
         .map(Path::to_path_buf)
         .map_err(|error| ProjectError::at("resolve art source path", path, error))
+}
+
+fn normalized_relative_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 #[cfg(test)]

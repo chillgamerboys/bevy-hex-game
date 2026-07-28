@@ -16,6 +16,9 @@ use hex_assets::{
 use serde::{Deserialize, Serialize};
 
 use crate::history::{HistoryError, SnapshotHistory};
+use crate::recovery::{
+    sanitized_selection, EditorRecoveryDraft, RawObjectDraft, RecoveryError, RecoverySanitization,
+};
 
 /// The two authoring workspaces sharing one editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,6 +241,66 @@ impl EditorModel {
         })
     }
 
+    /// Captures all durable object-authoring state for crash recovery.
+    ///
+    /// Clipboard contents, undo/redo history, and an open transaction are
+    /// intentionally session-only and are not included.
+    #[must_use]
+    pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
+        EditorRecoveryDraft {
+            object: RawObjectDraft::from_blueprint(&self.object),
+            saved_object: RawObjectDraft::from_blueprint(&self.saved_object),
+            mode: self.mode,
+            tool: self.tool,
+            preview_rig: self.preview_rig,
+            active_level: self.active_level,
+            active_style: self.active_style.clone(),
+            active_part: self.active_part,
+            selection: self.selection.cells.iter().copied().collect(),
+        }
+    }
+
+    /// Restores a potentially incomplete object-authoring draft from recovery.
+    ///
+    /// Production blueprint validation is deliberately deferred until an explicit
+    /// save. Selection cells that are no longer occupied are discarded, while
+    /// clipboard and history state restart empty.
+    pub fn from_recovery(
+        mut recovery: EditorRecoveryDraft,
+    ) -> Result<(Self, RecoverySanitization), RecoveryError> {
+        recovery.normalize_and_validate()?;
+        let EditorRecoveryDraft {
+            object,
+            saved_object,
+            mode,
+            tool,
+            preview_rig,
+            active_level,
+            active_style,
+            active_part,
+            selection,
+        } = recovery;
+        let object = object.into_blueprint();
+        let saved_object = saved_object.into_blueprint();
+        let (selection, sanitization) = sanitized_selection(selection, &object);
+        Ok((
+            Self {
+                mode,
+                tool,
+                preview_rig,
+                active_level,
+                active_style,
+                active_part,
+                object,
+                selection: ObjectSelection { cells: selection },
+                clipboard: ObjectClipboard::default(),
+                saved_object,
+                history: SnapshotHistory::default(),
+            },
+            sanitization,
+        ))
+    }
+
     /// Builds the unsaved, in-memory scene shown when no authored object is open.
     pub fn calibration_scene() -> Result<Self, EditorModelError> {
         let id = ObjectAssetId::new("calibration/scene")
@@ -263,7 +326,6 @@ impl EditorModel {
         };
         let mut editor = Self::from_blueprint(object)?;
         editor.active_style = Some(style);
-        editor.saved_object.placements.clear();
         Ok(editor)
     }
 
@@ -1479,7 +1541,7 @@ mod tests {
     fn calibration_scene_is_intrinsically_valid_but_unsaved() {
         let editor = editor();
         assert!(editor.validate_draft().is_ok());
-        assert!(editor.is_dirty());
+        assert!(!editor.is_dirty());
         assert_eq!(editor.object().bounds, ObjectBounds::DEFAULT);
         assert_eq!(editor.object().placements.len(), 1);
     }

@@ -9,6 +9,7 @@ use hex_assets::{
 };
 
 use crate::model::{EditorModel, EditorModelError};
+use crate::recovery::{RecoveryError, RecoverySanitization, RecoveryWorkshopDraft};
 
 const GLOBAL_HISTORY_LIMIT: usize = 128;
 
@@ -98,6 +99,50 @@ impl WorkshopDraft {
             redo: VecDeque::new(),
             open_transaction_label: None,
         }
+    }
+
+    /// Captures current catalogs, their save checkpoints, and the open object for
+    /// editor-only crash recovery.
+    ///
+    /// Global undo/redo entries and an open paint transaction are intentionally
+    /// session-only and are not included.
+    #[must_use]
+    pub fn recovery_snapshot(&self) -> RecoveryWorkshopDraft {
+        RecoveryWorkshopDraft {
+            palette: self.palette.clone(),
+            styles: self.styles.clone(),
+            saved_palette: self.saved_palette.clone(),
+            saved_styles: self.saved_styles.clone(),
+            editor: self.editor.recovery_snapshot(),
+        }
+    }
+
+    /// Restores a recovery snapshot with empty global and object histories.
+    pub fn from_recovery(
+        mut recovery: RecoveryWorkshopDraft,
+    ) -> Result<(Self, RecoverySanitization), RecoveryError> {
+        recovery.normalize_and_validate()?;
+        let RecoveryWorkshopDraft {
+            palette,
+            styles,
+            saved_palette,
+            saved_styles,
+            editor,
+        } = recovery;
+        let (editor, sanitization) = EditorModel::from_recovery(editor)?;
+        Ok((
+            Self {
+                palette,
+                styles,
+                saved_palette,
+                saved_styles,
+                editor,
+                undo: VecDeque::new(),
+                redo: VecDeque::new(),
+                open_transaction_label: None,
+            },
+            sanitization,
+        ))
     }
 
     /// Current palette draft.

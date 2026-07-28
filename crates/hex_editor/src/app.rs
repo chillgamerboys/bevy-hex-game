@@ -2,9 +2,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use bevy::window::{PresentMode, WindowResolution};
+use bevy::window::{PresentMode, WindowCloseRequested, WindowResizeConstraints, WindowResolution};
 use bevy_egui::EguiPlugin;
 use hex_assets::{
     ConnectivityPolicy, LocalVoxelCoord, ObjectAssetId, ObjectCategory, SwatchId,
@@ -13,9 +16,11 @@ use hex_assets::{
 
 use crate::launch::resolve_repository_root;
 use crate::model::{EditorModel, EditorTool, PreviewRig, WorkshopMode};
-use crate::project::AssetProject;
+use crate::project::{AssetProject, ExternalAssetChange, ProjectRevisionSet};
+use crate::recovery::{RecoveryDocument, RecoveryEnvelope, RecoveryStore, RecoveryWorkshopDraft};
 use crate::ui::{
-    EditorCameraSnap, WorkshopStatus, WorkshopStatusKind, WorkshopUiAction, WorkshopUiSnapshot,
+    EditorCameraSnap, RecoveryPrompt, WorkshopDocumentState, WorkshopStatus, WorkshopStatusKind,
+    WorkshopUiAction, WorkshopUiSnapshot,
 };
 use crate::viewport::{
     CameraSnap, CameraSnapRequest, FrameViewportRequest, HoveredFaceTarget, RenderedVoxel,
@@ -24,6 +29,9 @@ use crate::viewport::{
     ViewportSystems,
 };
 use crate::workshop::WorkshopDraft;
+
+const RECOVERY_IDLE_SECONDS: f64 = 3.0;
+const RECOVERY_MAX_INTERVAL_SECONDS: f64 = 30.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OpenDocument {
@@ -37,6 +45,27 @@ enum PreviewSubject {
     ActiveStyle,
     Swatch(SwatchId),
     Style(VoxelStyleId),
+}
+
+#[derive(Debug)]
+enum PendingRecovery {
+    Available(Box<RecoveryEnvelope>),
+    Invalid(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct RecoverableSession {
+    document: RecoveryDocument,
+    workshop: RecoveryWorkshopDraft,
+}
+
+#[derive(Debug, Default)]
+struct RecoveryAutosave {
+    last_observed: Option<RecoverableSession>,
+    last_written: Option<RecoverableSession>,
+    dirty_since_seconds: Option<f64>,
+    last_change_seconds: Option<f64>,
+    next_retry_seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -57,13 +86,30 @@ struct WorkshopRuntime {
     overlays: OverlaySettings,
     status: Option<WorkshopStatus>,
     load_failure: Option<String>,
+    external_changes: Vec<ExternalAssetChange>,
+    recovery_store: Option<RecoveryStore>,
+    pending_recovery: Option<PendingRecovery>,
+    recovery_base_revisions: Option<ProjectRevisionSet>,
+    recovery_conflict: bool,
+    recovery_autosave: RecoveryAutosave,
+    close_confirmation: bool,
+    exit_requested: bool,
     needs_sync: bool,
 }
 
 impl WorkshopRuntime {
     fn initialize() -> Self {
-        let loaded =
-            (|| -> Result<(AssetProject, WorkshopDraft, PreviewSubject, String), String> {
+        let loaded = (|| -> Result<
+            (
+                AssetProject,
+                WorkshopDraft,
+                PreviewSubject,
+                RecoveryStore,
+                Option<PendingRecovery>,
+                String,
+            ),
+            String,
+        > {
                 let current_directory = env::current_dir()
                     .map_err(|error| format!("cannot read working directory: {error}"))?;
                 let root = resolve_repository_root(env::args_os(), &current_directory)
@@ -72,16 +118,24 @@ impl WorkshopRuntime {
                 let (editor, preview) = calibration_for_project(&project)?;
                 let draft =
                     WorkshopDraft::new(project.palette().clone(), project.styles().clone(), editor);
+                let recovery_store = RecoveryStore::new(&root);
+                let pending_recovery = match recovery_store.load() {
+                    Ok(Some(envelope)) => Some(PendingRecovery::Available(Box::new(envelope))),
+                    Ok(None) => None,
+                    Err(error) => Some(PendingRecovery::Invalid(error.to_string())),
+                };
                 Ok((
                     project,
                     draft,
                     preview,
+                    recovery_store,
+                    pending_recovery,
                     format!("Project loaded from {}", root.display()),
                 ))
             })();
 
         match loaded {
-            Ok((project, draft, preview, message)) => Self {
+            Ok((project, draft, preview, recovery_store, pending_recovery, message)) => Self {
                 project: Some(project),
                 draft: Some(draft),
                 document: OpenDocument::Calibration,
@@ -92,6 +146,14 @@ impl WorkshopRuntime {
                 },
                 status: Some(WorkshopStatus::info(message)),
                 load_failure: None,
+                external_changes: Vec::new(),
+                recovery_store: Some(recovery_store),
+                pending_recovery,
+                recovery_base_revisions: None,
+                recovery_conflict: false,
+                recovery_autosave: RecoveryAutosave::default(),
+                close_confirmation: false,
+                exit_requested: false,
                 needs_sync: true,
             },
             Err(error) => Self {
@@ -105,6 +167,14 @@ impl WorkshopRuntime {
                 },
                 status: None,
                 load_failure: Some(error),
+                external_changes: Vec::new(),
+                recovery_store: None,
+                pending_recovery: None,
+                recovery_base_revisions: None,
+                recovery_conflict: false,
+                recovery_autosave: RecoveryAutosave::default(),
+                close_confirmation: false,
+                exit_requested: false,
                 needs_sync: true,
             },
         }
@@ -141,29 +211,64 @@ struct PointerStroke {
     last_cell: Option<LocalVoxelCoord>,
 }
 
+#[derive(Resource)]
+struct ProjectChangePoll(Timer);
+
+impl Default for ProjectChangePoll {
+    fn default() -> Self {
+        Self(Timer::from_seconds(2.0, TimerMode::Repeating))
+    }
+}
+
 /// Starts the Asset Workshop.
 pub fn run() {
     let runtime = WorkshopRuntime::initialize();
+    let asset_root = runtime
+        .project
+        .as_ref()
+        .map(|project| project.repository_root().join("assets"))
+        .unwrap_or_else(|| PathBuf::from("assets"));
     App::new()
         .insert_resource(runtime)
         .insert_resource(ClearColor(Color::srgb(0.055, 0.06, 0.07)))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Bevy Hex Asset Workshop".to_owned(),
-                name: Some("hex-editor".to_owned()),
-                resolution: WindowResolution::new(1440, 900),
-                present_mode: PresentMode::AutoVsync,
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: asset_root.to_string_lossy().into_owned(),
+                    ..default()
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Bevy Hex Asset Workshop".to_owned(),
+                        name: Some("hex-editor".to_owned()),
+                        resolution: WindowResolution::new(1440, 900),
+                        resize_constraints: WindowResizeConstraints {
+                            min_width: 1024.0,
+                            min_height: 640.0,
+                            ..default()
+                        },
+                        present_mode: PresentMode::AutoVsync,
+                        ..default()
+                    }),
+                    close_when_requested: false,
+                    ..default()
+                }),
+        )
         .add_plugins(EguiPlugin::default())
         .add_plugins(crate::viewport::plugin)
         .add_plugins(crate::ui::plugin)
         .init_resource::<PointerStroke>()
+        .init_resource::<ProjectChangePoll>()
         .add_systems(
             Update,
-            (handle_ui_actions, handle_pointer_editing, synchronize_views)
+            (
+                intercept_window_close_requests,
+                handle_ui_actions,
+                handle_pointer_editing,
+                poll_external_changes,
+                autosave_recovery,
+                synchronize_views,
+            )
                 .chain()
                 .before(ViewportSystems::Reconcile),
         )
@@ -176,6 +281,7 @@ fn handle_ui_actions(
     mut runtime: ResMut<WorkshopRuntime>,
     mut camera_snaps: MessageWriter<CameraSnapRequest>,
     mut frame_requests: MessageWriter<FrameViewportRequest>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for action in actions.read().cloned() {
         match action {
@@ -201,6 +307,10 @@ fn handle_ui_actions(
                 }
             }
         }
+    }
+    if runtime.exit_requested {
+        runtime.exit_requested = false;
+        exit.write(AppExit::Success);
     }
 }
 
@@ -239,6 +349,7 @@ fn apply_ui_action(
             Ok(changed.then(|| format!("Redid {}", label.as_deref().unwrap_or("edit"))))
         }
         WorkshopUiAction::SaveCatalogs => {
+            ensure_tracked_overwrite_allowed(runtime)?;
             let (palette, styles) = {
                 let draft = runtime
                     .draft
@@ -252,6 +363,26 @@ fn apply_ui_action(
                 .map_err(|error| error.to_string())?;
             runtime.draft_mut()?.mark_catalogs_saved();
             Ok(Some("Saved palette and voxel styles".to_owned()))
+        }
+        WorkshopUiAction::ReloadProject => reload_project(runtime),
+        WorkshopUiAction::RestoreRecovery => restore_pending_recovery(runtime),
+        WorkshopUiAction::DiscardRecovery => discard_pending_recovery(runtime),
+        WorkshopUiAction::SaveAllAndClose => {
+            save_all_for_close(runtime)?;
+            discard_recovery_file(runtime)?;
+            runtime.close_confirmation = false;
+            runtime.exit_requested = true;
+            Ok(Some("Saved all Workshop changes".to_owned()))
+        }
+        WorkshopUiAction::DiscardAndClose => {
+            discard_recovery_file(runtime)?;
+            runtime.close_confirmation = false;
+            runtime.exit_requested = true;
+            Ok(Some("Discarded local Workshop changes".to_owned()))
+        }
+        WorkshopUiAction::CancelClose => {
+            runtime.close_confirmation = false;
+            Ok(Some("Close cancelled".to_owned()))
         }
         WorkshopUiAction::SaveObject => save_current_object(runtime),
         WorkshopUiAction::SaveObjectAs { id, display_name } => {
@@ -329,6 +460,7 @@ fn apply_ui_action(
             Ok(Some(format!("Opened {}", id.as_str())))
         }
         WorkshopUiAction::DeleteObject(id) => {
+            ensure_tracked_overwrite_allowed(runtime)?;
             if runtime.document == OpenDocument::Saved(id.clone()) {
                 ensure_document_can_change(runtime)?;
             }
@@ -644,6 +776,7 @@ fn save_current_object(runtime: &mut WorkshopRuntime) -> Result<Option<String>, 
             Ok(Some(format!("Saved {}", proposed_id.as_str())))
         }
         OpenDocument::Saved(id) => {
+            ensure_tracked_overwrite_allowed(runtime)?;
             runtime
                 .project_mut()?
                 .save_object(&id, blueprint)
@@ -684,7 +817,30 @@ fn save_current_object_as(
         .map_err(|error| error.to_string())?;
     runtime.draft_mut()?.mark_object_saved_as(id.clone());
     runtime.document = OpenDocument::Saved(id.clone());
+    resolve_recovery_conflict_after_save_as(runtime);
     Ok(Some(format!("Saved as {}", id.as_str())))
+}
+
+fn resolve_recovery_conflict_after_save_as(runtime: &mut WorkshopRuntime) {
+    if !runtime.recovery_conflict {
+        return;
+    }
+    let resolved = runtime
+        .project
+        .as_ref()
+        .zip(runtime.draft.as_ref())
+        .is_some_and(|(project, draft)| {
+            draft.palette() == project.palette()
+                && draft.styles() == project.styles()
+                && !draft.editor().is_dirty()
+        });
+    if resolved {
+        runtime.recovery_conflict = false;
+        runtime.recovery_base_revisions = runtime
+            .project
+            .as_ref()
+            .map(AssetProject::revision_snapshot);
+    }
 }
 
 fn ensure_document_can_change(runtime: &WorkshopRuntime) -> Result<(), String> {
@@ -708,6 +864,247 @@ fn reset_to_calibration(runtime: &mut WorkshopRuntime) -> Result<(), String> {
     runtime.document = OpenDocument::Calibration;
     runtime.preview = preview;
     Ok(())
+}
+
+fn reload_project(runtime: &mut WorkshopRuntime) -> Result<Option<String>, String> {
+    let root = runtime
+        .project
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?
+        .repository_root()
+        .to_path_buf();
+    let project = AssetProject::load(&root).map_err(|error| error.to_string())?;
+    let previous_mode = runtime
+        .draft
+        .as_ref()
+        .map(|draft| draft.editor().mode())
+        .unwrap_or(WorkshopMode::VoxelStyles);
+    let saved_id = match &runtime.document {
+        OpenDocument::Saved(id) => Some(id.clone()),
+        OpenDocument::Calibration | OpenDocument::Unsaved(_) => None,
+    };
+
+    let restored = saved_id.and_then(|id| {
+        project.object(&id).cloned().and_then(|blueprint| {
+            EditorModel::from_blueprint(blueprint)
+                .ok()
+                .map(|editor| (editor, OpenDocument::Saved(id), PreviewSubject::ActiveStyle))
+        })
+    });
+    let (mut editor, document, preview) = if let Some(restored) = restored {
+        restored
+    } else {
+        let (editor, preview) = calibration_for_project(&project)?;
+        (editor, OpenDocument::Calibration, preview)
+    };
+    if previous_mode == WorkshopMode::VoxelStyles {
+        editor.set_mode(WorkshopMode::VoxelStyles);
+    }
+    let draft = WorkshopDraft::new(project.palette().clone(), project.styles().clone(), editor);
+    discard_recovery_file(runtime)?;
+    runtime.project = Some(project);
+    runtime.draft = Some(draft);
+    runtime.document = document;
+    runtime.preview = preview;
+    runtime.external_changes.clear();
+    runtime.pending_recovery = None;
+    runtime.recovery_base_revisions = None;
+    runtime.recovery_conflict = false;
+    runtime.recovery_autosave = RecoveryAutosave::default();
+    runtime.close_confirmation = false;
+    runtime.load_failure = None;
+    runtime.needs_sync = true;
+    Ok(Some(format!("Reloaded project from {}", root.display())))
+}
+
+fn restore_pending_recovery(runtime: &mut WorkshopRuntime) -> Result<Option<String>, String> {
+    let envelope = match runtime.pending_recovery.as_ref() {
+        Some(PendingRecovery::Available(envelope)) => envelope.as_ref().clone(),
+        Some(PendingRecovery::Invalid(_)) => {
+            return Err("discard the invalid recovery file before authoring".to_owned());
+        }
+        None => return Err("no recovery draft is available".to_owned()),
+    };
+    let current_revisions = runtime
+        .project
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?
+        .revision_snapshot();
+    let base_conflict = envelope.base_revisions != current_revisions;
+    let document = open_document_from_recovery(&envelope.document);
+    let session = RecoverableSession {
+        document: envelope.document.clone(),
+        workshop: envelope.workshop.clone(),
+    };
+    let (draft, sanitization) =
+        WorkshopDraft::from_recovery(envelope.workshop).map_err(|error| error.to_string())?;
+    let preview = preview_for_draft(&draft);
+
+    runtime.draft = Some(draft);
+    runtime.document = document;
+    runtime.preview = preview;
+    runtime.pending_recovery = None;
+    runtime.recovery_base_revisions = Some(envelope.base_revisions);
+    runtime.recovery_conflict = base_conflict;
+    runtime.recovery_autosave = RecoveryAutosave {
+        last_observed: Some(session.clone()),
+        last_written: Some(session),
+        dirty_since_seconds: None,
+        last_change_seconds: None,
+        next_retry_seconds: 0.0,
+    };
+    runtime.needs_sync = true;
+
+    let selection_note = (sanitization.discarded_selection_cells > 0).then(|| {
+        format!(
+            "; discarded {} stale selection cells",
+            sanitization.discarded_selection_cells
+        )
+    });
+    let conflict_note = base_conflict
+        .then_some("; tracked files changed since recovery, so overwrites remain blocked");
+    Ok(Some(format!(
+        "Restored recovery draft{}{}",
+        selection_note.as_deref().unwrap_or(""),
+        conflict_note.unwrap_or("")
+    )))
+}
+
+fn discard_pending_recovery(runtime: &mut WorkshopRuntime) -> Result<Option<String>, String> {
+    if runtime.pending_recovery.is_none() {
+        return Err("no pending recovery file is available".to_owned());
+    }
+    let discarded = discard_recovery_file(runtime)?;
+    runtime.pending_recovery = None;
+    runtime.recovery_base_revisions = None;
+    runtime.recovery_conflict = false;
+    runtime.recovery_autosave = RecoveryAutosave::default();
+    runtime.needs_sync = true;
+    Ok(Some(if discarded {
+        "Discarded the recovery draft".to_owned()
+    } else {
+        "Recovery draft was already absent".to_owned()
+    }))
+}
+
+fn discard_recovery_file(runtime: &mut WorkshopRuntime) -> Result<bool, String> {
+    let discarded = runtime
+        .recovery_store
+        .as_ref()
+        .ok_or_else(|| "recovery storage is unavailable".to_owned())?
+        .discard()
+        .map_err(|error| error.to_string())?;
+    runtime.recovery_autosave.last_written = None;
+    Ok(discarded)
+}
+
+fn save_all_for_close(runtime: &mut WorkshopRuntime) -> Result<(), String> {
+    ensure_tracked_overwrite_allowed(runtime)?;
+    let object_needs_save = runtime
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.editor().is_dirty());
+    if object_needs_save && !matches!(runtime.document, OpenDocument::Saved(_)) {
+        return Err("use Save As for the current object before closing".to_owned());
+    }
+
+    if object_needs_save {
+        let draft = runtime
+            .draft
+            .as_ref()
+            .ok_or_else(|| runtime.load_error_message())?;
+        draft
+            .editor()
+            .blueprint_for_save(draft.styles())
+            .map_err(|error| error.to_string())?;
+    }
+
+    let catalogs_need_save = {
+        let project = runtime
+            .project
+            .as_ref()
+            .ok_or_else(|| runtime.load_error_message())?;
+        let draft = runtime
+            .draft
+            .as_ref()
+            .ok_or_else(|| runtime.load_error_message())?;
+        draft.palette() != project.palette() || draft.styles() != project.styles()
+    };
+    if catalogs_need_save {
+        let (palette, styles) = {
+            let draft = runtime
+                .draft
+                .as_ref()
+                .ok_or_else(|| runtime.load_error_message())?;
+            (draft.palette().clone(), draft.styles().clone())
+        };
+        runtime
+            .project_mut()?
+            .save_catalogs(palette, styles)
+            .map_err(|error| error.to_string())?;
+        runtime.draft_mut()?.mark_catalogs_saved();
+    }
+    if object_needs_save {
+        drop(save_current_object(runtime)?);
+    }
+    runtime.recovery_base_revisions = runtime
+        .project
+        .as_ref()
+        .map(AssetProject::revision_snapshot);
+    Ok(())
+}
+
+fn ensure_tracked_overwrite_allowed(runtime: &WorkshopRuntime) -> Result<(), String> {
+    if runtime.recovery_conflict {
+        return Err(
+            "recovered work has an older tracked baseline; use Save As or reload first".to_owned(),
+        );
+    }
+    if !runtime.external_changes.is_empty() {
+        return Err("tracked art files changed outside this editor; reload first".to_owned());
+    }
+    Ok(())
+}
+
+fn open_document_from_recovery(document: &RecoveryDocument) -> OpenDocument {
+    match document {
+        RecoveryDocument::Calibration => OpenDocument::Calibration,
+        RecoveryDocument::Unsaved(id) => OpenDocument::Unsaved(id.clone()),
+        RecoveryDocument::Saved(id) => OpenDocument::Saved(id.clone()),
+    }
+}
+
+fn recovery_document(document: &OpenDocument) -> RecoveryDocument {
+    match document {
+        OpenDocument::Calibration => RecoveryDocument::Calibration,
+        OpenDocument::Unsaved(id) => RecoveryDocument::Unsaved(id.clone()),
+        OpenDocument::Saved(id) => RecoveryDocument::Saved(id.clone()),
+    }
+}
+
+fn recovery_document_label(document: &RecoveryDocument) -> String {
+    match document {
+        RecoveryDocument::Calibration => "the calibration scene".to_owned(),
+        RecoveryDocument::Unsaved(id) => format!("new object '{}'", id.as_str()),
+        RecoveryDocument::Saved(id) => format!("saved object '{}'", id.as_str()),
+    }
+}
+
+fn preview_for_draft(draft: &WorkshopDraft) -> PreviewSubject {
+    if let Some(style) = draft
+        .editor()
+        .active_style()
+        .filter(|style| draft.styles().contains(style))
+    {
+        return PreviewSubject::Style(style.clone());
+    }
+    draft
+        .palette()
+        .swatches()
+        .keys()
+        .next()
+        .cloned()
+        .map_or(PreviewSubject::ActiveStyle, PreviewSubject::Swatch)
 }
 
 fn calibration_for_project(
@@ -863,6 +1260,9 @@ fn handle_pointer_editing(
         }
     }
     if !input_enabled.0 {
+        return;
+    }
+    if keys.pressed(KeyCode::Space) {
         return;
     }
     let Some(draft) = runtime.draft.as_ref() else {
@@ -1042,6 +1442,198 @@ fn tool_label(tool: EditorTool) -> &'static str {
     }
 }
 
+fn intercept_window_close_requests(
+    mut requests: MessageReader<WindowCloseRequested>,
+    mut runtime: ResMut<WorkshopRuntime>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+    if runtime.pending_recovery.is_some() || !has_unsaved_work(&runtime) {
+        exit.write(AppExit::Success);
+        return;
+    }
+
+    if let Err(error) = write_recovery_now(&mut runtime) {
+        runtime.set_status(WorkshopStatusKind::Error, error);
+    }
+    runtime.close_confirmation = true;
+    runtime.needs_sync = true;
+}
+
+fn autosave_recovery(time: Res<Time>, mut runtime: ResMut<WorkshopRuntime>) {
+    if runtime.pending_recovery.is_some() || runtime.close_confirmation {
+        return;
+    }
+    let now = time.elapsed_secs_f64();
+    if !has_unsaved_work(&runtime) {
+        if runtime.recovery_autosave.last_written.is_some()
+            && !runtime.recovery_conflict
+            && now >= runtime.recovery_autosave.next_retry_seconds
+        {
+            match discard_recovery_file(&mut runtime) {
+                Ok(_) => {
+                    runtime.recovery_base_revisions = None;
+                    runtime.recovery_autosave = RecoveryAutosave::default();
+                }
+                Err(error) => {
+                    runtime.recovery_autosave.next_retry_seconds = now + RECOVERY_IDLE_SECONDS;
+                    runtime.set_status(WorkshopStatusKind::Error, error);
+                }
+            }
+        } else if !runtime.recovery_conflict {
+            runtime.recovery_autosave.dirty_since_seconds = None;
+            runtime.recovery_autosave.last_change_seconds = None;
+        }
+        return;
+    }
+
+    let Ok(session) = recoverable_session(&runtime) else {
+        return;
+    };
+    if runtime.recovery_autosave.last_observed.as_ref() != Some(&session) {
+        runtime.recovery_autosave.last_observed = Some(session.clone());
+        runtime
+            .recovery_autosave
+            .dirty_since_seconds
+            .get_or_insert(now);
+        runtime.recovery_autosave.last_change_seconds = Some(now);
+    }
+    if runtime.recovery_autosave.last_written.as_ref() == Some(&session)
+        || now < runtime.recovery_autosave.next_retry_seconds
+        || runtime
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.editor().is_transaction_open())
+    {
+        return;
+    }
+
+    let idle_elapsed = runtime
+        .recovery_autosave
+        .last_change_seconds
+        .is_some_and(|changed| now - changed >= RECOVERY_IDLE_SECONDS);
+    let maximum_elapsed = runtime
+        .recovery_autosave
+        .dirty_since_seconds
+        .is_some_and(|started| now - started >= RECOVERY_MAX_INTERVAL_SECONDS);
+    if !idle_elapsed && !maximum_elapsed {
+        return;
+    }
+    match write_recovery_now(&mut runtime) {
+        Ok(_) => {
+            runtime.recovery_autosave.dirty_since_seconds = None;
+            runtime.recovery_autosave.last_change_seconds = None;
+            runtime.recovery_autosave.next_retry_seconds = 0.0;
+        }
+        Err(error) => {
+            runtime.recovery_autosave.next_retry_seconds = now + RECOVERY_IDLE_SECONDS;
+            runtime.set_status(WorkshopStatusKind::Error, error);
+        }
+    }
+}
+
+fn has_unsaved_work(runtime: &WorkshopRuntime) -> bool {
+    let Some(project) = runtime.project.as_ref() else {
+        return false;
+    };
+    let Some(draft) = runtime.draft.as_ref() else {
+        return false;
+    };
+    runtime.recovery_conflict
+        || matches!(runtime.document, OpenDocument::Unsaved(_))
+        || draft.palette() != project.palette()
+        || draft.styles() != project.styles()
+        || draft.editor().is_dirty()
+}
+
+fn recoverable_session(runtime: &WorkshopRuntime) -> Result<RecoverableSession, String> {
+    let draft = runtime
+        .draft
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?;
+    Ok(RecoverableSession {
+        document: recovery_document(&runtime.document),
+        workshop: draft.recovery_snapshot(),
+    })
+}
+
+fn write_recovery_now(runtime: &mut WorkshopRuntime) -> Result<bool, String> {
+    if !has_unsaved_work(runtime) {
+        return Ok(false);
+    }
+    let session = recoverable_session(runtime)?;
+    let store = runtime
+        .recovery_store
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "recovery storage is unavailable".to_owned())?;
+    let base_revisions = runtime
+        .recovery_base_revisions
+        .clone()
+        .or_else(|| {
+            runtime
+                .project
+                .as_ref()
+                .map(AssetProject::revision_snapshot)
+        })
+        .ok_or_else(|| "tracked art revisions are unavailable".to_owned())?;
+    let envelope = RecoveryEnvelope::new(
+        unix_timestamp_millis()?,
+        base_revisions.clone(),
+        session.document.clone(),
+        session.workshop.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    store.write(&envelope).map_err(|error| error.to_string())?;
+    let written_session = RecoverableSession {
+        document: envelope.document,
+        workshop: envelope.workshop,
+    };
+    runtime.recovery_base_revisions = Some(base_revisions);
+    runtime.recovery_autosave.last_observed = Some(written_session.clone());
+    runtime.recovery_autosave.last_written = Some(written_session);
+    Ok(true)
+}
+
+fn unix_timestamp_millis() -> Result<u64, String> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| format!("system clock precedes Unix epoch: {error}"))?;
+    Ok(u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+}
+
+fn poll_external_changes(
+    time: Res<Time>,
+    mut poll: ResMut<ProjectChangePoll>,
+    mut runtime: ResMut<WorkshopRuntime>,
+) {
+    poll.0.tick(time.delta());
+    if !poll.0.just_finished() {
+        return;
+    }
+    let Some(project) = runtime.project.as_ref() else {
+        return;
+    };
+    match project.external_changes() {
+        Ok(changes) if changes != runtime.external_changes => {
+            let newly_conflicted = runtime.external_changes.is_empty() && !changes.is_empty();
+            runtime.external_changes = changes;
+            if newly_conflicted {
+                runtime.set_status(
+                    WorkshopStatusKind::Warning,
+                    "Tracked art files changed outside this editor; reload or use Save As",
+                );
+            } else {
+                runtime.needs_sync = true;
+            }
+        }
+        Ok(_) => {}
+        Err(error) => runtime.set_status(WorkshopStatusKind::Error, error.to_string()),
+    }
+}
+
 fn synchronize_views(
     mut runtime: ResMut<WorkshopRuntime>,
     mut ui_snapshot: ResMut<WorkshopUiSnapshot>,
@@ -1062,6 +1654,7 @@ fn synchronize_views(
         runtime.needs_sync = false;
         return;
     };
+    let recovery_prompt = pending_recovery_prompt(&runtime);
 
     ui_snapshot.update_from(
         project,
@@ -1070,6 +1663,15 @@ fn synchronize_views(
         draft.editor(),
         draft.undo_label(),
         draft.redo_label(),
+        match runtime.document {
+            OpenDocument::Calibration => WorkshopDocumentState::Calibration,
+            OpenDocument::Unsaved(_) => WorkshopDocumentState::Unsaved,
+            OpenDocument::Saved(_) => WorkshopDocumentState::Saved,
+        },
+        &runtime.external_changes,
+        recovery_prompt,
+        runtime.recovery_conflict,
+        runtime.close_confirmation,
         runtime.status.clone(),
     );
     *viewport_mode = match draft.editor().mode() {
@@ -1087,6 +1689,25 @@ fn synchronize_views(
         runtime.overlays,
     )));
     runtime.needs_sync = false;
+}
+
+fn pending_recovery_prompt(runtime: &WorkshopRuntime) -> Option<RecoveryPrompt> {
+    match runtime.pending_recovery.as_ref()? {
+        PendingRecovery::Available(envelope) => {
+            let baseline_conflict = runtime
+                .project
+                .as_ref()
+                .is_some_and(|project| envelope.base_revisions != project.revision_snapshot());
+            Some(RecoveryPrompt::Available {
+                written_unix_ms: envelope.written_unix_ms,
+                document: recovery_document_label(&envelope.document),
+                baseline_conflict,
+            })
+        }
+        PendingRecovery::Invalid(message) => Some(RecoveryPrompt::Invalid {
+            message: message.clone(),
+        }),
+    }
 }
 
 fn build_viewport_content(
