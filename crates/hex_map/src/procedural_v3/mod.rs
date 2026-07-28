@@ -22,6 +22,11 @@ mod fingerprint;
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
 )]
 mod layout;
+#[expect(
+    dead_code,
+    reason = "liquid topology is consumed by the sequential V3 Waterfall recipe"
+)]
+mod liquid;
 #[cfg_attr(
     not(test),
     expect(

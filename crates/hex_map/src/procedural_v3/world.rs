@@ -8,31 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
-use super::layout::{HexSide, ResolvedLayoutPlan};
-use super::volume::{FillMaterialRole, SurfaceAccess, VolumeElement, VolumeIssue, VolumePlan};
-
-/// Deterministic identity of one planned liquid voxel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum LiquidFlowState {
-    Still,
-    Current,
-    Rapid,
-    Fall,
-}
-
-/// Directed presentation and topology metadata for one non-solid fill voxel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PlannedLiquid {
-    pub(crate) material: FillMaterialRole,
-    pub(crate) flow: LiquidFlowState,
-    pub(crate) direction: Option<HexSide>,
-}
-
-/// Exact directed liquid metadata, separate from its occupied volume.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(crate) struct LiquidPlan {
-    pub(crate) by_voxel: BTreeMap<TilePos, PlannedLiquid>,
-}
+use super::layout::ResolvedLayoutPlan;
+use super::liquid::LiquidIssue;
+pub(crate) use super::liquid::LiquidPlan;
+use super::volume::{SurfaceAccess, VolumeElement, VolumeIssue, VolumePlan};
 
 /// Stable map-local identity of a planned surface feature.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -151,7 +130,7 @@ impl GeneratedWorldPlan {
             append_volume_issues(&mut issues, &error);
         }
 
-        self.validate_liquids(&mut issues);
+        append_liquid_issues(&mut issues, &self.liquids.validate(&self.volume));
         self.validate_features_and_blockers(&mut issues);
         self.validate_structures(&mut issues);
         self.validate_biomes(&mut issues);
@@ -166,50 +145,6 @@ impl GeneratedWorldPlan {
         }
 
         issues
-    }
-
-    fn validate_liquids(&self, issues: &mut Vec<WorldValidationIssue>) {
-        let mut expected = BTreeMap::new();
-        for (coord, column) in &self.volume.columns {
-            for element in &column.elements {
-                let VolumeElement::Fill(fill) = *element else {
-                    continue;
-                };
-                for level in fill.levels.bottom..fill.levels.top {
-                    expected.insert(TilePos::new(*coord, level), fill.material);
-                }
-            }
-        }
-
-        let actual: BTreeSet<_> = self.liquids.by_voxel.keys().copied().collect();
-        let expected_positions: BTreeSet<_> = expected.keys().copied().collect();
-        if actual != expected_positions {
-            issues.push(WorldValidationIssue::new(
-                WorldIssueCode::Liquid,
-                "liquid topology does not exactly cover every non-solid fill voxel",
-            ));
-        }
-        for (position, planned) in &self.liquids.by_voxel {
-            if expected
-                .get(position)
-                .is_some_and(|role| *role != planned.material)
-            {
-                issues.push(WorldValidationIssue::new(
-                    WorldIssueCode::Liquid,
-                    format!("liquid material at {position:?} disagrees with occupied volume"),
-                ));
-            }
-            let needs_direction = planned.flow != LiquidFlowState::Still;
-            if needs_direction != planned.direction.is_some() {
-                issues.push(WorldValidationIssue::new(
-                    WorldIssueCode::Liquid,
-                    format!(
-                        "liquid flow at {position:?} must {} a direction",
-                        if needs_direction { "have" } else { "not have" }
-                    ),
-                ));
-            }
-        }
     }
 
     fn validate_features_and_blockers(&self, issues: &mut Vec<WorldValidationIssue>) {
@@ -473,6 +408,14 @@ fn append_volume_issues(issues: &mut Vec<WorldValidationIssue>, volume_issues: &
     );
 }
 
+fn append_liquid_issues(issues: &mut Vec<WorldValidationIssue>, liquid_issues: &[LiquidIssue]) {
+    issues.extend(
+        liquid_issues
+            .iter()
+            .map(|issue| WorldValidationIssue::new(WorldIssueCode::Liquid, issue.to_string())),
+    );
+}
+
 fn valid_stable_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -519,9 +462,13 @@ mod tests {
     use hex_core::SpecialMovementRegion;
 
     use super::*;
-    use crate::procedural_v3::layout::{LayoutKind, PatchId, ResolvedEdgeReference, ResolvedPatch};
+    use crate::procedural_v3::layout::{
+        HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
+    };
+    use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode};
     use crate::procedural_v3::volume::{
-        LevelInterval, SolidMass, SolidMaterialRole, SurfaceMetadata, VolumeColumn,
+        FillMaterialRole, LevelInterval, SolidMass, SolidMaterialRole, SurfaceMetadata,
+        VolumeColumn,
     };
 
     #[test]
@@ -661,12 +608,17 @@ mod tests {
                     .insert(TilePos::new(hex_core::HexCoord::ORIGIN, 3));
             }),
             (WorldIssueCode::Liquid, |plan| {
-                plan.liquids.by_voxel.insert(
-                    TilePos::new(hex_core::HexCoord::ORIGIN, 2),
-                    PlannedLiquid {
+                plan.liquids.bodies.insert(
+                    LiquidBodyId(0),
+                    LiquidBodyPlan {
                         material: FillMaterialRole::Water,
-                        flow: LiquidFlowState::Still,
-                        direction: None,
+                        nodes: BTreeMap::from([(
+                            TilePos::new(hex_core::HexCoord::ORIGIN, 2),
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        )]),
                     },
                 );
             }),

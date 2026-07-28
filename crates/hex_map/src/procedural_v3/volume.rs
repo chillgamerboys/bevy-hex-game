@@ -299,6 +299,31 @@ impl VolumePlan {
             .map(|column| column.headroom_above(surface.level.saturating_add(1)))
     }
 
+    /// Returns every non-solid fill run keyed by its top occupied voxel.
+    ///
+    /// This is a run identity, not an exposed-surface query. A fill immediately
+    /// below a bridge, roof, or another occupied interval is retained so stacked
+    /// liquid topology cannot collapse to one entry per horizontal coordinate.
+    #[must_use]
+    pub(crate) fn fill_runs_by_top(&self) -> BTreeMap<TilePos, NonSolidFill> {
+        self.columns
+            .iter()
+            .flat_map(|(coord, column)| {
+                column.elements.iter().filter_map(move |element| {
+                    let VolumeElement::Fill(fill) = *element else {
+                        return None;
+                    };
+                    (fill.levels.bottom < fill.levels.top).then(|| {
+                        (
+                            TilePos::new(*coord, fill.levels.top.saturating_sub(1)),
+                            fill,
+                        )
+                    })
+                })
+            })
+            .collect()
+    }
+
     /// Checks mask, interval, surface, and access invariants shared by every recipe.
     pub(crate) fn validate(&self) -> Result<(), Vec<VolumeIssue>> {
         let mut issues = Vec::new();
@@ -667,6 +692,41 @@ mod tests {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join("; ")
+    }
+
+    #[test]
+    fn fill_run_tops_preserve_covered_and_stacked_liquids() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the mask")
+            .elements = vec![
+            mass(0, 1, SolidMaterialRole::Stone, None),
+            fill(1, 3, FillMaterialRole::Water),
+            mass(3, 4, SolidMaterialRole::Metal, None),
+            fill(6, 8, FillMaterialRole::Lava),
+        ];
+
+        assert_eq!(
+            plan.fill_runs_by_top(),
+            BTreeMap::from([
+                (
+                    TilePos::new(coord, 2),
+                    NonSolidFill {
+                        levels: LevelInterval::new(1, 3),
+                        material: FillMaterialRole::Water,
+                    },
+                ),
+                (
+                    TilePos::new(coord, 7),
+                    NonSolidFill {
+                        levels: LevelInterval::new(6, 8),
+                        material: FillMaterialRole::Lava,
+                    },
+                ),
+            ])
+        );
     }
 
     #[test]
