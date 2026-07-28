@@ -64,6 +64,18 @@ is in the replay log rather than made inside the applier. A unit whose every hex
 disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
 deals damage the same way, through the same decision.
 
+**And casting has an interface.** A spell panel lists what the acting unit inscribes,
+each row carrying its live blocked reason from `castable` and, above the list, whichever
+of the applier's own refusals is standing in the way — not this unit's turn, action
+already spent, a decision still open. Choosing a spell starts aiming: every legal anchor
+takes a clickable marker, `hex_units::volumes` resolves the shape, and the surfaces
+inside that volume are painted in the spell's element colour. The anchor moves by
+clicking a lit surface or by cycling the units in range; `ENTER` casts and `Q` puts the
+spell down. Only *surfaces* are painted — gameplay cannot know how tall a level is in
+world units — so the panel reports the whole voxel count beside the number it could
+show. The `1`-casts-something placeholder that made the damage loop playable before any
+of this existed is gone.
+
 Bodies are one hex wide; there is no footprint for anything larger, and units do not
 obstruct each other — so a route may be drawn straight through another piece.
 
