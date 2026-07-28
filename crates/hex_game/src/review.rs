@@ -859,7 +859,10 @@ mod tests {
     use std::fs;
 
     use bevy::state::app::StatesPlugin;
-    use hex_assets::{CubeCoord, ScenarioPlacement, ScenarioSettings, Substance, SubstanceFile};
+    use hex_assets::{
+        ArtPalette, CubeCoord, ScenarioPlacement, ScenarioSettings, Substance, SubstanceFile,
+        SwatchId,
+    };
     use hex_core::{HexCoord, TraversalProfile};
 
     use crate::capture::{has_visual_coverage, temporary_capture_path};
@@ -1577,24 +1580,20 @@ mod tests {
     }
 
     fn review_substance_table() -> (SubstanceTable, SubstanceId) {
+        let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+            .expect("the shipped art palette should parse");
         let mut substances = bevy::platform::collections::HashMap::default();
-        substances.insert(
-            "air".to_owned(),
-            Substance {
-                color: (0.0, 0.0, 0.0),
-                solid: false,
-                diggable: false,
-            },
-        );
+        substances.insert("air".to_owned(), Substance::invisible(false, false));
         substances.insert(
             "stone".to_owned(),
-            Substance {
-                color: (0.5, 0.5, 0.5),
-                solid: true,
-                diggable: true,
-            },
+            Substance::from_swatch(
+                SwatchId::new("terrain/stone").expect("the shipped swatch id should be valid"),
+                true,
+                true,
+            ),
         );
-        let table = SubstanceTable::from_file(&SubstanceFile { substances });
+        let table = SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("the review substances should resolve through the palette");
         let stone = table
             .id("stone")
             .expect("the review test table should contain stone");

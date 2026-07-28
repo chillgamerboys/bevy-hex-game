@@ -4,12 +4,12 @@
         "liquid/lava": (
             display_name: "Lava",
             color: (red: 0.90, green: 0.20, blue: 0.04),
-            tags: ["hazard", "legacy", "liquid", "world"],
+            tags: ["hazard", "liquid", "world"],
         ),
         "liquid/water": (
             display_name: "Water",
             color: (red: 0.08, green: 0.32, blue: 0.65),
-            tags: ["legacy", "liquid", "world"],
+            tags: ["liquid", "world"],
         ),
         "plant/foliage-dark": (
             display_name: "Dark Foliage",
@@ -44,57 +44,57 @@
         "structure/metal": (
             display_name: "Metal",
             color: (red: 0.30, green: 0.34, blue: 0.40),
-            tags: ["construction", "legacy", "metal", "world"],
+            tags: ["construction", "metal", "world"],
         ),
         "terrain/basalt": (
             display_name: "Basalt",
             color: (red: 0.20, green: 0.22, blue: 0.24),
-            tags: ["legacy", "stone", "terrain", "world"],
+            tags: ["stone", "terrain", "world"],
         ),
         "terrain/bedrock": (
             display_name: "Bedrock",
             color: (red: 0.25, green: 0.24, blue: 0.28),
-            tags: ["legacy", "stone", "terrain", "world"],
+            tags: ["stone", "terrain", "world"],
         ),
         "terrain/dirt": (
             display_name: "Dirt",
             color: (red: 0.45, green: 0.33, blue: 0.22),
-            tags: ["earth", "legacy", "terrain", "world"],
+            tags: ["earth", "terrain", "world"],
         ),
         "terrain/grass": (
             display_name: "Grass Terrain",
             color: (red: 0.35, green: 0.62, blue: 0.30),
-            tags: ["ground", "legacy", "terrain", "world"],
+            tags: ["ground", "terrain", "world"],
         ),
         "terrain/gravel": (
             display_name: "Gravel",
             color: (red: 0.42, green: 0.40, blue: 0.36),
-            tags: ["legacy", "road", "stone", "terrain", "world"],
+            tags: ["road", "stone", "terrain", "world"],
         ),
         "terrain/ice": (
             display_name: "Ice",
             color: (red: 0.42, green: 0.72, blue: 0.88),
-            tags: ["frozen", "legacy", "terrain", "world"],
+            tags: ["frozen", "terrain", "world"],
         ),
         "terrain/snow": (
             display_name: "Snow",
             color: (red: 0.82, green: 0.88, blue: 0.92),
-            tags: ["frozen", "legacy", "terrain", "world"],
+            tags: ["frozen", "terrain", "world"],
         ),
         "terrain/stone": (
             display_name: "Stone",
             color: (red: 0.55, green: 0.55, blue: 0.58),
-            tags: ["legacy", "stone", "terrain", "world"],
+            tags: ["stone", "terrain", "world"],
         ),
         "unit/hostile": (
             display_name: "Hostile Blue",
             color: (red: 0.25, green: 0.45, blue: 0.90),
-            tags: ["hostile", "legacy", "unit"],
+            tags: ["hostile", "unit"],
         ),
         "unit/player": (
             display_name: "Player Red",
             color: (red: 1.00, green: 0.20, blue: 0.20),
-            tags: ["legacy", "player", "unit"],
+            tags: ["player", "unit"],
         ),
     },
 )

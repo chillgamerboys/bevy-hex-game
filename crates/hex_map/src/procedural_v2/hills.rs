@@ -490,7 +490,7 @@ const fn element_levels(element: VolumeElement) -> LevelInterval {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use hex_assets::{SubstanceFile, SubstanceTable};
+    use hex_assets::{ArtPalette, SubstanceFile, SubstanceTable};
     use hex_core::{MapAnchorId, SpecialMovementRegion};
 
     use super::*;
@@ -749,7 +749,11 @@ mod tests {
         let substances: SubstanceFile =
             ron::from_str(include_str!("../../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
-        let table = SubstanceTable::from_file(&substances);
+        let art_palette: ArtPalette =
+            ron::from_str(include_str!("../../../../assets/art/palette.ron"))
+                .expect("the shipped art palette should parse");
+        let table = SubstanceTable::from_file(&substances, &art_palette)
+            .expect("the shipped substances should resolve through the art palette");
 
         for (label, seed) in std::iter::once(("hero", HERO_SEED)).chain(FIXED_REGRESSION_SEEDS) {
             print_review_report(

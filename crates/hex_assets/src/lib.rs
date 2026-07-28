@@ -52,7 +52,7 @@ pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
     TargetingSpec,
 };
-pub use substances::{Substance, SubstanceFile, SubstanceTable};
+pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";

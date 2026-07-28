@@ -4,7 +4,7 @@
 //! Authored objects must remain meaningful when a palette or style catalog is
 //! reordered, and their references must be readable in review diffs.
 
-use bevy::prelude::{Asset, Color, Resource, TypePath};
+use bevy::prelude::{Asset, Color, Reflect, Resource, TypePath};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -52,7 +52,7 @@ impl std::error::Error for ArtContractError {}
 macro_rules! stable_id {
     ($name:ident, $description:literal) => {
         #[doc = $description]
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Reflect, Serialize)]
         #[serde(transparent)]
         pub struct $name(String);
 
