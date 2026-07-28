@@ -163,6 +163,9 @@ pub struct SrgbColor {
 impl SrgbColor {
     /// Constructs a validated sRGB colour.
     pub fn new(red: f32, green: f32, blue: f32) -> Result<Self, ArtContractError> {
+        let red = canonical_zero(red);
+        let green = canonical_zero(green);
+        let blue = canonical_zero(blue);
         for (name, component) in [("red", red), ("green", green), ("blue", blue)] {
             if !component.is_finite() || !(0.0..=1.0).contains(&component) {
                 return Err(ArtContractError::new(format!(
@@ -542,6 +545,7 @@ pub struct VoxelEmission {
 impl VoxelEmission {
     /// Constructs a validated emission reference.
     pub fn new(swatch: SwatchId, strength: f32) -> Result<Self, ArtContractError> {
+        let strength = canonical_zero(strength);
         validate_emission_strength(strength)?;
         Ok(Self { swatch, strength })
     }
@@ -873,6 +877,14 @@ fn validate_tag(tag: &str) -> Result<(), ArtContractError> {
     Ok(())
 }
 
+const fn canonical_zero(value: f32) -> f32 {
+    if value.to_bits() == (-0.0_f32).to_bits() {
+        0.0
+    } else {
+        value
+    }
+}
+
 fn validate_opacity(surface_mode: VoxelSurfaceMode, opacity: f32) -> Result<(), ArtContractError> {
     if !opacity.is_finite() || opacity <= 0.0 || opacity > 1.0 {
         return Err(ArtContractError::new(format!(
@@ -1041,6 +1053,70 @@ mod tests {
         assert!(SrgbColor::new(0.0, 1.01, 1.0).is_err());
         assert!(SrgbColor::new(0.0, f32::NAN, 1.0).is_err());
         assert!(SrgbColor::new(0.0, 0.5, f32::INFINITY).is_err());
+    }
+
+    #[test]
+    fn signed_zero_is_canonicalized_before_semantic_fingerprinting() {
+        let positive = SrgbColor::new(0.0, 0.0, 0.0).expect("positive zero should be valid");
+        let negative = SrgbColor::new(-0.0, -0.0, -0.0).expect("negative zero should be valid");
+        assert_eq!(
+            positive.to_array().map(f32::to_bits),
+            negative.to_array().map(f32::to_bits)
+        );
+        let tags = BTreeSet::from(["effect".to_owned()]);
+        let positive_palette = ArtPalette::new(BTreeMap::from([(
+            id("effect/black"),
+            PaletteSwatch::new("Black", positive, tags.clone())
+                .expect("positive-zero swatch should be valid"),
+        )]))
+        .expect("positive-zero palette should be valid");
+        let negative_palette = ArtPalette::new(BTreeMap::from([(
+            id("effect/black"),
+            PaletteSwatch::new("Black", negative, tags)
+                .expect("negative-zero swatch should be valid"),
+        )]))
+        .expect("negative-zero palette should be valid");
+        assert_eq!(
+            positive_palette.semantic_fingerprint(),
+            negative_palette.semantic_fingerprint()
+        );
+
+        let swatch_id: SwatchId = id("effect/glow");
+        let positive_emission =
+            VoxelEmission::new(swatch_id.clone(), 0.0).expect("positive zero should be valid");
+        let negative_emission =
+            VoxelEmission::new(swatch_id.clone(), -0.0).expect("negative zero should be valid");
+        assert_eq!(
+            positive_emission.strength().to_bits(),
+            negative_emission.strength().to_bits()
+        );
+
+        let positive_style = VoxelStyle::new(
+            "Glow",
+            swatch_id.clone(),
+            VoxelSurfaceMode::Additive,
+            0.5,
+            Some(positive_emission),
+        )
+        .expect("positive-zero style should be valid");
+        let negative_style = VoxelStyle::new(
+            "Glow",
+            swatch_id,
+            VoxelSurfaceMode::Additive,
+            0.5,
+            Some(negative_emission),
+        )
+        .expect("negative-zero style should be valid");
+        let positive_catalog =
+            VoxelStyleCatalog::new(BTreeMap::from([(id("effect/glow"), positive_style)]))
+                .expect("positive-zero catalog should be valid");
+        let negative_catalog =
+            VoxelStyleCatalog::new(BTreeMap::from([(id("effect/glow"), negative_style)]))
+                .expect("negative-zero catalog should be valid");
+        assert_eq!(
+            positive_catalog.semantic_fingerprint(),
+            negative_catalog.semantic_fingerprint()
+        );
     }
 
     #[test]
