@@ -451,9 +451,9 @@ impl EditorModel {
         let position = LocalVoxelCoord::new(0, 0, level);
         if !self.object.bounds.contains(position) {
             return Err(EditorModelError::new(format!(
-                "active level {level} lies outside levels {}..{}",
+                "active level {level} lies outside levels {}..={}; adjust Document > Authoring bounds",
                 self.object.bounds.min_level,
-                upper_level(self.object.bounds)
+                maximum_level(self.object.bounds)
             )));
         }
         self.active_level = level;
@@ -1258,23 +1258,37 @@ fn validate_bounds(bounds: ObjectBounds) -> Result<(), EditorModelError> {
     Ok(())
 }
 
-fn validate_position(
+pub(crate) fn validate_position(
     object: &ObjectBlueprint,
     position: LocalVoxelCoord,
 ) -> Result<(), EditorModelError> {
-    if !object.bounds.contains(position) {
+    let axial_radius = position.axial().radius();
+    if axial_radius > i64::from(object.bounds.radius) {
         return Err(EditorModelError::new(format!(
-            "cell {position:?} lies outside radius {} and levels {}..{}",
+            "cell {position:?} is outside authoring radius {}: axial radius {axial_radius} is above the maximum; increase Radius under Document > Authoring bounds",
             object.bounds.radius,
-            object.bounds.min_level,
-            upper_level(object.bounds)
         )));
     }
+
+    let level = i64::from(position.level);
+    let minimum = i64::from(object.bounds.min_level);
+    let maximum = maximum_level(object.bounds);
+    if level < minimum {
+        return Err(EditorModelError::new(format!(
+            "cell {position:?} is outside levels {minimum}..={maximum}: level {level} is below authoring minimum {minimum}; adjust Minimum level under Document > Authoring bounds"
+        )));
+    }
+    if level > maximum {
+        return Err(EditorModelError::new(format!(
+            "cell {position:?} is outside levels {minimum}..={maximum}: level {level} is above authoring maximum {maximum}; increase Height under Document > Authoring bounds"
+        )));
+    }
+
     Ok(())
 }
 
-fn upper_level(bounds: ObjectBounds) -> i64 {
-    i64::from(bounds.min_level) + i64::from(bounds.height)
+fn maximum_level(bounds: ObjectBounds) -> i64 {
+    i64::from(bounds.min_level) + i64::from(bounds.height) - 1
 }
 
 fn placement_at(object: &ObjectBlueprint, position: LocalVoxelCoord) -> Option<&ObjectPlacement> {
@@ -1628,6 +1642,48 @@ mod tests {
             })
             .is_err());
         assert_eq!(editor.object().display_name, "Calibration Scene");
+    }
+
+    #[test]
+    fn authoring_bounds_accept_exact_edges_and_report_each_exceeded_dimension() {
+        let mut editor = editor();
+        let bounds = ObjectBounds {
+            radius: 3,
+            min_level: -2,
+            height: 8,
+        };
+        assert_eq!(editor.set_bounds(bounds), Ok(true));
+
+        for position in [
+            LocalVoxelCoord::new(0, 3, -2),
+            LocalVoxelCoord::new(0, 3, 5),
+        ] {
+            assert_eq!(validate_position(editor.object(), position), Ok(()));
+        }
+
+        let below = validate_position(editor.object(), LocalVoxelCoord::new(0, 3, -3))
+            .expect_err("the level below the inclusive minimum must be rejected");
+        assert!(below.message().contains("level -3"));
+        assert!(below.message().contains("below authoring minimum -2"));
+        assert!(below.message().contains("levels -2..=5"));
+        assert!(below.message().contains("Document > Authoring bounds"));
+
+        let above = validate_position(editor.object(), LocalVoxelCoord::new(0, 3, 6))
+            .expect_err("the level above the inclusive maximum must be rejected");
+        assert!(above.message().contains("level 6"));
+        assert!(above.message().contains("above authoring maximum 5"));
+        assert!(above.message().contains("levels -2..=5"));
+        assert!(above.message().contains("Document > Authoring bounds"));
+
+        let outside_radius = validate_position(editor.object(), LocalVoxelCoord::new(0, 4, 0))
+            .expect_err("the cell beyond the inclusive axial radius must be rejected");
+        assert!(outside_radius
+            .message()
+            .contains("outside authoring radius 3"));
+        assert!(outside_radius.message().contains("axial radius 4"));
+        assert!(outside_radius
+            .message()
+            .contains("Document > Authoring bounds"));
     }
 
     #[test]

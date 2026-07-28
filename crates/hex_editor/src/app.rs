@@ -15,7 +15,7 @@ use hex_assets::{
 };
 
 use crate::launch::resolve_repository_root;
-use crate::model::{EditorModel, EditorTool, PreviewRig, WorkshopMode};
+use crate::model::{validate_position, EditorModel, EditorTool, PreviewRig, WorkshopMode};
 use crate::project::{AssetProject, ExternalAssetChange, ProjectRevisionSet};
 use crate::recovery::{RecoveryDocument, RecoveryEnvelope, RecoveryStore, RecoveryWorkshopDraft};
 use crate::review::{ReviewPresentation, ReviewPublishOutcome, ReviewReport, REVIEW_FRAME_SPECS};
@@ -1391,6 +1391,13 @@ fn handle_pointer_editing(
         return;
     }
     stroke.last_cell = Some(cell);
+    let Some(editor) = runtime.draft.as_ref().map(WorkshopDraft::editor) else {
+        return;
+    };
+    if let Err(warning) = preflight_pointer_stroke_cell(editor, tool, cell) {
+        runtime.set_status(WorkshopStatusKind::Warning, warning);
+        return;
+    }
     let result = apply_stroke_cell(runtime.draft_mut(), tool, cell);
     match result {
         Ok(_) => runtime.needs_sync = true,
@@ -1409,6 +1416,19 @@ fn handle_pointer_editing(
             runtime.set_status(WorkshopStatusKind::Error, error);
         }
     }
+}
+
+fn preflight_pointer_stroke_cell(
+    editor: &EditorModel,
+    tool: EditorTool,
+    cell: LocalVoxelCoord,
+) -> Result<(), String> {
+    if tool != EditorTool::Place {
+        return Ok(());
+    }
+    validate_position(editor.object(), cell).map_err(|error| {
+        format!("{error}; skipped this boundary cell without rolling back the current stroke")
+    })
 }
 
 fn apply_stroke_cell(
@@ -2050,6 +2070,72 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    fn boundary_stroke_editor() -> EditorModel {
+        let mut object = EditorModel::calibration_scene()
+            .expect("calibration scene should be valid")
+            .object()
+            .clone();
+        object.bounds = ObjectBounds {
+            radius: 3,
+            min_level: 0,
+            height: 6,
+        };
+        let mut editor =
+            EditorModel::from_blueprint(object).expect("boundary fixture should be valid");
+        editor
+            .set_active_part(ObjectPart::Plant(PlantPart::Trunk))
+            .expect("trunk should be valid for a plant");
+        editor
+    }
+
+    #[test]
+    fn boundary_contact_skips_only_that_cell_and_preserves_the_valid_stroke() {
+        let mut editor = boundary_stroke_editor();
+        let valid = LocalVoxelCoord::new(0, 3, 5);
+        let beyond_top = LocalVoxelCoord::new(0, 3, 6);
+
+        editor
+            .begin_transaction("Place stroke")
+            .expect("stroke should begin");
+        assert_eq!(
+            preflight_pointer_stroke_cell(&editor, EditorTool::Place, valid),
+            Ok(())
+        );
+        assert_eq!(editor.place_active(valid), Ok(true));
+        let warning = preflight_pointer_stroke_cell(&editor, EditorTool::Place, beyond_top)
+            .expect_err("boundary contact should be skipped");
+        assert!(warning.contains("above authoring maximum 5"));
+        assert!(warning.contains("without rolling back the current stroke"));
+        assert_eq!(editor.commit_transaction(), Ok(true));
+
+        assert!(editor
+            .object()
+            .placements
+            .iter()
+            .any(|placement| placement.position == valid));
+        assert!(!editor
+            .object()
+            .placements
+            .iter()
+            .any(|placement| placement.position == beyond_top));
+    }
+
+    #[test]
+    fn entirely_out_of_bounds_pointer_stroke_is_a_no_op() {
+        let mut editor = boundary_stroke_editor();
+        let original = editor.object().clone();
+        let beyond_radius = LocalVoxelCoord::new(0, 4, 0);
+
+        editor
+            .begin_transaction("Place stroke")
+            .expect("stroke should begin");
+        let warning = preflight_pointer_stroke_cell(&editor, EditorTool::Place, beyond_radius)
+            .expect_err("boundary contact should be skipped");
+        assert!(warning.contains("outside authoring radius 3"));
+        assert_eq!(editor.commit_transaction(), Ok(false));
+        assert_eq!(editor.object(), &original);
     }
 
     #[test]
