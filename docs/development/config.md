@@ -1,19 +1,20 @@
 # Changing the game without writing code
 
-Most of how the game looks and feels is controlled by a handful of text files in
-`assets/config/`. You can edit them in any text editor. You do not need to know
-Rust, and you do not need to recompile the game.
+Most of how the game looks and feels is controlled by a handful of text files under
+`assets/`. You can edit them in any text editor. You do not need to know Rust, and
+you do not need to recompile the game.
 
 | File | Controls |
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
-| `substances.ron` | What the world is made of — including water and metal — and its colours |
+| `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
+| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and future objects |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, and the open design questions as policy knobs that reject unbuilt variants with a reason |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
-| `player.ron` | Player piece size, movement speed and colour |
+| `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
 | `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
@@ -37,10 +38,11 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
+| `art/palette.ron` | Substance and unit colours on the next world rebuild |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
-| `player.ron` | Speed on the next movement started; scale and colour on the next rebuild |
+| `player.ron` | Speed on the next movement started; scale on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
 | `menu.ron` | Straight away |
 
@@ -114,17 +116,28 @@ the single most common mistake.
 **Decimal numbers need a decimal point.** Write `1.0`, not `1`. Whole numbers like
 `grid_radius: 20` are the exception — those are counts, and are written plainly.
 
-Colours are written as `(red, green, blue)`, each from `0.0` to `1.0`:
+Substances name an exact entry in the canonical art palette:
 
 ```ron
 "grass": (
-    color: (0.35, 0.62, 0.30),
+    swatch: Some("terrain/grass"),
     solid: true,
     diggable: true,
 ),
 ```
 
-`0.0, 0.0, 0.0` is black, `1.0, 1.0, 1.0` is white.
+Palette colours use named channels from `0.0` to `1.0`:
+
+```ron
+"terrain/grass": (
+    display_name: "Grass Terrain",
+    color: (red: 0.35, green: 0.62, blue: 0.30),
+    tags: ["ground", "terrain", "world"],
+),
+```
+
+`0.0` is no light in that channel and `1.0` is full intensity. Use `cargo editor`
+for normal palette edits so validation and near-colour warnings run before saving.
 
 ## If something goes wrong
 
@@ -301,20 +314,22 @@ steps: [
 ],
 ```
 
-**A new substance.** In the map-owned `substances.ron`, copy an entry and change
-the name:
+**A new substance.** First create or deliberately reuse a swatch in the canonical
+palette. Then, in the map-owned `substances.ron`, copy an entry and change its name
+and exact reference:
 
 ```ron
 "sand": (
-    color: (0.85, 0.78, 0.55),
+    swatch: Some("terrain/sand"),
     solid: true,
     diggable: true,
 ),
 ```
 
 Saving the file registers it with the game. It will not appear in generated terrain
-until the generation code selects it. `air` must always be present — it means empty
-space.
+until the generation code selects it. A missing palette reference rejects the
+cross-file update and retains the previous valid runtime table. `air` is never drawn
+and therefore uses `swatch: None`; every rendered substance requires `Some(...)`.
 
 **A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
 and `40` gives 4921. Procedural recipes accept radii from 12 through 40 and regenerate

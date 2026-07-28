@@ -31,10 +31,10 @@ edit.
 
 The catalogs are machine-written documents. Workshop saves replace their complete
 serialized contents, so comments inside the RON files are not durable; visual policy
-and migration notes belong in this document. The initial `legacy` tag means the live
-renderer still owns that colour literal and is removed when the renderer resolves the
-swatch directly. The initially empty style catalog does not promote runtime substance
-or temporary-feature materials into reviewed Workshop styles.
+and migration notes belong in this document. A `legacy` tag means the live renderer
+still owns that colour literal and is removed when the renderer resolves the swatch
+directly. The initially empty style catalog does not promote runtime substances or
+temporary-feature materials into reviewed Workshop styles.
 
 ## Strict for new work, staged for old work
 
@@ -44,9 +44,9 @@ The palette has two adoption rules on purpose:
    id. Object files never embed an arbitrary base colour, and procedural object
    generation may choose between swatches but may not invent per-instance tints.
 2. **Staged:** existing renderers retain their current colour sources until their own
-   migration. The initial palette records those colours without changing runtime
-   output. Migration proceeds through temporary vegetation, substances and liquids,
-   then unit presentation.
+   migration. Terrain substances, liquids, construction metal, and unit presentation
+   now resolve palette swatches directly. Temporary Forest vegetation remains the
+   outstanding legacy renderer until its feature branch is reconciled.
 
 This keeps the palette useful immediately without turning its introduction into a
 cross-cutting visual rewrite. During the staged period, a palette entry can be an
@@ -104,10 +104,10 @@ The initial catalog records the currently rendered content vocabulary:
 
 | Group | Swatches | Current authority |
 |---|---|---|
-| Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `substances.ron` |
-| Liquids and construction | water, lava, metal | `substances.ron` |
+| Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
+| Liquids and construction | water, lava, metal | `palette.ron`, referenced by `substances.ron` |
 | Temporary vegetation | trunk, three foliage values, two grass-blade values | Forest feature renderer |
-| Units | player red, hostile blue | `player.ron` and unit rendering |
+| Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 
 Air is absent because it is never drawn. Sky, celestial light, atmosphere, fog,
 interface panels, text, movement overlays, selection rings, and debug colours are
