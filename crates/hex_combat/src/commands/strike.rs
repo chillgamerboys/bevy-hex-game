@@ -29,6 +29,11 @@ pub(super) fn apply(
     if ctx.turn_order.current() != Some(unit) {
         return Err("not this unit's turn");
     }
+    // Same rule as casting: a second hit landing while a defender still owes an answer
+    // would overwrite the open decision and silently erase the first one's damage.
+    if ctx.pending.is_open() {
+        return Err("a decision is still open — resolution is parked");
+    }
     let Some(target_entity) = ctx.registry.entity_of(target) else {
         return Err("no such target");
     };

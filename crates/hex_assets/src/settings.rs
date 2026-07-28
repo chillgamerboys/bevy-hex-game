@@ -1206,6 +1206,13 @@ impl CombatSettings {
                     .to_owned(),
             );
         }
+        if self.strike_disables == 0 {
+            return Err(
+                "combat.ron: strike_disables must be at least 1 — zero makes melee do \
+                 nothing, which looks exactly like the game before damage existed"
+                    .to_owned(),
+            );
+        }
         match self.initiative_policy {
             InitiativePolicy::FlatComponent => {}
             other => {

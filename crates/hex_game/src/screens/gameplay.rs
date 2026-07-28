@@ -7,13 +7,14 @@
 //! writes neither.
 
 use bevy::prelude::*;
-use hex_assets::SpellBook;
+use hex_assets::{Effect, SpellBook};
 use hex_combat::{Turn, TurnOrder};
 use hex_core::{
     AppSystems, CommandQueue, GameCommand, IssuedCommand, Mode, PausableSystems, Pause, PlayerSeat,
     Screen, TilePos,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
+use hex_units::volumes::grid_distance;
 use hex_units::{Downed, Faction, Player, StandsOn, UnitRegistry};
 
 use super::{despawn_screen, DespawnOnExit};
@@ -260,10 +261,30 @@ fn cast_first_spell(
     let Ok((spec, standing)) = casters.get(entity) else {
         return;
     };
-    let Some(name) = spec.cells().find_map(|(_, kind)| match kind {
-        CellKind::Spell { spell } => spells.name(spell),
-        _ => None,
-    }) else {
+    // Prefer a spell that actually damages. A placeholder the player cannot see into
+    // should at least pick something whose effect is *built*, or pressing the key looks
+    // broken: the hedge-mage's lowest-coordinate spell is Renewal, whose effects all
+    // still refuse, so first-in-coordinate-order would cast and visibly do nothing.
+    let mut inscribed: Vec<&str> = spec
+        .cells()
+        .filter_map(|(_, kind)| match kind {
+            CellKind::Spell { spell } => spells.name(spell),
+            _ => None,
+        })
+        .collect();
+    inscribed.sort_by_key(|name| {
+        let damaging = spells
+            .id(name)
+            .and_then(|id| spells.spell(id))
+            .is_some_and(|spell| {
+                spell
+                    .effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::DisableHexes { .. }))
+            });
+        (!damaging, *name)
+    });
+    let Some(name) = inscribed.first().copied() else {
         info!("cast: this unit inscribes no spells");
         return;
     };
@@ -273,12 +294,11 @@ fn cast_first_spell(
     let mut targets: Vec<(u32, TilePos)> = hostiles
         .iter()
         .filter(|(faction, _)| Faction::Player.is_hostile_to(**faction))
-        .map(|(_, target)| {
-            (
-                standing.0.pos.coord.distance(target.0.pos.coord),
-                target.0.pos,
-            )
-        })
+        // Grid distance over the whole `TilePos`, not the coordinate: discarding the
+        // level is what once put a unit on a bridge and one on the ground beneath it
+        // zero hexes apart. Ranking by coordinate could pick a target the applier then
+        // refuses as out of range while a genuinely reachable one is never tried.
+        .map(|(_, target)| (grid_distance(standing.0.pos, target.0.pos), target.0.pos))
         .collect();
     targets.sort_unstable();
     let Some(&(_, target)) = targets.first() else {

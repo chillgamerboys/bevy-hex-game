@@ -72,9 +72,19 @@ pub(super) fn apply(
     };
 
     let (standing, busy) = {
-        let Ok((standing, _, _, busy, _, _)) = actors.get(entity) else {
+        let Ok((standing, _, turn, busy, _, _)) = actors.get(entity) else {
             return Err("unit no longer exists");
         };
+        // Rung 1 is "action available", and casting is an action. Without this a unit
+        // casts every frame its turn lasts: a cast starts no animation, so the `Busy`
+        // it sets is gone by the next frame, and `advance_turn` waits for the movement
+        // budget as well — so the whole lattice could be spent in one turn.
+        let Some(turn) = turn else {
+            return Err("no turn to take the action from");
+        };
+        if turn.acted {
+            return Err("unit already took its action");
+        }
         let Some(standing) = standing.copied() else {
             return Err("unit has no standing to cast from");
         };
@@ -122,10 +132,11 @@ pub(super) fn apply(
     // --- rung 2: the lattice -----------------------------------------------
 
     let cell = {
-        let Ok((caster_spec, _)) = lattices.get(entity) else {
+        let Ok((caster_spec, caster_state)) = lattices.get(entity) else {
             return Err("caster has no lattice to cast from");
         };
-        spell_cell(caster_spec, spell).ok_or("this unit's lattice does not inscribe that spell")?
+        spell_cell(caster_spec, caster_state, spell)
+            .ok_or("this unit's lattice does not inscribe that spell")?
     };
 
     let plan = {
@@ -232,11 +243,27 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 /// lowest `LatticeCoord` makes the choice deterministic rather than dependent on
 /// iteration; `spec.cells()` is already ordered, so first-match is that. The alternative
 /// — refusing an ambiguous lattice — would turn a redundancy into an authoring error.
-fn spell_cell(spec: &LatticeSpec, spell: hex_core::SpellId) -> Option<LatticeCoord> {
-    spec.cells().find_map(|(coord, kind)| match kind {
+fn spell_cell(
+    spec: &LatticeSpec,
+    state: &LatticeState,
+    spell: hex_core::SpellId,
+) -> Option<LatticeCoord> {
+    let mut matching = spec.cells().filter_map(|(coord, kind)| match kind {
         CellKind::Spell { spell: found } if found == spell => Some(coord),
         _ => None,
-    })
+    });
+    // The live one, and only then the lowest. Taking the lowest unconditionally would
+    // defeat the redundancy this is supposed to preserve: a second copy exists so that
+    // losing one hex does not lose the spell, and picking a disabled cell when a live
+    // one is right there refuses the cast as "that spell's hex is disabled".
+    let mut fallback = None;
+    for coord in &mut matching {
+        if !state.is_disabled(coord) {
+            return Some(coord);
+        }
+        fallback = fallback.or(Some(coord));
+    }
+    fallback
 }
 
 /// Whether the cast's anchor is currently observed by the acting faction.

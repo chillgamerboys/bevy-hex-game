@@ -73,6 +73,12 @@ pub(super) fn apply(
         if seen.contains(&cell) {
             return Err("the answer names the same cell twice");
         }
+        // And it has to still be standing. `apply_disables` treats an already-dead cell
+        // as a no-op, so naming two corpses would satisfy the count and absorb the hit
+        // for free — the same hole the membership check above closes, one step along.
+        if state.is_disabled(cell) {
+            return Err("the answer names a cell that is already disabled");
+        }
         seen.push(cell);
     }
 
@@ -85,6 +91,11 @@ pub(super) fn apply(
             record.burned_mana
         );
     }
-    info!("damage: {source:?} disables {count} of {unit:?}'s hexes");
+    // What fell, not what was asked for: a spent lattice gives fewer than the hit
+    // demanded, and a log that reported the demand would overstate every killing blow.
+    info!(
+        "damage: {source:?} disables {} of {unit:?}'s hexes",
+        cells.len()
+    );
     Ok(())
 }

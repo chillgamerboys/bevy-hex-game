@@ -144,6 +144,10 @@ pub(crate) fn plugin(app: &mut App) {
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
     app.add_systems(OnExit(Screen::Gameplay), clear_session_state);
+    // A decision open when a fight ends has nobody left to answer it: the auto-policy
+    // runs only in combat, so it would park every later cast behind "a decision is
+    // still open" for the rest of the session.
+    app.add_systems(OnExit(Mode::Combat), clear_pending_decision);
 }
 
 /// Forgets everything naming a unit, on the way out of a session.
@@ -156,6 +160,14 @@ pub(crate) fn plugin(app: &mut App) {
 fn clear_session_state(mut queue: ResMut<CommandQueue>, mut pending: ResMut<PendingDecision>) {
     queue.clear();
     *pending = PendingDecision::None;
+}
+
+/// Drops an unanswered decision when a fight ends.
+fn clear_pending_decision(mut pending: ResMut<PendingDecision>) {
+    if pending.is_open() {
+        warn!("combat ended with a decision still open; dropping it");
+        *pending = PendingDecision::None;
+    }
 }
 
 /// Keeps [`Busy`] equal to "presentation in flight".

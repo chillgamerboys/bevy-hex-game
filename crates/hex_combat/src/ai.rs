@@ -31,7 +31,7 @@ use hex_core::{
     LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, SubstanceId, TilePos, Turn,
     UnitId,
 };
-use hex_units::{route, Body, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
+use hex_units::{route, Body, Downed, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
 
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 
@@ -81,7 +81,7 @@ fn take_enemy_turn(
         ),
         (With<Enemy>, Without<Busy>),
     >,
-    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
+    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn), Without<Downed>>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
 ) {
@@ -198,7 +198,7 @@ impl FoePlan {
 /// ranked so the unreachable one cannot consume the turn merely by looking nearer on
 /// the map.
 fn best_foe(
-    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
+    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn), Without<Downed>>,
     faction: Faction,
     from: Standing,
     footing: &Footing,
@@ -288,7 +288,7 @@ fn answer_disable_decision(
     };
     // The answer is already on its way. Without this the policy would push a second
     // identical command every frame until the applier drained the first.
-    if queue.holds_command_for(decider) {
+    if queue.holds_answer_for(decider) {
         return;
     }
     let Some(entity) = registry.entity_of(decider) else {

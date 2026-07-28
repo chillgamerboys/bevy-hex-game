@@ -474,6 +474,9 @@ fn advance_turn(
     }
 }
 
+/// Movement budget when `combat.ron` has not loaded, for headless harnesses only.
+const DEFAULT_MOVEMENT_PER_TURN: u32 = 4;
+
 /// Takes units whose lattice is entirely disabled out of the fight.
 ///
 /// **Downed, not dead.** The design leaves both functional death — a threshold arriving
@@ -487,6 +490,8 @@ fn check_for_downed(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
     mut knowledge: ResMut<crate::knowledge::FactionKnowledge>,
+    registry: Res<UnitRegistry>,
+    settings: Option<Res<CombatSettings>>,
     units: Query<(Entity, &UnitId, &LatticeSpec, &LatticeState), Without<Downed>>,
 ) {
     for (entity, &unit, spec, state) in &units {
@@ -495,12 +500,35 @@ fn check_for_downed(
         if spec.capacity() == 0 || !spec.cells().all(|(coord, _)| state.is_disabled(coord)) {
             continue;
         }
+        let held_the_turn = turn_order.current() == Some(unit);
         commands.entity(entity).insert(Downed).remove::<Turn>();
         turn_order.remove(unit);
         // What anybody knew about this lattice goes with it. Keeping it would leave a
         // faction reading a dead unit's contents out of the store forever.
         knowledge.forget_subject(unit);
         info!("{unit:?} is down — every hex disabled");
+
+        // **Hand the turn on, or the fight stalls forever.** `advance_turn` only acts
+        // on a unit that *holds* a `Turn`, and `TurnOrder::remove` slides `current` onto
+        // a successor who has none — so taking the turn-holder out without granting the
+        // next one a turn means nobody ever acts again, and only combat ending unwedges
+        // it. This is the one path that removes a unit mid-order, so it is the one place
+        // that has to do the handover.
+        if !held_the_turn {
+            continue;
+        }
+        let budget = settings
+            .as_deref()
+            .map_or(DEFAULT_MOVEMENT_PER_TURN, |combat| combat.movement_per_turn);
+        if let Some(next) = turn_order
+            .current()
+            .and_then(|unit| registry.entity_of(unit))
+        {
+            commands.entity(next).insert(Turn {
+                movement_left: budget,
+                acted: false,
+            });
+        }
     }
 }
 

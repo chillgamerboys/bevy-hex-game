@@ -35,14 +35,16 @@
     AwaitTerrain,
     Settle(120),
     Capture("13-close-quarters-combat"),
-    // The wave's proof. `1` casts the acting unit's first inscribed spell at the
-    // nearest hostile — a placeholder emitter until the casting UX lands — and the
-    // frame after it should show the HUD's hex count fall, because a landed cast
-    // parks a disable decision that the auto-policy answers on the next tick.
+    // The wave's proof, in two halves.
     //
-    // Photographing damage is the point: the count is the only thing on screen that
-    // says a spell did anything, and a cast that silently does nothing looks exactly
-    // like one that worked.
+    // `1` casts the acting unit's first *damaging* inscribed spell at the nearest
+    // hostile — a placeholder emitter until the casting UX lands. Frame 14 cannot show
+    // that damage: the HUD counts your own party's hexes, and nothing draws a hostile
+    // lattice yet, so the cast's effect is in the log rather than on screen.
+    //
+    // Frame 15 is where damage becomes visible, and it is the enemy's doing: its strike
+    // takes one of *your* hexes, and the readout falls. Both halves matter — one proves
+    // a cast resolves, the other proves damage lands somewhere a player can see.
     Key("Digit1"),
     Settle(120),
     Capture("14-close-quarters-after-cast"),
