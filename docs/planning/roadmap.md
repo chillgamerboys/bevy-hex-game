@@ -84,10 +84,13 @@ for Waterfall, Forest, and Fort semantic plans; V3 migration waits for the
 composite contracts but not for final combat tuning.
 
 The first liquid implementation also records an explicit terrain-edit policy for
-support removal and stale flow topology. The `diggable` flag governs only direct
-edits to a liquid voxel; it is not a substitute for that policy. Dynamic cave-breach
-illumination remains unresolved: terrain edits do not reclassify an entire chamber
-until aperture and domain semantics are agreed.
+support removal and stale flow topology. Until topology-aware rebuilding exists, V3
+authored liquid voxels and every lower voxel in their columns are protected as one
+atomic semantic dependency. The map-private exact classifier lands with topology;
+runtime admission lands with the first runnable V3 recipe. The `diggable` flag still
+governs legacy and non-topological liquids and is not a substitute for this policy.
+Dynamic cave-breach illumination remains unresolved: terrain edits do not reclassify
+an entire chamber until aperture and domain semantics are agreed.
 
 The pre-existing gameplay critical path remains independent: sim seams →
 funnel → lattices wired, with element content and the lattice engine feeding

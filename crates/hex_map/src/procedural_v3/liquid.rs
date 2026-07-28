@@ -44,7 +44,79 @@ pub(crate) struct LiquidPlan {
     pub(crate) bodies: BTreeMap<LiquidBodyId, LiquidBodyPlan>,
 }
 
+/// Stable identity of one authored liquid run affected by a terrain edit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ProtectedLiquidRun {
+    pub(crate) body: LiquidBodyId,
+    /// Top occupied voxel, matching the node key in [`LiquidBodyPlan`].
+    pub(crate) top: TilePos,
+}
+
+/// Why an exact terrain edit must be rejected while authored topology is retained.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LiquidEditProtectionReason {
+    /// The edited voxel is part of an authored liquid run.
+    AuthoredLiquid,
+    /// One or more authored liquid runs remain above the edited voxel.
+    SupportsRetainedLiquid,
+}
+
+/// Exact map-private result of applying the conservative V3 liquid edit policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiquidEditProtection {
+    pub(crate) reason: LiquidEditProtectionReason,
+    /// Every retained run at or above the edit, ordered by body and run identity.
+    pub(crate) affected_runs: Vec<ProtectedLiquidRun>,
+}
+
 impl LiquidPlan {
+    /// Classifies an exact voxel under the conservative V3 liquid edit policy.
+    ///
+    /// Until terrain edits can atomically rebuild liquid occupancy and topology,
+    /// edits are protected when they target an authored liquid run or any lower
+    /// voxel in the same column. An absent result means only that this V3 topology
+    /// adds no protection; ordinary material policy still decides whether the edit
+    /// is otherwise admissible.
+    #[must_use]
+    pub(crate) fn edit_protection(
+        &self,
+        volume: &VolumePlan,
+        position: TilePos,
+    ) -> Option<LiquidEditProtection> {
+        let fill_runs = volume.fill_runs_by_top();
+        let mut affected_runs = Vec::new();
+        let mut edits_authored_liquid = false;
+
+        for (body_id, body) in &self.bodies {
+            for top in body.nodes.keys().copied() {
+                if top.coord != position.coord {
+                    continue;
+                }
+                let Some(fill) = fill_runs.get(&top) else {
+                    continue;
+                };
+                if position.level >= fill.levels.top {
+                    continue;
+                }
+                affected_runs.push(ProtectedLiquidRun {
+                    body: *body_id,
+                    top,
+                });
+                edits_authored_liquid |=
+                    fill.levels.bottom <= position.level && position.level < fill.levels.top;
+            }
+        }
+
+        (!affected_runs.is_empty()).then_some(LiquidEditProtection {
+            reason: if edits_authored_liquid {
+                LiquidEditProtectionReason::AuthoredLiquid
+            } else {
+                LiquidEditProtectionReason::SupportsRetainedLiquid
+            },
+            affected_runs,
+        })
+    }
+
     /// Cross-checks exact fill ownership, flow geometry, and graph integrity.
     #[must_use]
     pub(crate) fn validate(&self, volume: &VolumePlan) -> Vec<LiquidIssue> {
@@ -473,6 +545,136 @@ mod tests {
         let volume = VolumePlan::new(BTreeSet::from([coord(0, 0, 0)]));
 
         assert_eq!(LiquidPlan::default().validate(&volume), Vec::new());
+    }
+
+    #[test]
+    fn exact_liquid_and_every_lower_support_voxel_are_protected() {
+        let origin = coord(0, 0, 0);
+        let neighbor = coord(1, 0, -1);
+        let volume = volume(&[(origin, 4, 7, FillMaterialRole::Water)]);
+        let top = TilePos::new(origin, 6);
+        let plan = body(
+            FillMaterialRole::Water,
+            [(top, node(LiquidFlowState::Still, None))],
+        );
+        let affected_runs = vec![ProtectedLiquidRun {
+            body: LiquidBodyId(7),
+            top,
+        }];
+
+        for level in 4..=6 {
+            assert_eq!(
+                plan.edit_protection(&volume, TilePos::new(origin, level)),
+                Some(LiquidEditProtection {
+                    reason: LiquidEditProtectionReason::AuthoredLiquid,
+                    affected_runs: affected_runs.clone(),
+                })
+            );
+        }
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(origin, 3)),
+            Some(LiquidEditProtection {
+                reason: LiquidEditProtectionReason::SupportsRetainedLiquid,
+                affected_runs,
+            })
+        );
+        assert_eq!(plan.edit_protection(&volume, TilePos::new(origin, 7)), None);
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(neighbor, 3)),
+            None
+        );
+    }
+
+    #[test]
+    fn stacked_runs_report_every_exact_dependency_in_stable_order() {
+        let origin = coord(0, 0, 0);
+        let mut volume = VolumePlan::new(BTreeSet::from([origin]));
+        volume
+            .columns
+            .get_mut(&origin)
+            .expect("the origin is in the mask")
+            .elements = vec![
+            VolumeElement::Fill(NonSolidFill {
+                levels: LevelInterval::new(2, 4),
+                material: FillMaterialRole::Water,
+            }),
+            VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(4, 6),
+                material: SolidMaterialRole::Metal,
+                cutaway_for: None,
+            }),
+            VolumeElement::Fill(NonSolidFill {
+                levels: LevelInterval::new(7, 9),
+                material: FillMaterialRole::Lava,
+            }),
+        ];
+        let lower = ProtectedLiquidRun {
+            body: LiquidBodyId(1),
+            top: TilePos::new(origin, 3),
+        };
+        let upper = ProtectedLiquidRun {
+            body: LiquidBodyId(2),
+            top: TilePos::new(origin, 8),
+        };
+        let plan = LiquidPlan {
+            bodies: BTreeMap::from([
+                (
+                    lower.body,
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Water,
+                        nodes: BTreeMap::from([(lower.top, node(LiquidFlowState::Still, None))]),
+                    },
+                ),
+                (
+                    upper.body,
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Lava,
+                        nodes: BTreeMap::from([(upper.top, node(LiquidFlowState::Still, None))]),
+                    },
+                ),
+            ]),
+        };
+
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(origin, 1)),
+            Some(LiquidEditProtection {
+                reason: LiquidEditProtectionReason::SupportsRetainedLiquid,
+                affected_runs: vec![lower, upper],
+            })
+        );
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(origin, 3)),
+            Some(LiquidEditProtection {
+                reason: LiquidEditProtectionReason::AuthoredLiquid,
+                affected_runs: vec![lower, upper],
+            })
+        );
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(origin, 5)),
+            Some(LiquidEditProtection {
+                reason: LiquidEditProtectionReason::SupportsRetainedLiquid,
+                affected_runs: vec![upper],
+            })
+        );
+        assert_eq!(
+            plan.edit_protection(&volume, TilePos::new(origin, 8)),
+            Some(LiquidEditProtection {
+                reason: LiquidEditProtectionReason::AuthoredLiquid,
+                affected_runs: vec![upper],
+            })
+        );
+        assert_eq!(plan.edit_protection(&volume, TilePos::new(origin, 9)), None);
+    }
+
+    #[test]
+    fn fill_without_v3_topology_adds_no_edit_protection() {
+        let origin = coord(0, 0, 0);
+        let volume = volume(&[(origin, 4, 7, FillMaterialRole::Water)]);
+
+        assert_eq!(
+            LiquidPlan::default().edit_protection(&volume, TilePos::new(origin, 6)),
+            None
+        );
     }
 
     #[test]

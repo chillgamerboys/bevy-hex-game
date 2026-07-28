@@ -45,6 +45,21 @@ only the shared, exact consequences required by consumers:
 Terrain edits still enter through `TerrainEdit`. V3 may rebuild private derived
 layers after an edit, but no consumer receives mutable access to the plan.
 
+The first V3 liquid policy is deliberately conservative. Until `hex_map` can rebuild
+liquid occupancy, directed topology, and their runtime projection as one atomic
+operation, it requires rejection of an edit to an authored V3 liquid voxel and an
+edit to every lower voxel in that column while a retained authored liquid run remains
+above it.
+The private liquid plan classifies the exact `TilePos` and identifies every stacked
+run affected. The classifier lands before a runtime hook because no runnable V3
+recipe exists yet; the first runnable recipe must enforce it at the existing
+`TerrainEdit` admission point.
+
+This rule does not change `Substance::diggable`. Legacy and non-topological liquids
+continue to use their existing material policy. A rejected V3 edit changes neither
+occupancy nor flow metadata: liquid does not redistribute, and the map must never
+leave stale current or fall descriptors behind.
+
 ## Layouts and patches
 
 `generator_version: 3` selects one of two layouts:
@@ -131,7 +146,8 @@ outlet. Terrain is then fitted to that graph.
 Water remains an opaque non-solid fill. The renderer animates the authored direction
 and flow state, but water does not redistribute after terrain edits, push characters,
 slow movement, or deal damage. The critical land network includes a two-wide bypass
-around the hazard.
+around the hazard. Until topology-aware rebuilding exists, the conservative V3 edit
+policy above protects each authored liquid run and every lower voxel in its column.
 
 ### Forest
 
