@@ -7,7 +7,9 @@
 //! undocumented, unenforced, and one refactor away from a panic.
 
 use bevy::prelude::*;
-use hex_assets::{GameAssets, SettingsRegistry, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ContentIndex, GameAssets, LatticeLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
+};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
@@ -61,6 +63,8 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
+    content: Option<Res<ContentIndex>>,
+    lattices: Option<Res<LatticeLibrary>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -72,10 +76,19 @@ fn enter_gameplay_when_ready(
         .as_deref()
         .is_some_and(|status| *status == ScenarioContractStatus::Ready);
 
+    // Both are absent until every cross-file reference resolves, and both now have real
+    // consumers: the cast path reads the index, and units spawn carrying what the
+    // library holds. Waiting on them here is the same rule the files already follow —
+    // a dangling reference must stall the gate rather than log and let gameplay start
+    // with content that half-exists. Before this, a spell naming a missing element left
+    // the index absent, logged once, and entered gameplay anyway.
+    let content_is_resolved = content.is_some() && lattices.is_some();
+
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current
         && scenario_is_valid
+        && content_is_resolved
     {
         next.set(Screen::Gameplay);
     }

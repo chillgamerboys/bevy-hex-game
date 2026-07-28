@@ -9,6 +9,7 @@
 use bevy::prelude::*;
 use hex_combat::{Turn, TurnOrder};
 use hex_core::{Mode, PausableSystems, Pause, Screen};
+use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
@@ -96,6 +97,7 @@ fn update_hud(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
     acting: Query<(Has<Player>, &Turn)>,
+    party: Query<(&LatticeSpec, &LatticeState), With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
@@ -115,10 +117,11 @@ fn update_hud(
                 Err(_) => "…".to_owned(),
             };
             format!(
-                "COMBAT   ·   round {}   ·   {}   ·   SPACE to end turn   \
+                "COMBAT   ·   round {}   ·   {}{}   ·   SPACE to end turn   \
                  ·   ESC to pause",
                 order.round + 1,
-                whose
+                whose,
+                lattice_readout(&party)
             )
         }
     };
@@ -140,15 +143,47 @@ fn update_hud(
 /// adds, so this cannot be the observer-on-the-title-screen crash: it is a
 /// system, it is gated on the gameplay screen, and its parameter always resolves.
 ///
-/// Logs the new state because there is nothing to see today — no unit carries a
-/// lattice yet, so the toggle reveals an empty store until HEX-12 lands. A silent
-/// key that appears to do nothing is indistinguishable from a broken one.
+/// Logs the new state because the reveal has no presentation of its own yet: units now
+/// carry lattices, so the store fills, but nothing draws a hostile one. A silent key
+/// that appears to do nothing is indistinguishable from a broken one.
 #[cfg(feature = "dev")]
 fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_combat::RevealAll>) {
     if keys.just_pressed(KeyCode::KeyK) {
         reveal.0 = !reveal.0;
         info!("reveal-all {}", if reveal.0 { "on" } else { "off" });
     }
+}
+
+/// Your own lattice, as hexes still standing out of hexes total.
+///
+/// **Your own**, deliberately, and read straight off the component rather than through
+/// [`FactionKnowledge`](hex_combat::FactionKnowledge): a faction's knowledge of *itself*
+/// is not the question that store answers. It exists to gate what you know about a
+/// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
+/// routing your own hexes through it would either need a self-view nothing publishes, or
+/// teach the next reader that `view()` is how you look at anything, which is exactly the
+/// confusion the two-channel split exists to prevent.
+///
+/// Empty while nothing carries a lattice, so a party of one inert unit reads exactly as
+/// it did before this — no readout rather than a zero.
+fn lattice_readout(party: &Query<(&LatticeSpec, &LatticeState), With<Player>>) -> String {
+    let mut live = 0_usize;
+    let mut total = 0_usize;
+    for (spec, state) in party {
+        // The spec is what says which cells exist; the state only says which of them
+        // are down. Counting the state alone would miss every cell that has never been
+        // touched, which early in a fight is all of them.
+        for (coord, _) in spec.cells() {
+            total += 1;
+            if !state.is_disabled(coord) {
+                live += 1;
+            }
+        }
+    }
+    if total == 0 {
+        return String::new();
+    }
+    format!("   ·   {live}/{total} hexes")
 }
 
 /// Entering gameplay always starts unpaused, so a pause left set from a previous
