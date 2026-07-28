@@ -6,7 +6,9 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hex_core::{HexCoord, MapViewHint, TilePos, TraversalEndpoint, TraversalProfile};
+use hex_core::{
+    HexCoord, MapViewHint, SpecialMovementRegion, TilePos, TraversalEndpoint, TraversalProfile,
+};
 
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
@@ -20,8 +22,8 @@ use super::volume::{
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeaturePlan, GeneratedWorldPlan, InteriorPlan, StructurePlan, WorldIssueCode,
-    WorldValidationIssue,
+    FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedStructure, StructureId, StructureKind,
+    StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 use super::V3GenerationError;
 use crate::settings::{
@@ -29,21 +31,27 @@ use crate::settings::{
     V3WaterfallSettings,
 };
 
-const HIGH_LAND_LEVEL: i32 = 24;
+const HIGH_LAND_LEVEL: i32 = 27;
 const LOW_LAND_LEVEL: i32 = 16;
 const HIGH_WATER_LEVEL: i32 = HIGH_LAND_LEVEL - 1;
 const LOW_WATER_LEVEL: i32 = LOW_LAND_LEVEL - 1;
 const FALL_SOURCE_X: i32 = -1;
 const FALL_TARGET_X: i32 = 0;
 const WATER_HALF_WIDTH: i32 = 1;
-const INLET_MARGIN: i32 = 3;
-const BASIN_WIDE_END_X: i32 = 1;
-const BASIN_END_X: i32 = 3;
+const BASIN_WIDE_END_X: i32 = 4;
+const BASIN_END_X: i32 = 6;
 const BASIN_MAX_HALF_WIDTH: i32 = 3;
-const BYPASS_HIGH_X: i32 = -5;
-const BYPASS_LOW_X: i32 = 3;
-const SECONDARY_HIGH_X: i32 = -6;
-const SECONDARY_LOW_X: i32 = 4;
+const BYPASS_HIGH_X: i32 = -6;
+const BYPASS_LOW_X: i32 = 5;
+const SECONDARY_HIGH_X: i32 = -7;
+const SECONDARY_LOW_X: i32 = 6;
+const BRIDGE_FIRST_X: i32 = -7;
+const BRIDGE_LAST_X: i32 = -6;
+const BRIDGE_BANK_Y: i32 = 3;
+const BRIDGE_DECK_LEVEL: i32 = HIGH_LAND_LEVEL + 1;
+const CLIFF_MID_LEVEL: i32 = LOW_LAND_LEVEL + (HIGH_LAND_LEVEL - LOW_LAND_LEVEL) / 2;
+const CLIFF_MAX_OFFSET: i32 = 2;
+const CLIFF_SHELF_REGION: SpecialMovementRegion = SpecialMovementRegion(0);
 const RELIEF_CENTERS_PER_BANK: u64 = 3;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
@@ -76,6 +84,12 @@ struct WaterfallRecipe {
     layout: ResolvedLayoutPlan,
     #[cfg(test)]
     reject_candidates: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WaterfallStreams<'a> {
+    relief: SeedStream<'a>,
+    cliff: SeedStream<'a>,
 }
 
 /// Runs the common eight-candidate V3 selector for one Waterfall world.
@@ -132,10 +146,16 @@ impl V3Recipe for WaterfallRecipe {
                 ),
             ));
         }
-        let stream = SeedStreams::new(context.seed, context.candidate, PatchId(0).0)
-            .stage("waterfall.relief");
-        construct_plan(self.layout.clone(), Some(stream), self.level_height)
-            .map_err(CandidateAttemptError::Rejected)
+        let streams = SeedStreams::new(context.seed, context.candidate, PatchId(0).0);
+        construct_plan(
+            self.layout.clone(),
+            Some(WaterfallStreams {
+                relief: streams.stage("waterfall.relief"),
+                cliff: streams.stage("waterfall.cliff"),
+            }),
+            self.level_height,
+        )
+        .map_err(CandidateAttemptError::Rejected)
     }
 
     fn validate(
@@ -217,6 +237,7 @@ fn validate_recipe_settings(settings: &ProceduralV3Settings) -> Result<(), V3Gen
 
 fn validate_footprint_capacity(layout: &ResolvedLayoutPlan) -> Result<(), V3GenerationError> {
     watercourse(&layout.footprint).map_err(recipe_issues_to_error)?;
+    bridge_tiles(&layout.footprint).map_err(recipe_issues_to_error)?;
     bypass_tiles(layout.grid_radius, &layout.footprint).map_err(recipe_issues_to_error)?;
     secondary_bypass_tiles(layout.grid_radius, &layout.footprint)
         .map_err(recipe_issues_to_error)?;
@@ -248,7 +269,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
 
 fn construct_plan(
     layout: ResolvedLayoutPlan,
-    relief: Option<SeedStream<'_>>,
+    streams: Option<WaterfallStreams<'_>>,
     level_height: f32,
 ) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
     let patch = layout
@@ -261,21 +282,40 @@ fn construct_plan(
     let bypass = bypass_tiles(layout.grid_radius, &mask)?;
     let secondary_bypass = secondary_bypass_tiles(layout.grid_radius, &mask)?;
     let secondary_apron = secondary_slope_apron(layout.grid_radius, &mask)?;
+    let bridge = bridge_tiles(&mask)?;
+    let bridge_by_coord: BTreeMap<_, _> = bridge
+        .iter()
+        .copied()
+        .map(|position| (position.coord, position))
+        .collect();
     let water_coords = watercourse.coordinates();
-    let bypass_by_coord: BTreeMap<_, _> = bypass
+    let mut protected_by_coord: BTreeMap<_, _> = bypass
         .iter()
         .chain(&secondary_bypass)
         .flatten()
         .chain(&secondary_apron)
         .map(|position| (position.coord, position.level))
         .collect();
-    let relief = relief.map(|stream| {
+    protected_by_coord.extend(
+        bridge
+            .iter()
+            .map(|position| (position.coord, HIGH_LAND_LEVEL)),
+    );
+    let escarpment = EscarpmentPlan::new(
+        layout.grid_radius,
+        &mask,
+        &water_coords,
+        &protected_by_coord,
+        streams.map(|streams| streams.cliff),
+    )?;
+    let relief = streams.map(|streams| {
         ReliefPlan::new(
             layout.grid_radius,
             &mask,
             &water_coords,
-            &bypass_by_coord,
-            stream,
+            &protected_by_coord,
+            &escarpment,
+            streams.relief,
         )
     });
 
@@ -301,16 +341,26 @@ fn construct_plan(
     }
 
     for coord in &mask {
+        let bridge_deck = bridge_by_coord.get(coord).copied();
         if let Some(water) = water_by_coord.get(coord).copied() {
-            let (column, surface) = water_column(water);
+            let (column, bed) = water_column(water, bridge_deck);
             columns.insert(*coord, column);
             surfaces.insert(
-                surface,
+                bed,
                 SurfaceMetadata {
                     access: SurfaceAccess::NonStandable,
                     interior: None,
                 },
             );
+            if let Some(deck) = bridge_deck {
+                surfaces.insert(
+                    deck,
+                    SurfaceMetadata {
+                        access: SurfaceAccess::Ordinary,
+                        interior: None,
+                    },
+                );
+            }
             water_nodes.insert(
                 water.top,
                 LiquidNode {
@@ -319,13 +369,18 @@ fn construct_plan(
                 },
             );
         } else {
-            let surface_level = land_surface_level(*coord, &bypass_by_coord, relief.as_ref());
-            let surface = TilePos::new(*coord, surface_level);
-            columns.insert(*coord, land_column(surface_level));
+            let surface_level =
+                land_surface_level(*coord, &protected_by_coord, &escarpment, relief.as_ref());
+            let surface = bridge_deck.unwrap_or_else(|| TilePos::new(*coord, surface_level));
+            columns.insert(*coord, land_column(surface_level, bridge_deck));
             surfaces.insert(
                 surface,
                 SurfaceMetadata {
-                    access: SurfaceAccess::Ordinary,
+                    access: if escarpment.shelves.contains(coord) && bridge_deck.is_none() {
+                        SurfaceAccess::SpecialMovement(CLIFF_SHELF_REGION)
+                    } else {
+                        SurfaceAccess::Ordinary
+                    },
                     interior: None,
                 },
             );
@@ -348,11 +403,10 @@ fn construct_plan(
         .copied()
         .ok_or_else(|| vec![recipe_issue("Waterfall bypass has no low landing")])?;
     let surface_at = |coord| {
-        volume
-            .surfaces
-            .keys()
-            .find(|surface| surface.coord == coord)
-            .copied()
+        volume.surfaces.iter().find_map(|(surface, metadata)| {
+            (surface.coord == coord && metadata.access == SurfaceAccess::Ordinary)
+                .then_some(*surface)
+        })
     };
     let fall_overlook = surface_at(HexCoord::from_axial(
         FALL_SOURCE_X - 1,
@@ -391,7 +445,15 @@ fn construct_plan(
             )]),
         },
         features: FeaturePlan::default(),
-        structures: StructurePlan::default(),
+        structures: StructurePlan {
+            by_id: BTreeMap::from([(
+                StructureId(0),
+                PlannedStructure {
+                    kind: StructureKind::Bridge,
+                    voxels: bridge,
+                },
+            )]),
+        },
         blockers: BTreeSet::new(),
         lights: BTreeMap::new(),
         biome_regions,
@@ -410,8 +472,8 @@ fn waterfall_view_hint(
             "Waterfall radius is too large: {error}"
         ))]
     })?;
-    let focus_height = 20.0 * level_height;
-    let frame = (f32::from(radius) * 3.5).max(8.0 * level_height * 3.0);
+    let focus_height = 21.5 * level_height;
+    let frame = (f32::from(radius) * 3.5).max(11.0 * level_height * 3.0);
     Ok(MapViewHint::new(
         (frame, focus_height + frame, 0.0),
         (0.0, focus_height, 0.0),
@@ -500,12 +562,6 @@ fn watercourse(mask: &BTreeSet<HexCoord>) -> Result<Watercourse, Vec<WorldValida
         }
     }
     let mut main_lanes = Vec::new();
-    let inlet_x = (-WATER_HALF_WIDTH..=WATER_HALF_WIDTH)
-        .filter_map(|y| rows.get(&y))
-        .filter_map(|row| row.iter().map(|coord| coord.x()).min())
-        .max()
-        .and_then(|minimum| minimum.checked_add(INLET_MARGIN))
-        .ok_or_else(|| vec![recipe_issue("Waterfall has no common inlet position")])?;
     for y in -WATER_HALF_WIDTH..=WATER_HALF_WIDTH {
         let Some(row) = rows.get(&y) else {
             return Err(vec![recipe_issue(format!(
@@ -517,11 +573,7 @@ fn watercourse(mask: &BTreeSet<HexCoord>) -> Result<Watercourse, Vec<WorldValida
                 "Waterfall mask has insufficient length on water lane y={y}"
             ))]);
         }
-        let mut lane: Vec<_> = row
-            .iter()
-            .copied()
-            .filter(|coord| coord.x() >= inlet_x)
-            .collect();
+        let mut lane = row.clone();
         lane.sort_unstable_by_key(|coord| coord.x());
         if !lane.windows(2).all(|pair| {
             let [first, second] = pair else {
@@ -554,6 +606,24 @@ fn watercourse(mask: &BTreeSet<HexCoord>) -> Result<Watercourse, Vec<WorldValida
         )]);
     }
     Ok(Watercourse { main_lanes, basin })
+}
+
+fn bridge_tiles(mask: &BTreeSet<HexCoord>) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let bridge: BTreeSet<_> = (BRIDGE_FIRST_X..=BRIDGE_LAST_X)
+        .flat_map(|x| {
+            (-BRIDGE_BANK_Y..=BRIDGE_BANK_Y)
+                .map(move |y| TilePos::new(HexCoord::from_axial(x, y), BRIDGE_DECK_LEVEL))
+        })
+        .collect();
+    if bridge
+        .iter()
+        .any(|position| !mask.contains(&position.coord))
+    {
+        return Err(vec![recipe_issue(
+            "Waterfall mask cannot fit the required two-wide upstream bridge",
+        )]);
+    }
+    Ok(bridge)
 }
 
 fn bypass_tiles(
@@ -658,18 +728,139 @@ fn secondary_slope_apron(
 fn land_surface_level(
     coord: HexCoord,
     bypass: &BTreeMap<HexCoord, i32>,
+    escarpment: &EscarpmentPlan,
     relief: Option<&ReliefPlan>,
 ) -> i32 {
     if let Some(level) = bypass.get(&coord) {
         return *level;
     }
-
-    let base = if coord.x() < FALL_TARGET_X {
-        HIGH_LAND_LEVEL
-    } else {
-        LOW_LAND_LEVEL
-    };
+    if escarpment.shelves.contains(&coord) {
+        return CLIFF_MID_LEVEL;
+    }
+    let base = escarpment.base_level(coord);
     base + relief.map_or(0, |relief| relief.height_at(coord))
+}
+
+#[derive(Debug)]
+struct EscarpmentPlan {
+    boundary_by_y: BTreeMap<i32, i32>,
+    shelves: BTreeSet<HexCoord>,
+}
+
+impl EscarpmentPlan {
+    fn new(
+        grid_radius: u32,
+        mask: &BTreeSet<HexCoord>,
+        water: &BTreeSet<HexCoord>,
+        protected: &BTreeMap<HexCoord, i32>,
+        stream: Option<SeedStream<'_>>,
+    ) -> Result<Self, Vec<WorldValidationIssue>> {
+        const PATTERN: [i32; 12] = [-2, -2, -1, 0, 1, 2, 2, 1, 0, -1, -2, -2];
+
+        let phase = stream.map_or(0, |stream| {
+            usize::try_from(stream.sample(0) % u64::try_from(PATTERN.len()).unwrap_or(1))
+                .unwrap_or_default()
+        });
+        let reverse = stream.is_some_and(|stream| stream.sample(1) & 1 == 1);
+        let ys: BTreeSet<_> = mask.iter().map(|coord| coord.y()).collect();
+        let mut boundary_by_y = BTreeMap::new();
+        for y in ys {
+            let shifted =
+                usize::try_from(y.rem_euclid(i32::try_from(PATTERN.len()).unwrap_or(i32::MAX)))
+                    .unwrap_or_default();
+            let index = if reverse {
+                phase
+                    .saturating_add(PATTERN.len())
+                    .saturating_sub(shifted % PATTERN.len())
+                    % PATTERN.len()
+            } else {
+                phase.saturating_add(shifted) % PATTERN.len()
+            };
+            let offset = if y.abs() <= BASIN_MAX_HALF_WIDTH {
+                FALL_TARGET_X
+            } else {
+                PATTERN.get(index).copied().unwrap_or_default()
+            }
+            .clamp(-CLIFF_MAX_OFFSET, CLIFF_MAX_OFFSET);
+            boundary_by_y.insert(y, offset);
+        }
+
+        let mut candidates: Vec<_> = boundary_by_y
+            .iter()
+            .filter_map(|(&y, &x)| {
+                let coord = HexCoord::from_axial(x, y);
+                (mask.contains(&coord)
+                    && !water.contains(&coord)
+                    && !protected.contains_key(&coord))
+                .then_some(coord)
+            })
+            .collect();
+        candidates.sort_unstable_by_key(|coord| {
+            (
+                stream.map_or_else(
+                    || fallback_cliff_priority(*coord),
+                    |stream| stream.sample_coord(*coord, 2),
+                ),
+                *coord,
+            )
+        });
+        let target = usize::try_from((grid_radius / 2).clamp(4, 8)).unwrap_or(4);
+        let mut shelves = BTreeSet::new();
+        for coord in &candidates {
+            if shelves.len() >= target {
+                break;
+            }
+            if shelves
+                .iter()
+                .all(|selected: &HexCoord| selected.y().abs_diff(coord.y()) >= 2)
+            {
+                shelves.insert(*coord);
+            }
+        }
+        for coord in candidates {
+            if shelves.len() >= target {
+                break;
+            }
+            shelves.insert(coord);
+        }
+        if shelves.len() < target {
+            return Err(vec![recipe_issue(format!(
+                "Waterfall escarpment can fit only {} of {target} required shelf cells",
+                shelves.len()
+            ))]);
+        }
+
+        Ok(Self {
+            boundary_by_y,
+            shelves,
+        })
+    }
+
+    fn boundary_x(&self, y: i32) -> i32 {
+        self.boundary_by_y.get(&y).copied().unwrap_or(FALL_TARGET_X)
+    }
+
+    fn high_side(&self, coord: HexCoord) -> bool {
+        coord.x() < self.boundary_x(coord.y())
+    }
+
+    fn base_level(&self, coord: HexCoord) -> i32 {
+        if self.high_side(coord) {
+            HIGH_LAND_LEVEL
+        } else {
+            LOW_LAND_LEVEL
+        }
+    }
+}
+
+fn fallback_cliff_priority(coord: HexCoord) -> u64 {
+    let x = u64::from(u32::from_le_bytes(coord.x().to_le_bytes()));
+    let y = u64::from(u32::from_le_bytes(coord.y().to_le_bytes()));
+    let z = u64::from(u32::from_le_bytes(coord.z().to_le_bytes()));
+    let mut value = x ^ y.rotate_left(21) ^ z.rotate_left(42) ^ 0x9e37_79b9_7f4a_7c15;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 
 #[derive(Debug)]
@@ -686,6 +877,7 @@ impl ReliefPlan {
         mask: &BTreeSet<HexCoord>,
         water: &BTreeSet<HexCoord>,
         bypass: &BTreeMap<HexCoord, i32>,
+        escarpment: &EscarpmentPlan,
         stream: SeedStream<'_>,
     ) -> Self {
         let protected: BTreeSet<_> = bypass.keys().copied().collect();
@@ -694,7 +886,7 @@ impl ReliefPlan {
             let candidates: Vec<_> = mask
                 .iter()
                 .copied()
-                .filter(|coord| (coord.x() < FALL_TARGET_X) == high_bank)
+                .filter(|coord| escarpment.high_side(*coord) == high_bank)
                 .filter(|coord| !water.contains(coord) && !protected.contains(coord))
                 .filter(|coord| coord.distance(HexCoord::ORIGIN).saturating_add(2) <= grid_radius)
                 .collect();
@@ -750,61 +942,70 @@ impl ReliefPlan {
     }
 }
 
-fn land_column(surface: i32) -> VolumeColumn {
-    VolumeColumn {
-        elements: vec![
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(0, 1),
-                material: SolidMaterialRole::Bedrock,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(1, surface - 2),
-                material: SolidMaterialRole::Stone,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(surface - 2, surface),
-                material: SolidMaterialRole::Dirt,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(surface, surface + 1),
-                material: SolidMaterialRole::Grass,
-                cutaway_for: None,
-            }),
-        ],
+fn land_column(surface: i32, bridge_deck: Option<TilePos>) -> VolumeColumn {
+    let mut elements = vec![
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(0, 1),
+            material: SolidMaterialRole::Bedrock,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(1, surface - 2),
+            material: SolidMaterialRole::Stone,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(surface - 2, surface),
+            material: SolidMaterialRole::Dirt,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(surface, surface + 1),
+            material: SolidMaterialRole::Grass,
+            cutaway_for: None,
+        }),
+    ];
+    if let Some(deck) = bridge_deck {
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(deck.level, deck.level.saturating_add(1)),
+            material: SolidMaterialRole::Metal,
+            cutaway_for: None,
+        }));
     }
+    VolumeColumn { elements }
 }
 
-fn water_column(cell: WaterCell) -> (VolumeColumn, TilePos) {
+fn water_column(cell: WaterCell, bridge_deck: Option<TilePos>) -> (VolumeColumn, TilePos) {
     let bed = TilePos::new(cell.top.coord, cell.bed_level);
-    (
-        VolumeColumn {
-            elements: vec![
-                VolumeElement::Solid(SolidMass {
-                    levels: LevelInterval::new(0, 1),
-                    material: SolidMaterialRole::Bedrock,
-                    cutaway_for: None,
-                }),
-                VolumeElement::Solid(SolidMass {
-                    levels: LevelInterval::new(1, cell.bed_level),
-                    material: SolidMaterialRole::Stone,
-                    cutaway_for: None,
-                }),
-                VolumeElement::Solid(SolidMass {
-                    levels: LevelInterval::new(cell.bed_level, cell.bed_level + 1),
-                    material: SolidMaterialRole::Gravel,
-                    cutaway_for: None,
-                }),
-                VolumeElement::Fill(NonSolidFill {
-                    levels: LevelInterval::new(cell.fill_bottom, cell.top.level + 1),
-                    material: FillMaterialRole::Water,
-                }),
-            ],
-        },
-        bed,
-    )
+    let mut elements = vec![
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(0, 1),
+            material: SolidMaterialRole::Bedrock,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(1, cell.bed_level),
+            material: SolidMaterialRole::Stone,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(cell.bed_level, cell.bed_level + 1),
+            material: SolidMaterialRole::Gravel,
+            cutaway_for: None,
+        }),
+        VolumeElement::Fill(NonSolidFill {
+            levels: LevelInterval::new(cell.fill_bottom, cell.top.level + 1),
+            material: FillMaterialRole::Water,
+        }),
+    ];
+    if let Some(deck) = bridge_deck {
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(deck.level, deck.level.saturating_add(1)),
+            material: SolidMaterialRole::Metal,
+            cutaway_for: None,
+        }));
+    }
+    (VolumeColumn { elements }, bed)
 }
 
 fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMetrics> {
@@ -846,18 +1047,24 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
         ));
     }
     let fall_height = validate_fall(&fall_nodes, &mut issues);
-    let surfaces_by_coord: BTreeMap<_, _> = plan
-        .volume
-        .surfaces
-        .iter()
-        .map(|(position, metadata)| (position.coord, (*position, *metadata)))
-        .collect();
-    if surfaces_by_coord.len() != plan.volume.surfaces.len() {
+    let mut surfaces_by_coord = BTreeMap::<HexCoord, Vec<(TilePos, SurfaceMetadata)>>::new();
+    for (position, metadata) in &plan.volume.surfaces {
+        surfaces_by_coord
+            .entry(position.coord)
+            .or_default()
+            .push((*position, *metadata));
+    }
+    if surfaces_by_coord
+        .values()
+        .any(|surfaces| surfaces.is_empty() || surfaces.len() > 2)
+    {
         issues.push(recipe_issue(
-            "Waterfall must publish exactly one semantic surface per column",
+            "Waterfall columns must publish one surface, or one bed plus one bridge deck",
         ));
     }
     validate_liquid_beds(plan, body, &surfaces_by_coord, &mut issues);
+    validate_bridge(plan, &mut issues);
+    validate_escarpment(plan, &mut issues);
 
     let bypass = match bypass_tiles(plan.layout.grid_radius, &plan.layout.footprint) {
         Ok(bypass) => bypass,
@@ -883,13 +1090,20 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
             }
         };
     let ordinary = OrdinaryGraph::from_plan(plan);
-    validate_bypass(plan, &ordinary, &bypass, "critical", 9, &mut issues);
+    validate_bypass(
+        plan,
+        &ordinary,
+        &bypass,
+        "critical",
+        inclusive_span_len(BYPASS_HIGH_X, BYPASS_LOW_X),
+        &mut issues,
+    );
     validate_bypass(
         plan,
         &ordinary,
         &secondary_bypass,
         "secondary",
-        11,
+        inclusive_span_len(SECONDARY_HIGH_X, SECONDARY_LOW_X),
         &mut issues,
     );
     validate_secondary_apron(plan, &ordinary, &secondary_apron, &mut issues);
@@ -920,9 +1134,18 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
         .as_ref()
         .is_none_or(|distances| distances.len() != ordinary.len())
     {
-        issues.push(recipe_issue(
-            "Waterfall ordinary network leaves one or more surfaces disconnected",
-        ));
+        let reached = distances.as_ref().map_or(0, BTreeMap::len);
+        let examples = distances.as_ref().map_or_else(Vec::new, |distances| {
+            ordinary
+                .positions()
+                .filter(|position| !distances.contains_key(position))
+                .take(6)
+                .collect::<Vec<_>>()
+        });
+        issues.push(recipe_issue(format!(
+            "Waterfall ordinary network reaches {reached}/{} surfaces; disconnected examples: {examples:?}",
+            ordinary.len()
+        )));
     }
 
     let bypass_coords: BTreeSet<_> = bypass
@@ -931,6 +1154,12 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
         .flatten()
         .chain(&secondary_apron)
         .map(|position| position.coord)
+        .chain(
+            bridge_tiles(&plan.layout.footprint)
+                .into_iter()
+                .flatten()
+                .map(|position| position.coord),
+        )
         .collect();
     let raised_terrain = ordinary
         .positions()
@@ -938,7 +1167,7 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
             if bypass_coords.contains(&position.coord) {
                 return false;
             }
-            let base = if position.coord.x() < FALL_TARGET_X {
+            let base = if position.level >= HIGH_LAND_LEVEL {
                 HIGH_LAND_LEVEL
             } else {
                 LOW_LAND_LEVEL
@@ -1019,7 +1248,7 @@ fn validate_flow_stages(
     let expected_coords = watercourse.coordinates();
     if actual_coords != expected_coords {
         issues.push(recipe_issue(
-            "Waterfall liquid nodes do not exactly cover the three lanes and widened basin",
+            "Waterfall liquid nodes do not exactly cover the edge-to-edge lanes and widened basin",
         ));
     }
 
@@ -1063,21 +1292,36 @@ fn validate_flow_stages(
         }
     }
     for lane in &watercourse.main_lanes {
+        let Some(first) = lane.first().copied() else {
+            issues.push(recipe_issue("Waterfall has an empty main lane"));
+            continue;
+        };
         if let Some(last) = lane.last() {
             let terminal = TilePos::new(*last, LOW_WATER_LEVEL);
-            if last.neighbors().into_iter().any(|neighbor| {
-                neighbor.y() == last.y()
-                    && neighbor.x() > last.x()
-                    && expected_coords.contains(&neighbor)
-            }) || !matches!(
-                body.nodes.get(&terminal),
-                Some(LiquidNode {
-                    state: LiquidFlowState::Still,
-                    downstream: None,
+            let leaves_west = !watercourse.coordinates().contains(&HexCoord::from_axial(
+                first.x().saturating_sub(1),
+                first.y(),
+            ));
+            let leaves_east = !watercourse
+                .coordinates()
+                .contains(&HexCoord::from_axial(last.x().saturating_add(1), last.y()));
+            if !leaves_west
+                || !leaves_east
+                || last.neighbors().into_iter().any(|neighbor| {
+                    neighbor.y() == last.y()
+                        && neighbor.x() > last.x()
+                        && expected_coords.contains(&neighbor)
                 })
-            ) {
+                || !matches!(
+                    body.nodes.get(&terminal),
+                    Some(LiquidNode {
+                        state: LiquidFlowState::Still,
+                        downstream: None,
+                    })
+                )
+            {
                 issues.push(recipe_issue(format!(
-                    "Waterfall outlet lane y={} does not terminate as still water at the world edge",
+                    "Waterfall lane y={} does not span the world and terminate as still water",
                     last.y()
                 )));
             }
@@ -1130,21 +1374,19 @@ fn validate_fall(
 fn validate_liquid_beds(
     plan: &GeneratedWorldPlan,
     body: &LiquidBodyPlan,
-    surfaces_by_coord: &BTreeMap<HexCoord, (TilePos, SurfaceMetadata)>,
+    surfaces_by_coord: &BTreeMap<HexCoord, Vec<(TilePos, SurfaceMetadata)>>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
     for position in body.nodes.keys() {
-        let bed = surfaces_by_coord.get(&position.coord);
-        if !matches!(
-            bed,
-            Some(&(
-                _,
-                SurfaceMetadata {
-                    access: SurfaceAccess::NonStandable,
-                    ..
-                }
-            ))
-        ) {
+        let bed = surfaces_by_coord
+            .get(&position.coord)
+            .and_then(|surfaces| {
+                surfaces
+                    .iter()
+                    .find(|(_, metadata)| metadata.access == SurfaceAccess::NonStandable)
+            })
+            .copied();
+        if bed.is_none() {
             issues.push(recipe_issue(format!(
                 "water column {:?} does not publish a non-standable bed",
                 position.coord
@@ -1176,6 +1418,209 @@ fn validate_liquid_beds(
                 position.coord
             )));
         }
+    }
+}
+
+fn validate_bridge(plan: &GeneratedWorldPlan, issues: &mut Vec<WorldValidationIssue>) {
+    let expected = match bridge_tiles(&plan.layout.footprint) {
+        Ok(bridge) => bridge,
+        Err(mut bridge_issues) => {
+            issues.append(&mut bridge_issues);
+            return;
+        }
+    };
+    let bridges: Vec<_> = plan
+        .structures
+        .by_id
+        .values()
+        .filter(|structure| structure.kind == StructureKind::Bridge)
+        .collect();
+    if bridges.len() != 1
+        || bridges
+            .first()
+            .is_none_or(|bridge| bridge.voxels != expected)
+    {
+        issues.push(recipe_issue(
+            "Waterfall must retain one exact two-wide upstream bridge structure",
+        ));
+    }
+
+    for deck in &expected {
+        if plan
+            .volume
+            .surfaces
+            .get(deck)
+            .map(|metadata| metadata.access)
+            != Some(SurfaceAccess::Ordinary)
+        {
+            issues.push(recipe_issue(format!(
+                "Waterfall bridge deck {deck:?} is not ordinary footing"
+            )));
+        }
+        let Some(column) = plan.volume.columns.get(&deck.coord) else {
+            issues.push(recipe_issue(format!(
+                "Waterfall bridge deck {deck:?} has no volume column"
+            )));
+            continue;
+        };
+        if !column.elements.iter().any(|element| {
+            matches!(
+                element,
+                VolumeElement::Solid(SolidMass {
+                    levels,
+                    material: SolidMaterialRole::Metal,
+                    ..
+                }) if *levels == LevelInterval::new(deck.level, deck.level.saturating_add(1))
+            )
+        }) {
+            issues.push(recipe_issue(format!(
+                "Waterfall bridge deck {deck:?} is not one metal voxel thick"
+            )));
+        }
+        if deck.coord.y().abs() <= WATER_HALF_WIDTH {
+            let clearance_level = deck.level.saturating_sub(1);
+            if column.elements.iter().any(|element| {
+                let levels = match element {
+                    VolumeElement::Solid(mass) => mass.levels,
+                    VolumeElement::Fill(fill) => fill.levels,
+                };
+                levels.bottom <= clearance_level && clearance_level < levels.top
+            }) {
+                issues.push(recipe_issue(format!(
+                    "Waterfall bridge deck {deck:?} does not leave one air level over the river"
+                )));
+            }
+        }
+    }
+
+    let ordinary = OrdinaryGraph::from_plan(plan);
+    for x in BRIDGE_FIRST_X..=BRIDGE_LAST_X {
+        let lane: Vec<_> = (-BRIDGE_BANK_Y..=BRIDGE_BANK_Y)
+            .map(|y| TilePos::new(HexCoord::from_axial(x, y), BRIDGE_DECK_LEVEL))
+            .collect();
+        if lane
+            .windows(2)
+            .any(|pair| !matches!(pair, [from, to] if ordinary.admits(*from, *to)))
+        {
+            issues.push(recipe_issue(format!(
+                "Waterfall bridge lane x={x} is not continuously walkable"
+            )));
+        }
+    }
+
+    let ordinary_at = |coord| {
+        plan.volume
+            .surfaces
+            .iter()
+            .find_map(|(position, metadata)| {
+                (position.coord == coord && metadata.access == SurfaceAccess::Ordinary)
+                    .then_some(*position)
+            })
+    };
+    let north = ordinary_at(HexCoord::from_axial(BRIDGE_FIRST_X, -BRIDGE_BANK_Y - 1));
+    let south = ordinary_at(HexCoord::from_axial(BRIDGE_FIRST_X, BRIDGE_BANK_Y + 1));
+    match (north, south) {
+        (Some(north), Some(south)) => {
+            let reachable_without_bridge = ordinary.reachable_avoiding(north, &expected);
+            if reachable_without_bridge.contains(&south) {
+                issues.push(recipe_issue(
+                    "Waterfall water barrier can be crossed without the upper bridge",
+                ));
+            }
+        }
+        _ => issues.push(recipe_issue(
+            "Waterfall bridge has no ordinary landing on both river banks",
+        )),
+    }
+}
+
+fn validate_escarpment(plan: &GeneratedWorldPlan, issues: &mut Vec<WorldValidationIssue>) {
+    let shelves: BTreeSet<_> = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::SpecialMovement(CLIFF_SHELF_REGION))
+                .then_some(*position)
+        })
+        .collect();
+    let expected_shelves = usize::try_from((plan.layout.grid_radius / 2).clamp(4, 8)).unwrap_or(4);
+    if shelves.len() != expected_shelves
+        || shelves
+            .iter()
+            .any(|position| position.level != CLIFF_MID_LEVEL)
+    {
+        issues.push(recipe_issue(format!(
+            "Waterfall escarpment must retain {expected_shelves} mid-height shelf cells"
+        )));
+    }
+
+    let water_coords: BTreeSet<_> = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect();
+    let protected_coords: BTreeSet<_> =
+        bypass_tiles(plan.layout.grid_radius, &plan.layout.footprint)
+            .into_iter()
+            .flat_map(|lanes| lanes.into_iter().flatten().map(|position| position.coord))
+            .chain(
+                secondary_bypass_tiles(plan.layout.grid_radius, &plan.layout.footprint)
+                    .into_iter()
+                    .flat_map(|lanes| lanes.into_iter().flatten().map(|position| position.coord)),
+            )
+            .chain(
+                secondary_slope_apron(plan.layout.grid_radius, &plan.layout.footprint)
+                    .into_iter()
+                    .flatten()
+                    .map(|position| position.coord),
+            )
+            .chain(
+                bridge_tiles(&plan.layout.footprint)
+                    .into_iter()
+                    .flatten()
+                    .map(|position| position.coord),
+            )
+            .collect();
+    let protected_rows: BTreeSet<_> = protected_coords.iter().map(|coord| coord.y()).collect();
+    let mut fronts = BTreeMap::<i32, i32>::new();
+    for position in plan.volume.surfaces.keys() {
+        if position.coord.y().abs() <= BASIN_MAX_HALF_WIDTH
+            || protected_rows.contains(&position.coord.y())
+            || water_coords.contains(&position.coord)
+            || protected_coords.contains(&position.coord)
+        {
+            continue;
+        }
+        if position.level <= CLIFF_MID_LEVEL {
+            fronts
+                .entry(position.coord.y())
+                .and_modify(|x| *x = (*x).min(position.coord.x()))
+                .or_insert(position.coord.x());
+        }
+    }
+    let front_values: Vec<_> = fronts.into_iter().collect();
+    let lateral_span = front_values
+        .iter()
+        .map(|(_, x)| *x)
+        .min()
+        .zip(front_values.iter().map(|(_, x)| *x).max())
+        .map_or(0, |(minimum, maximum)| maximum.saturating_sub(minimum));
+    if lateral_span < 3 || lateral_span > CLIFF_MAX_OFFSET.saturating_mul(2) {
+        issues.push(recipe_issue(format!(
+            "Waterfall escarpment lateral variation must span 3-{}, got {lateral_span}",
+            CLIFF_MAX_OFFSET.saturating_mul(2)
+        )));
+    }
+    if front_values.windows(2).any(|pair| {
+        matches!(pair, [(first_y, first_x), (second_y, second_x)]
+            if second_y.saturating_sub(*first_y) == 1
+                && first_x.abs_diff(*second_x) > 2)
+    }) {
+        issues.push(recipe_issue(
+            "Waterfall escarpment moves more than two hexes between adjacent rows",
+        ));
     }
 }
 
@@ -1235,10 +1680,11 @@ fn validate_secondary_apron(
     apron: &[TilePos],
     issues: &mut Vec<WorldValidationIssue>,
 ) {
-    if apron.len() != 14 {
-        issues.push(recipe_issue(
-            "Waterfall secondary slope must retain its irregular fourteen-tile apron",
-        ));
+    let expected = secondary_apron_len();
+    if apron.len() != expected {
+        issues.push(recipe_issue(format!(
+            "Waterfall secondary slope must retain its irregular {expected}-tile apron"
+        )));
     }
     let apron_set: BTreeSet<_> = apron.iter().copied().collect();
     for expected in apron {
@@ -1427,6 +1873,21 @@ fn count_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+fn inclusive_span_len(start: i32, end: i32) -> usize {
+    usize::try_from(end.saturating_sub(start).saturating_add(1)).unwrap_or_default()
+}
+
+fn secondary_apron_len() -> usize {
+    let broad = SECONDARY_LOW_X
+        .saturating_sub(SECONDARY_HIGH_X)
+        .saturating_sub(1);
+    let shoulder = SECONDARY_LOW_X
+        .saturating_sub(SECONDARY_HIGH_X)
+        .saturating_sub(5)
+        .max(0);
+    usize::try_from(broad.saturating_add(shoulder)).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1497,8 +1958,8 @@ mod tests {
                     generate(radius, 0.4, &settings(), seed).expect("Waterfall should generate");
                 assert!(!selected.used_fallback);
                 assert_eq!(selected.metrics.fall_nodes, 3);
-                assert_eq!(selected.metrics.fall_height, 8);
-                assert_eq!(selected.metrics.bypass_steps, 8);
+                assert_eq!(selected.metrics.fall_height, 11);
+                assert_eq!(selected.metrics.bypass_steps, 11);
                 assert_eq!(selected.validated.plan.validate(), Vec::new());
             }
         }
@@ -1513,8 +1974,8 @@ mod tests {
         assert!(metrics.current_nodes >= 3);
         assert!(metrics.rapid_nodes >= 3);
         assert_eq!(metrics.fall_nodes, 3);
-        assert_eq!(metrics.fall_height, 8);
-        assert!(metrics.water_nodes > 30);
+        assert_eq!(metrics.fall_height, 11);
+        assert!(metrics.water_nodes > 60);
     }
 
     #[test]
@@ -1522,35 +1983,7 @@ mod tests {
         let selected = generate(12, 0.4, &settings(), 77).expect("Waterfall should generate");
         let plan = &selected.validated.plan;
         let course = watercourse(&plan.layout.footprint).expect("fixed watercourse");
-        let ordinary = OrdinaryGraph::from_plan(plan);
-
-        let inlet_xs: BTreeSet<_> = course
-            .main_lanes
-            .iter()
-            .filter_map(|lane| lane.first())
-            .map(|coord| coord.x())
-            .collect();
-        assert_eq!(inlet_xs.len(), 1, "all inlet lanes start together");
-        let inlet_x = inlet_xs.first().copied().expect("three inlet lanes");
-        for x in [inlet_x - 2, inlet_x - 1] {
-            let circulation: Vec<_> = (-2..=2)
-                .map(|y| {
-                    ordinary
-                        .positions_by_coord
-                        .get(&HexCoord::from_axial(x, y))
-                        .copied()
-                        .expect("the headwater margin should remain dry and ordinary")
-                })
-                .collect();
-            assert!(
-                circulation.windows(2).all(
-                    |pair| matches!(pair, [first, second] if ordinary.admits(*first, *second))
-                ),
-                "the inlet needs two independent ordinary circulation lanes"
-            );
-        }
-
-        for (x, expected_width) in [(0, 7), (1, 7), (2, 5), (3, 5)] {
+        for (x, expected_width) in [(0, 7), (1, 7), (2, 7), (3, 7), (4, 7), (5, 5), (6, 5)] {
             assert_eq!(
                 course.basin.iter().filter(|coord| coord.x() == x).count(),
                 expected_width,
@@ -1566,15 +1999,66 @@ mod tests {
         }));
 
         for lane in &course.main_lanes {
+            let first = lane.first().copied().expect("every lane has an inlet");
             let last = lane.last().copied().expect("every lane has an outlet");
+            assert!(
+                !plan.layout.footprint.contains(&HexCoord::from_axial(
+                    first.x().saturating_sub(1),
+                    first.y(),
+                )),
+                "each high-water lane must begin on the west boundary"
+            );
             assert!(
                 !plan
                     .layout
                     .footprint
-                    .contains(&super::super::layout::HexSide::East.neighbor(last)),
+                    .contains(&HexCoord::from_axial(last.x().saturating_add(1), last.y(),)),
                 "each low-water lane must terminate on the resolved east boundary"
             );
         }
+    }
+
+    #[test]
+    fn upstream_bridge_is_two_wide_and_the_only_ordinary_bank_crossing() {
+        let selected = generate(12, 0.4, &settings(), 77).expect("Waterfall should generate");
+        let plan = &selected.validated.plan;
+        let expected = bridge_tiles(&plan.layout.footprint).expect("fixed upper bridge");
+        let structure = plan
+            .structures
+            .by_id
+            .values()
+            .find(|structure| structure.kind == StructureKind::Bridge)
+            .expect("Waterfall should publish a bridge structure");
+        assert_eq!(structure.voxels, expected);
+        assert_eq!(expected.len(), 14);
+
+        let ordinary = OrdinaryGraph::from_plan(plan);
+        for x in BRIDGE_FIRST_X..=BRIDGE_LAST_X {
+            let lane: Vec<_> = (-BRIDGE_BANK_Y..=BRIDGE_BANK_Y)
+                .map(|y| TilePos::new(HexCoord::from_axial(x, y), BRIDGE_DECK_LEVEL))
+                .collect();
+            assert!(lane
+                .windows(2)
+                .all(|pair| matches!(pair, [from, to] if ordinary.admits(*from, *to))));
+        }
+        let ordinary_at = |coord| {
+            plan.volume
+                .surfaces
+                .iter()
+                .find_map(|(position, metadata)| {
+                    (position.coord == coord && metadata.access == SurfaceAccess::Ordinary)
+                        .then_some(*position)
+                })
+                .expect("bridge bank should retain ordinary footing")
+        };
+        let first_bank = ordinary_at(HexCoord::from_axial(BRIDGE_FIRST_X, -BRIDGE_BANK_Y - 1));
+        let second_bank = ordinary_at(HexCoord::from_axial(BRIDGE_FIRST_X, BRIDGE_BANK_Y + 1));
+        assert!(
+            !ordinary
+                .reachable_avoiding(first_bank, &expected)
+                .contains(&second_bank),
+            "edge-to-edge water should make the bridge the only ordinary bank crossing"
+        );
     }
 
     #[test]
@@ -1586,7 +2070,13 @@ mod tests {
             secondary_bypass_tiles(12, &plan.layout.footprint).expect("secondary bypass");
         let ordinary = OrdinaryGraph::from_plan(plan);
 
-        for (route, expected_length) in [(&bypass, 9), (&secondary, 11)] {
+        for (route, expected_length) in [
+            (&bypass, inclusive_span_len(BYPASS_HIGH_X, BYPASS_LOW_X)),
+            (
+                &secondary,
+                inclusive_span_len(SECONDARY_HIGH_X, SECONDARY_LOW_X),
+            ),
+        ] {
             for lane in route {
                 assert_eq!(lane.len(), expected_length);
                 assert!(lane.windows(2).all(|pair| {
@@ -1599,7 +2089,7 @@ mod tests {
                     lane.first()
                         .zip(lane.last())
                         .map_or(0, |(first, last)| first.level.saturating_sub(last.level)),
-                    8
+                    11
                 );
                 assert!(lane.windows(2).all(|pair| {
                     matches!(
@@ -1622,7 +2112,7 @@ mod tests {
                 .all(|(first, second)| ordinary.admits(*first, *second)));
         }
         let apron = secondary_slope_apron(12, &plan.layout.footprint).expect("slope apron");
-        assert_eq!(apron.len(), 14);
+        assert_eq!(apron.len(), secondary_apron_len());
         assert!(apron.iter().all(|position| ordinary.contains(*position)));
         let party = plan
             .anchors
@@ -1652,7 +2142,9 @@ mod tests {
                 .volume
                 .surfaces
                 .iter()
-                .find(|(surface, _)| surface.coord == node.coord)
+                .find(|(surface, metadata)| {
+                    surface.coord == node.coord && metadata.access == SurfaceAccess::NonStandable
+                })
                 .expect("every water column has a bed");
             assert_eq!(metadata.access, SurfaceAccess::NonStandable);
             assert!(matches!(
@@ -1698,19 +2190,35 @@ mod tests {
             let secondary =
                 secondary_bypass_tiles(radius, &layout.footprint).expect("secondary bypass");
             let apron = secondary_slope_apron(radius, &layout.footprint).expect("secondary apron");
-            let bypass: BTreeMap<_, _> = critical
+            let bridge = bridge_tiles(&layout.footprint).expect("upper bridge");
+            let mut bypass: BTreeMap<_, _> = critical
                 .iter()
                 .chain(&secondary)
                 .flatten()
                 .chain(&apron)
                 .map(|position| (position.coord, position.level))
                 .collect();
+            bypass.extend(
+                bridge
+                    .iter()
+                    .map(|position| (position.coord, HIGH_LAND_LEVEL)),
+            );
+            let streams = SeedStreams::new(912_441, 3, PatchId(0).0);
+            let escarpment = EscarpmentPlan::new(
+                radius,
+                &layout.footprint,
+                &course.coordinates(),
+                &bypass,
+                Some(streams.stage("waterfall.cliff")),
+            )
+            .expect("cliff should fit");
             let relief = ReliefPlan::new(
                 radius,
                 &layout.footprint,
                 &course.coordinates(),
                 &bypass,
-                SeedStreams::new(912_441, 3, PatchId(0).0).stage("waterfall.relief"),
+                &escarpment,
+                streams.stage("waterfall.relief"),
             );
             assert_eq!(relief.outer_radius, expected_outer_radius);
             assert_eq!(relief.inner_radius, (expected_outer_radius / 2).max(1));
@@ -1741,6 +2249,49 @@ mod tests {
             expanded > compact,
             "radius-40 relief should occupy more terrain than radius-12 relief"
         );
+    }
+
+    #[test]
+    fn cliff_front_meanders_and_retains_mid_height_shelves() {
+        let layout = resolve_layout(12, &settings()).expect("test layout should resolve");
+        let course = watercourse(&layout.footprint).expect("test watercourse");
+        let critical = bypass_tiles(12, &layout.footprint).expect("critical bypass");
+        let secondary = secondary_bypass_tiles(12, &layout.footprint).expect("secondary bypass");
+        let apron = secondary_slope_apron(12, &layout.footprint).expect("secondary apron");
+        let bridge = bridge_tiles(&layout.footprint).expect("upper bridge");
+        let mut protected: BTreeMap<_, _> = critical
+            .iter()
+            .chain(&secondary)
+            .flatten()
+            .chain(&apron)
+            .map(|position| (position.coord, position.level))
+            .collect();
+        protected.extend(
+            bridge
+                .iter()
+                .map(|position| (position.coord, HIGH_LAND_LEVEL)),
+        );
+        let cliff = EscarpmentPlan::new(
+            12,
+            &layout.footprint,
+            &course.coordinates(),
+            &protected,
+            Some(SeedStreams::new(77, 2, PatchId(0).0).stage("waterfall.cliff")),
+        )
+        .expect("cliff should fit");
+
+        let offsets: BTreeSet<_> = cliff.boundary_by_y.values().copied().collect();
+        assert!(offsets.contains(&-CLIFF_MAX_OFFSET));
+        assert!(offsets.contains(&CLIFF_MAX_OFFSET));
+        assert!(cliff
+            .boundary_by_y
+            .values()
+            .all(|offset| offset.abs() <= CLIFF_MAX_OFFSET));
+        assert_eq!(cliff.shelves.len(), 6);
+        assert!(cliff
+            .shelves
+            .iter()
+            .all(|coord| !course.coordinates().contains(coord)));
     }
 
     #[test]
@@ -1783,7 +2334,7 @@ mod tests {
         assert_eq!(selected.selected_candidate, None);
         assert_eq!(selected.valid_candidates, 0);
         assert_eq!(selected.metrics.raised_terrain, 0);
-        assert_eq!(selected.metrics.fall_height, 8);
+        assert_eq!(selected.metrics.fall_height, 11);
     }
 
     #[test]

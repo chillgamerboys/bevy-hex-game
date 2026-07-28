@@ -390,7 +390,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.seed, 771_203_419);
     assert_eq!(report.candidates_evaluated, 8);
     assert_eq!(report.valid_candidates, 8);
-    assert_eq!(report.selected_candidate, Some(7));
+    assert_eq!(report.selected_candidate, Some(4));
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
@@ -398,25 +398,25 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(1_427_819_116_951_828_988)
+        Some(13_149_356_101_097_810_401)
     );
-    assert_eq!(report.map_fingerprint, 10_801_394_444_515_877_317);
+    assert_eq!(report.map_fingerprint, 17_075_345_429_537_665_322);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
         "semantic and materialized identities use independent domains"
     );
-    assert_eq!(report.metrics.relief, 10);
-    assert_eq!(report.metrics.critical_route_steps, 8);
+    assert_eq!(report.metrics.relief, 13);
+    assert_eq!(report.metrics.critical_route_steps, 11);
     let Some(ProceduralRecipeMetrics::Waterfall(metrics)) = &report.recipe_metrics else {
         panic!("V3 Waterfall should publish exact recipe metrics");
     };
-    assert_eq!(metrics.fall_height, 8);
+    assert_eq!(metrics.fall_height, 11);
     assert_eq!(metrics.fall_nodes, 3);
-    assert_eq!(metrics.bypass_steps, 8);
-    assert_eq!(metrics.alternate_bypass_steps, 10);
-    assert_eq!(metrics.raised_terrain, 111);
-    assert_eq!(report.metrics.alternate_detour_percent, 25);
+    assert_eq!(metrics.bypass_steps, 11);
+    assert_eq!(metrics.alternate_bypass_steps, 13);
+    assert_eq!(metrics.raised_terrain, 95);
+    assert_eq!(report.metrics.alternate_detour_percent, 18);
     assert_eq!(metrics.water_nodes, report.metrics.barrier_cells);
     assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
 
@@ -427,7 +427,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     let hostile = anchors
         .get(&MapAnchorId::from("hostile_start"))
         .expect("Waterfall should publish hostile_start");
-    assert_eq!(party.level - hostile.level, 8);
+    assert_eq!(party.level - hostile.level, 11);
     for review_anchor in ["fall_overlook", "basin_overlook"] {
         assert!(
             anchors.get(&MapAnchorId::from(review_anchor)).is_some(),
@@ -436,10 +436,10 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     }
 
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
-    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 6);
     assert!(app.world().resource::<InteriorRegions>().is_empty());
     assert!(app.world().resource::<TraversalBlockers>().is_empty());
-    assert_eq!(app.world().resource::<BiomeRegions>().len(), 469);
+    assert_eq!(app.world().resource::<BiomeRegions>().len(), 475);
     assert!(app.world().resource::<MapViewHint>().is_valid());
 }
 
