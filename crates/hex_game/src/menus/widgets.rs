@@ -50,6 +50,22 @@ pub const EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.13);
 /// Panel fill — the gameplay HUD's proven dark surface, generalised.
 pub const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.045, 0.72);
 
+/// The tint of a basic gem, and the anchor of the element palette.
+///
+/// Saturated and mostly opaque — the first visual walk photographed the lattice demo's
+/// older low-alpha fills washing out against the screen behind them.
+///
+/// Lives here rather than in the demo that first used it because two screens now draw
+/// the lattice's vocabulary: the demo paints cells, and the casting panel paints the
+/// spells drawing on them. `casting::element_color` rotates this hue around
+/// `elements.ron`'s wheel to give each element its own, so this is literally the colour
+/// of the wheel's first entry as well as the fallback for an element nothing resolves.
+pub const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
+
+/// The tint of a fusion — a cell that combines gems, or a spell drawing on what one
+/// makes. Off the wheel in the content and off the hue circle here, for the same reason.
+pub const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
+
 /// Display size — screen titles, in the display face.
 pub const DISPLAY_SIZE: f32 = 46.0;
 
@@ -197,17 +213,32 @@ pub fn button(name: &'static str) -> impl Bundle {
     )
 }
 
+/// The width of a [`small_button`], and the width a blocked-reason slot has to match so
+/// a table of them keeps its rhythm whether or not each row can be acted on.
+pub const SMALL_BUTTON_WIDTH: f32 = 132.0;
+
 /// A compact button for a secondary command inside a row.
 ///
 /// Fixed dimensions so its row cannot resize when a numeric label changes, and
 /// short enough that a table of them keeps an even rhythm.
 #[must_use]
 pub fn small_button(name: impl Into<String>) -> impl Bundle {
+    row_button(name, SMALL_BUTTON_WIDTH)
+}
+
+/// The same button at a caller-chosen width.
+///
+/// For a row of several, where [`small_button`]'s fixed width would run past the panel
+/// holding it. The height is *not* a parameter: buttons of differing heights in one
+/// interface look like a mistake, and the fixed one is what makes a column of them read
+/// as a column.
+#[must_use]
+pub fn row_button(name: impl Into<String>, width: f32) -> impl Bundle {
     (
         Name::new(name.into()),
         Button,
         Node {
-            width: Val::Px(132.0),
+            width: Val::Px(width),
             height: Val::Px(46.0),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,

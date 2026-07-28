@@ -28,12 +28,14 @@ use bevy::prelude::*;
 use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, tick_burns, CastBlocked, Casting, CellKind,
-    LatticeSpec, LatticeState, LatticeStats, SpellTable,
+    apply_cast, apply_disables, castable, channel, tick_burns, Casting, CellKind, LatticeSpec,
+    LatticeState, LatticeStats, SpellTable,
 };
 
+use crate::casting::blocked_reason;
 use crate::menus::widgets::{
-    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets, LABEL,
+    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets,
+    FUSION_COLOR, GEM_COLOR, LABEL, SMALL_BUTTON_WIDTH,
 };
 
 use super::{despawn_screen, screen_root};
@@ -66,10 +68,9 @@ const ROW_STEP: f32 = 56.0;
 /// How many log lines the demo keeps.
 const LOG_LINES: usize = 6;
 
-/// Tints multiplied over the white hex sprite. Saturated and mostly opaque —
-/// the first walk photograph showed the old low-alpha fills washing out.
-const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
-const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
+/// Tints multiplied over the white hex sprite. `GEM_COLOR` and `FUSION_COLOR` moved to
+/// [`widgets`](crate::menus::widgets) when the gameplay casting panel started drawing
+/// the same vocabulary: two copies of a palette is one edit away from two palettes.
 const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
 const LOCKED_COLOR: Color = Color::srgba(0.72, 0.54, 0.18, 0.95);
 const DISABLED_COLOR: Color = Color::srgba(0.46, 0.13, 0.11, 0.95);
@@ -458,14 +459,6 @@ fn strike(demo: &mut DemoLattice, coord: LatticeCoord, spells: &SpellBook) {
     }
 }
 
-fn blocked_reason(blocked: &CastBlocked) -> &'static str {
-    match blocked {
-        CastBlocked::NotASpell => "no spell here",
-        CastBlocked::SpellDisabled => "spell hex disabled",
-        CastBlocked::Unsatisfiable => "not enough adjacent mana",
-    }
-}
-
 fn push_log(log: &mut Vec<String>, line: String) {
     log.push(line);
     while log.len() > LOG_LINES {
@@ -725,7 +718,7 @@ fn spawn_control_panel(
                         },
                     ))
                     .with_children(|row| {
-                        // The action slot is a fixed 132px whether it holds a
+                        // The action slot is a button's width whether it holds a
                         // button or a blocked reason, so every row aligns.
                         match castable(&demo.spec, &demo.state, coord, tables) {
                             Ok(plan) => {
@@ -747,7 +740,7 @@ fn spawn_control_panel(
                                 row.spawn((
                                     Name::new("Blocked Reason"),
                                     Node {
-                                        width: Val::Px(132.0),
+                                        width: Val::Px(SMALL_BUTTON_WIDTH),
                                         ..default()
                                     },
                                     children![fine(
