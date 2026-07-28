@@ -1,8 +1,8 @@
 //! Immediate-mode user interface for the Asset Workshop.
 //!
 //! This module deliberately owns no project persistence. It renders a cloned,
-//! read-only [`WorkshopUiSnapshot`](self::WorkshopUiSnapshot) and emits
-//! [`WorkshopUiAction`](self::WorkshopUiAction) messages for the
+//! read-only [`WorkshopUiSnapshot`](crate::ui::WorkshopUiSnapshot) and emits
+//! [`WorkshopUiAction`](crate::ui::WorkshopUiAction) messages for the
 //! application session to validate and execute.
 
 use std::collections::BTreeSet;

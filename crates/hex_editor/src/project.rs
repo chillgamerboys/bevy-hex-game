@@ -1,8 +1,9 @@
 //! Filesystem project loading, validation, impact reporting, and explicit saves.
 //!
-//! The editor model owns mutable drafts. [`AssetProject`](self::AssetProject) represents the last state
-//! successfully loaded from or written to the tracked `assets/art` tree, so a failed
-//! validation or filesystem operation never leaves its in-memory view ahead of disk.
+//! The editor model owns mutable drafts. [`AssetProject`](crate::project::AssetProject)
+//! represents the last state successfully loaded from or written to the tracked
+//! `assets/art` tree, so a failed validation or filesystem operation never leaves its
+//! in-memory view ahead of disk.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
