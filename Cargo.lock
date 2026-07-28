@@ -3318,6 +3318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_perception"
+version = "0.1.0"
+dependencies = [
+ "bevy_ecs",
+ "hex_core",
+ "hex_units",
+]
+
+[[package]]
 name = "hex_units"
 version = "0.1.0"
 dependencies = [
