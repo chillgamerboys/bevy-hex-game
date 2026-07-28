@@ -122,6 +122,16 @@
             ),
         ),
         (
+            name: "Waterfall",
+            blurb: "An elevated river accelerates into a broad fall, with a two-wide dry route around it.",
+            world: "config/worlds/procedural-waterfall.ron",
+            generation_seed: Some(771203419),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
             name: "Close Quarters",
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
             world: "config/world.ron",

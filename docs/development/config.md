@@ -278,6 +278,34 @@ interrupt entry. Recipe and environment combinations are validated together:
 Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
 the previous valid hot-reloaded settings active.
 
+**Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
+single-patch layout. Its liquid topology, three-wide flow, fall bounds, and two-wide
+dry bypass are structural recipe invariants rather than extra tuning fields:
+
+```ron
+terrain: Procedural((
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Waterfall(()),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
+    )),
+)),
+```
+
+As with earlier procedural scenarios, the reproducible seed belongs in
+`scenarios.ron`, not in the world recipe. V3 rejects unsupported
+recipe/environment pairs and incomplete edge contracts while deserializing.
+
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
 
