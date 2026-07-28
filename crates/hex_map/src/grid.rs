@@ -15,14 +15,15 @@ use bevy::prelude::*;
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-    HexTile, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors, MapViewHint,
-    ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady,
-    TilePos, TraversalProfile,
+    BiomeRegions, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
+    HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors,
+    MapViewHint, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId, TerrainEdit,
+    TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
 use crate::procedural;
 use crate::procedural_v2;
+use crate::procedural_v3;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
@@ -72,10 +73,13 @@ fn generate_world(
 ) {
     commands.remove_resource::<GameplaySetupFailure>();
     commands.remove_resource::<TerrainReady>();
+    commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<GenerationReport>();
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<TraversalBlockers>();
+    commands.remove_resource::<BiomeRegions>();
     commands.remove_resource::<MapViewHint>();
     let palette = match TerrainPalette::for_terrain(&table, &settings.terrain) {
         Ok(palette) => palette,
@@ -183,6 +187,16 @@ fn generate_world(
             commands.insert_resource(generated.report);
             commands.insert_resource(TerrainReady);
         }
+        crate::settings::ProceduralSettings::V3(v3) => {
+            let reason = match procedural_v3::ensure_recipe_available(v3) {
+                Ok(()) => "procedural V3 recipe has no generation runner".to_owned(),
+                Err(error) => error.to_string(),
+            };
+            error!("cannot build procedural V3 terrain: {reason}");
+            commands.insert_resource(GameplaySetupFailure::new(format!(
+                "The selected procedural terrain cannot be built: {reason}."
+            )));
+        }
     }
 }
 
@@ -194,6 +208,8 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
+    commands.remove_resource::<TraversalBlockers>();
+    commands.remove_resource::<BiomeRegions>();
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<GenerationReport>();
     commands.remove_resource::<TerrainReady>();
