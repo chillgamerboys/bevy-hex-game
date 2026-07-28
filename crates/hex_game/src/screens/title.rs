@@ -401,15 +401,11 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::{CubeCoord, Scenario, ScenarioPlacement, ScenarioSettings};
+    use hex_assets::Scenario;
 
     use super::*;
 
-    fn at(x: i32, y: i32, z: i32) -> CubeCoord {
-        CubeCoord { x, y, z }
-    }
-
-    fn scenario(name: &str, enemy: CubeCoord) -> Scenario {
+    fn scenario(name: &str) -> Scenario {
         Scenario {
             name: name.to_owned(),
             blurb: "A map.".to_owned(),
@@ -417,32 +413,27 @@ mod tests {
             lighting: "config/lighting.ron".to_owned(),
             generation_seed: None,
             starting_time_hours: None,
-            units: ScenarioSettings {
-                player: ScenarioPlacement::Fixed(at(0, 0, 0)),
-                enemy: ScenarioPlacement::Fixed(enemy),
-            },
+            encounter: "config/encounters/bridge-crossing.ron".to_owned(),
         }
     }
 
     fn seeded_scenario(name: &str, seed: u64) -> Scenario {
         Scenario {
             generation_seed: Some(seed),
-            ..scenario(name, at(1, -1, 0))
+            encounter: "config/encounters/anchored-skirmish.ron".to_owned(),
+            ..scenario(name)
         }
     }
 
     fn library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![scenario("First", at(1, -1, 0))],
+            scenarios: vec![scenario("First")],
         }
     }
 
     fn two_scenario_library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![
-                scenario("First", at(1, -1, 0)),
-                scenario("Second", at(2, -2, 0)),
-            ],
+            scenarios: vec![scenario("First"), scenario("Second")],
         }
     }
 
@@ -716,10 +707,7 @@ mod tests {
     #[test]
     fn only_seeded_scenarios_offer_rerolls_and_capture_the_seed() {
         let mut app = test_app_with(ScenarioLibrary {
-            scenarios: vec![
-                scenario("Authored", at(1, -1, 0)),
-                seeded_scenario("Generated", 42),
-            ],
+            scenarios: vec![scenario("Authored"), seeded_scenario("Generated", 42)],
         });
         go_to(&mut app, Screen::Title);
 

@@ -17,6 +17,8 @@ use bevy::prelude::*;
 
 pub mod content_index;
 pub mod elements;
+/// What stands on the map when a scenario starts.
+pub mod encounter;
 pub mod loader;
 /// The scenarios offered on the title screen.
 pub mod scenario;
@@ -26,6 +28,10 @@ pub mod substances;
 
 pub use content_index::{ContentError, ContentIndex};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
+pub use encounter::{
+    Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
+    RosteredUnit,
+};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
@@ -34,7 +40,7 @@ pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
     ChannellingTrickle, CombatSettings, CubeCoord, DisplaySettings, InitiativePolicy,
     LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
-    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy, ScenarioPlacement, ScenarioSettings,
+    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy,
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
@@ -62,8 +68,8 @@ pub fn plugin(app: &mut App) {
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
-        .register_type::<ScenarioPlacement>()
-        .register_type::<ScenarioSettings>()
+        .register_type::<Encounter>()
+        .register_type::<EncounterPlacement>()
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
@@ -73,13 +79,13 @@ pub fn plugin(app: &mut App) {
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //
-    // `ScenarioSettings` is still the resource `spawn_units` reads, but its value now
-    // comes from whichever scenario was chosen, so the library is what gets loaded and
-    // the placements come out of it.
+    // `Encounter` is the resource `spawn_units` reads, but which file it comes from is
+    // whichever the chosen scenario named, so the library is what gets loaded and the
+    // encounter is selected out of it.
     //
     // `LightingSettings` is chosen the same way, by `hex_game::scenarios` — a scenario
-    // names its own sky. Loading it here as well would run both `insert_settings` and
-    // `apply_settings_choice` against one resource, and hold the loading screen open
+    // names its own sky. Loading either here as well would run both `insert_settings`
+    // and `apply_settings_choice` against one resource, and hold the loading screen open
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)

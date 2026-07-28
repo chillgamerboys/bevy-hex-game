@@ -40,7 +40,8 @@ pub use selection::{
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
 pub use units::{
-    Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator, UnitRegistry,
+    Archetype, Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
+    UnitRegistry,
 };
 
 /// Adds every unit system.

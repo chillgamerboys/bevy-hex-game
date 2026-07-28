@@ -14,13 +14,11 @@
 //! That is the same trick the settings loader already uses: the generic machinery lives
 //! here and gets instantiated at a concrete type from wherever that type is defined.
 //!
-//! The cost is that a typo in a path is not a compile error. It is caught by a test in
-//! `hex_game` that opens every world file a scenario names.
+//! The cost is that a typo in a path is not a compile error. It is caught by tests in
+//! `hex_game` that open every world, lighting and encounter file a scenario names.
 
 use bevy::prelude::*;
 use serde::{de::Error as _, Deserialize, Deserializer};
-
-use crate::settings::ScenarioSettings;
 
 /// `assets/config/scenarios.ron` — everything the title screen offers.
 ///
@@ -65,8 +63,14 @@ pub struct Scenario {
     /// checked after both this scenario and its lighting file have loaded.
     #[serde(default, deserialize_with = "deserialize_optional_hour")]
     pub starting_time_hours: Option<f32>,
-    /// Where the units start.
-    pub units: ScenarioSettings,
+    /// Asset path of the encounter file: the roster standing on this world.
+    ///
+    /// A path for the same reason `world` is one — a scenario is a world, a sky and an
+    /// encounter, each authored on its own and reusable by the next scenario. Six
+    /// generated maps share one anchored skirmish today.
+    ///
+    /// Not optional: a scenario with no encounter has nothing to play.
+    pub encounter: String,
 }
 
 /// The lighting a scenario gets when it does not name one.
@@ -91,8 +95,6 @@ where
 mod tests {
     use std::collections::HashSet;
 
-    use crate::ScenarioPlacement;
-
     use super::*;
 
     /// The shipped file parses, and says enough to build a menu from.
@@ -113,6 +115,10 @@ mod tests {
         for scenario in &library.scenarios {
             assert!(!scenario.name.is_empty(), "a scenario needs a name");
             assert!(!scenario.world.is_empty(), "a scenario needs a world");
+            assert!(
+                !scenario.encounter.is_empty(),
+                "a scenario needs an encounter"
+            );
         }
     }
 
@@ -139,10 +145,7 @@ mod tests {
                     blurb: "Time validation.",
                     world: "config/world.ron",
                     starting_time_hours: {hours},
-                    units: (
-                        player: Fixed((x: 0, y: 0, z: 0)),
-                        enemy: Fixed((x: 1, y: -1, z: 0)),
-                    ),
+                    encounter: "config/encounters/bridge-crossing.ron",
                 )"#
             )
         };
@@ -164,10 +167,13 @@ mod tests {
         }
     }
 
-    /// Generated scenarios own distinct reproducible seeds and use the stable anchors
-    /// promised by the procedural generator.
+    /// Generated scenarios own distinct reproducible seeds and name an encounter file.
+    ///
+    /// Whether that encounter places its units through generated *anchors* is a
+    /// cross-file fact — the encounter is a separate asset — so it is checked in
+    /// `hex_game`, which is allowed to open both. This crate can only see the path.
     #[test]
-    fn procedural_scenarios_use_distinct_seeds_and_spawn_anchors() {
+    fn procedural_scenarios_use_distinct_seeds_and_name_an_encounter() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -193,16 +199,9 @@ mod tests {
         );
 
         for scenario in generated {
-            assert_eq!(
-                scenario.units.player,
-                ScenarioPlacement::Anchor("party_start".to_owned()),
-                "scenario {:?} does not use the party anchor",
-                scenario.name
-            );
-            assert_eq!(
-                scenario.units.enemy,
-                ScenarioPlacement::Anchor("hostile_start".to_owned()),
-                "scenario {:?} does not use the hostile anchor",
+            assert!(
+                scenario.encounter.starts_with("config/encounters/"),
+                "scenario {:?} does not name an encounter file",
                 scenario.name
             );
         }

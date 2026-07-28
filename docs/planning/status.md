@@ -14,7 +14,7 @@ a strict lint wall, dependency auditing, a state machine, and a RON content pipe
 that refuses to start on a bad file rather than defaulting past it.
 
 The world is a voxel map with substances, destruction, and a deterministic
-procedural generator: seeded recipes with validated crossings, anchors that scenarios
+procedural generator: seeded recipes with validated crossings, anchors that encounters
 place units on by name, architecture probes for frozen and volcanic Hills, and
 dedicated Sky Islands, Mountains, and Caves biomes. Sky Islands preserves a complete
 playable Hills map below a high flight-gated upper network. Mountains covers most of
@@ -31,6 +31,17 @@ targeting where height buys range. Its tuning values are designer-facing knobs i
 funnel**: clicks, the end-turn key, and the AI emit `GameCommand`s into a queue,
 and a single applier in `hex_combat` validates each against seat, turn, reach, and
 budget before anything moves — which is what makes an input log a replay.
+
+Who stands on a map is an **encounter**: `assets/config/encounters/*.ron`, a roster of
+units per side, each naming an archetype and one placement — an authored coordinate, a
+generated anchor, or a formation that spreads a group over the surfaces walkable from one
+centre. A scenario names its encounter by path exactly as it names its world and its sky,
+so several scenarios share one file, and every rostered unit is either placed or setup
+fails naming the entry and the reason. It replaced a two-coordinate scaffold that could
+express one player and one enemy and nothing else. The archetype resolves to nothing yet:
+it is the key HEX-12 will look an archetype's lattice up by. The shipped encounters are
+still one unit a side, because a real party needs interface work the roster does not
+imply — see the note below.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
@@ -103,7 +114,16 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
   ice or a climb would each need a priority queue, and none of them are designed.
 - **Units obstructing each other.** Two units can occupy the same surface, and the
   pathfinder will happily route one straight through another. An occupancy map over
-  unit positions would fix both and lives entirely in `hex_combat`.
+  unit positions would fix both and lives entirely in `hex_combat`. Encounter placement
+  is the one exception: a roster never *starts* two units on one voxel, because
+  placement tracks the surfaces it has already used.
+- **A party you would want to play.** Rosters, formations and per-unit spawning are
+  built, and a four-unit party spawns correctly today — but the interface is still
+  written for one piece a side: `select_a_player` picks whichever member it finds first
+  and there is no way to switch, so the rest of the party cannot be ordered to move, and
+  the hostile AI has never been played against more than one attacker. That work belongs
+  to selection, the camera and `hex_combat`, which is why the shipped encounters still
+  field one unit a side.
 - **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
   stays in the fight forever: `approach` finds no route, so it spends its turn doing
   nothing, every round. Height makes this easier to fall into, since a fight now starts

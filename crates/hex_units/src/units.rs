@@ -4,20 +4,25 @@
 //! can tell friend from foe without naming concrete types. `Player` and `Enemy` are
 //! markers on top of that, for the two things that currently exist.
 //!
-//! Spawning reads the active entry from `assets/config/scenarios.ron`, which is
-//! deliberately the crudest thing that works: two coordinates. It exists so terrain
-//! can be tried out without writing Rust, not because it is the encounter format the
-//! game will ship.
+//! Spawning reads the active `Encounter` — the roster the chosen scenario named —
+//! and places every entry in it on a surface. One entry is one unit, so the loop is
+//! roster-shaped rather than "the player and the enemy": the day an archetype carries a
+//! lattice, that lookup goes in one place here instead of into per-unit spawn code.
+//!
+//! **Every rostered unit is placed, or setup fails with a reason.** A roster entry with
+//! nowhere to stand is not a unit that quietly does not appear — that is the failure
+//! mode this codebase is worst at seeing.
 
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use hex_anim::Transformation;
 use hex_assets::{
-    to_color, CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings,
-    SubstanceTable,
+    to_color, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
+    GameAssets, PlayerSettings, RosteredUnit, SubstanceTable,
 };
 use std::collections::BTreeMap;
 
@@ -27,7 +32,7 @@ use hex_core::{
     SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
 };
 
-use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
+use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
 use crate::pathing::reached_step_index;
 use crate::selection::Selected;
 
@@ -236,6 +241,7 @@ pub struct Party {
 pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
         .register_type::<Enemy>()
+        .register_type::<Archetype>()
         .register_type::<Faction>()
         // `hex_core` has no plugin, so the runtime plugin that introduces its
         // shared types registers them.
@@ -516,27 +522,49 @@ fn nearest_step(path: &[Standing], at: Vec3) -> Option<Standing> {
         .copied()
 }
 
-/// Resolves a coordinate written in a settings file, falling back to the map centre.
+/// What kind of unit this is, as its encounter rostered it.
 ///
-/// Both failures are a designer's typo rather than a bug, so both say so in the log
-/// and carry on. Refusing to start would leave someone staring at a loading screen
-/// with no idea which of two numbers was wrong.
-fn coord_from(setting: CubeCoord, unit: &str) -> HexCoord {
-    HexCoord::try_new_cubic(setting.x, setting.y, setting.z).unwrap_or_else(|| {
-        warn!(
-            "scenarios.ron: {unit} is at ({}, {}, {}), which does not sum to zero — \
-             using the centre of the map instead",
+/// A name and nothing else: it resolves to no stats, no lattice and no mesh today.
+/// It exists now because it is the **key** an archetype's lattice will be looked up by,
+/// and putting it on the entity at spawn time is what keeps that lookup a single line
+/// inside the spawn loop later rather than a per-unit spawn path per archetype.
+#[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct Archetype(pub String);
+
+impl From<EncounterFaction> for Faction {
+    fn from(faction: EncounterFaction) -> Self {
+        match faction {
+            EncounterFaction::Player => Self::Player,
+            EncounterFaction::Hostile => Self::Hostile,
+        }
+    }
+}
+
+/// Resolves a coordinate written in an encounter file.
+///
+/// A triple that does not sum to zero is not a hex at all. The encounter file's own
+/// validation rejects it before it can be loaded, so reaching this means an encounter
+/// built in Rust — and answering with the centre of the map would place a unit
+/// somewhere nobody asked for, which is the whole failure mode this ticket removes.
+fn coord_from(setting: CubeCoord) -> Result<HexCoord, String> {
+    HexCoord::try_new_cubic(setting.x, setting.y, setting.z).ok_or_else(|| {
+        format!(
+            "is placed at ({}, {}, {}), whose components do not sum to zero and so are not a hex",
             setting.x, setting.y, setting.z
-        );
-        HexCoord::ORIGIN
+        )
     })
 }
 
-/// Places both units on the terrain.
+/// Places every rostered unit on the terrain.
 ///
 /// Runs in `Actors`, after the map has built and flushed its tiles. Reading them any
 /// earlier finds nothing and drops the units to ground level — a bug that renders
 /// perfectly and reports nothing, which is why the set boundary exists.
+///
+/// Placement is resolved for the **whole roster before anything spawns**, so a roster
+/// that cannot be placed leaves no half-built encounter standing on the map for the
+/// frame it takes the failure to reach the title screen.
 fn spawn_units(
     mut commands: Commands,
     assets: Res<GameAssets>,
@@ -544,7 +572,7 @@ fn spawn_units(
     tiles: TileQuery,
     table: Res<SubstanceTable>,
     settings: Res<PlayerSettings>,
-    scenario: Res<ScenarioSettings>,
+    encounter: Res<Encounter>,
     anchors: Option<Res<MapAnchors>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
@@ -555,60 +583,45 @@ fn spawn_units(
         registry: &mut registry,
         party: &mut party,
     };
-    // Both units share a body for now. When lattices land, size becomes a property of
-    // the unit rather than a global setting, and this is where that starts.
+    // Every unit shares a body for now. When lattices land, size becomes a property of
+    // the archetype rather than a global setting, and this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
     let footing = Footing::from_tiles(tiles.iter(), &table, body);
+
+    let placements = match place_roster(&encounter, &footing, anchors.as_deref()) {
+        Ok(placements) => placements,
+        Err(reason) => {
+            error!("{reason}");
+            commands.insert_resource(GameplaySetupFailure::new(reason));
+            return;
+        }
+    };
 
     let player_material = materials.add(StandardMaterial::from(to_color(settings.color)));
     // Hostile pieces are a colder colour, which is the only way to tell them apart
     // until they have their own meshes.
     let enemy_material = materials.add(StandardMaterial::from(Color::srgb(0.25, 0.45, 0.9)));
 
-    let anchors = anchors.as_deref();
-    // Player first, then enemy: the fixed spawn order is what makes the dealt
-    // ids a function of the scenario rather than of this run.
-    let player = placement_from(&scenario.player, "player", anchors).and_then(|placement| {
+    // Declaration order, which is what makes the dealt ids a function of the encounter
+    // rather than of this run.
+    for (unit, standing) in placements {
+        let faction = Faction::from(unit.faction);
         spawn_unit(
             &mut commands,
             &assets,
             UnitSpawn {
-                placement,
-                faction: Faction::Player,
-                material: player_material,
-                name: "Player",
+                standing,
+                faction,
+                material: match faction {
+                    Faction::Player => player_material.clone(),
+                    Faction::Hostile => enemy_material.clone(),
+                },
+                archetype: unit.archetype,
                 settings: &settings,
                 body,
             },
-            &footing,
             &mut identity,
-        )
-    });
-    if let Err(reason) = player {
-        error!("{reason}");
-        commands.insert_resource(GameplaySetupFailure::new(reason));
-        return;
-    }
-
-    let enemy = placement_from(&scenario.enemy, "enemy", anchors).and_then(|placement| {
-        spawn_unit(
-            &mut commands,
-            &assets,
-            UnitSpawn {
-                placement,
-                faction: Faction::Hostile,
-                material: enemy_material,
-                name: "Enemy",
-                settings: &settings,
-                body,
-            },
-            &footing,
-            &mut identity,
-        )
-    });
-    if let Err(reason) = enemy {
-        error!("{reason}");
-        commands.insert_resource(GameplaySetupFailure::new(reason));
+        );
     }
 }
 
@@ -620,46 +633,200 @@ struct UnitIdentity<'a> {
     party: &'a mut Party,
 }
 
-/// A placement resolved as far as scenario settings permit.
-enum ResolvedPlacement {
-    /// Authored placements choose the lowest fitting surface at this coordinate.
-    Fixed(HexCoord),
-    /// Generated anchors identify one exact surface, including its level.
-    Anchor { id: MapAnchorId, pos: TilePos },
-}
-
-/// Resolves a scenario placement without silently substituting generated anchors.
-fn placement_from(
-    setting: &ScenarioPlacement,
-    unit: &str,
+/// Resolves one surface for every rostered unit, or says which entry could not be.
+///
+/// **Exact placements are resolved first, formations second.** A `Fixed` coordinate or
+/// an `Anchor` names one surface deliberately; a formation only wants *a* surface near
+/// its centre. Resolving in that order means a formation flows around the sentry on the
+/// bridge rather than taking his hex and pushing him off the map.
+///
+/// The returned order is the encounter's declaration order regardless, because that is
+/// what the unit ids are dealt in.
+fn place_roster<'a>(
+    encounter: &'a Encounter,
+    footing: &Footing,
     anchors: Option<&MapAnchors>,
-) -> Result<ResolvedPlacement, String> {
-    match setting {
-        ScenarioPlacement::Fixed(coord) => Ok(ResolvedPlacement::Fixed(coord_from(*coord, unit))),
-        ScenarioPlacement::Anchor(name) => {
-            let id = MapAnchorId::from(name.as_str());
-            let Some(anchors) = anchors else {
-                return Err(format!(
-                    "The {unit} uses map anchor \"{id}\", but the active map published no anchors."
-                ));
-            };
-            let Some(pos) = anchors.get(&id) else {
-                return Err(format!("The {unit} uses missing map anchor \"{id}\"."));
-            };
-            Ok(ResolvedPlacement::Anchor { id, pos })
+) -> Result<Vec<(RosteredUnit<'a>, Standing)>, String> {
+    let units: Vec<RosteredUnit<'a>> = encounter.entries().collect();
+    let mut resolved: Vec<Option<Standing>> = vec![None; units.len()];
+    // One unit per surface. Two pieces on one voxel is not a position the rest of the
+    // game can express, so it is a setup failure rather than a rendering curiosity.
+    let mut taken: HashSet<TilePos> = HashSet::default();
+
+    for (index, unit) in units.iter().enumerate() {
+        let standing = match unit.placement {
+            EncounterPlacement::Fixed(coord) => {
+                authored_standing(*coord, footing, unit, encounter)?
+            }
+            EncounterPlacement::Anchor(name) => {
+                anchored_standing(name, footing, anchors, unit, encounter)?
+            }
+            // Second pass: a formation needs to know which surfaces the exact
+            // placements have already claimed.
+            EncounterPlacement::Formation { .. } => continue,
+        };
+        if !taken.insert(standing.pos) {
+            return Err(format!(
+                "Encounter {:?}: {} is placed on {:?}, where another unit already stands.",
+                encounter.name,
+                describe(unit),
+                standing.pos
+            ));
+        }
+        if let Some(slot) = resolved.get_mut(index) {
+            *slot = Some(standing);
         }
     }
+
+    // Surfaces per formation centre, computed once. Two rosters may share a centre, and
+    // the flood fill is the expensive part of placement.
+    let mut spreads: HashMap<(TilePos, u32), Vec<Standing>> = HashMap::default();
+    for (index, unit) in units.iter().enumerate() {
+        let EncounterPlacement::Formation { center, spread } = unit.placement else {
+            continue;
+        };
+        let middle = match center {
+            FormationCenter::Fixed(coord) => authored_standing(*coord, footing, unit, encounter)?,
+            FormationCenter::Anchor(name) => {
+                anchored_standing(name, footing, anchors, unit, encounter)?
+            }
+        };
+        let candidates = spreads
+            .entry((middle.pos, *spread))
+            .or_insert_with(|| formation_surfaces(middle, footing, *spread));
+
+        let Some(standing) = candidates
+            .iter()
+            .find(|candidate| !taken.contains(&candidate.pos))
+            .copied()
+        else {
+            return Err(format!(
+                "Encounter {:?}: {} has no free surface within {spread} steps of its formation \
+                 centre {:?}. The formation needs a wider spread, or the roster is larger than \
+                 the ground it was given.",
+                encounter.name,
+                describe(unit),
+                middle.pos
+            ));
+        };
+        let _first = taken.insert(standing.pos);
+        if let Some(slot) = resolved.get_mut(index) {
+            *slot = Some(standing);
+        }
+    }
+
+    // Every entry, or a reason. A `None` here would be a bug in the two passes above
+    // rather than a designer's mistake, so it is reported as what it is.
+    units
+        .into_iter()
+        .zip(resolved)
+        .map(|(unit, standing)| {
+            standing.map(|standing| (unit, standing)).ok_or_else(|| {
+                format!(
+                    "Encounter {:?}: {} was never placed.",
+                    encounter.name,
+                    describe(&unit)
+                )
+            })
+        })
+        .collect()
+}
+
+/// How a roster entry is named in a message a designer has to act on.
+fn describe(unit: &RosteredUnit<'_>) -> String {
+    format!("the {} {:?}", unit.faction.label(), unit.archetype)
+}
+
+/// The lowest surface at an authored coordinate that this body fits on.
+///
+/// The ground, rather than any bridge built over it — an authored coordinate is written
+/// on a map whose landmarks do not move, so the ambiguity a stacked column introduces is
+/// resolved downwards, where the designer was looking.
+fn authored_standing(
+    coord: CubeCoord,
+    footing: &Footing,
+    unit: &RosteredUnit<'_>,
+    encounter: &Encounter,
+) -> Result<Standing, String> {
+    let described = describe(unit);
+    let coord = coord_from(coord)
+        .map_err(|reason| format!("Encounter {:?}: {described} {reason}.", encounter.name))?;
+    footing.ground(coord).ok_or_else(|| {
+        format!(
+            "Encounter {:?}: {described} is placed at {coord:?}, where nothing can be stood on.",
+            encounter.name
+        )
+    })
+}
+
+/// The exact surface a generated anchor published.
+///
+/// Never a nearby surface and never the origin: an anchor promises one voxel, and
+/// substituting another would hide a generator or validation defect — and could put the
+/// unit on the ground *beneath* the bridge the anchor named.
+fn anchored_standing(
+    name: &str,
+    footing: &Footing,
+    anchors: Option<&MapAnchors>,
+    unit: &RosteredUnit<'_>,
+    encounter: &Encounter,
+) -> Result<Standing, String> {
+    let described = describe(unit);
+    let id = MapAnchorId::from(name);
+    let Some(anchors) = anchors else {
+        return Err(format!(
+            "Encounter {:?}: {described} uses map anchor \"{id}\", but the active map published \
+             no anchors.",
+            encounter.name
+        ));
+    };
+    let Some(pos) = anchors.get(&id) else {
+        return Err(format!(
+            "Encounter {:?}: {described} uses missing map anchor \"{id}\".",
+            encounter.name
+        ));
+    };
+    footing.at(pos).ok_or_else(|| {
+        format!(
+            "Encounter {:?}: map anchor \"{id}\" for {described} points to {pos:?}, which its \
+             body cannot stand on.",
+            encounter.name
+        )
+    })
+}
+
+/// The surfaces a formation may use, nearest first.
+///
+/// Walkable from the centre rather than merely near it: a flood fill through
+/// [`Reach`] uses the same footing and traversal rules movement does, so a formation
+/// never spreads across a chasm, onto a ledge the body cannot climb, or under a ceiling
+/// it does not fit beneath.
+///
+/// Sorted explicitly. [`Reach`] is a hash map, so its iteration order is not a promise,
+/// and a formation that dealt its surfaces in a different order between runs would make
+/// the same encounter on the same seed a different fight.
+fn formation_surfaces(center: Standing, footing: &Footing, spread: u32) -> Vec<Standing> {
+    let reach = Reach::from(center, footing, Some(spread));
+    let mut surfaces: Vec<Standing> = reach.surfaces().collect();
+    surfaces.sort_by_key(|surface| {
+        (
+            reach.cost(surface.pos).unwrap_or(u32::MAX),
+            surface.pos.coord,
+            surface.pos.level,
+        )
+    });
+    surfaces
 }
 
 /// Everything that differs between one unit and the next.
 ///
 /// Grouped into a struct because the alternative is an eight-argument function where
-/// two of the arguments are `&str` and easy to swap by accident.
+/// two of the arguments are strings and easy to swap by accident.
 struct UnitSpawn<'a> {
-    placement: ResolvedPlacement,
+    standing: Standing,
     faction: Faction,
     material: Handle<StandardMaterial>,
-    name: &'static str,
+    archetype: &'a str,
     settings: &'a PlayerSettings,
     body: Body,
 }
@@ -668,39 +835,9 @@ fn spawn_unit(
     commands: &mut Commands,
     assets: &GameAssets,
     spawn: UnitSpawn,
-    footing: &Footing,
     identity: &mut UnitIdentity,
-) -> Result<(), String> {
-    let standing = match spawn.placement {
-        // Stand on the lowest surface at an authored coordinate that this body fits
-        // on: the ground, rather than any bridge built over it. Preserve the existing
-        // authored-map fallback for a designer typo.
-        ResolvedPlacement::Fixed(coord) => footing.ground(coord).unwrap_or_else(|| {
-            warn!(
-                "scenarios.ron: nothing at {:?} that the {} can stand on — \
-                 using the centre of the map instead",
-                coord, spawn.name
-            );
-            footing.ground(HexCoord::ORIGIN).unwrap_or(Standing {
-                pos: TilePos::new(HexCoord::ORIGIN, 0),
-                span: HexSpan::new(0.0, f32::EPSILON),
-            })
-        }),
-        // A generated anchor promises one exact surface. Falling back to the lowest
-        // surface or the origin would hide a generator/validation defect and may put
-        // the unit on the ground beneath a bridge.
-        ResolvedPlacement::Anchor { id, pos } => {
-            let Some(standing) = footing.at(pos) else {
-                return Err(format!(
-                    "Map anchor \"{id}\" for the {} points to {pos:?}, which its body cannot \
-                     stand on.",
-                    spawn.name
-                ));
-            };
-            standing
-        }
-    };
-
+) {
+    let standing = spawn.standing;
     let scale = spawn.settings.scale;
     let [mesh_a, mesh_b] = assets.player_pieces.clone();
 
@@ -721,7 +858,10 @@ fn spawn_unit(
         id,
         // Seat 0 everywhere today; the command funnel gives this teeth.
         ControlOwner::default(),
-        Name::new(spawn.name),
+        Archetype(spawn.archetype.to_owned()),
+        // Archetype plus the stable id, so two wolves are distinguishable in the
+        // inspector and each one's name matches what the log calls it.
+        Name::new(format!("{} #{}", spawn.archetype, id.0)),
     ));
 
     match spawn.faction {
@@ -750,7 +890,6 @@ fn spawn_unit(
             Pickable::IGNORE,
         ));
     });
-    Ok(())
 }
 
 #[cfg(test)]
