@@ -235,7 +235,7 @@ mod tests {
             .expect("the replacement palette should contain stone")
             .color()
             .red();
-        assert_eq!(changed_red, 0.8);
+        assert_eq!(changed_red.to_bits(), 0.8_f32.to_bits());
         assert!(
             !world
                 .resource::<SubstanceTable>()

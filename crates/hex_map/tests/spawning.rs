@@ -128,6 +128,10 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the integration test immediately"
+)]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
     let palette = ArtPalette::new(BTreeMap::from([(
