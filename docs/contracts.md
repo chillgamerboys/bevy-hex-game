@@ -48,7 +48,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `GameplayLight` + `LightDomain` — public radial light sources | world | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — the compact traversal projection | perception | `hex_units` | reserved | [systems/perception.md](systems/perception.md) |
-| Richer faction-knowledge API — observation queries | perception | `hex_combat` | reserved | [systems/perception.md](systems/perception.md) |
+| Richer faction-knowledge API — observation queries (the **spatial** channel) | perception | `hex_combat` | reserved | [systems/perception.md](systems/perception.md) |
+| `KnowledgeSource` / `KnowledgeExpiry` — how a fact was learned and when it stops being true | core | both | live | [systems/combat.md](systems/combat.md) |
 | `PresentationOcclusion` — composed hide reasons, no single owner of `Visibility` | shared | presentation | reserved | [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | **agreed** | [planning/boundary.md](planning/boundary.md) J |
 
@@ -70,6 +71,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
+| `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
 

@@ -513,4 +513,50 @@ mod tests {
             }
         }
     }
+
+    /// Every scenario a shipped walk starts must still exist in `scenarios.ron`.
+    ///
+    /// Parsing proves a script is well-formed; it does not prove it still points at
+    /// anything. `validate_step` only rejects an *empty* name, so renaming a scenario
+    /// leaves the walk naming a ghost — and that sails through fmt, clippy, the whole
+    /// suite and all six CI jobs, failing only when a person runs the walk by hand.
+    /// The wave that added encounters rewrote `scenarios.ron` and got away with it
+    /// because it happened to rename nothing.
+    #[test]
+    fn every_walk_scenario_name_resolves() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("scenarios.ron parses");
+        let known: Vec<&str> = library
+            .scenarios
+            .iter()
+            .map(|scenario| scenario.name.as_str())
+            .collect();
+
+        let mut checked = 0;
+        for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+            let steps: Vec<WalkStep> = ron::from_str(&text)
+                .unwrap_or_else(|error| panic!("cannot parse {}: {error}", path.display()));
+            for step in &steps {
+                if let WalkStep::StartScenario { name, .. } = step {
+                    assert!(
+                        known.contains(&name.as_str()),
+                        "{} starts {name:?}, which is not in scenarios.ron; it offers {known:?}",
+                        path.display(),
+                    );
+                    checked += 1;
+                }
+            }
+        }
+        // Otherwise a walk that stopped launching scenarios — or a variant rename that
+        // made the `if let` stop matching — would leave this passing while checking
+        // nothing, which is the failure it exists to prevent, one level up.
+        assert!(
+            checked >= 3,
+            "expected the shipped walks to launch at least three scenarios, found {checked}"
+        );
+    }
 }
