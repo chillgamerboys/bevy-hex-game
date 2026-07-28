@@ -27,10 +27,13 @@ use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand, Mode,
-    PausableSystems, SubstanceId, TilePos, Turn, UnitId,
+    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand,
+    LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, SubstanceId, TilePos, Turn,
+    UnitId,
 };
 use hex_units::{route, Body, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
+
+use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 
 use crate::turns::TurnOrder;
 
@@ -50,7 +53,7 @@ type TileQuery<'w, 's> = Query<
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        take_enemy_turn
+        (take_enemy_turn, answer_disable_decision)
             .in_set(crate::CombatSystems::Act)
             .in_set(PausableSystems)
             .run_if(in_state(Mode::Combat)),
@@ -257,4 +260,79 @@ fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) ->
         steps: steps.to_vec(),
         route_cost: adjacent_index,
     })
+}
+
+/// Answers an open [`PendingDecision::ChooseDisables`] on the defender's behalf.
+///
+/// **The auto-policy the design names.** Defender-chooses is a protocol fact, not a UI
+/// feature: the decision exists, something answers it, and today that something is this.
+/// A second player answers through the same seam in co-op, and a human player answers
+/// through it when there is UI for it — neither needs the applier to change.
+///
+/// The policy itself is deliberately the dumbest defensible one: **give up the cheapest
+/// hexes first**, where cheapest means blank cells, then gems holding the least mana,
+/// then everything else, ties broken on coordinate. That is roughly what a player would
+/// do early in a fight and exactly what makes late damage hurt, which is the shape the
+/// design predicts and wants to feel before tuning it.
+///
+/// It answers by pushing a command rather than mutating, because the answer belongs in
+/// the replay log — see [`crate::commands::choose_disables`].
+fn answer_disable_decision(
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    mut queue: ResMut<CommandQueue>,
+    lattices: Query<(&LatticeSpec, &LatticeState)>,
+) {
+    let PendingDecision::ChooseDisables { decider, count, .. } = *pending else {
+        return;
+    };
+    // The answer is already on its way. Without this the policy would push a second
+    // identical command every frame until the applier drained the first.
+    if queue.holds_command_for(decider) {
+        return;
+    }
+    let Some(entity) = registry.entity_of(decider) else {
+        return;
+    };
+    let Ok((spec, state)) = lattices.get(entity) else {
+        return;
+    };
+
+    let mut candidates: Vec<(u8, u16, LatticeCoord)> = spec
+        .cells()
+        .filter(|&(coord, _)| !state.is_disabled(coord))
+        .map(|(coord, kind)| {
+            // Rank, then mana, then coordinate — a total order, so the same hit on the
+            // same lattice always takes the same hexes on every machine.
+            let rank = match kind {
+                CellKind::Blank => 0,
+                CellKind::Gem { .. } => 1,
+                CellKind::Fusion { .. } => 2,
+                CellKind::Spell { .. } => 3,
+            };
+            (rank, state.mana(coord), coord)
+        })
+        .collect();
+    candidates.sort_unstable();
+
+    let cells: Vec<LatticeCoord> = candidates
+        .into_iter()
+        .take(usize::from(count))
+        .map(|(_, _, coord)| coord)
+        .collect();
+
+    // A lattice with fewer live hexes than the hit demands cannot answer as asked, and
+    // the applier would refuse a short answer. Take everything that is left: the unit
+    // is going down either way, and the alternative is a decision nobody can satisfy
+    // parking resolution forever.
+    if cells.len() < usize::from(count) {
+        info!("damage: {decider:?} has fewer hexes left than the hit — all of them go");
+    }
+    queue.push(IssuedCommand {
+        seat: PlayerSeat::default(),
+        command: GameCommand::ChooseDisables {
+            unit: decider,
+            cells,
+        },
+    });
 }

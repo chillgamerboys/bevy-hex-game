@@ -35,9 +35,20 @@
     AwaitTerrain,
     Settle(120),
     Capture("13-close-quarters-combat"),
+    // The wave's proof. `1` casts the acting unit's first inscribed spell at the
+    // nearest hostile — a placeholder emitter until the casting UX lands — and the
+    // frame after it should show the HUD's hex count fall, because a landed cast
+    // parks a disable decision that the auto-policy answers on the next tick.
+    //
+    // Photographing damage is the point: the count is the only thing on screen that
+    // says a spell did anything, and a cast that silently does nothing looks exactly
+    // like one that worked.
+    Key("Digit1"),
+    Settle(120),
+    Capture("14-close-quarters-after-cast"),
     Key("Space"),
     Settle(90),
-    Capture("14-close-quarters-enemy-turn"),
+    Capture("15-close-quarters-enemy-turn"),
     Key("Backspace"),
     AwaitScreen("Title"),
 ]

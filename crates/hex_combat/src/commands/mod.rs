@@ -35,7 +35,10 @@
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
-use hex_assets::{PlayerSettings, SubstanceTable};
+use hex_assets::{
+    CombatSettings, ContentIndex, ContentTables, ElementCatalog, PlayerSettings, SpellBook,
+    SubstanceTable,
+};
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
     PausableSystems, PendingDecision, Screen, TilePos, Turn,
@@ -44,6 +47,8 @@ use hex_units::{Body, Faction, MovingTo, StandsOn, UnitRegistry};
 
 use crate::turns::TurnOrder;
 
+mod cast;
+mod choose_disables;
 mod end_turn;
 mod move_along;
 mod presentation;
@@ -94,6 +99,14 @@ struct Verb<'a> {
     registry: &'a UnitRegistry,
     settings: Option<&'a PlayerSettings>,
     table: Option<&'a SubstanceTable>,
+    /// What a spell is called, and what it costs.
+    spells: Option<&'a SpellBook>,
+    /// The engine's content lookups, borrowed for the length of one drain.
+    tables: Option<ContentTables<'a>>,
+    /// The one open decision, if resolution is parked on somebody's answer.
+    pending: &'a mut PendingDecision,
+    /// Policy knobs: budgets, ranges, and what a strike costs.
+    combat: Option<&'a CombatSettings>,
     /// Units this drain already committed presentation for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
@@ -184,8 +197,14 @@ fn apply_commands(
     registry: Res<UnitRegistry>,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
+    spells: Option<Res<SpellBook>>,
+    content: Option<Res<ContentIndex>>,
+    elements: Option<Res<ElementCatalog>>,
+    mut pending: ResMut<PendingDecision>,
+    combat: Option<Res<CombatSettings>>,
     tiles: TileQuery,
     mut actors: ActorQuery,
+    mut lattices: cast::LatticeQuery,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
     let in_combat = *mode.get() == Mode::Combat;
@@ -215,6 +234,13 @@ fn apply_commands(
             registry: &registry,
             settings: settings.as_deref(),
             table: table.as_deref(),
+            spells: spells.as_deref(),
+            tables: content
+                .as_deref()
+                .zip(elements.as_deref())
+                .map(|(index, elements)| index.tables(elements)),
+            pending: &mut pending,
+            combat: combat.as_deref(),
             committed: &mut committed,
             in_combat,
         };
@@ -234,15 +260,34 @@ fn apply_commands(
                 &mut commands,
                 &tiles,
                 &mut actors,
+                &mut lattices,
                 unit,
                 entity,
                 target,
             ),
             GameCommand::EndTurn { .. } => end_turn::apply(&mut verb, &mut actors, unit, entity),
-            GameCommand::Cast { .. } | GameCommand::Channel { .. } => {
-                Err("not built yet — waits on lattices (HEX-12)")
+            GameCommand::Cast {
+                ref spell,
+                target,
+                facing,
+                ..
+            } => cast::apply(
+                &mut verb,
+                &mut commands,
+                &mut actors,
+                &mut lattices,
+                unit,
+                entity,
+                spell,
+                target,
+                facing,
+            ),
+            GameCommand::Channel { .. } => {
+                Err("channelling waits on the initiative question being settled")
             }
-            GameCommand::ChooseDisables { .. } => Err("not built yet — waits on the damage model"),
+            GameCommand::ChooseDisables { ref cells, .. } => {
+                choose_disables::apply(&mut verb, &mut lattices, unit, entity, cells)
+            }
         };
 
         if let Err(reason) = outcome {

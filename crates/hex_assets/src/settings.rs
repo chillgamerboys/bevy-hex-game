@@ -1116,6 +1116,14 @@ pub struct CombatSettings {
     pub default_initiative: u32,
     /// Levels of height that buy one extra hex of range.
     pub levels_per_bonus_range: u32,
+    /// Hexes a melee strike disables, before the defender's own defences subtract.
+    ///
+    /// A strike is the one attack every unit has, spell or not — a wolf is four hexes
+    /// and a bite — so it needs a number and there is no content file for it: content
+    /// describes spells. One is the smallest thing damage can be, and matches Ember,
+    /// the cheapest spell in the roster. It is a knob because it is a balance number
+    /// nobody has played with yet, not because it is settled.
+    pub strike_disables: u16,
     /// How turn order is decided. Only [`InitiativePolicy::FlatComponent`] is built.
     pub initiative_policy: InitiativePolicy,
     /// What a turn affords. Only [`ActionEconomy::MoveAndAction`] is built.
@@ -1250,6 +1258,7 @@ impl Default for CombatSettings {
             movement_per_turn: 4,
             default_initiative: 10,
             levels_per_bonus_range: 5,
+            strike_disables: 1,
             initiative_policy: InitiativePolicy::FlatComponent,
             action_economy: ActionEconomy::MoveAndAction,
             channelling_trickle: ChannellingTrickle::BurstOnly,
@@ -1266,6 +1275,7 @@ struct UnvalidatedCombatSettings {
     movement_per_turn: u32,
     default_initiative: u32,
     levels_per_bonus_range: u32,
+    strike_disables: u16,
     initiative_policy: InitiativePolicy,
     action_economy: ActionEconomy,
     channelling_trickle: ChannellingTrickle,
@@ -1284,6 +1294,7 @@ impl<'de> Deserialize<'de> for CombatSettings {
             movement_per_turn: raw.movement_per_turn,
             default_initiative: raw.default_initiative,
             levels_per_bonus_range: raw.levels_per_bonus_range,
+            strike_disables: raw.strike_disables,
             initiative_policy: raw.initiative_policy,
             action_economy: raw.action_economy,
             channelling_trickle: raw.channelling_trickle,

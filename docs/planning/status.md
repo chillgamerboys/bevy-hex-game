@@ -38,8 +38,8 @@ generated anchor, or a formation that spreads a group over the surfaces walkable
 centre. A scenario names its encounter by path exactly as it names its world and its sky,
 so several scenarios share one file, and every rostered unit is either placed or setup
 fails naming the entry and the reason. It replaced a two-coordinate scaffold that could
-express one player and one enemy and nothing else. The archetype resolves to nothing yet:
-it is the key HEX-12 will look an archetype's lattice up by. The shipped encounters are
+express one player and one enemy and nothing else. **The archetype is looked up in
+`lattices.ron`**, so a roster line is most of what a unit is. The shipped encounters are
 still one unit a side, because a real party needs interface work the roster does not
 imply — see the note below.
 
@@ -53,23 +53,28 @@ content kept, and a test opens everything shipped so a broken reference cannot s
 `SubstanceId`. A dev-feature stub logs the resolved spell list to prove the pipeline
 end to end.
 
-The **lattice engine also exists** as a pure crate (`hex_lattice`): casting
-(`castable` → a `CastPlan` or a blocked reason), applying casts, disables that break
-enchantments and burn their locked mana, channelling, and a property suite carrying
-the design's geometric theorems — all headless. Content and engine are **not yet
-joined**: the `FusionTable`/`SpellTable` wiring and everything that spawns units with
-lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). Bodies
-are one hex wide; there is no footprint for anything larger, and units do not obstruct
-each other — so a route may be drawn straight through another piece.
+**Damage exists.** The lattice engine (`hex_lattice`) is joined to the game at last:
+`lattices.ron` authors the three archetypes the design names — a wolf of four hexes and
+a bite, a raider of eight around a metal shield, a hedge-mage of twelve with the roster's
+only fusion chain — and units spawn carrying them, keyed by the archetype their encounter
+rostered. A cast goes through the command funnel, up the first three rungs of the legality
+ladder, and drains the lattice that paid for it. Damage names a count; **the defender
+chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
+is in the replay log rather than made inside the applier. A unit whose every hex is
+disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
+deals damage the same way, through the same decision.
+
+Bodies are one hex wide; there is no footprint for anything larger, and units do not
+obstruct each other — so a route may be drawn straight through another piece.
 
 The **knowledge seam exists** as `hex_combat::knowledge`: `FactionKnowledge::view` is
 the one read path for what a faction knows about a hostile lattice, entries carry
 their source and their own expiry so a divination-written fact decays on its own
-schedule, and decay ticks on `RoundElapsed`. It is **empty in the running game** —
-publishing keys on a `LatticeSpec` no unit carries yet — so the HUD readout and
-pointing the AI at `view()` both wait on HEX-12, and the integration tests attach the
-components by hand rather than pass while doing nothing. The dev reveal-all toggle is
-`K` under the `dev` feature.
+schedule, and decay ticks on `RoundElapsed`. It **fills now** that units carry lattices.
+What is still missing is presentation: nothing draws a hostile lattice, so the HUD shows
+your own party's hex count rather than anything about the enemy, and no divination writes
+into the store because `Reveal` is still refused with a reason. The dev reveal-all toggle
+is `K` under the `dev` feature.
 
 Around the game sits its own verification tooling. A **lattice-demo screen** on the
 title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
@@ -93,8 +98,8 @@ place** — they are meant to be replaced.
 |---|---|---|
 | **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
-| **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
-| **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast and a rout threshold to know when to stop. The hidden-information half now has its seam (`FactionKnowledge::view`), but the AI reads only positions — the *spatial* channel — so there is nothing to route through it until units carry lattices |
+| **Damage** | disables lattice hexes; the defender chooses which, by an auto-policy that gives up the cheapest first | A human answering the same decision, and the fight-length question — how many hexes a spell should take is a feel question nobody has played with yet |
+| **Enemy behaviour** | close the distance, swing | A rout threshold to know when to stop, and a reason to cast. Units carry lattices now, so the AI *could* read `view()` and choose a spell; it still only strikes, which is the placeholder it always was |
 | **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
 | **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
 | **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
@@ -104,15 +109,19 @@ from hidden information rather than dice, so the turn order is deterministic: ti
 break by the stable `UnitId` dealt at spawn, and the same units always
 produce the same order across runs and saves.
 
-### Why there is no damage
+### What damage does not settle
 
-Damage disables hexes in a lattice. With no lattices, any damage model would be a
-second system invented to be thrown away — and worse, it would fix numbers the design
-has deliberately left open (how many hexes a spell disables, how long a fight runs,
-whether functional death arrives before zero).
+It disables hexes and it can put a unit down, and that is deliberately as far as it
+goes. **Downed is provisional**: the design leaves both functional death — a threshold
+arriving before zero — and permadeath open, and a unit whose lattice is spent simply
+leaves the turn order revivable. How many hexes a spell disables, how long a fight runs,
+and what a strike costs are all knobs rather than answers; `strike_disables` sits in
+`combat.ron` beside the rest precisely so it can be moved without touching code.
 
-An attack is currently an animation and a log line. That is enough to see a turn pass,
-which is what the loop needed to exist at all.
+Two things a landed cast still cannot do: reach terrain (rungs 4 and 5 of the ladder wait
+on `RunBottom` from the world lane) and last beyond the moment it resolves (`Burn` and
+every other persistent effect wait on the effect runtime). Both refuse by name rather
+than silently doing nothing.
 
 ## Not built, and not next
 

@@ -1,0 +1,81 @@
+//! The defender's answer: which hexes a landed hit takes down.
+//!
+//! The design's one mid-resolution decision. Damage names a **count**; the defender
+//! picks **which**, except for the rare abilities that target hexes directly. That makes
+//! early damage nearly free — you give up junk hexes — and late damage catastrophic,
+//! because everything still standing is load-bearing.
+//!
+//! # Why it is a command rather than a function call
+//!
+//! The applier could pick for the defender and be done in one frame. It must not,
+//! because **the choice has to be in the replay log**. A fight replays by re-running its
+//! commands; a choice made inside the applier and never written down would be re-derived
+//! on replay, and any change to the policy — or a human answering in co-op — would make
+//! the same log produce a different fight.
+//!
+//! So the applier parks a [`PendingDecision`], something answers it by pushing a
+//! `ChooseDisables`, and this handler applies that answer. Today an auto-policy in
+//! [`crate::ai`] answers immediately; a second player answers through the same seam.
+
+use bevy::prelude::*;
+
+use hex_core::{LatticeCoord, PendingDecision, UnitId};
+use hex_lattice::apply_disables;
+
+use super::{cast::LatticeQuery, Verb};
+
+/// Applies the defender's answer, or returns the reason it was refused.
+pub(super) fn apply(
+    ctx: &mut Verb,
+    lattices: &mut LatticeQuery,
+    unit: UnitId,
+    entity: Entity,
+    cells: &[LatticeCoord],
+) -> Result<(), &'static str> {
+    let PendingDecision::ChooseDisables {
+        decider,
+        count,
+        source,
+    } = *ctx.pending
+    else {
+        return Err("nothing is waiting on a disable choice");
+    };
+    // The answer must be the one that was asked for. A replayed or forged log must not
+    // be able to disable a bystander's hexes by naming somebody else's unit.
+    if decider != unit {
+        return Err("that answer is not from the unit the decision is waiting on");
+    }
+    if cells.len() != usize::from(count) {
+        return Err("the answer names the wrong number of hexes");
+    }
+
+    let Ok((spec, mut state)) = lattices.get_mut(entity) else {
+        return Err("the deciding unit has no lattice");
+    };
+    // Every cell has to be one of this lattice's own, and distinct. Without the first
+    // check an answer could name coordinates that are not in the drawing at all, which
+    // `apply_disables` would treat as no-ops — turning a hit into nothing. Without the
+    // second, naming one hex twice would satisfy the count while taking down one.
+    let mut seen: Vec<LatticeCoord> = Vec::with_capacity(cells.len());
+    for &cell in cells {
+        if spec.get(cell).is_none() {
+            return Err("the answer names a cell that is not in this lattice");
+        }
+        if seen.contains(&cell) {
+            return Err("the answer names the same cell twice");
+        }
+        seen.push(cell);
+    }
+
+    let broken = apply_disables(&mut state, cells);
+    *ctx.pending = PendingDecision::None;
+
+    for record in &broken {
+        info!(
+            "damage: {unit:?} loses an enchantment — {} mana burned with it",
+            record.burned_mana
+        );
+    }
+    info!("damage: {source:?} disables {count} of {unit:?}'s hexes");
+    Ok(())
+}

@@ -42,8 +42,8 @@ pub use selection::{
 };
 pub use targeting::{either_in_reach, high_ground_bonus, in_reach};
 pub use units::{
-    Archetype, Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    Archetype, Downed, Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt,
+    UnitAllocator, UnitRegistry,
 };
 // `volumes` is deliberately not re-exported here. Its names are bare verbs —
 // `line`, `column`, `path`, `resolve` — that only read correctly qualified, and

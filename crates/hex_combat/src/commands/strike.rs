@@ -9,6 +9,7 @@ use bevy::prelude::*;
 use hex_core::{Busy, UnitId};
 use hex_units::Footing;
 
+use super::cast::{open_disable_decision, LatticeQuery};
 use super::{presentation, ActorQuery, TileQuery, Verb};
 
 /// Applies a strike, or returns the reason it was refused.
@@ -17,6 +18,7 @@ pub(super) fn apply(
     commands: &mut Commands,
     tiles: &TileQuery,
     actors: &mut ActorQuery,
+    lattices: &mut LatticeQuery,
     unit: UnitId,
     entity: Entity,
     target: UnitId,
@@ -91,8 +93,14 @@ pub(super) fn apply(
         commands.entity(entity).insert(Busy);
         ctx.committed.push(entity);
     }
-    // The damage seam: when lattices land, this is where `apply_disables`
-    // runs against the target's `LatticeState`.
+    // The damage seam, now wired. A strike is the one attack every unit has — a wolf
+    // is four hexes and a bite — so it deals damage the same way a spell does: it names
+    // a count, the defender's defences subtract from it, and the defender chooses which
+    // hexes go down. Nothing about melee is special except where the number comes from.
+    let count = ctx.combat.map_or(0, |settings| settings.strike_disables);
+    if count > 0 {
+        open_disable_decision(ctx, lattices, target, target_entity, unit, count);
+    }
     info!("strike: {unit:?} hits {target:?}");
     Ok(())
 }
