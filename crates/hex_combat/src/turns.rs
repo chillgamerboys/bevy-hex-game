@@ -39,9 +39,10 @@ use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
     PausableSystems, RoundElapsed, Screen, TilePos, Turn, UnitId,
 };
+use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
-    either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    either_in_reach, Downed, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt,
+    UnitAllocator, UnitRegistry,
 };
 
 /// Where a unit sits in the turn order. Higher acts first.
@@ -198,6 +199,13 @@ pub fn plugin(app: &mut App) {
                     .before(crate::CombatSystems::Apply)
                     .in_set(PausableSystems)
                     .run_if(in_state(Mode::Combat)),
+                // Between applying and advancing: a unit that goes down on its own
+                // turn must not then be handed that turn.
+                check_for_downed
+                    .after(crate::CombatSystems::Apply)
+                    .before(crate::CombatSystems::Advance)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
                 advance_turn
                     .in_set(crate::CombatSystems::Advance)
                     .in_set(PausableSystems)
@@ -228,7 +236,7 @@ fn engagement(
     mut commands: Commands,
     mode: Res<State<Mode>>,
     mut next: ResMut<NextState<Mode>>,
-    units: Query<(Entity, &Faction, &StandsOn)>,
+    units: Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: Option<Res<MovementCrossings>>,
     settings: Res<CombatSettings>,
 ) {
@@ -271,7 +279,7 @@ fn engagement(
 /// horizontally, and exactly why the answer has to come from a reach rule that knows
 /// what height is worth rather than from raw separation.
 fn any_hostile_in_reach(
-    units: &Query<(Entity, &Faction, &StandsOn)>,
+    units: &Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     range: u32,
     levels_per_bonus: u32,
 ) -> Option<bool> {
@@ -296,7 +304,7 @@ fn any_hostile_in_reach(
 /// final [`StandsOn`] would miss a fast unit that entered and left the engagement
 /// radius during one frame.
 fn first_hostile_crossing(
-    units: &Query<(Entity, &Faction, &StandsOn)>,
+    units: &Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: &MovementCrossings,
     range: u32,
     levels_per_bonus: u32,
@@ -321,7 +329,7 @@ fn first_hostile_crossing(
 fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), With<Faction>>,
+    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), (With<Faction>, Without<Downed>)>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     settings: Res<CombatSettings>,
@@ -463,6 +471,64 @@ fn advance_turn(
             movement_left: settings.movement_per_turn,
             acted: false,
         });
+    }
+}
+
+/// Movement budget when `combat.ron` has not loaded, for headless harnesses only.
+const DEFAULT_MOVEMENT_PER_TURN: u32 = 4;
+
+/// Takes units whose lattice is entirely disabled out of the fight.
+///
+/// **Downed, not dead.** The design leaves both functional death — a threshold arriving
+/// before zero — and permadeath open, and this settles neither: a unit whose every hex
+/// is disabled leaves the turn order, gains [`Downed`], and stays on the map revivable
+/// by a restoring spell. That is a testable starting behaviour, not an answer.
+///
+/// Runs after the applier, because that is what disables hexes, and before the turn
+/// advances, so a unit that goes down on its own turn does not get to take it.
+fn check_for_downed(
+    mut commands: Commands,
+    mut turn_order: ResMut<TurnOrder>,
+    mut knowledge: ResMut<crate::knowledge::FactionKnowledge>,
+    registry: Res<UnitRegistry>,
+    settings: Option<Res<CombatSettings>>,
+    units: Query<(Entity, &UnitId, &LatticeSpec, &LatticeState), Without<Downed>>,
+) {
+    for (entity, &unit, spec, state) in &units {
+        // A lattice with no cells at all is not a downed unit — it is a unit with no
+        // lattice, which `all()` would call downed on the vacuous truth.
+        if spec.capacity() == 0 || !spec.cells().all(|(coord, _)| state.is_disabled(coord)) {
+            continue;
+        }
+        let held_the_turn = turn_order.current() == Some(unit);
+        commands.entity(entity).insert(Downed).remove::<Turn>();
+        turn_order.remove(unit);
+        // What anybody knew about this lattice goes with it. Keeping it would leave a
+        // faction reading a dead unit's contents out of the store forever.
+        knowledge.forget_subject(unit);
+        info!("{unit:?} is down — every hex disabled");
+
+        // **Hand the turn on, or the fight stalls forever.** `advance_turn` only acts
+        // on a unit that *holds* a `Turn`, and `TurnOrder::remove` slides `current` onto
+        // a successor who has none — so taking the turn-holder out without granting the
+        // next one a turn means nobody ever acts again, and only combat ending unwedges
+        // it. This is the one path that removes a unit mid-order, so it is the one place
+        // that has to do the handover.
+        if !held_the_turn {
+            continue;
+        }
+        let budget = settings
+            .as_deref()
+            .map_or(DEFAULT_MOVEMENT_PER_TURN, |combat| combat.movement_per_turn);
+        if let Some(next) = turn_order
+            .current()
+            .and_then(|unit| registry.entity_of(unit))
+        {
+            commands.entity(next).insert(Turn {
+                movement_left: budget,
+                acted: false,
+            });
+        }
     }
 }
 

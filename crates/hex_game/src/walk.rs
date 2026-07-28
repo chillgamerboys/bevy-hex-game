@@ -170,8 +170,9 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Escape" => Ok(KeyCode::Escape),
         "Space" => Ok(KeyCode::Space),
         "Enter" => Ok(KeyCode::Enter),
+        "Digit1" => Ok(KeyCode::Digit1),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, or Enter"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, or Digit1"
         )),
     }
 }

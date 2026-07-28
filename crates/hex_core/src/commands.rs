@@ -192,6 +192,21 @@ impl CommandQueue {
             .any(|issued| issued.command.unit() == unit)
     }
 
+    /// Whether an answer to an open decision is already waiting for `unit`.
+    ///
+    /// Narrower than [`Self::holds_command_for`] on purpose: the auto-policy that
+    /// answers a decision must not be silenced by an unrelated `MoveAlong` or `EndTurn`
+    /// queued for the same unit, which is what asking the broader question would do.
+    #[must_use]
+    pub fn holds_answer_for(&self, unit: UnitId) -> bool {
+        self.queue.iter().any(|issued| {
+            matches!(
+                issued.command,
+                GameCommand::ChooseDisables { unit: named, .. } if named == unit
+            )
+        })
+    }
+
     /// How many commands are waiting.
     #[must_use]
     pub fn len(&self) -> usize {

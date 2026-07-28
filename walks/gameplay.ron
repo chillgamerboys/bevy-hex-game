@@ -35,9 +35,22 @@
     AwaitTerrain,
     Settle(120),
     Capture("13-close-quarters-combat"),
+    // The wave's proof, in two halves.
+    //
+    // `1` casts the acting unit's first *damaging* inscribed spell at the nearest
+    // hostile — a placeholder emitter until the casting UX lands. Frame 14 cannot show
+    // that damage: the HUD counts your own party's hexes, and nothing draws a hostile
+    // lattice yet, so the cast's effect is in the log rather than on screen.
+    //
+    // Frame 15 is where damage becomes visible, and it is the enemy's doing: its strike
+    // takes one of *your* hexes, and the readout falls. Both halves matter — one proves
+    // a cast resolves, the other proves damage lands somewhere a player can see.
+    Key("Digit1"),
+    Settle(120),
+    Capture("14-close-quarters-after-cast"),
     Key("Space"),
     Settle(90),
-    Capture("14-close-quarters-enemy-turn"),
+    Capture("15-close-quarters-enemy-turn"),
     Key("Backspace"),
     AwaitScreen("Title"),
 ]

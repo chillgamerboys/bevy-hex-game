@@ -205,10 +205,20 @@ impl UnitRegistry {
         self.ids.insert(entity, id);
     }
 
+    /// Every registered unit, in id order.
+    ///
+    /// Ordered because callers scan it to answer sim questions — "who is standing
+    /// here" — and a scan whose order came from a hash would make the answer depend on
+    /// insertion history rather than on the map.
+    pub fn iter(&self) -> impl Iterator<Item = (UnitId, Entity)> + '_ {
+        self.by_id.iter().map(|(&id, &entity)| (id, entity))
+    }
+
     /// The entity registered for `id`, if any.
     ///
-    /// The registry has no liveness knowledge: nothing despawns units
-    /// mid-session today, and when death lands it must unregister here or
+    /// The registry has no liveness knowledge, and deliberately does not need any:
+    /// death is a [`Downed`] marker rather than a despawn, so an entity here is always
+    /// a real one. A future path that *does* despawn units must unregister them, or
     /// this will serve a dead entity.
     #[must_use]
     pub fn entity_of(&self, id: UnitId) -> Option<Entity> {
@@ -243,6 +253,7 @@ pub fn plugin(app: &mut App) {
     app.register_type::<Player>()
         .register_type::<Enemy>()
         .register_type::<Archetype>()
+        .register_type::<Downed>()
         .register_type::<Faction>()
         // `hex_core` has no plugin, so the runtime plugin that introduces its
         // shared types registers them.
@@ -525,13 +536,33 @@ fn nearest_step(path: &[Standing], at: Vec3) -> Option<Standing> {
 
 /// What kind of unit this is, as its encounter rostered it.
 ///
-/// A name and nothing else: it resolves to no stats, no lattice and no mesh today.
-/// It exists now because it is the **key** an archetype's lattice will be looked up by,
-/// and putting it on the entity at spawn time is what keeps that lookup a single line
-/// inside the spawn loop later rather than a per-unit spawn path per archetype.
+/// The key an archetype's lattice is looked up by in `lattices.ron`, attached at spawn.
+/// It resolves to no mesh and no body size: every unit is still drawn the same and walks
+/// the same.
 #[derive(Component, Reflect, Debug, Clone, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct Archetype(pub String);
+
+/// A unit whose lattice is entirely disabled: out of the fight, not out of the world.
+///
+/// **The provisional first implementation of death**, and provisional is the operative
+/// word — the design leaves both functional death (a threshold before zero) and
+/// permadeath open, and this settles neither. A downed unit leaves the turn order and is
+/// revivable by a restoring spell.
+///
+/// A marker rather than a despawn, for two reasons. `UnitRegistry` has no `unregister`
+/// and its own doc says death must add one or it will serve a dead entity — a marker
+/// avoids needing it at all. And a revival spell needs something to target: a despawned
+/// unit cannot be brought back, so despawning would quietly make the design's stated
+/// recovery path impossible.
+///
+/// Everything that decides who is *in* a fight filters on this: `engagement` and
+/// `begin_combat` in `hex_combat`, the AI's target search, selection, and targeting. A
+/// downed unit that kept its `Faction` unfiltered would keep the fight running forever
+/// against somebody who cannot act.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct Downed;
 
 impl From<EncounterFaction> for Faction {
     fn from(faction: EncounterFaction) -> Self {
