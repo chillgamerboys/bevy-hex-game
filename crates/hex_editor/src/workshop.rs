@@ -227,7 +227,7 @@ impl WorkshopDraft {
                 .is_empty()
         {
             return Err(WorkshopDraftError::new(
-                "the new swatch is within the palette near-colour threshold; confirm it explicitly",
+                "the swatch is within the palette near-colour threshold; confirm it explicitly",
             ));
         }
         let before = self.catalog_snapshot();
@@ -585,9 +585,13 @@ mod tests {
             BTreeSet::from(["editor".to_owned()]),
         )
         .expect("test swatch should be valid");
-        assert!(draft
+        let error = draft
             .upsert_swatch(swatch_id("editor/near"), close.clone(), false)
-            .is_err());
+            .expect_err("near-colour insertion should require confirmation");
+        assert_eq!(
+            error.detail(),
+            "the swatch is within the palette near-colour threshold; confirm it explicitly"
+        );
         assert_eq!(
             draft.upsert_swatch(swatch_id("editor/near"), close, true),
             Ok(true)
@@ -610,9 +614,13 @@ mod tests {
             BTreeSet::from(["plant".to_owned()]),
         )
         .expect("test swatch should be valid");
-        assert!(draft
+        let error = draft
             .upsert_swatch(second_id.clone(), close_to_neutral.clone(), false)
-            .is_err());
+            .expect_err("near-colour edit should require confirmation");
+        assert_eq!(
+            error.detail(),
+            "the swatch is within the palette near-colour threshold; confirm it explicitly"
+        );
         assert_eq!(
             draft.upsert_swatch(second_id, close_to_neutral, true),
             Ok(true)

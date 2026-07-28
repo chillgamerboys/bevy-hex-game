@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 
 use bevy::prelude::*;
-use bevy::window::{PresentMode, WindowResolution};
+use bevy::window::{PresentMode, WindowCloseRequested, WindowResolution};
 use bevy_egui::EguiPlugin;
 use hex_assets::{
     ConnectivityPolicy, LocalVoxelCoord, ObjectAssetId, ObjectCategory, SwatchId,
@@ -141,6 +141,12 @@ struct PointerStroke {
     last_cell: Option<LocalVoxelCoord>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowCloseDecision {
+    Exit,
+    RefuseDirty,
+}
+
 /// Starts the Asset Workshop.
 pub fn run() {
     let runtime = WorkshopRuntime::initialize();
@@ -155,6 +161,7 @@ pub fn run() {
                 present_mode: PresentMode::AutoVsync,
                 ..default()
             }),
+            close_when_requested: false,
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
@@ -163,11 +170,43 @@ pub fn run() {
         .init_resource::<PointerStroke>()
         .add_systems(
             Update,
-            (handle_ui_actions, handle_pointer_editing, synchronize_views)
+            (
+                intercept_window_close_requests,
+                handle_ui_actions,
+                handle_pointer_editing,
+                synchronize_views,
+            )
                 .chain()
                 .before(ViewportSystems::Reconcile),
         )
         .run();
+}
+
+fn intercept_window_close_requests(
+    mut requests: MessageReader<WindowCloseRequested>,
+    mut runtime: ResMut<WorkshopRuntime>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if requests.read().next().is_none() {
+        return;
+    }
+    match window_close_decision(runtime.draft.as_ref()) {
+        WindowCloseDecision::Exit => {
+            exit.write(AppExit::Success);
+        }
+        WindowCloseDecision::RefuseDirty => runtime.set_status(
+            WorkshopStatusKind::Warning,
+            "Unsaved changes prevent closing the Workshop; save or undo them first",
+        ),
+    }
+}
+
+fn window_close_decision(draft: Option<&WorkshopDraft>) -> WindowCloseDecision {
+    if draft.is_some_and(WorkshopDraft::is_dirty) {
+        WindowCloseDecision::RefuseDirty
+    } else {
+        WindowCloseDecision::Exit
+    }
 }
 
 fn handle_ui_actions(
@@ -717,6 +756,7 @@ fn calibration_for_project(
     if let Some(style) = project.styles().styles().keys().next() {
         apply_calibration_style(&mut editor, style)?;
         editor.set_active_style(Some(style.clone()));
+        editor.mark_saved();
         return Ok((editor, PreviewSubject::ActiveStyle));
     }
     editor.set_mode(WorkshopMode::VoxelStyles);
@@ -1310,6 +1350,62 @@ mod tests {
             .placements
             .iter()
             .all(|placement| placement.style == style));
+    }
+
+    #[test]
+    fn clean_document_allows_window_close() {
+        let mut editor =
+            EditorModel::calibration_scene().expect("calibration scene should be valid");
+        editor.mark_saved();
+        let draft = WorkshopDraft::new(fixture_palette(), fixture_styles(), editor);
+
+        assert_eq!(
+            window_close_decision(Some(&draft)),
+            WindowCloseDecision::Exit
+        );
+        assert_eq!(window_close_decision(None), WindowCloseDecision::Exit);
+    }
+
+    #[test]
+    fn dirty_document_refuses_window_close() {
+        let mut editor =
+            EditorModel::calibration_scene().expect("calibration scene should be valid");
+        editor.mark_saved();
+        assert_eq!(
+            editor.set_display_name("Unsaved calibration edit".to_owned()),
+            Ok(true)
+        );
+        let draft = WorkshopDraft::new(fixture_palette(), fixture_styles(), editor);
+
+        assert_eq!(
+            window_close_decision(Some(&draft)),
+            WindowCloseDecision::RefuseDirty
+        );
+    }
+
+    fn fixture_palette() -> hex_assets::ArtPalette {
+        let swatch = SwatchId::new("plant/base").expect("fixture swatch id should be valid");
+        hex_assets::ArtPalette::new(BTreeMap::from([(
+            swatch,
+            PaletteSwatch::new(
+                "Base",
+                SrgbColor::new(0.2, 0.3, 0.2).expect("fixture colour should be valid"),
+                BTreeSet::from(["plant".to_owned()]),
+            )
+            .expect("fixture swatch should be valid"),
+        )]))
+        .expect("fixture palette should be valid")
+    }
+
+    fn fixture_styles() -> VoxelStyleCatalog {
+        let swatch = SwatchId::new("plant/base").expect("fixture swatch id should be valid");
+        let style = VoxelStyleId::new("plant/base").expect("fixture style id should be valid");
+        VoxelStyleCatalog::new(BTreeMap::from([(
+            style,
+            VoxelStyle::new("Base", swatch, VoxelSurfaceMode::Opaque, 1.0, None)
+                .expect("fixture style should be valid"),
+        )]))
+        .expect("fixture style catalog should be valid")
     }
 
     #[test]
