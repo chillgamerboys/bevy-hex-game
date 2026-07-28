@@ -830,12 +830,14 @@ dependencies = [
  "bevy_log",
  "bevy_math",
  "bevy_mesh",
+ "bevy_picking",
  "bevy_platform",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
  "bevy_time",
  "bevy_transform",
+ "bevy_ui_render",
  "bevy_utils",
  "bevy_window",
  "bevy_winit",
@@ -3244,6 +3246,18 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy-inspector-egui",
+]
+
+[[package]]
+name = "hex_editor"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "hex_assets",
+ "hex_core",
+ "ron",
+ "serde",
 ]
 
 [[package]]
