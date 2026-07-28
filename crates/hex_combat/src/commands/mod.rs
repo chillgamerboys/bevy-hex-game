@@ -105,6 +105,12 @@ struct Verb<'a> {
     tables: Option<ContentTables<'a>>,
     /// The one open decision, if resolution is parked on somebody's answer.
     pending: &'a mut PendingDecision,
+    /// The ledger of effects that outlast the action that caused them.
+    ///
+    /// The field this struct's docs promised: persistent effects were named as one of
+    /// wave 3's additions, and casting a burn is a verb needing a fact the handlers
+    /// lacked. One field here rather than a ninth argument on `cast::apply`.
+    effects: &'a mut crate::effects::PersistentEffects,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
     /// Units this drain already committed presentation for. `Busy` lands via
@@ -213,6 +219,7 @@ fn apply_commands(
     content: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
     mut pending: ResMut<PendingDecision>,
+    mut effects: ResMut<crate::effects::PersistentEffects>,
     combat: Option<Res<CombatSettings>>,
     tiles: TileQuery,
     mut actors: ActorQuery,
@@ -252,6 +259,7 @@ fn apply_commands(
                 .zip(elements.as_deref())
                 .map(|(index, elements)| index.tables(elements)),
             pending: &mut pending,
+            effects: &mut effects,
             combat: combat.as_deref(),
             committed: &mut committed,
             in_combat,

@@ -118,10 +118,19 @@ leaves the turn order revivable. How many hexes a spell disables, how long a fig
 and what a strike costs are all knobs rather than answers; `strike_disables` sits in
 `combat.ron` beside the rest precisely so it can be moved without touching code.
 
-Two things a landed cast still cannot do: reach terrain (rungs 4 and 5 of the ladder wait
-on `RunBottom` from the world lane) and last beyond the moment it resolves (`Burn` and
-every other persistent effect wait on the effect runtime). Both refuse by name rather
-than silently doing nothing.
+One thing a landed cast still cannot do: reach terrain, because rungs 4 and 5 of the
+ladder wait on `RunBottom` from the world lane. It refuses by name rather than silently
+doing nothing.
+
+**A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
+(`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast starts a countdown on
+the target's lattice, and one hex goes down at the start of each of that target's own
+turns. The two settled rules hold — the tick point is **personal, not the round
+boundary**, and burn **ignores armour** while still going through the defender's choice,
+so its damage lands in the replay log like every other hit. What that does *not* settle
+is anything about the negative spiral it accelerates: fight length, functional death, and
+the brakes the design names (rout, surrender) are all still deferred, and burn deliberately
+ships without one. See [systems/combat.md](../systems/combat.md#effects-that-outlast-their-cast).
 
 ## Not built, and not next
 
@@ -205,6 +214,18 @@ The first implementation also ships with explicit limitations:
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and remains revivable; functional death and permadeath remain open.
+- **A unit effect reaches the unit on the anchor, not everyone in the volume.**
+  `volumes::resolve` produces the full voxel list and the cast path checks that it
+  resolves, but `DisableHexes` and `Burn` both apply to whoever stands on the target
+  voxel. The friendly-fire contract above is unchanged and unweakened — nothing filters
+  by faction — but a fireball currently damages one unit rather than every unit inside
+  it, and a line spell burns whoever it is aimed at rather than everyone along it. This
+  is the same gap `RunBottom` and the announce path close for terrain, arriving at the
+  same seam.
+- **Burn attributes one source per tick.** Several burns on one target come due as a
+  single count and therefore a single decision, which has room for one `source`. The
+  earliest-lit fire fills it. The rules never read `source`, so the imprecision is
+  confined to the combat log.
 
 ## Not yet done, at the toolchain level
 

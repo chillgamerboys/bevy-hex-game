@@ -69,6 +69,7 @@ pub(crate) fn plugin(app: &mut App) {
 fn take_enemy_turn(
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
+    pending: Res<PendingDecision>,
     mut queue: ResMut<CommandQueue>,
     acting: Query<
         (
@@ -88,6 +89,19 @@ fn take_enemy_turn(
     let Some(table) = table else {
         return;
     };
+    // Nothing is decided while resolution is parked — the same rule the applier
+    // enforces for a cast and a strike, moved one step earlier so the AI does not
+    // emit commands that will be refused.
+    //
+    // **This is what keeps a burning enemy's turn deterministic.** Persistent effects
+    // tick before `Act` and park the defender's choice there, so on a burning unit's
+    // turn a decision is open exactly when this system and the one answering it both
+    // run — and they are unordered against each other. Without this gate the strike
+    // this pushes would land or be dropped depending on which of the two the executor
+    // happened to run first, which is randomness in resolution by another name.
+    if pending.is_open() {
+        return;
+    }
     let Some(current) = turn_order
         .current()
         .and_then(|unit| registry.entity_of(unit))

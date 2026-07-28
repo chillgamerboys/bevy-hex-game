@@ -1,0 +1,675 @@
+//! Integration tests for persistent effects: lighting a fire, and collecting on it.
+//!
+//! These drive the real applier over the real command queue, with a hand-built content
+//! set standing in for `spells.ron`. What they prove is the part no unit test can: that
+//! a burn **lands on a later turn than the cast that started it**, that it arrives at the
+//! start of the *target's* turn rather than on the round boundary, and that it reaches
+//! the lattice through the same defender-chooses seam as any other damage while ignoring
+//! the armour that would have stopped a spell.
+//!
+//! The content is built here rather than loaded, because this crate cannot see asset
+//! files and should not need to: what is under test is the runtime, not the roster.
+
+use std::collections::BTreeMap;
+
+use bevy::app::PluginsState;
+use bevy::platform::collections::HashMap;
+use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
+
+use hex_assets::{
+    CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
+    ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec,
+};
+use hex_combat::{Initiative, PersistentEffects, TurnOrder};
+use hex_core::{
+    CommandQueue, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan, IssuedCommand,
+    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
+};
+use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_units::{Faction, Standing, StandsOn, UnitRegistry};
+
+/// The level every unit in these tests stands on.
+const GROUND: hex_core::Level = 1;
+
+/// How much mana each gem starts with. Comfortably more than any spell here costs, so a
+/// refused cast is never a refused *payment* in disguise.
+const GEM_MANA: u16 = 6;
+
+// --- content -----------------------------------------------------------------
+
+/// Two elements, no fusions. Ids come from sorted names, so nothing here may assume
+/// which is which — every lookup goes through the catalog.
+fn elements() -> ElementCatalog {
+    ElementCatalog::from_file(&ElementFile {
+        wheel: vec!["Fire".to_owned(), "Metal".to_owned()],
+        fusions: HashMap::default(),
+    })
+}
+
+/// Two spells: one that sets a target alight, one that raises a flat defence.
+///
+/// The pair is the whole point of the fixture. "Ward" subtracts 1 from an incoming
+/// disable count, which is exactly enough to absorb an ember — and exactly what burn is
+/// specified to ignore, so the same lattice can be shown to stop one and not the other.
+fn spells(burn_turns: u16) -> SpellBook {
+    let single = TargetingSpec {
+        range: 3,
+        shape: TargetShape::Single,
+        needs_los: false,
+    };
+    let mut by_name = HashMap::default();
+    by_name.insert(
+        "Kindle".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: single.clone(),
+            effects: vec![Effect::Burn { amount: burn_turns }],
+        },
+    );
+    by_name.insert(
+        "Ward".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Metal".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Enchantment { defense: 1 },
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: single,
+            effects: Vec::new(),
+        },
+    );
+    SpellBook::from_file(&SpellFile { spells: by_name })
+}
+
+// --- lattices ----------------------------------------------------------------
+
+/// A lattice that can cast `spell`, plus `spare` blank cells to lose.
+///
+/// The spell sits at the origin with its one funding gem adjacent, which is what
+/// `castable` looks for; the spares hang off the far side so damage has somewhere to go
+/// that is not the spell or the gem paying for it.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; a fixture naming content it did not \
+              define IS the failure"
+)]
+fn lattice_casting(
+    book: &SpellBook,
+    catalog: &ElementCatalog,
+    spell: &str,
+    element: &str,
+    spare: u16,
+) -> (LatticeSpec, LatticeStats) {
+    let spell_id = book.id(spell).expect("the fixture book holds that spell");
+    let element_id = catalog.id(element).expect("and the catalog that element");
+    let mut spec = LatticeSpec::default()
+        .with(LatticeCoord::ORIGIN, CellKind::Spell { spell: spell_id })
+        .with(
+            LatticeCoord::new(1, 0),
+            CellKind::Gem {
+                element: element_id,
+            },
+        );
+    for step in 0..i32::from(spare) {
+        spec = spec.with(LatticeCoord::new(-1 - step, 0), CellKind::Blank);
+    }
+    let stats = LatticeStats::new(
+        BTreeMap::from([(element_id, GEM_MANA)]),
+        BTreeMap::default(),
+    );
+    (spec, stats)
+}
+
+// --- watching the decision seam ----------------------------------------------
+
+/// What the defender-chooses seam was seen doing, between parking and applying.
+///
+/// The seam opens and closes inside a **single frame** — the tick parks the decision
+/// before `Act`, the auto-policy answers during it, and the applier drains that answer
+/// during `Apply` — so nothing outside the schedule can observe it. Recording from
+/// inside is the only honest way to prove a burn went through it rather than around it.
+#[derive(Resource, Debug, Default)]
+struct Seam {
+    /// Every distinct decision seen parked, in order.
+    parked: Vec<PendingDecision>,
+    /// Whether an answering **command** was waiting while a decision was parked.
+    answered_by_command: bool,
+}
+
+/// Samples the seam between deciding and applying.
+fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam: ResMut<Seam>) {
+    if !pending.is_open() {
+        return;
+    }
+    if seam.parked.last() != Some(&*pending) {
+        seam.parked.push(pending.clone());
+    }
+    if let Some(decider) = pending.decider() {
+        seam.answered_by_command |= queue.holds_answer_for(decider);
+    }
+}
+
+// --- harness -----------------------------------------------------------------
+
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; fixture content that will not resolve \
+              IS the failure"
+)]
+fn test_app(burn_turns: u16) -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
+    app.init_state::<Screen>();
+    app.insert_resource(CombatSettings::default());
+    app.add_sub_state::<Mode>();
+    app.add_plugins(hex_combat::plugin);
+    app.init_resource::<UnitRegistry>();
+
+    let catalog = elements();
+    let book = spells(burn_turns);
+    let index = ContentIndex::build(&catalog, &book, &SubstanceTable::default())
+        .expect("the fixture content resolves");
+    app.insert_resource(catalog);
+    app.insert_resource(book);
+    app.insert_resource(index);
+
+    app.init_resource::<Seam>();
+    app.add_systems(
+        Update,
+        watch_seam
+            .after(hex_combat::CombatSystems::Act)
+            .before(hex_combat::CombatSystems::Apply),
+    );
+
+    while app.plugins_state() != PluginsState::Cleaned {
+        app.finish();
+        app.cleanup();
+    }
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Gameplay);
+    app.update();
+    app
+}
+
+fn spawn(
+    app: &mut App,
+    id: UnitId,
+    faction: Faction,
+    coord: HexCoord,
+    initiative: u32,
+    lattice: (LatticeSpec, LatticeStats),
+) -> Entity {
+    let (spec, stats) = lattice;
+    let state = LatticeState::new(&spec, &stats);
+    let entity = app
+        .world_mut()
+        .spawn((
+            faction,
+            id,
+            StandsOn(Standing {
+                pos: TilePos::new(coord, GROUND),
+                span: HexSpan::new(0.0, 1.0),
+            }),
+            Initiative(initiative),
+            spec,
+            state,
+            stats,
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<UnitRegistry>()
+        .register(id, entity);
+    entity
+}
+
+/// The caster, the defender, and the position the defender stands on.
+struct Fight {
+    caster: Entity,
+    defender: Entity,
+    defender_pos: TilePos,
+}
+
+/// Two units one hex apart, both able to cast, with the caster acting first.
+///
+/// The defender is given "Ward" rather than "Kindle" so the armour test can raise it,
+/// and the initiative gap is what makes the turn order predictable without relying on
+/// spawn order.
+fn two_casters(app: &mut App) -> Fight {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::new_cubic(1, -1, 0);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Kindle", "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    Fight {
+        caster,
+        defender,
+        defender_pos: TilePos::new(defender_coord, GROUND),
+    }
+}
+
+fn push(app: &mut App, command: GameCommand) {
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command,
+        });
+}
+
+/// Casts "Kindle" at `target` and yields the rest of the caster's turn.
+fn kindle(app: &mut App, caster: UnitId, target: TilePos) {
+    push(
+        app,
+        GameCommand::Cast {
+            unit: caster,
+            spell: "Kindle".to_owned(),
+            target,
+            facing: None,
+            mana: None,
+        },
+    );
+    push(app, GameCommand::EndTurn { unit: caster });
+    app.update();
+}
+
+/// How many of a unit's cells are currently down.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; a unit that lost its lattice IS the \
+              failure, and reporting zero would read as 'nothing was damaged'"
+)]
+fn disabled_count(app: &App, entity: Entity) -> usize {
+    let entity = app.world().entity(entity);
+    let spec = entity.get::<LatticeSpec>().expect("a lattice spec");
+    let state = entity.get::<LatticeState>().expect("a lattice state");
+    spec.cells()
+        .filter(|&(coord, _)| state.is_disabled(coord))
+        .count()
+}
+
+/// How many burns a unit's lattice is carrying.
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; see disabled_count"
+)]
+fn burns_on(app: &App, entity: Entity) -> usize {
+    app.world()
+        .entity(entity)
+        .get::<LatticeState>()
+        .expect("a lattice state")
+        .burns()
+        .len()
+}
+
+/// Runs frames until `unit` is the one acting, yielding whoever holds the turn.
+///
+/// Turn handover takes more than one frame — the marker lands through `Commands` and
+/// `advance_turn` waits for the acting unit to be spent — so a fixed update count would
+/// be a guess that silently passes when the loop stalls. The bound is what turns a
+/// stalled loop into a failure instead of a hang.
+fn run_until_acting(app: &mut App, unit: UnitId) {
+    for _ in 0..16 {
+        let acting = app.world().resource::<TurnOrder>().current();
+        if acting == Some(unit) {
+            return;
+        }
+        push(
+            app,
+            GameCommand::EndTurn {
+                unit: acting.unwrap_or(unit),
+            },
+        );
+        app.update();
+    }
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(unit),
+        "the order never came round to this unit; the loop is stalled"
+    );
+}
+
+// --- tests -------------------------------------------------------------------
+
+/// A cast that burns takes nothing down at the moment it lands.
+///
+/// This is the difference between `Burn` and `DisableHexes`, and the reason burn needed
+/// a runtime at all: the cast starts a countdown on the target's lattice and records who
+/// started it. If this ever asserts a disabled hex, burn has quietly become an ember.
+#[test]
+fn casting_a_burn_starts_a_countdown_rather_than_landing_damage() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        0,
+        "a burn must not disable anything on the turn it is cast"
+    );
+    assert_eq!(
+        burns_on(&app, fight.defender),
+        1,
+        "the countdown belongs on the target's lattice"
+    );
+
+    let effects = app.world().resource::<PersistentEffects>();
+    assert_eq!(effects.len(), 1, "and the attribution in the ledger");
+    let (_, effect) = effects.iter().next().expect("the record just made");
+    assert_eq!(effect.source, UnitId(1));
+    assert_eq!(effect.target, UnitId(2));
+    assert_eq!(effect.payload, EffectPayload::Burn);
+    assert_eq!(effect.end, EffectEnd::AfterTurns(2));
+}
+
+/// The burn comes due at the start of the target's own turn, and takes a hex.
+///
+/// The tick point is the settled half of this ticket: personal, not global. A burn that
+/// ticked on the round boundary would hit a unit that had just acted and one that had
+/// not at the same moment, which is a different mechanic than the one the design words.
+#[test]
+fn a_burn_comes_due_at_the_start_of_its_targets_turn() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        0,
+        "precondition: nothing down yet"
+    );
+
+    // The caster yielded, so the next turn is the defender's — and that is when it hurts.
+    run_until_acting(&mut app, UnitId(2));
+    app.update();
+    app.update();
+
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "the burn should take exactly one hex at the start of its target's turn"
+    );
+    assert_eq!(
+        disabled_count(&app, fight.caster),
+        0,
+        "and nothing from anybody else"
+    );
+}
+
+/// The burn's damage goes through `ChooseDisables`, so it lands in the replay log.
+///
+/// Burn ignoring armour is **not** burn ignoring the defender's choice. A runtime that
+/// disabled hexes itself would satisfy every other test in this file — the hex would
+/// still go down — so what is asserted here is the *route*: a decision was parked naming
+/// the defender and the count, and a **command** was what answered it. A fight replays by
+/// re-running its commands, and a choice made inside the applier would be re-derived
+/// instead of replayed.
+#[test]
+fn a_due_burn_routes_through_the_defender_chooses_seam() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    run_until_acting(&mut app, UnitId(2));
+    app.update();
+
+    let seam = app.world().resource::<Seam>();
+    assert_eq!(
+        seam.parked.as_slice(),
+        &[PendingDecision::ChooseDisables {
+            decider: UnitId(2),
+            count: 1,
+            source: UnitId(1),
+        }],
+        "a due burn must park exactly one choice, naming the defender and who lit it"
+    );
+    assert!(
+        seam.answered_by_command,
+        "and the answer must arrive as a command, or the fight cannot be replayed"
+    );
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the answer should close the decision"
+    );
+    assert_eq!(disabled_count(&app, fight.defender), 1);
+}
+
+/// A due burn waits for the seam rather than being lost to it.
+///
+/// The seam holds one decision at a time. A tick that skipped itself while another
+/// decision was open would silently drop a turn of burn — and a tick that parked over
+/// the open one would erase somebody else's damage. So the tick always happens on
+/// schedule and queues what it found, and the queue drains when the seam frees up.
+#[test]
+fn a_due_burn_waits_for_an_occupied_seam_rather_than_being_dropped() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    run_until_acting(&mut app, UnitId(2));
+
+    // Occupy the seam with somebody else's decision, asking the caster for a hex.
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 1,
+        source: UnitId(2),
+    };
+    for _ in 0..6 {
+        app.update();
+    }
+
+    assert_eq!(
+        disabled_count(&app, fight.caster),
+        1,
+        "the decision that was already open resolves first"
+    );
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "and the burn that came due behind it still lands"
+    );
+    assert_eq!(
+        burns_on(&app, fight.defender),
+        1,
+        "having consumed exactly one of its turns"
+    );
+}
+
+/// Armour that stops an ember does not stop a fire.
+///
+/// The precondition is the contrast and does the real work: the same lattice, asked what
+/// a one-hex spell would do, answers zero. Burn then takes a hex anyway. A burn routed
+/// through `resolve_incoming` by mistake would fail here and nowhere else — every other
+/// test in this file passes with the subtraction wired in, because none of them have a
+/// defence up.
+#[test]
+fn a_burn_ignores_the_armour_that_would_absorb_a_spell() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+
+    // Raise the ward directly on the defender's lattice: `apply_cast` is the engine's
+    // own entry point, and going through a turn to reach it would test the turn order.
+    {
+        let catalog = app.world().resource::<ElementCatalog>().clone();
+        let index = app.world().resource::<ContentIndex>().clone();
+        let tables = index.tables(&catalog);
+        let mut entity = app.world_mut().entity_mut(fight.defender);
+        let spec = entity.get::<LatticeSpec>().expect("a spec").clone();
+        let mut state = entity.get_mut::<LatticeState>().expect("a state");
+        let plan = castable(&spec, &state, LatticeCoord::ORIGIN, &tables)
+            .expect("the defender can afford its own ward");
+        assert!(
+            apply_cast(&mut state, &plan, &tables),
+            "the ward should apply"
+        );
+        assert_eq!(
+            hex_lattice::resolve_incoming(&state, 1),
+            0,
+            "precondition: this defence absorbs a one-hex spell entirely"
+        );
+    }
+
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    run_until_acting(&mut app, UnitId(2));
+    app.update();
+    app.update();
+    app.update();
+
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "burn ignores armour, so the hex goes down anyway"
+    );
+}
+
+/// A burn ticks once per turn, however many frames that turn lasts.
+///
+/// The tick is driven by a `(round, unit)` cursor rather than by a one-frame signal
+/// precisely so this holds. A tick keyed on "the acting unit has a burn" would fire
+/// every frame and empty a lattice in about a second.
+#[test]
+fn a_burn_ticks_once_per_turn_however_long_the_turn_lasts() {
+    let mut app = test_app(4);
+    let fight = two_casters(&mut app);
+
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    run_until_acting(&mut app, UnitId(2));
+    // Sit on the defender's turn without ending it.
+    for _ in 0..8 {
+        app.update();
+    }
+
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "one turn is one hex, no matter how many frames the turn takes"
+    );
+    assert_eq!(
+        burns_on(&app, fight.defender),
+        1,
+        "and the countdown should have advanced exactly once"
+    );
+}
+
+/// A burn stops when its turns are spent, and the ledger forgets it.
+///
+/// A one-turn burn that ticked twice, or a record that outlived its countdown, would
+/// both show up here — the second as an effect still in the ledger with nothing left to
+/// tick, which is how a fire would become permanent.
+#[test]
+fn a_burn_expires_when_its_turns_are_spent() {
+    let mut app = test_app(1);
+    let fight = two_casters(&mut app);
+
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    run_until_acting(&mut app, UnitId(2));
+    app.update();
+    app.update();
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "precondition: the one turn it had"
+    );
+
+    // Round the order back to the defender and give it another turn.
+    run_until_acting(&mut app, UnitId(1));
+    run_until_acting(&mut app, UnitId(2));
+    app.update();
+    app.update();
+
+    assert_eq!(
+        disabled_count(&app, fight.defender),
+        1,
+        "a spent burn must not take a second hex"
+    );
+    assert_eq!(burns_on(&app, fight.defender), 0, "the countdown is empty");
+    assert!(
+        app.world().resource::<PersistentEffects>().is_empty(),
+        "and the ledger drops the record rather than keeping a fire that cannot burn"
+    );
+}
+
+/// Leaving gameplay forgets every effect.
+///
+/// Unit ids restart each session, so a ledger carried across one names somebody else's
+/// unit next launch — and unlike a stale command, nothing ever drains an effect: it
+/// would tick on a stranger every turn, forever.
+#[test]
+fn the_ledger_is_cleared_on_leaving_gameplay() {
+    let mut app = test_app(3);
+    let fight = two_casters(&mut app);
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+    assert_eq!(
+        app.world().resource::<PersistentEffects>().len(),
+        1,
+        "precondition: something is running"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+
+    assert!(
+        app.world().resource::<PersistentEffects>().is_empty(),
+        "a new session must not inherit the last one's fires"
+    );
+}
+
+/// A fight ending drops undelivered ticks but not the fires themselves.
+///
+/// The two halves differ. A due hit has nobody left to answer it once the auto-policy
+/// stops running, exactly like the open decision the funnel drops beside it — but
+/// nothing in the design puts a fire out because the party walked away, and the
+/// countdown on the unit's own lattice survives the mode flip regardless.
+#[test]
+fn a_fight_ending_keeps_the_fires_it_started() {
+    let mut app = test_app(3);
+    let fight = two_casters(&mut app);
+    kindle(&mut app, UnitId(1), fight.defender_pos);
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Exploring);
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<PersistentEffects>().len(),
+        1,
+        "the fire keeps burning; only what could not be delivered is dropped"
+    );
+    assert_eq!(
+        burns_on(&app, fight.defender),
+        1,
+        "and the lattice agrees, because it is the same countdown"
+    );
+}

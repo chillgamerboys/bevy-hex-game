@@ -165,6 +165,7 @@ pub(super) fn apply(
     // --- effects -----------------------------------------------------------
 
     let target_unit = unit_standing_on(ctx, actors, target);
+    let round = ctx.turn_order.round;
     let mut refusals: Vec<&'static str> = Vec::new();
     for effect in &spec.effects {
         match effect {
@@ -194,7 +195,41 @@ pub(super) fn apply(
             Effect::SetTerrain { .. } | Effect::ClearTerrain | Effect::SpawnWall { .. } => {
                 refusals.push("terrain effects wait on RunBottom and the announce path");
             }
-            Effect::Burn { .. } => refusals.push("Burn waits on the persistent-effect runtime"),
+            Effect::Burn { amount } => {
+                let Some(defender) = target_unit else {
+                    // Same rule as `DisableHexes` above: a spell that reaches nobody is
+                    // a legal cast that set nothing alight, and it is already paid for.
+                    continue;
+                };
+                let Ok((_, mut state)) = lattices.get_mut(defender.1) else {
+                    refusals.push("the target has no lattice to set alight");
+                    continue;
+                };
+                // **Nothing goes down now.** Burn's whole shape is that it arrives at
+                // the start of each of the target's own turns, so what a cast does is
+                // start a countdown; `crate::effects` is what collects on it and routes
+                // the result through the same defender-chooses seam as any other damage.
+                //
+                // `amount` is **how many of the target's turns burn for**, which is the
+                // only reading the design supports: burn is "one additional hex disabled
+                // at the start of the target's turn, for some number of turns", and
+                // `LatticeState::add_burn` takes exactly that in exactly this width.
+                // `hex_assets`' field doc still describes an older idea (burning locked
+                // mana) that nothing implements and that would make the shipped
+                // Flamethrower a no-op against any target without an enchantment.
+                crate::effects::apply_burn(
+                    ctx.effects,
+                    &mut state,
+                    round,
+                    unit,
+                    defender.0,
+                    *amount,
+                );
+                info!(
+                    "cast: {unit:?} sets {:?} alight for {amount} of its turns",
+                    defender.0
+                );
+            }
             Effect::RestoreHexes { .. } => {
                 refusals.push("RestoreHexes waits on choosing which hexes come back");
             }
