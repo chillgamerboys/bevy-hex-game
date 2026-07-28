@@ -14,7 +14,8 @@ Rust, and you do not need to recompile the game.
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, and the open design questions as policy knobs that reject unbuilt variants with a reason |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size, movement speed and colour |
-| `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
+| `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
+| `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
 
@@ -42,6 +43,7 @@ How quickly you *see* the change depends on which file:
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale and colour on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
+| `encounters/*.ron` | On the next world rebuild |
 | `menu.ron` | Straight away |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
@@ -458,17 +460,14 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-`scenarios.ron` entries can name a lighting file and choose how units are placed:
+A scenario is three files it names and nothing else: a world, a sky, and an encounter.
 
 ```ron
 (
     name: "Rolling Hills",
     world: "config/worlds/rolling-hills.ron",
     lighting: "config/lighting/overcast.ron",
-    units: (
-        player: Fixed((x: 0, y: 0, z: 0)),
-        enemy: Fixed((x: 5, y: -5, z: 0)),
-    ),
+    encounter: "config/encounters/open-ground.ron",
 ),
 ```
 
@@ -476,18 +475,16 @@ Leave `lighting` out and the scenario gets `config/lighting.ron`, which is what 
 should do. A lighting file is a complete copy of that file's contents — start by
 copying it and changing what you want.
 
-`Fixed(...)` is for authored terrain whose landmarks never move. Generated terrain
-instead uses anchors published by the generator and owns its reproducible seed here:
+An `encounter` is required, and several scenarios may share one — every generated map
+ships pointing at the same anchored skirmish. Generated terrain also owns its
+reproducible seed here:
 
 ```ron
 (
     name: "Procedural Hills",
     world: "config/worlds/procedural-hills.ron",
     generation_seed: Some(1592598566),
-    units: (
-        player: Anchor("party_start"),
-        enemy: Anchor("hostile_start"),
-    ),
+    encounter: "config/encounters/anchored-skirmish.ron",
 ),
 ```
 
@@ -513,9 +510,83 @@ map, so you only see the lower band of the sky dome — `sky_color` is effective
 whole background. That is why the shipped alternative is weather rather than a sunset:
 a warm horizon colour fills the screen with terracotta and reads as clay, not evening.
 
-Both `world` and `lighting` are paths, and neither is checked by the compiler. A typo
-fails `cargo test` rather than at the loading screen, but only because a test opens
-every file the scenarios name — keep it that way.
+`world`, `lighting` and `encounter` are all paths, and none of them is checked by the
+compiler. A typo fails `cargo test` rather than at the loading screen, but only because
+tests open every file the scenarios name — keep it that way.
+
+## Writing an encounter
+
+An encounter is a **roster**: one entry per unit, each naming an archetype and one
+placement. It replaced a scaffold that could only say "one player here, one enemy
+there".
+
+```ron
+(
+    name: "Bridge Ambush",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Anchor("hostile_start"), spread: 2),
+            units: [
+                (archetype: "wolf"),
+                (archetype: "wolf"),
+                // One unit that has to be somewhere exact, while the rest of its side
+                // comes in as a formation.
+                (archetype: "raider", placement: Some(Anchor("bridge"))),
+            ],
+        ),
+    ],
+)
+```
+
+`faction` is `Player` or `Hostile`, and a faction may appear in **more than one
+roster** — that is how two hostile groups hold different ground, with no second
+mechanism for it.
+
+`archetype` is a name and nothing else today: nothing resolves it to stats, a mesh or a
+lattice. It is named now because it is the key an archetype's lattice will be looked up
+by when `lattices.ron` lands.
+
+### The three placements
+
+| Placement | Holds | Use it for |
+|---|---|---|
+| `Fixed((x: 0, y: 4, z: -4))` | one unit | authored maps, whose landmarks never move. Takes the **lowest** surface at that coordinate the unit fits on — the ground, not a bridge over it. Cube coordinates must sum to zero |
+| `Anchor("party_start")` | one unit | generated maps. One exact surface, level included, published by the generator after it validates the map — so rerolling a seed moves the ground and the anchor with it |
+| `Formation(center: …, spread: N)` | a group | a party. `center` is a `Fixed` coordinate or an `Anchor`; the first unit stands on it and each one after takes the next free surface, closest first |
+
+A formation's `spread` is in **walking steps**, not hexes. The candidate surfaces come
+out of the same flood fill movement uses, so a formation will not spread across a
+chasm, onto a ledge the body cannot climb, or under a ceiling it does not fit beneath.
+A **named spawn zone** is written exactly this way: the anchor names it, `spread`
+bounds it, and the fill order is deterministic — walking distance, then position — so
+the same encounter on the same seed always deals the same surfaces.
+
+Two units may not share a `Fixed` or an `Anchor`: those hold exactly one unit each, and
+the file is rejected when it parses with a message telling you to use a formation.
+Exact placements are resolved *before* formations, so the sentry who must stand on the
+bridge keeps his surface and the crowd flows around him.
+
+### When a unit cannot be placed
+
+**Every rostered unit is placed, or the game returns to the title screen with the
+reason on it** — naming the side, the archetype, and what was wrong. An anchor that the
+active map does not publish, an authored coordinate with nothing standable under it, and
+a formation with more units than room all fail that way. None of them is a unit that
+quietly does not appear, which is the class of bug this repo is worst at noticing.
+
+A scenario is also checked against the world it names: procedural terrain requires every
+placement to resolve through an anchor, and authored terrain requires every placement to
+be fixed. That pairing is checked once both files have loaded, and a mismatch returns to
+the title screen rather than starting a fight with a unit missing.
 
 ## Elements and spells
 

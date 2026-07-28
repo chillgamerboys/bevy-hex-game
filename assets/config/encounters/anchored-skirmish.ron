@@ -1,0 +1,67 @@
+// Who is on the map, and where they start.
+//
+// An encounter is a ROSTER: one entry per unit, each naming an archetype and one
+// placement. A scenario names the encounter it wants by path, the same way it names its
+// world and its sky, so this file is reused by every generated map that publishes the
+// two standard anchors — six of them today.
+//
+// FIELDS
+//
+//   name      what logs and setup failures call this encounter
+//   rosters   one entry per side. A faction may appear more than once, which is how two
+//             hostile groups hold different ground
+//     faction   Player or Hostile
+//     placement where this side's units come in, unless a unit names its own
+//     units     the units, in the order they spawn
+//       archetype  what kind of unit it is. Nothing resolves it yet — it is the name an
+//                  archetype's lattice will be looked up by
+//       placement  OPTIONAL Some(...) for the one unit that must be somewhere exact
+//
+// PLACEMENTS
+//
+//   Fixed((x: 0, y: 4, z: -4))   an authored coordinate; the unit takes the LOWEST
+//                                surface there it fits on. Cube coordinates MUST SUM
+//                                TO ZERO: x + y + z == 0.
+//                                See https://www.redblobgames.com/grids/hexagons/
+//   Anchor("party_start")        one exact surface published by the generator, level
+//                                included. Generated maps use this: rerolling the seed
+//                                moves the useful ground and the anchor moves with it
+//   Formation(center: ..., spread: N)
+//                                a centre plus how many WALKING STEPS from it units may
+//                                be placed. The first unit stands on the centre and each
+//                                one after it takes the next free surface, closest
+//                                first. Steps, not hexes: a formation will not spread
+//                                across a chasm, onto a ledge the body cannot climb, or
+//                                under a ceiling it does not fit beneath
+//
+// `Fixed` and `Anchor` each hold exactly ONE unit — two units sharing one is rejected
+// when this file parses, and the fix is a formation. A formation is also how a named
+// spawn zone is written: the anchor names it and `spread` bounds it.
+//
+// Every rostered unit is placed or the game returns to the title screen saying which
+// entry could not be, so a unit is never quietly missing from a fight.
+//
+// TO ADD A PARTY MEMBER: add a line to `units`. Nothing else changes — the formation
+// finds it a surface. (The interface has not caught up yet: selection, the camera and
+// the hostile AI are all still written for one piece a side, so a bigger roster is
+// playable but not yet pleasant.)
+(
+    name: "Anchored Skirmish",
+    rosters: [
+        (
+            faction: Player,
+            // The party gathers on the anchor the generator promises is good ground.
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Anchor("hostile_start"), spread: 2),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)

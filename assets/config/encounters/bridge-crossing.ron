@@ -1,0 +1,25 @@
+// The Crossing's encounter: one piece at each end of the bridge.
+//
+// Authored terrain, so the placements are exact coordinates — the landmarks on a
+// hand-built map never move. See `anchored-skirmish.ron` for the full field reference.
+(
+    name: "Bridge Crossing",
+    rosters: [
+        (
+            faction: Player,
+            // Opposite ends of the bridge, so the first movement test is the crossing
+            // this map is built around.
+            placement: Formation(center: Fixed((x: 0, y: 4, z: -4)), spread: 1),
+            units: [
+                (archetype: "hedge-mage"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Fixed((x: 0, y: -4, z: 4)), spread: 1),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)

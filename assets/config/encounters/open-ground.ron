@@ -1,0 +1,23 @@
+// Open ground: nothing in the way, so distance is the only obstacle.
+//
+// Closer together than on the Crossing, because there is no terrain between them to
+// make the walk interesting. See `anchored-skirmish.ron` for the full field reference.
+(
+    name: "Open Ground",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Fixed((x: 0, y: 0, z: 0)), spread: 1),
+            units: [
+                (archetype: "hedge-mage"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Fixed((x: 5, y: -5, z: 0)), spread: 1),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)

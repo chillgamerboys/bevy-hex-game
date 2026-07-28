@@ -1090,35 +1090,11 @@ pub struct CubeCoord {
     pub z: i32,
 }
 
-/// One unit's starting point in a scenario.
-///
-/// Authored maps use an exact cube coordinate. Generated maps publish named anchors
-/// after generation, so their scenarios remain valid when a different seed moves the
-/// useful parts of the map.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
-pub enum ScenarioPlacement {
-    /// An exact coordinate on an authored map.
-    Fixed(CubeCoord),
-    /// A generated position resolved from [`hex_core::MapAnchors`].
-    Anchor(String),
-}
-
-/// Where a scenario's units start.
-///
-/// **Not loaded from a file of its own.** It is the placements out of whichever
-/// scenario was chosen, inserted by `hex_game` before gameplay spawns — see
-/// [`ScenarioLibrary`](crate::scenario::ScenarioLibrary).
-///
-/// A scaffold for trying maps out, not an encounter format: a real one will describe
-/// many units, their lattices, and what triggers them.
-#[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
-#[reflect(Resource)]
-pub struct ScenarioSettings {
-    /// Where the player starts.
-    pub player: ScenarioPlacement,
-    /// Where the single enemy starts.
-    pub enemy: ScenarioPlacement,
-}
+// Unit placement used to live here, as a `ScenarioSettings` holding exactly one player
+// coordinate and one enemy coordinate. It is a roster in `crate::encounter` now, which a
+// scenario names by path the same way it names its world and its lighting. `CubeCoord`
+// stayed: an authored placement is still a cube coordinate, and so is a formation's
+// centre.
 
 /// `assets/config/combat.ron` — the combat policy knobs.
 ///

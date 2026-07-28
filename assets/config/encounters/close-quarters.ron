@@ -1,0 +1,26 @@
+// Both sides start inside engagement range, so the fight begins on entry.
+//
+// The Crossing's player landing and its off-bridge neighbour on the same bank: adjacent,
+// so combat starts at once and the hostile's first turn is a strike rather than a march.
+// See `anchored-skirmish.ron` for the full field reference.
+(
+    name: "Close Quarters",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Fixed((x: 0, y: 4, z: -4)), spread: 1),
+            units: [
+                (archetype: "hedge-mage"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            // One hex away. A formation of one stands exactly on its centre, so this is
+            // the adjacency the scenario exists to show.
+            placement: Formation(center: Fixed((x: 1, y: 4, z: -5)), spread: 1),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)
