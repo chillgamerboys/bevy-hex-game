@@ -163,9 +163,12 @@ independent of each other still holds.
 
 ## Trying it out
 
-Each entry in `assets/config/scenarios.ron` places its player and enemy. Move them onto
-whatever part of that scenario's map is worth testing, press `BACKSPACE`, then click
-the scenario to rebuild. See [development/config.md](../development/config.md).
+Each entry in `assets/config/scenarios.ron` names an encounter file under
+`assets/config/encounters/`, and that file holds the roster: who is on the map, by
+archetype, and where each unit starts. Move them onto whatever part of that scenario's
+map is worth testing, press `BACKSPACE`, then click the scenario to rebuild. Adding a
+second unit to a side is one line in the roster. See
+[development/config.md](../development/config.md).
 
 ## Where a unit is, and where it is going
 

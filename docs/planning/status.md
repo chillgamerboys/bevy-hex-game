@@ -139,7 +139,10 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
   from further away when one side is above the other. Nothing is stuck — the player can
   still walk out past the disengage margin — but the enemy should give up rather than
   wait to be left. That is the rout threshold the design names and the enemy-behaviour
-  row above is waiting on.
+  row above is waiting on. **Rout was deferred deliberately on 2026-07-27**, not
+  overlooked: the threshold is a number nobody can pick honestly before fights have been
+  played. `rout_policy` stays an unbuilt knob, and this stalemate is the known cost of
+  waiting.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.
 

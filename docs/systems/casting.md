@@ -293,8 +293,12 @@ without touching the framework, which is the point of having one.
 - **There is no ally/enemy targeting filter, and there will not be one.** You may heal
   an enemy and immolate a friend. Area effects hit everyone inside the volume, always.
 - **Combat-only casting is provisional in wave 3.** Shaping terrain out of combat is
-  attractive and waits on an answer to out-of-combat mana regeneration, which
-  channelling's per-turn model does not provide.
+  attractive, and the mana half of that question now has an answer: recovery between
+  fights is an explicit **rest action** (ruled 2026-07-27 — see
+  [design/game.md](../design/game.md#recovery-and-death)), because channelling's
+  per-turn model has nothing to say about the time between fights. What has no answer is
+  the *input* half: casting in real time wants a different interaction model than a turn
+  does. That is what magic outside combat still waits on, and it is a separate epic.
 - **Channelling and rituals are deferred.** `co_castable` parses and feeds
   `Spell::is_ritual()` (**built**, and read today only by the lattice demo and the dev
   content dump); it has no mechanical effect. Co-casting is entangled with the
