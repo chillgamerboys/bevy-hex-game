@@ -19,6 +19,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{ElementId, Screen, SpellId};
+use hex_lattice::{Casting, FusionTable, Requirement, SpellTable};
 use thiserror::Error;
 
 use crate::elements::ElementCatalog;
@@ -136,6 +137,18 @@ impl ContentIndex {
         self.spells.get(&spell).map(|resolved| resolved.casting)
     }
 
+    /// Bridges the loaded content tables to the engine's lookup traits.
+    ///
+    /// Borrows rather than owns, so it is built where it is used and never goes stale
+    /// against the tables it reads.
+    #[must_use]
+    pub fn tables<'a>(&'a self, elements: &'a ElementCatalog) -> ContentTables<'a> {
+        ContentTables {
+            index: self,
+            elements,
+        }
+    }
+
     /// How many spells the index holds.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -146,6 +159,56 @@ impl ContentIndex {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.spells.is_empty()
+    }
+}
+
+/// The engine's content lookups, over the loaded tables.
+///
+/// Build one with [`ContentIndex::tables`]. The two `None` arms are the load-bearing
+/// part and must stay as they are: an unknown spell has to remain **uncastable**, and an
+/// empty requirement list would instead read as a tier-0 spell that costs nothing — so
+/// the fallback is a single `u16::MAX`-mana requirement, beyond any attunement content
+/// can name. An unknown casting axis falls to `Evocation`, the one that spends rather
+/// than locks, because an unknown spell that quietly tied mana up forever would be worse.
+pub struct ContentTables<'a> {
+    index: &'a ContentIndex,
+    elements: &'a ElementCatalog,
+}
+
+impl SpellTable for ContentTables<'_> {
+    fn requirements(&self, spell: SpellId) -> Vec<Requirement> {
+        match self.index.requirements(spell) {
+            Some(requirements) => requirements
+                .iter()
+                .map(|&(element, mana)| Requirement { element, mana })
+                .collect(),
+            None => vec![Requirement {
+                // Any real element does — the cost is what blocks the cast — and an
+                // empty catalog blocks everything anyway, so the default is fine there.
+                element: self.elements.wheel().first().copied().unwrap_or_default(),
+                mana: u16::MAX,
+            }],
+        }
+    }
+
+    fn casting(&self, spell: SpellId) -> Casting {
+        match self.index.casting(spell) {
+            Some(CastingAxis::Enchantment { defense }) => Casting::Enchantment { defense },
+            Some(CastingAxis::Evocation) | None => Casting::Evocation,
+        }
+    }
+}
+
+impl FusionTable for ContentTables<'_> {
+    fn recipe(&self, output: ElementId) -> Option<Vec<Requirement>> {
+        // `None` passes straight through, and correctly: it means "a basic element, not
+        // a fusion output", which is not a failure.
+        self.elements.recipe(output).map(|inputs| {
+            inputs
+                .iter()
+                .map(|&(element, mana)| Requirement { element, mana })
+                .collect()
+        })
     }
 }
 

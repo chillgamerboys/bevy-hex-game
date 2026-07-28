@@ -130,13 +130,18 @@ from looking at a character, so base visibility — faction and cell count — i
 available with no reveal at all. That is what makes the "unknown lattice, N hexes"
 readout honest rather than a placeholder.
 
-### Not wired yet
+### Wired, and what is still missing
 
-No unit carries a lattice: `LatticeSpec` and `LatticeState` are components, but
-nothing attaches them and `lattices.ron` does not exist. Until HEX-12 lands the
-publishing systems match no entities and the store stays empty, so `view()`
-returns `None` in the running game and the HUD readout and AI rewiring wait on it.
-The integration tests attach the components by hand rather than pass silently.
+Units carry lattices. `lattices.ron` holds the archetypes, `spawn_units` attaches
+a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
+`Archetype`, and the publishing systems that matched nothing now populate the
+store every frame in gameplay. `view()` returns real base visibility.
+
+Two things it does not yet do. **Nothing draws a hostile lattice** — the store
+fills, the dev reveal-all toggle fills it further, and no UI renders either, so
+the readout in the HUD is your own party's hex count rather than anything about
+the enemy. And **nothing writes divination-sourced knowledge**, because casting
+does not resolve yet; `Reveal` is still refused with a reason.
 
 `Reveal` (the shipped "Scrying Eye") reaches the store through the cast path,
 which HEX-12 also lands. A cast must still anchor on a currently Observed

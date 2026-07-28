@@ -42,6 +42,19 @@
             ],
         ),
 
+        // The roster's only higher-order spell, and the only thing that consumes a
+        // fusion. Tier 1 by requirement count, but Lightning is not a gem anyone holds:
+        // it has to be fused from an adjacent Light and Fire, so the real cost is the
+        // three cells that arrangement takes up. Cheap to cast, expensive to be able to.
+        "Lightning Bolt": (
+            requirements: [(element: "Lightning", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 4, shape: Single, needs_los: true),
+            effects: [DisableHexes(count: 2, targeted: false)],
+        ),
+
         // Ritual: variable mana AND co-castable — a flamethrower that scales with fuel
         // and stays useful late in a fight (docs/design/game.md, "rituals").
         "Flamethrower": (

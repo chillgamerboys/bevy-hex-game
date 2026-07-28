@@ -22,8 +22,9 @@ use serde::{Deserialize, Serialize};
 use hex_anim::Transformation;
 use hex_assets::{
     to_color, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
-    GameAssets, PlayerSettings, RosteredUnit, SubstanceTable,
+    GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
 };
+use hex_lattice::LatticeState;
 use std::collections::BTreeMap;
 
 use hex_core::{
@@ -573,6 +574,11 @@ fn spawn_units(
     table: Res<SubstanceTable>,
     settings: Res<PlayerSettings>,
     encounter: Res<Encounter>,
+    // Absent until the element and spell catalogs resolve, which the loading gate now
+    // waits on — so in practice it is here. Optional rather than required because a
+    // headless test harness has no content, and demanding it would make every one of
+    // them build a library to spawn a unit that does not cast.
+    lattices: Option<Res<LatticeLibrary>>,
     anchors: Option<Res<MapAnchors>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
@@ -617,12 +623,40 @@ fn spawn_units(
                     Faction::Hostile => enemy_material.clone(),
                 },
                 archetype: unit.archetype,
+                lattice: lattice_for(lattices.as_deref(), unit.archetype),
                 settings: &settings,
                 body,
             },
             &mut identity,
         );
     }
+}
+
+/// The archetype's lattice, warning once per unit if there is none.
+///
+/// A unit without a lattice is playable but inert — it cannot cast and nothing can
+/// damage it — so this is exactly the case that must not pass quietly. It is a warning
+/// rather than a setup failure because an encounter naming an undefined archetype should
+/// still let the rest of the fight be looked at, which is more useful than a black
+/// screen while content is being written.
+fn lattice_for<'a>(
+    library: Option<&'a LatticeLibrary>,
+    archetype: &str,
+) -> Option<&'a hex_assets::Archetype> {
+    let Some(library) = library else {
+        // Not a warning: no library at all means *every* unit on the field is inert, so
+        // the fight cannot be won or lost by anybody. That is a broken build rather than
+        // a content gap, and it is the one case here that is never a designer mid-edit.
+        error!("no lattice library at all — every unit spawns unable to cast or be damaged");
+        return None;
+    };
+    let found = library.get(archetype);
+    if found.is_none() {
+        warn!(
+            "lattices.ron defines no {archetype:?}: it spawns inert — it cannot cast or be damaged"
+        );
+    }
+    found
 }
 
 /// The identity bookkeeping a spawn threads through: deal an id, record it,
@@ -827,6 +861,14 @@ struct UnitSpawn<'a> {
     faction: Faction,
     material: Handle<StandardMaterial>,
     archetype: &'a str,
+    /// The lattice this archetype names, if the library resolved one.
+    ///
+    /// `Option` because the library is absent until content resolves, and because an
+    /// encounter may name an archetype `lattices.ron` does not define. Neither is fatal:
+    /// a unit with no lattice stands, walks and strikes exactly as every unit did before
+    /// this — it simply cannot cast and cannot be damaged. That is the honest fallback,
+    /// and `spawn_units` warns when it happens so it is not a silent one.
+    lattice: Option<&'a hex_assets::Archetype>,
     settings: &'a PlayerSettings,
     body: Body,
 }
@@ -863,6 +905,19 @@ fn spawn_unit(
         // inspector and each one's name matches what the log calls it.
         Name::new(format!("{} #{}", spawn.archetype, id.0)),
     ));
+
+    // The archetype seam, and the whole reason `Archetype` went on at spawn time: one
+    // lookup here rather than per-unit stat code everywhere. The three ride together
+    // because they are meaningless apart — a spec with no stats has gems that hold
+    // nothing, and a state built against a different spec addresses cells that are not
+    // there.
+    if let Some(lattice) = spawn.lattice {
+        unit.insert((
+            lattice.spec.clone(),
+            LatticeState::new(&lattice.spec, &lattice.stats),
+            lattice.stats.clone(),
+        ));
+    }
 
     match spawn.faction {
         Faction::Player => unit.insert(Player),

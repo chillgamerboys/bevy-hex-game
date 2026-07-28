@@ -1,0 +1,94 @@
+// Who a unit *is*.
+//
+// An enemy's lattice is its entire stat block — there is no separate authoring system.
+// A wolf is four hexes with a bite. A raider is eight with a metal shield. A hedge-mage
+// is twelve with a fusion chain. Difficulty is the size and complexity of the drawing,
+// and every enemy runs on the player's rules.
+//
+// An archetype named here is what `Archetype("raider")` in an encounter roster looks up.
+//
+// CELLS
+//
+//   Gem("Fire")            holds mana of one element, and powers ADJACENT spells
+//   Fusion("Lightning")    combines its own adjacent gems into a higher-order element,
+//                          which adjacent spells may then draw on
+//   Spell("Ember")         castable, if its adjacent cells can pay the requirements
+//   Blank                  part of the lattice, holds nothing — still takes a hit
+//
+// **Adjacency is the entire power mechanism.** There is no action at a distance inside a
+// lattice: a spell draws only from the six cells touching it. Laying one out is the
+// design problem, and a spell whose neighbours cannot pay is simply offline.
+//
+// Coordinates are axial `(q, r)`. They carry no geometric meaning beyond adjacency —
+// the drawing is what matters, not where it sits.
+//
+// STATS
+//
+//   attunement    how much mana one gem of that element holds when full
+//   channelling   how much a channel action puts back into that element, per turn
+//
+// An element with no attunement entry resolves to zero, which means a gem of it is
+// inert — a legal way to say "this element is decoration on this archetype". The wolf
+// takes the blunter route: attunement 1 with no spell cell to spend it on.
+//
+// Every shipped spell costs 1 mana per required gem, so an attunement of 3 is three
+// casts before that gem needs channelling back up.
+(
+    archetypes: {
+        // Four hexes and a bite. No spell cells at all: a wolf's threat is the Strike
+        // verb every unit has, and its four gems are pure durability — four hits to put
+        // down. Attunement 1 with no spell to spend it on is the data saying so.
+        "wolf": (
+            cells: [
+                (at: (q: 0, r: 0), kind: Gem("Earth")),
+                (at: (q: 1, r: 0), kind: Gem("Earth")),
+                (at: (q: 0, r: 1), kind: Gem("Earth")),
+                (at: (q: 1, r: -1), kind: Gem("Earth")),
+            ],
+            attunement: {"Earth": 1},
+            channelling: {"Earth": 1},
+        ),
+
+        // Eight hexes around a metal shield. The two Metal gems touching the shell are
+        // what fund it, which makes them the correct thing to break first: disabling
+        // either one drops the shield and burns the mana locked in it.
+        "raider": (
+            cells: [
+                (at: (q: 0, r: 0), kind: Spell("Metal Shield")),
+                (at: (q: 1, r: 0), kind: Gem("Metal")),
+                (at: (q: 1, r: -1), kind: Gem("Metal")),
+                (at: (q: 0, r: -1), kind: Gem("Earth")),
+                (at: (q: -1, r: 0), kind: Gem("Earth")),
+                (at: (q: -1, r: 1), kind: Gem("Earth")),
+                (at: (q: 0, r: 1), kind: Gem("Earth")),
+                (at: (q: 2, r: 0), kind: Gem("Metal")),
+            ],
+            attunement: {"Metal": 3, "Earth": 2},
+            channelling: {"Metal": 2, "Earth": 1},
+        ),
+
+        // Twelve hexes, and the roster's only fusion chain. The Lightning cell is not a
+        // gem — it holds nothing itself. It combines the Light and Fire gems beside it
+        // into an element neither of them is, which the bolt then draws on. That makes
+        // the two feeder gems worth more than their own hexes: taking either one down
+        // kills the fusion and everything downstream of it.
+        "hedge-mage": (
+            cells: [
+                (at: (q: 0, r: 0), kind: Fusion("Lightning")),
+                (at: (q: 1, r: 0), kind: Gem("Light")),
+                (at: (q: 0, r: -1), kind: Gem("Fire")),
+                (at: (q: 1, r: -1), kind: Spell("Lightning Bolt")),
+                (at: (q: -1, r: 0), kind: Gem("Fire")),
+                (at: (q: -1, r: 1), kind: Gem("Fire")),
+                (at: (q: 0, r: 1), kind: Gem("Fire")),
+                (at: (q: -1, r: -1), kind: Gem("Light")),
+                (at: (q: 1, r: 1), kind: Spell("Ember")),
+                (at: (q: -1, r: 2), kind: Gem("Water")),
+                (at: (q: 0, r: 2), kind: Gem("Water")),
+                (at: (q: -1, r: 3), kind: Spell("Renewal")),
+            ],
+            attunement: {"Fire": 3, "Light": 3, "Water": 2},
+            channelling: {"Fire": 2, "Light": 2, "Water": 1},
+        ),
+    },
+)

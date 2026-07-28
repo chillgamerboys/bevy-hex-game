@@ -19,6 +19,8 @@ pub mod content_index;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
+/// Who each of them is: archetype lattices, resolved from content.
+pub mod lattices;
 pub mod loader;
 /// The scenarios offered on the title screen.
 pub mod scenario;
@@ -26,12 +28,13 @@ pub mod settings;
 pub mod spells;
 pub mod substances;
 
-pub use content_index::{ContentError, ContentIndex};
+pub use content_index::{ContentError, ContentIndex, ContentTables};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
     RosteredUnit,
 };
+pub use lattices::{Archetype, LatticeError, LatticeFile, LatticeLibrary};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
@@ -76,6 +79,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(elements::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
+    app.add_plugins(lattices::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //

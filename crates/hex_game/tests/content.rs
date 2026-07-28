@@ -7,8 +7,10 @@
 //! from sorted names, resolve across files — but headless, with no `App`.
 
 use hex_assets::{
-    ContentIndex, ElementCatalog, ElementFile, SpellBook, SpellFile, SubstanceFile, SubstanceTable,
+    ContentIndex, ElementCatalog, ElementFile, Encounter, LatticeFile, LatticeLibrary, SpellBook,
+    SpellFile, SubstanceFile, SubstanceTable,
 };
+use hex_lattice::{castable, CellKind, LatticeState};
 use ron::error::SpannedError;
 
 // Parsing returns a `Result` so the `expect` lives inside a `#[test]` function, where
@@ -24,6 +26,166 @@ fn parse_spells() -> Result<SpellFile, SpannedError> {
 
 fn parse_substances() -> Result<SubstanceFile, SpannedError> {
     ron::from_str(include_str!("../../../assets/config/substances.ron"))
+}
+
+fn parse_lattices() -> Result<LatticeFile, SpannedError> {
+    ron::from_str(include_str!("../../../assets/config/lattices.ron"))
+}
+
+/// Every spell a shipped archetype inscribes must actually be castable on a fresh
+/// lattice.
+///
+/// **This is the test that checks the drawings, and it is the only thing that can.**
+/// Adjacency is the entire power mechanism, so a spell cell one hex away from the gems
+/// meant to fund it parses, loads, spawns, and is simply never castable — a unit that
+/// stands there doing nothing, with no error anywhere. Nothing else in the pipeline
+/// asks whether a lattice *works*: the resolver checks that names exist, and the engine
+/// reports an unsatisfiable cast at cast time, which in a shipped build means a player
+/// finding it.
+///
+/// It also covers the fusion path end to end, which no other shipped content reaches:
+/// the hedge-mage's bolt draws on a Lightning cell that is itself fed by two gems, so a
+/// broken link anywhere in that chain fails here.
+#[test]
+fn every_shipped_archetype_can_cast_what_it_inscribes() {
+    let elements =
+        ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let substances = SubstanceTable::from_file(&parse_substances().expect("substances.ron parses"));
+    let index = ContentIndex::build(&elements, &spells, &substances).expect("content resolves");
+    let file = parse_lattices().expect("lattices.ron parses");
+
+    let library = match LatticeLibrary::build(&file, &elements, &spells) {
+        Ok(library) => library,
+        Err(errors) => panic!("shipped lattices have unresolvable names: {errors:#?}"),
+    };
+    assert!(
+        !library.is_empty(),
+        "the shipped library should not be empty"
+    );
+
+    let tables = index.tables(&elements);
+    let mut checked = 0;
+    for (name, archetype) in library.iter() {
+        let state = LatticeState::new(&archetype.spec, &archetype.stats);
+        for (coord, kind) in archetype.spec.cells() {
+            let CellKind::Spell { spell } = kind else {
+                continue;
+            };
+            let label = spells.name(spell).unwrap_or("<unknown>");
+            castable(&archetype.spec, &state, coord, &tables).unwrap_or_else(|blocked| {
+                panic!(
+                    "archetype {name:?} inscribes {label:?} at {coord:?}, which a fresh \
+                     lattice cannot cast: {blocked:?} — its neighbours cannot pay"
+                )
+            });
+            checked += 1;
+        }
+    }
+
+    // Otherwise an archetype file that lost its spell cells — or a rename that made the
+    // `CellKind::Spell` arm stop matching — would leave this passing while checking
+    // nothing, which is the failure it exists to prevent.
+    assert!(
+        checked >= 3,
+        "expected the shipped archetypes to inscribe at least three spells, found {checked}"
+    );
+}
+
+/// Every archetype a shipped encounter names must have a lattice.
+///
+/// The runtime fallback for a missing one is deliberately soft — the unit spawns inert
+/// with a warning, so a designer writing content can still look at the rest of the
+/// fight — and that softness is exactly why this has to be hard in CI. An inert unit
+/// stands, walks and strikes; it cannot cast and **nothing can damage it**. A typo in an
+/// archetype name would ship as an enemy that cannot be killed.
+#[test]
+fn every_encounter_archetype_has_a_lattice() {
+    let elements =
+        ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let library = LatticeLibrary::build(
+        &parse_lattices().expect("lattices.ron parses"),
+        &elements,
+        &spells,
+    )
+    .expect("shipped lattices resolve");
+
+    // Read the directory rather than listing files: `include_str!` cannot glob, so a
+    // hardcoded list silently stops covering the fifth encounter somebody adds — and
+    // the whole point of this test is that an unlisted file is the dangerous case.
+    let dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/config/encounters");
+    let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", dir.display()))
+        .map(|entry| entry.expect("a directory entry").path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ron"))
+        .collect();
+    files.sort();
+    assert!(
+        !files.is_empty(),
+        "no encounter files found under {}",
+        dir.display()
+    );
+
+    let mut checked = 0;
+    for path in &files {
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+        let encounter: Encounter = ron::from_str(&raw)
+            .unwrap_or_else(|error| panic!("{} does not parse: {error}", path.display()));
+        for unit in encounter.entries() {
+            assert!(
+                library.get(unit.archetype).is_some(),
+                "encounter {:?} rosters a {:?}, which lattices.ron does not define — it \
+                 would spawn unable to cast and impossible to damage",
+                encounter.name,
+                unit.archetype,
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= files.len(),
+        "every encounter should roster at least one unit: {checked} units across {} files",
+        files.len()
+    );
+}
+
+/// "Four hexes and a bite" is a claim about content, so content is where it is checked.
+#[test]
+fn the_shipped_archetypes_match_the_design() {
+    let elements =
+        ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let library = LatticeLibrary::build(
+        &parse_lattices().expect("lattices.ron parses"),
+        &elements,
+        &spells,
+    )
+    .expect("shipped lattices resolve");
+
+    let wolf = library.get("wolf").expect("a wolf is shipped");
+    assert_eq!(wolf.spec.capacity(), 4, "four hexes");
+    assert!(
+        !wolf
+            .spec
+            .cells()
+            .any(|(_, kind)| matches!(kind, CellKind::Spell { .. })),
+        "a wolf casts nothing — its threat is the strike verb every unit has"
+    );
+
+    let raider = library.get("raider").expect("a raider is shipped");
+    assert_eq!(raider.spec.capacity(), 8, "eight hexes");
+
+    let mage = library.get("hedge-mage").expect("a hedge-mage is shipped");
+    assert_eq!(mage.spec.capacity(), 12, "twelve hexes");
+    assert!(
+        mage.spec
+            .cells()
+            .any(|(_, kind)| matches!(kind, CellKind::Fusion { .. })),
+        "the hedge-mage is the roster's only fusion chain"
+    );
 }
 
 #[test]

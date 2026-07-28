@@ -7,7 +7,10 @@
 //! undocumented, unenforced, and one refactor away from a panic.
 
 use bevy::prelude::*;
-use hex_assets::{GameAssets, SettingsRegistry, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
+    SubstanceFile, SubstanceTable,
+};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
@@ -61,6 +64,10 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
+    content: Option<Res<ContentIndex>>,
+    lattices: Option<Res<LatticeLibrary>>,
+    spells: Option<Res<SpellFile>>,
+    lattice_file: Option<Res<LatticeFile>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -72,10 +79,28 @@ fn enter_gameplay_when_ready(
         .as_deref()
         .is_some_and(|status| *status == ScenarioContractStatus::Ready);
 
+    // Currency, not presence, for the same reason `substances_are_current` is: both
+    // builders keep the last valid value on failure and insert nothing, so after one
+    // success neither resource can ever go *absent* again. A presence check would stall
+    // only the very first load and wave every later bad edit straight through — a
+    // designer renaming a gem's element at the title screen would see the error in the
+    // log, press Play, and get a fight built from the pre-edit library with nothing
+    // on screen saying so.
+    //
+    // Comparing against the files means a failed rebuild leaves the source changed and
+    // the resolved value stale, which holds the gate until the file is fixed.
+    let content_is_current = spells
+        .as_ref()
+        .is_some_and(|file| !file.is_changed() && content.is_some())
+        && lattice_file
+            .as_ref()
+            .is_some_and(|file| !file.is_changed() && lattices.is_some());
+
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current
         && scenario_is_valid
+        && content_is_current
     {
         next.set(Screen::Gameplay);
     }
