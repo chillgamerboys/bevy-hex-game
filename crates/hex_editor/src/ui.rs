@@ -1,8 +1,7 @@
 //! Immediate-mode user interface for the Asset Workshop.
 //!
 //! This module deliberately owns no project persistence. It renders a cloned,
-//! read-only [`WorkshopUiSnapshot`](crate::ui::WorkshopUiSnapshot) and emits
-//! [`WorkshopUiAction`](crate::ui::WorkshopUiAction) messages for the
+//! read-only [`WorkshopUiSnapshot`] and emits [`WorkshopUiAction`] messages for the
 //! application session to validate and execute.
 
 use std::collections::BTreeSet;
@@ -602,16 +601,12 @@ enum StyleInspectorSubject {
 }
 
 /// Installs UI state, command messages, and the primary egui pass.
-pub struct WorkshopUiPlugin;
-
-impl Plugin for WorkshopUiPlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<WorkshopUiState>()
-            .init_resource::<WorkshopUiSnapshot>()
-            .init_resource::<ViewportInputSuppression>()
-            .add_message::<WorkshopUiAction>()
-            .add_systems(EguiPrimaryContextPass, draw_workshop_ui);
-    }
+pub fn plugin(app: &mut App) {
+    app.init_resource::<WorkshopUiState>()
+        .init_resource::<WorkshopUiSnapshot>()
+        .init_resource::<ViewportInputSuppression>()
+        .add_message::<WorkshopUiAction>()
+        .add_systems(EguiPrimaryContextPass, draw_workshop_ui);
 }
 
 fn draw_workshop_ui(
@@ -651,19 +646,34 @@ fn draw_workshop_ui(
 
     suppression.viewport_rect = central.inner.rect;
     let pointer_position = context.input(|input| input.pointer.hover_pos());
-    let pointer_outside = pointer_position
-        .map(|position| !suppression.viewport_rect.contains(position))
-        .unwrap_or(true);
-    suppression.pointer = context.egui_wants_pointer_input() || pointer_outside;
+    let overlay_open =
+        state.object_dialog.is_some() || state.pending_delete.is_some() || context.any_popup_open();
+    suppression.pointer = viewport_pointer_is_suppressed(
+        suppression.viewport_rect,
+        pointer_position,
+        context.egui_is_using_pointer(),
+        overlay_open,
+    );
     suppression.keyboard = context.egui_wants_keyboard_input();
     if let Some(mut viewport_input) = viewport_input {
-        viewport_input.0 = !suppression.pointer && !suppression.keyboard;
+        viewport_input.0 = !suppression.pointer;
     }
 
     for action in actions {
         messages.write(action);
     }
     Ok(())
+}
+
+fn viewport_pointer_is_suppressed(
+    viewport_rect: egui::Rect,
+    pointer_position: Option<egui::Pos2>,
+    egui_is_using_pointer: bool,
+    overlay_open: bool,
+) -> bool {
+    overlay_open
+        || egui_is_using_pointer
+        || pointer_position.is_none_or(|position| !viewport_rect.contains(position))
 }
 
 fn install_theme(context: &egui::Context) {
@@ -2476,7 +2486,7 @@ fn tool_tooltip(tool: EditorTool) -> &'static str {
     match tool {
         EditorTool::Place => "Place from a clicked face or the active level",
         EditorTool::Erase => "Erase an occupied voxel",
-        EditorTool::Repaint => "Apply the active style to an occupied voxel",
+        EditorTool::Repaint => "Apply the active style and semantic role to an occupied voxel",
         EditorTool::Eyedropper => "Sample a voxel's style and role",
         EditorTool::Select => "Select occupied voxels for exact transforms",
     }
@@ -2581,5 +2591,40 @@ mod tests {
     fn duplicate_tags_are_rejected_before_contract_creation() {
         assert!(parse_tags("plant, foliage, plant").is_err());
         assert_eq!(parse_tags("plant, foliage").map(|tags| tags.len()), Ok(2));
+    }
+
+    #[test]
+    fn central_viewport_accepts_pointer_without_ui_capture() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(100.0, 80.0), egui::pos2(900.0, 700.0));
+        assert!(!viewport_pointer_is_suppressed(
+            viewport,
+            Some(egui::pos2(450.0, 320.0)),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn panels_active_widgets_and_overlays_suppress_viewport_pointer() {
+        let viewport = egui::Rect::from_min_max(egui::pos2(100.0, 80.0), egui::pos2(900.0, 700.0));
+        assert!(viewport_pointer_is_suppressed(
+            viewport,
+            Some(egui::pos2(40.0, 320.0)),
+            false,
+            false,
+        ));
+        assert!(viewport_pointer_is_suppressed(
+            viewport,
+            Some(egui::pos2(450.0, 320.0)),
+            true,
+            false,
+        ));
+        assert!(viewport_pointer_is_suppressed(
+            viewport,
+            Some(egui::pos2(450.0, 320.0)),
+            false,
+            true,
+        ));
+        assert!(viewport_pointer_is_suppressed(viewport, None, false, false));
     }
 }

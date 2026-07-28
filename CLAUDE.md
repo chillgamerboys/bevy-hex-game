@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a ten-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as an eleven-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -25,6 +25,7 @@ with errors that don't obviously point at the toolchain.
 ```
 cargo dev            # inspector + live asset reload
 cargo run --release  # as it ships
+cargo editor         # standalone Asset Workshop
 ```
 
 **Always run through cargo.** `BEVY_ASSET_ROOT` is set in `.cargo/config.toml`
@@ -100,6 +101,7 @@ every UI root pointed at the redirected camera.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+{Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units

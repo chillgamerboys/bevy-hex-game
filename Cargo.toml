@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+default-members = ["crates/hex_game"]
 
 # Dependency versions live here so the crates can't drift apart. Each crate
 # opts in with `foo = { workspace = true }` and states its own features.

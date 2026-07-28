@@ -1446,7 +1446,11 @@ mod tests {
         let Ok(swatch_id) = SwatchId::new("calibration/green") else {
             unreachable!("test swatch id should be valid")
         };
-        let Ok(swatch) = PaletteSwatch::new("Calibration Green", color, BTreeSet::new()) else {
+        let Ok(swatch) = PaletteSwatch::new(
+            "Calibration Green",
+            color,
+            BTreeSet::from(["editor".to_owned()]),
+        ) else {
             unreachable!("test swatch should be valid")
         };
         let mut swatches = BTreeMap::new();
@@ -1642,6 +1646,31 @@ mod tests {
         assert_eq!(editor.object().placements.len(), 1);
         assert_eq!(editor.redo(), Ok(true));
         assert_eq!(editor.object().placements.len(), 4);
+    }
+
+    #[test]
+    fn cancelling_a_failed_drag_restores_the_complete_baseline() {
+        let mut editor = editor();
+        let original = editor.object().clone();
+        assert!(editor.begin_transaction("Paint stroke").is_ok());
+        assert_eq!(
+            editor.place(
+                LocalVoxelCoord::new(0, 0, 1),
+                style_id("calibration/neutral"),
+                ObjectPart::Plant(PlantPart::Trunk),
+            ),
+            Ok(true)
+        );
+        assert!(editor
+            .place(
+                LocalVoxelCoord::new(7, 0, 1),
+                style_id("calibration/neutral"),
+                ObjectPart::Plant(PlantPart::Trunk),
+            )
+            .is_err());
+        assert_eq!(editor.cancel_transaction(), Ok(()));
+        assert_eq!(editor.object(), &original);
+        assert!(!editor.is_transaction_open());
     }
 
     #[test]

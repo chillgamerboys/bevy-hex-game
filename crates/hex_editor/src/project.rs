@@ -1,7 +1,7 @@
 //! Filesystem project loading, validation, impact reporting, and explicit saves.
 //!
-//! The editor model owns mutable drafts. [`AssetProject`](crate::project::AssetProject)
-//! represents the last state successfully loaded from or written to the tracked
+//! The editor model owns mutable drafts. [`AssetProject`] represents the last state
+//! successfully loaded from or written to the tracked
 //! `assets/art` tree, so a failed validation or filesystem operation never leaves its
 //! in-memory view ahead of disk.
 
@@ -959,12 +959,13 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
-        ConnectivityPolicy, LocalAxialCoord, LocalVoxelCoord, ObjectBounds, ObjectPart,
+        ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectBounds, ObjectPart,
         ObjectPlacement, PlantPart, PropPart, VoxelStyle, VoxelSurfaceMode,
         OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
 
     use super::*;
+    use crate::model::EditorModel;
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -1048,6 +1049,37 @@ mod tests {
                 },
             ],
             blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
+            canopy_occluders: Vec::new(),
+        }
+    }
+
+    fn floating_effect(id: &str, display_name: &str) -> ObjectBlueprint {
+        let origin = LocalVoxelCoord::new(0, 0, -2);
+        ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id: object_id(id),
+            display_name: display_name.to_owned(),
+            category: ObjectCategory::Effect,
+            bounds: ObjectBounds {
+                radius: 2,
+                min_level: -4,
+                height: 8,
+            },
+            connectivity: ConnectivityPolicy::Free,
+            origin,
+            placements: vec![
+                ObjectPlacement {
+                    position: origin,
+                    style: style_id("plant/trunk"),
+                    part: ObjectPart::Effect(EffectPart::Core),
+                },
+                ObjectPlacement {
+                    position: LocalVoxelCoord::new(1, 0, 1),
+                    style: style_id("plant/trunk"),
+                    part: ObjectPart::Effect(EffectPart::Trail),
+                },
+            ],
+            blocker_footprint: Vec::new(),
             canopy_occluders: Vec::new(),
         }
     }
@@ -1269,6 +1301,40 @@ mod tests {
     }
 
     #[test]
+    fn signed_effect_pivot_rotates_six_times_and_survives_save_reload() {
+        let directory = prepare_project();
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let styles = project.styles().clone();
+        let mut editor =
+            EditorModel::from_blueprint(floating_effect("effect/draft", "Signed Burst"))
+                .expect("floating effect should open");
+        let origin = editor.object().origin;
+        let trail = LocalVoxelCoord::new(1, 0, 1);
+        assert!(editor.select(trail, false));
+        for _ in 0..6 {
+            assert_eq!(editor.rotate_selection_clockwise(origin), Ok(true));
+        }
+        assert!(editor.selection().contains(trail));
+        let blueprint = editor
+            .blueprint_for_save(&styles)
+            .expect("rotated effect should validate");
+        project
+            .save_object_as(blueprint, object_id("effect/signed-burst"))
+            .expect("effect should save");
+
+        let reloaded = AssetProject::load(&directory.path).expect("project should reload");
+        let saved = reloaded
+            .object(&object_id("effect/signed-burst"))
+            .expect("saved effect should exist");
+        assert_eq!(saved.origin, LocalVoxelCoord::new(0, 0, -2));
+        assert!(saved
+            .placements
+            .iter()
+            .any(|placement| placement.position == trail));
+        assert_eq!(saved.connectivity, ConnectivityPolicy::Free);
+    }
+
+    #[test]
     fn ordinary_save_cannot_overwrite_another_objects_identity() {
         let directory = prepare_project();
         write_object_fixture(&directory, &tree("plant/oak", "Oak"));
@@ -1304,7 +1370,7 @@ mod tests {
         let accent = PaletteSwatch::new(
             "Plant Accent",
             hex_assets::SrgbColor::new(0.88, 0.12, 0.25).expect("fixture colour should be valid"),
-            BTreeSet::new(),
+            BTreeSet::from(["plant".to_owned()]),
         )
         .expect("fixture swatch should be valid");
         let mut palette = project.palette().clone();

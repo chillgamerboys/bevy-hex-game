@@ -212,18 +212,19 @@ impl WorkshopDraft {
 
     /// Inserts or updates a palette swatch in the draft.
     ///
-    /// A new near-duplicate requires explicit confirmation. Updating the existing
-    /// swatch at `id` does not compare that swatch against itself.
+    /// A new or edited near-duplicate requires explicit confirmation. Updating the
+    /// existing swatch at `id` does not compare that swatch against itself.
     pub fn upsert_swatch(
         &mut self,
         id: SwatchId,
         swatch: PaletteSwatch,
         confirmed_near_color: bool,
     ) -> Result<bool, WorkshopDraftError> {
-        let is_new = !self.palette.contains(&id);
-        if is_new
-            && !confirmed_near_color
-            && !self.palette.near_duplicates(swatch.color()).is_empty()
+        if !confirmed_near_color
+            && !self
+                .palette
+                .near_duplicates(swatch.color(), Some(&id))
+                .is_empty()
         {
             return Err(WorkshopDraftError::new(
                 "the new swatch is within the palette near-colour threshold; confirm it explicitly",
@@ -488,7 +489,7 @@ mod tests {
         let swatch = PaletteSwatch::new(
             "Editor Neutral",
             SrgbColor::new(0.5, 0.5, 0.5).expect("test colour should be valid"),
-            BTreeSet::new(),
+            BTreeSet::from(["editor".to_owned()]),
         )
         .expect("test swatch should be valid");
         let palette = ArtPalette::new(BTreeMap::from([(base_id.clone(), swatch)]))
@@ -520,7 +521,7 @@ mod tests {
         let accent = PaletteSwatch::new(
             "Accent",
             SrgbColor::new(0.9, 0.1, 0.2).expect("test colour should be valid"),
-            BTreeSet::new(),
+            BTreeSet::from(["plant".to_owned()]),
         )
         .expect("test swatch should be valid");
         assert_eq!(
@@ -553,7 +554,7 @@ mod tests {
         let swatch = PaletteSwatch::new(
             "Accent",
             SrgbColor::new(0.9, 0.1, 0.2).expect("test colour should be valid"),
-            BTreeSet::new(),
+            BTreeSet::from(["plant".to_owned()]),
         )
         .expect("test swatch should be valid");
         assert_eq!(draft.upsert_swatch(id, swatch, false), Ok(true));
@@ -565,12 +566,23 @@ mod tests {
     }
 
     #[test]
-    fn near_colour_confirmation_is_required_only_for_new_ids() {
+    fn near_colour_confirmation_excludes_self_but_covers_edits() {
         let mut draft = fixture();
+        let changed = PaletteSwatch::new(
+            "Editor Neutral Renamed",
+            SrgbColor::new(0.5, 0.5, 0.5).expect("test colour should be valid"),
+            BTreeSet::from(["editor".to_owned()]),
+        )
+        .expect("test swatch should be valid");
+        assert_eq!(
+            draft.upsert_swatch(swatch_id("editor/neutral"), changed, false),
+            Ok(true)
+        );
+
         let close = PaletteSwatch::new(
             "Very Close",
             SrgbColor::new(0.5, 0.5, 0.5).expect("test colour should be valid"),
-            BTreeSet::new(),
+            BTreeSet::from(["editor".to_owned()]),
         )
         .expect("test swatch should be valid");
         assert!(draft
@@ -581,14 +593,28 @@ mod tests {
             Ok(true)
         );
 
-        let changed = PaletteSwatch::new(
-            "Editor Neutral Renamed",
-            SrgbColor::new(0.5, 0.5, 0.5).expect("test colour should be valid"),
-            BTreeSet::new(),
+        let second_id = swatch_id("plant/second");
+        let second = PaletteSwatch::new(
+            "Second",
+            SrgbColor::new(0.8, 0.2, 0.2).expect("test colour should be valid"),
+            BTreeSet::from(["plant".to_owned()]),
         )
         .expect("test swatch should be valid");
         assert_eq!(
-            draft.upsert_swatch(swatch_id("editor/neutral"), changed, false),
+            draft.upsert_swatch(second_id.clone(), second, false),
+            Ok(true)
+        );
+        let close_to_neutral = PaletteSwatch::new(
+            "Second Near Neutral",
+            SrgbColor::new(0.5, 0.5, 0.5).expect("test colour should be valid"),
+            BTreeSet::from(["plant".to_owned()]),
+        )
+        .expect("test swatch should be valid");
+        assert!(draft
+            .upsert_swatch(second_id.clone(), close_to_neutral.clone(), false)
+            .is_err());
+        assert_eq!(
+            draft.upsert_swatch(second_id, close_to_neutral, true),
             Ok(true)
         );
     }

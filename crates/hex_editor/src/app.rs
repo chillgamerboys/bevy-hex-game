@@ -15,8 +15,7 @@ use crate::launch::resolve_repository_root;
 use crate::model::{EditorModel, EditorTool, PreviewRig, WorkshopMode};
 use crate::project::AssetProject;
 use crate::ui::{
-    EditorCameraSnap, WorkshopStatus, WorkshopStatusKind, WorkshopUiAction, WorkshopUiPlugin,
-    WorkshopUiSnapshot,
+    EditorCameraSnap, WorkshopStatus, WorkshopStatusKind, WorkshopUiAction, WorkshopUiSnapshot,
 };
 use crate::viewport::{
     CameraSnap, CameraSnapRequest, FrameViewportRequest, HoveredFaceTarget, RenderedVoxel,
@@ -70,21 +69,7 @@ impl WorkshopRuntime {
                 let root = resolve_repository_root(env::args_os(), &current_directory)
                     .map_err(|error| error.to_string())?;
                 let project = AssetProject::load(&root).map_err(|error| error.to_string())?;
-                let mut editor =
-                    EditorModel::calibration_scene().map_err(|error| error.to_string())?;
-                let preview = if let Some(style) = project.styles().styles().keys().next() {
-                    editor.set_active_style(Some(style.clone()));
-                    PreviewSubject::ActiveStyle
-                } else {
-                    editor.set_mode(WorkshopMode::VoxelStyles);
-                    project
-                        .palette()
-                        .swatches()
-                        .keys()
-                        .next()
-                        .cloned()
-                        .map_or(PreviewSubject::ActiveStyle, PreviewSubject::Swatch)
-                };
+                let (editor, preview) = calibration_for_project(&project)?;
                 let draft =
                     WorkshopDraft::new(project.palette().clone(), project.styles().clone(), editor);
                 Ok((
@@ -174,7 +159,7 @@ pub fn run() {
         }))
         .add_plugins(EguiPlugin::default())
         .add_plugins(crate::viewport::plugin)
-        .add_plugins(WorkshopUiPlugin)
+        .add_plugins(crate::ui::plugin)
         .init_resource::<PointerStroke>()
         .add_systems(
             Update,
@@ -713,26 +698,50 @@ fn ensure_document_can_change(runtime: &WorkshopRuntime) -> Result<(), String> {
 }
 
 fn reset_to_calibration(runtime: &mut WorkshopRuntime) -> Result<(), String> {
-    let mut editor = EditorModel::calibration_scene().map_err(|error| error.to_string())?;
-    let preview = if let Some(style) = runtime
-        .draft
-        .as_ref()
-        .and_then(|draft| draft.styles().styles().keys().next())
-    {
-        editor.set_active_style(Some(style.clone()));
-        PreviewSubject::ActiveStyle
-    } else {
-        editor.set_mode(WorkshopMode::VoxelStyles);
+    let (editor, preview) = calibration_for_project(
         runtime
-            .draft
+            .project
             .as_ref()
-            .and_then(|draft| draft.palette().swatches().keys().next())
-            .cloned()
-            .map_or(PreviewSubject::ActiveStyle, PreviewSubject::Swatch)
-    };
+            .ok_or_else(|| runtime.load_error_message())?,
+    )?;
     runtime.draft_mut()?.open_object(editor);
     runtime.document = OpenDocument::Calibration;
     runtime.preview = preview;
+    Ok(())
+}
+
+fn calibration_for_project(
+    project: &AssetProject,
+) -> Result<(EditorModel, PreviewSubject), String> {
+    let mut editor = EditorModel::calibration_scene().map_err(|error| error.to_string())?;
+    if let Some(style) = project.styles().styles().keys().next() {
+        apply_calibration_style(&mut editor, style)?;
+        editor.set_active_style(Some(style.clone()));
+        return Ok((editor, PreviewSubject::ActiveStyle));
+    }
+    editor.set_mode(WorkshopMode::VoxelStyles);
+    let preview = project
+        .palette()
+        .swatches()
+        .keys()
+        .next()
+        .cloned()
+        .map_or(PreviewSubject::ActiveStyle, PreviewSubject::Swatch);
+    Ok((editor, preview))
+}
+
+fn apply_calibration_style(editor: &mut EditorModel, style: &VoxelStyleId) -> Result<(), String> {
+    let occupied = editor
+        .object()
+        .placements
+        .iter()
+        .map(|placement| placement.position)
+        .collect::<Vec<_>>();
+    for position in occupied {
+        editor
+            .repaint(position, style.clone())
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 
@@ -936,7 +945,20 @@ fn handle_pointer_editing(
     let result = apply_stroke_cell(runtime.draft_mut(), tool, cell);
     match result {
         Ok(_) => runtime.needs_sync = true,
-        Err(error) => runtime.set_status(WorkshopStatusKind::Error, error),
+        Err(error) => {
+            let rollback = runtime.draft_mut().and_then(|draft| {
+                draft
+                    .cancel_object_transaction()
+                    .map_err(|cancel| cancel.to_string())
+            });
+            *stroke = PointerStroke::default();
+            runtime.needs_sync = true;
+            let error = match rollback {
+                Ok(()) => format!("{error}; the complete stroke was rolled back"),
+                Err(cancel) => format!("{error}; stroke rollback also failed: {cancel}"),
+            };
+            runtime.set_status(WorkshopStatusKind::Error, error);
+        }
     }
 }
 
@@ -954,9 +976,14 @@ fn apply_stroke_cell(
                 .active_style()
                 .cloned()
                 .ok_or_else(|| "choose a voxel style before repainting".to_owned())?;
-            editor
+            let part = editor.active_part();
+            let style_changed = editor
                 .repaint(cell, style)
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            let part_changed = editor
+                .change_part(cell, part)
+                .map_err(|error| error.to_string())?;
+            Ok(style_changed || part_changed)
         }
         EditorTool::Eyedropper | EditorTool::Select => Ok(false),
     }
@@ -1203,6 +1230,10 @@ const fn camera_snap(snap: EditorCameraSnap) -> CameraSnap {
 
 #[cfg(test)]
 mod tests {
+    use hex_assets::{
+        ObjectPart, PaletteSwatch, PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode,
+    };
+
     use super::*;
 
     fn face_target(
@@ -1261,5 +1292,100 @@ mod tests {
         let nested =
             ObjectAssetId::new("plant/trees/oak").expect("path-like fixture id should be valid");
         assert!(validate_object_id_category(&nested, ObjectCategory::Plant).is_err());
+    }
+
+    #[test]
+    fn calibration_scene_uses_a_real_catalog_style_when_available() {
+        let mut editor =
+            EditorModel::calibration_scene().expect("calibration scene should be valid");
+        let style =
+            VoxelStyleId::new("plant/calibration").expect("fixture style id should be valid");
+
+        apply_calibration_style(&mut editor, &style)
+            .expect("calibration style replacement should succeed");
+
+        assert!(!editor.object().placements.is_empty());
+        assert!(editor
+            .object()
+            .placements
+            .iter()
+            .all(|placement| placement.style == style));
+    }
+
+    #[test]
+    fn repaint_stroke_applies_the_active_style_and_semantic_role() {
+        let base_swatch = SwatchId::new("plant/base").expect("fixture swatch id should be valid");
+        let accent_swatch =
+            SwatchId::new("plant/accent").expect("fixture swatch id should be valid");
+        let palette = hex_assets::ArtPalette::new(BTreeMap::from([
+            (
+                base_swatch.clone(),
+                PaletteSwatch::new(
+                    "Base",
+                    SrgbColor::new(0.2, 0.3, 0.2).expect("fixture colour should be valid"),
+                    BTreeSet::from(["plant".to_owned()]),
+                )
+                .expect("fixture swatch should be valid"),
+            ),
+            (
+                accent_swatch.clone(),
+                PaletteSwatch::new(
+                    "Accent",
+                    SrgbColor::new(0.4, 0.7, 0.2).expect("fixture colour should be valid"),
+                    BTreeSet::from(["plant".to_owned()]),
+                )
+                .expect("fixture swatch should be valid"),
+            ),
+        ]))
+        .expect("fixture palette should be valid");
+        let base_style = VoxelStyleId::new("plant/base").expect("fixture style id should be valid");
+        let accent_style =
+            VoxelStyleId::new("plant/accent").expect("fixture style id should be valid");
+        let styles = VoxelStyleCatalog::new(BTreeMap::from([
+            (
+                base_style.clone(),
+                VoxelStyle::new("Base", base_swatch, VoxelSurfaceMode::Opaque, 1.0, None)
+                    .expect("fixture style should be valid"),
+            ),
+            (
+                accent_style.clone(),
+                VoxelStyle::new("Accent", accent_swatch, VoxelSurfaceMode::Cutout, 0.9, None)
+                    .expect("fixture style should be valid"),
+            ),
+        ]))
+        .expect("fixture style catalog should be valid");
+        let mut editor = EditorModel::blank(
+            ObjectCategory::Plant,
+            ConnectivityPolicy::Grounded,
+            base_style.clone(),
+        )
+        .expect("fixture editor should be valid");
+        let target = LocalVoxelCoord::new(0, 0, 1);
+        assert_eq!(
+            editor.place(target, base_style, ObjectPart::Plant(PlantPart::Trunk),),
+            Ok(true)
+        );
+        editor.set_active_style(Some(accent_style.clone()));
+        assert_eq!(
+            editor.set_active_part(ObjectPart::Plant(PlantPart::Foliage)),
+            Ok(())
+        );
+        let mut draft = WorkshopDraft::new(palette, styles, editor);
+        assert!(draft.begin_object_transaction("Repaint stroke").is_ok());
+
+        assert_eq!(
+            apply_stroke_cell(Ok(&mut draft), EditorTool::Repaint, target),
+            Ok(true)
+        );
+        assert_eq!(draft.commit_object_transaction(), Ok(true));
+        let placement = draft
+            .editor()
+            .object()
+            .placements
+            .iter()
+            .find(|placement| placement.position == target)
+            .expect("repainted placement should remain");
+        assert_eq!(placement.style, accent_style);
+        assert_eq!(placement.part, ObjectPart::Plant(PlantPart::Foliage));
     }
 }
