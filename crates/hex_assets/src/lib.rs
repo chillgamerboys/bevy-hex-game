@@ -15,19 +15,33 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+/// Canonical authored colours and reusable voxel surface styles.
+pub mod art_palette;
 pub mod content_index;
 pub mod elements;
 pub mod loader;
+/// Durable static voxel-object blueprints.
+pub mod object_blueprint;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
 pub mod spells;
 pub mod substances;
 
+pub use art_palette::{
+    ArtContractError, ArtPalette, ObjectAssetId, PaletteSwatch, SrgbColor, SwatchId, SwatchMatch,
+    VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
+    ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
+};
 pub use content_index::{ContentError, ContentIndex};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+};
+pub use object_blueprint::{
+    ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectBlueprint,
+    ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart, PropPart,
+    MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
 pub use scenario::{Scenario, ScenarioLibrary};
 pub use settings::{
