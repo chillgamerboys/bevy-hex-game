@@ -258,6 +258,10 @@ impl Encounter {
             ));
         }
 
+        // Across the whole encounter, not per roster: two sides sent to one anchor is the
+        // same mistake as two units of one side, and the file is the earliest place that
+        // can see either.
+        let mut exact: Vec<(&EncounterPlacement, &'static str)> = Vec::new();
         for roster in &self.rosters {
             let side = roster.faction.label();
             if roster.units.is_empty() {
@@ -270,7 +274,6 @@ impl Encounter {
                 format!("encounter {:?}: the {side} roster {reason}", self.name)
             })?;
 
-            let mut exact: Vec<&EncounterPlacement> = Vec::new();
             for entry in &roster.units {
                 if entry.archetype.trim().is_empty() {
                     return Err(format!(
@@ -290,15 +293,15 @@ impl Encounter {
                 // crowd to be resolved at spawn time, it is a file to be fixed — and
                 // the fix is a formation, so the message says so.
                 if placement.is_exact() {
-                    if exact.contains(&placement) {
+                    if let Some((_, other)) = exact.iter().find(|(taken, _)| *taken == placement) {
                         return Err(format!(
-                            "encounter {:?}: two {side} units share the placement {placement:?}, \
-                             which holds exactly one; use \
+                            "encounter {:?}: the {side} unit {:?} and a {other} unit share the \
+                             placement {placement:?}, which holds exactly one; use \
                              Formation(center: …, spread: …) for a group",
-                            self.name
+                            self.name, entry.archetype
                         ));
                     }
-                    exact.push(placement);
+                    exact.push((placement, side));
                 }
             }
         }
@@ -559,6 +562,35 @@ mod tests {
         .expect_err("two units on one anchor should be rejected")
         .to_string();
         assert!(error.contains("Formation"), "unexpected error: {error}");
+    }
+
+    /// And two *sides* sent to one anchor is the same mistake, which a per-roster check
+    /// would have let through to the spawn loop.
+    #[test]
+    fn two_sides_may_not_share_one_exact_placement() {
+        let error = parse(
+            r#"(
+                name: "Overlap",
+                rosters: [
+                    (
+                        faction: Player,
+                        placement: Anchor("bridge"),
+                        units: [(archetype: "hedge-mage")],
+                    ),
+                    (
+                        faction: Hostile,
+                        placement: Anchor("bridge"),
+                        units: [(archetype: "raider")],
+                    ),
+                ],
+            )"#,
+        )
+        .expect_err("both sides on one anchor should be rejected")
+        .to_string();
+        assert!(
+            error.contains("player") && error.contains("hostile"),
+            "the error should name both sides: {error}"
+        );
     }
 
     #[test]
