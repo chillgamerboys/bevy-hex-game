@@ -13,6 +13,7 @@ you do not need to recompile the game.
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, and the open design questions as policy knobs that reject unbuilt variants with a reason |
+| `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
@@ -41,6 +42,7 @@ How quickly you *see* the change depends on which file:
 | `art/palette.ron` | Substance and unit colours on the next world rebuild |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
+| `perception.ron` | Straight away; observation and knowledge use the new profile on the next frame |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
@@ -320,6 +322,20 @@ terrain: Procedural((
 As with earlier procedural scenarios, the reproducible seed belongs in
 `scenarios.ron`, not in the world recipe. V3 rejects unsupported
 recipe/environment pairs and incomplete edge contracts while deserializing.
+
+**Compare gameplay sight ranges.** `perception.ron` contains three fixed review
+profiles without coupling them to renderer brightness:
+
+```ron
+active: Expansive,
+```
+
+`Expansive` uses Bright/Dim/Dark horizontal and vertical limits of `36/12/1`,
+`Focused` uses `24/8/1`, and `Tight` uses `18/6/1`. Each axis remains independently
+authored, so vertical visibility can be tuned for caves and sky layers without
+widening the ground footprint. Every profile must keep Bright at least Dim, Dim at
+least Dark, and Dark exactly one in both axes. Invalid edits and unknown fields are
+reported while the last valid settings remain active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
