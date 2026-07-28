@@ -269,6 +269,11 @@ impl PaletteSwatch {
     ) -> Result<Self, ArtContractError> {
         let display_name = display_name.into();
         validate_display_name(&display_name)?;
+        if tags.is_empty() {
+            return Err(ArtContractError::new(
+                "palette swatch must have at least one ownership or search tag",
+            ));
+        }
         for tag in &tags {
             validate_tag(tag)?;
         }
@@ -406,6 +411,11 @@ impl ArtPalette {
         }
         for swatch in self.swatches.values() {
             validate_display_name(swatch.display_name())?;
+            if swatch.tags().is_empty() {
+                return Err(ArtContractError::new(
+                    "palette swatch must have at least one ownership or search tag",
+                ));
+            }
             for tag in swatch.tags() {
                 validate_tag(tag)?;
             }
@@ -1055,6 +1065,11 @@ mod tests {
             "tags: [\"plant\", \"plant\"],"
         ))
         .is_err());
+        assert!(ron::from_str::<ArtPalette>(
+            &valid.replace("tags: [\"plant\", \"foliage\"],", "tags: [],")
+        )
+        .is_err());
+        assert!(PaletteSwatch::new("Leaf", color(0.12, 0.34, 0.12), BTreeSet::new()).is_err());
         assert!(ron::from_str::<ArtPalette>(&valid.replace(
             "display_name: \"Leaf\",",
             "display_name: \"Leaf\", stale: true,"
