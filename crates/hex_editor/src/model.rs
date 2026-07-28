@@ -1560,7 +1560,7 @@ mod tests {
     }
 
     #[test]
-    fn calibration_scene_is_intrinsically_valid_but_unsaved() {
+    fn calibration_scene_is_intrinsically_valid_and_clean() {
         let editor = editor();
         assert!(editor.validate_draft().is_ok());
         assert!(!editor.is_dirty());

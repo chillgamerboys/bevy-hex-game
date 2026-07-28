@@ -268,6 +268,13 @@ impl Default for ProjectChangePoll {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WindowCloseDecision {
+    Exit,
+    WaitForReview,
+    ConfirmDirty,
+}
+
 /// Starts the Asset Workshop.
 pub fn run() {
     let runtime = WorkshopRuntime::initialize();
@@ -1206,6 +1213,7 @@ fn calibration_for_project(
     if let Some(style) = project.styles().styles().keys().next() {
         apply_calibration_style(&mut editor, style)?;
         editor.set_active_style(Some(style.clone()));
+        editor.mark_saved();
         return Ok((editor, PreviewSubject::ActiveStyle));
     }
     editor.set_mode(WorkshopMode::VoxelStyles);
@@ -1569,16 +1577,23 @@ fn intercept_window_close_requests(
     if requests.read().next().is_none() {
         return;
     }
-    if runtime.review_in_progress {
-        runtime.set_status(
-            WorkshopStatusKind::Warning,
-            "Wait for the review export to finish before closing the Workshop",
-        );
-        return;
-    }
-    if runtime.pending_recovery.is_some() || !has_unsaved_work(&runtime) {
-        exit.write(AppExit::Success);
-        return;
+    match window_close_decision(
+        runtime.review_in_progress,
+        runtime.pending_recovery.is_some(),
+        has_unsaved_work(&runtime),
+    ) {
+        WindowCloseDecision::WaitForReview => {
+            runtime.set_status(
+                WorkshopStatusKind::Warning,
+                "Wait for the review export to finish before closing the Workshop",
+            );
+            return;
+        }
+        WindowCloseDecision::Exit => {
+            exit.write(AppExit::Success);
+            return;
+        }
+        WindowCloseDecision::ConfirmDirty => {}
     }
 
     let open_transaction = runtime
@@ -1603,6 +1618,20 @@ fn intercept_window_close_requests(
     }
     runtime.close_confirmation = true;
     runtime.needs_sync = true;
+}
+
+fn window_close_decision(
+    review_in_progress: bool,
+    pending_recovery: bool,
+    has_unsaved_work: bool,
+) -> WindowCloseDecision {
+    if review_in_progress {
+        WindowCloseDecision::WaitForReview
+    } else if pending_recovery || !has_unsaved_work {
+        WindowCloseDecision::Exit
+    } else {
+        WindowCloseDecision::ConfirmDirty
+    }
 }
 
 fn autosave_recovery(time: Res<Time>, mut runtime: ResMut<WorkshopRuntime>) {
@@ -2268,6 +2297,26 @@ mod tests {
         autosave.last_change_seconds = Some(39.9);
         assert!(!recovery_write_due(&autosave, 39.9));
         assert!(recovery_write_due(&autosave, 40.0));
+    }
+
+    #[test]
+    fn window_close_decision_covers_clean_dirty_recovery_and_review_states() {
+        assert_eq!(
+            window_close_decision(false, false, false),
+            WindowCloseDecision::Exit
+        );
+        assert_eq!(
+            window_close_decision(false, false, true),
+            WindowCloseDecision::ConfirmDirty
+        );
+        assert_eq!(
+            window_close_decision(false, true, true),
+            WindowCloseDecision::Exit
+        );
+        assert_eq!(
+            window_close_decision(true, false, false),
+            WindowCloseDecision::WaitForReview
+        );
     }
 
     #[test]
