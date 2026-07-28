@@ -195,6 +195,7 @@ impl Plugin for AppPlugin {
             hex_map::plugin,
             hex_world::plugin,
             hex_units::plugin,
+            hex_perception::plugin,
             hex_combat::plugin,
             scenarios::plugin,
             screens::plugin,

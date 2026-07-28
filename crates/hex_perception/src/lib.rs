@@ -11,6 +11,7 @@
 
 mod illumination;
 mod knowledge;
+mod runtime;
 mod sight;
 mod snapshots;
 
@@ -18,5 +19,6 @@ pub use illumination::{
     resolve_illumination_at, LightSourceSnapshot, ResolvedIllumination, ResolvedLight,
 };
 pub use knowledge::{apply_observations, FactionKnowledge, FactionMapKnowledge, KnownSurface};
+pub use runtime::plugin;
 pub use sight::{can_observe, resolve_observations, FactionObservation, FactionObservations};
 pub use snapshots::{ObservedUnit, PerceptionError, SurfaceSnapshot, SurfaceSnapshots};

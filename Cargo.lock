@@ -3286,6 +3286,7 @@ dependencies = [
  "hex_dev",
  "hex_lattice",
  "hex_map",
+ "hex_perception",
  "hex_units",
  "hex_world",
  "ron",
@@ -3321,7 +3322,9 @@ dependencies = [
 name = "hex_perception"
 version = "0.1.0"
 dependencies = [
+ "bevy",
  "bevy_ecs",
+ "hex_assets",
  "hex_core",
  "hex_units",
 ]

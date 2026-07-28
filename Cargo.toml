@@ -14,6 +14,7 @@ hex_combat = { path = "crates/hex_combat" }
 hex_world = { path = "crates/hex_world" }
 hex_units = { path = "crates/hex_units" }
 hex_map = { path = "crates/hex_map" }
+hex_perception = { path = "crates/hex_perception" }
 hex_dev = { path = "crates/hex_dev" }
 
 bevy = "0.19"
