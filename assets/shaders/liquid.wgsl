@@ -70,7 +70,10 @@ fn fragment(
         clamp(foam_mask, 0.0, 0.72),
     );
 
-    pbr_input.material.base_color.rgb = liquid_color;
+    pbr_input.material.base_color = vec4<f32>(
+        liquid_color,
+        pbr_input.material.base_color.a,
+    );
     pbr_input.material.perceptual_roughness = clamp(
         pbr_input.material.perceptual_roughness -
             ripple * roughness_reduction,

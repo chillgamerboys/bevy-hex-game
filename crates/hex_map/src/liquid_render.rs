@@ -1153,6 +1153,8 @@ mod tests {
         assert!(shader.contains("pbr_input_from_standard_material"));
         assert!(shader.contains("apply_pbr_lighting"));
         assert!(shader.contains("main_pass_post_lighting_processing"));
+        assert!(shader.contains("pbr_input.material.base_color = vec4<f32>"));
+        assert!(!shader.contains("pbr_input.material.base_color.rgb ="));
         assert!(shader.contains("out.color.a = 1.0"));
     }
 }
