@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use hex_combat::{Turn, TurnOrder};
-use hex_core::{Mode, Pause, Screen};
+use hex_core::{Mode, PausableSystems, Pause, Screen};
 use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
@@ -24,8 +24,18 @@ pub(super) fn plugin(app: &mut App) {
 
     app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
+    // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
+    // `PausableSystems`, so a toggle that kept firing while paused would set the
+    // resource with nothing to carry it out — leaving the store holding a full reveal
+    // the flag says is off, which is the stale-and-authoritative state its own doc
+    // calls worse than no reveal at all.
     #[cfg(feature = "dev")]
-    app.add_systems(Update, toggle_reveal_all.run_if(in_state(Screen::Gameplay)));
+    app.add_systems(
+        Update,
+        toggle_reveal_all
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
     app.add_systems(
         OnEnter(Screen::Gameplay),
         (reset_pause, reset_mode, spawn_hud),
