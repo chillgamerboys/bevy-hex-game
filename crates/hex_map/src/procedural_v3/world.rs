@@ -1042,11 +1042,9 @@ mod tests {
             state: LiquidFlowState::Still,
             downstream: None,
         };
-        assert!(
-            seam_issues(&missing)
-                .iter()
-                .any(|issue| issue.detail.contains("does not realize exact port lane"))
-        );
+        assert!(seam_issues(&missing)
+            .iter()
+            .any(|issue| issue.detail.contains("does not realize exact port lane")));
 
         let mut outside_port = plan;
         let first_low = hex_core::HexCoord::ORIGIN;
@@ -1063,11 +1061,9 @@ mod tests {
             state: LiquidFlowState::Still,
             downstream: None,
         };
-        assert!(
-            seam_issues(&outside_port)
-                .iter()
-                .any(|issue| issue.detail.contains("outside its exact directed port"))
-        );
+        assert!(seam_issues(&outside_port)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
 
         let mut stacked = two_patch_liquid_plan();
         for coord in [first_low, second_low] {
@@ -1100,11 +1096,9 @@ mod tests {
             state: LiquidFlowState::Current,
             downstream: Some(first_low),
         };
-        assert!(
-            seam_issues(&reversed)
-                .iter()
-                .any(|issue| issue.detail.contains("outside its exact directed port"))
-        );
+        assert!(seam_issues(&reversed)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
 
         let mut extra = plan.clone();
         let first_high = TilePos::new(hex_core::HexCoord::new_cubic(0, 1, -1), 3);
@@ -1112,11 +1106,9 @@ mod tests {
             state: LiquidFlowState::Current,
             downstream: Some(second_low),
         };
-        assert!(
-            seam_issues(&extra)
-                .iter()
-                .any(|issue| issue.detail.contains("outside its exact directed port"))
-        );
+        assert!(seam_issues(&extra)
+            .iter()
+            .any(|issue| issue.detail.contains("outside its exact directed port")));
 
         let mut dry = plan;
         let Some(edge) = dry.layout.shared_edges.get_mut(&ResolvedEdgeId(0)) else {
@@ -1189,11 +1181,9 @@ mod tests {
             max: 2,
         };
 
-        assert!(
-            seam_issues(&plan)
-                .iter()
-                .any(|issue| issue.detail.contains("leaves elevation band 2..=2"))
-        );
+        assert!(seam_issues(&plan)
+            .iter()
+            .any(|issue| issue.detail.contains("leaves elevation band 2..=2")));
     }
 
     #[test]
