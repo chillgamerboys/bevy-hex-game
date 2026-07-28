@@ -10,7 +10,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use atomic_write_file::AtomicWriteFile;
+use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, OverwriteBehavior};
 use hex_assets::{
     ArtPalette, ObjectAssetId, ObjectBlueprint, ObjectCategory, PaletteSwatch, SwatchId,
     VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
@@ -39,6 +39,26 @@ pub struct SwatchUsage {
     pub styles: Vec<VoxelStyleId>,
     /// Objects using one or more of those styles.
     pub objects: Vec<ObjectUsage>,
+}
+
+/// How one tracked art source differs from the bytes loaded by this editor session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExternalChangeKind {
+    /// A new tracked RON file appeared.
+    Added,
+    /// A previously loaded tracked RON file disappeared.
+    Removed,
+    /// A tracked RON file now contains different bytes.
+    Modified,
+}
+
+/// One external art-source change, reported with an `assets/art`-relative path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalAssetChange {
+    /// Stable relative path below `assets/art`.
+    pub path: PathBuf,
+    /// Nature of the byte-level change.
+    pub kind: ExternalChangeKind,
 }
 
 /// Actionable failure from loading or persisting an asset project.
@@ -106,6 +126,7 @@ pub struct AssetProject {
     palette: ArtPalette,
     styles: VoxelStyleCatalog,
     objects: BTreeMap<ObjectAssetId, ObjectBlueprint>,
+    loaded_sources: BTreeMap<PathBuf, Vec<u8>>,
 }
 
 impl AssetProject {
@@ -121,6 +142,7 @@ impl AssetProject {
         let palette = read_ron::<ArtPalette>(&palette_path)?;
         let styles = read_ron::<VoxelStyleCatalog>(&style_path)?;
         let objects = load_objects(&art_root)?;
+        let loaded_sources = scan_art_sources(&art_root)?;
 
         let project = Self {
             repository_root,
@@ -128,6 +150,7 @@ impl AssetProject {
             palette,
             styles,
             objects,
+            loaded_sources,
         };
         project.validate_graph()?;
         Ok(project)
@@ -183,14 +206,31 @@ impl AssetProject {
         SwatchUsage { styles, objects }
     }
 
+    /// Reports byte-level on-disk changes made since this project loaded or saved.
+    ///
+    /// Formatting-only edits count as modifications. The Workshop never silently
+    /// merges or overwrites them.
+    pub fn external_changes(&self) -> Result<Vec<ExternalAssetChange>, ProjectError> {
+        let current = scan_art_sources(&self.art_root)?;
+        Ok(compare_sources(&self.loaded_sources, &current))
+    }
+
+    /// Discards the loaded project snapshot and reloads the complete art graph.
+    pub fn reload_from_disk(&mut self) -> Result<(), ProjectError> {
+        *self = Self::load(&self.repository_root)?;
+        Ok(())
+    }
+
     /// Validates and atomically replaces the shared palette file.
     ///
     /// Every existing style and object is checked against the proposed palette before
     /// the previous file is touched.
     pub fn save_palette(&mut self, palette: ArtPalette) -> Result<(), ProjectError> {
+        self.ensure_no_external_changes("save palette")?;
         validate_graph(&palette, &self.styles, &self.objects)?;
         let path = self.art_root.join(PALETTE_FILE);
-        write_ron_atomically(&path, &palette)?;
+        let source = write_ron_atomically(&path, &palette, AllowOverwrite)?;
+        self.record_written_source(&path, source)?;
         self.palette = palette;
         Ok(())
     }
@@ -200,9 +240,11 @@ impl AssetProject {
     /// Every existing object is checked against the proposed catalog before the
     /// previous file is touched.
     pub fn save_styles(&mut self, styles: VoxelStyleCatalog) -> Result<(), ProjectError> {
+        self.ensure_no_external_changes("save voxel styles")?;
         validate_graph(&self.palette, &styles, &self.objects)?;
         let path = self.art_root.join(STYLE_FILE);
-        write_ron_atomically(&path, &styles)?;
+        let source = write_ron_atomically(&path, &styles, AllowOverwrite)?;
+        self.record_written_source(&path, source)?;
         self.styles = styles;
         Ok(())
     }
@@ -217,6 +259,7 @@ impl AssetProject {
         palette: ArtPalette,
         styles: VoxelStyleCatalog,
     ) -> Result<(), ProjectError> {
+        self.ensure_no_external_changes("save art catalogs")?;
         validate_graph(&palette, &styles, &self.objects)?;
         let palette_changed = palette != self.palette;
         let styles_changed = styles != self.styles;
@@ -231,27 +274,33 @@ impl AssetProject {
         let style_path = self.art_root.join(STYLE_FILE);
         let old_palette = self.palette.clone();
         let old_styles = self.styles.clone();
+        let old_palette_source = self.loaded_source(&palette_path)?.to_vec();
+        let old_style_source = self.loaded_source(&style_path)?.to_vec();
         let palette_first = validate_graph(&palette, &old_styles, &self.objects).is_ok();
         let styles_first = validate_graph(&old_palette, &styles, &self.objects).is_ok();
 
         if palette_first {
-            write_ron_atomically(&palette_path, &palette)?;
-            if let Err(error) = write_ron_atomically(&style_path, &styles) {
+            let palette_source = write_ron_atomically(&palette_path, &palette, AllowOverwrite)?;
+            if let Err(error) = write_ron_atomically(&style_path, &styles, AllowOverwrite) {
                 return Err(with_rollback(
                     error,
-                    write_ron_atomically(&palette_path, &old_palette),
+                    write_bytes_atomically(&palette_path, &old_palette_source, AllowOverwrite),
                     "palette",
                 ));
             }
+            self.record_written_source(&palette_path, palette_source)?;
+            self.record_serialized_source(&style_path, &styles)?;
         } else if styles_first {
-            write_ron_atomically(&style_path, &styles)?;
-            if let Err(error) = write_ron_atomically(&palette_path, &palette) {
+            let style_source = write_ron_atomically(&style_path, &styles, AllowOverwrite)?;
+            if let Err(error) = write_ron_atomically(&palette_path, &palette, AllowOverwrite) {
                 return Err(with_rollback(
                     error,
-                    write_ron_atomically(&style_path, &old_styles),
+                    write_bytes_atomically(&style_path, &old_style_source, AllowOverwrite),
                     "voxel styles",
                 ));
             }
+            self.record_written_source(&style_path, style_source)?;
+            self.record_serialized_source(&palette_path, &palette)?;
         } else {
             return Err(ProjectError::new(
                 "save art catalogs",
@@ -294,11 +343,13 @@ impl AssetProject {
                 ),
             ));
         }
+        self.ensure_no_external_changes("save object")?;
         let path = object_path(&self.art_root, &blueprint)?;
         let mut objects = self.objects.clone();
         drop(objects.insert(blueprint.id.clone(), blueprint.clone()));
         validate_graph(&self.palette, &self.styles, &objects)?;
-        write_ron_atomically(&path, &blueprint)?;
+        let source = write_ron_atomically(&path, &blueprint, AllowOverwrite)?;
+        self.record_written_source(&path, source)?;
         self.objects = objects;
         Ok(())
     }
@@ -312,6 +363,7 @@ impl AssetProject {
         mut blueprint: ObjectBlueprint,
         new_id: ObjectAssetId,
     ) -> Result<(), ProjectError> {
+        self.ensure_catalog_sources_unchanged("save object as")?;
         if self.objects.contains_key(&new_id) {
             return Err(ProjectError::new(
                 "save object as",
@@ -335,7 +387,8 @@ impl AssetProject {
         let mut objects = self.objects.clone();
         drop(objects.insert(new_id, blueprint.clone()));
         validate_graph(&self.palette, &self.styles, &objects)?;
-        write_ron_atomically(&path, &blueprint)?;
+        let source = write_ron_atomically(&path, &blueprint, DisallowOverwrite)?;
+        self.record_written_source(&path, source)?;
         self.objects = objects;
         Ok(())
     }
@@ -363,6 +416,7 @@ impl AssetProject {
     /// Object-to-object references do not exist in schema version 1, so no downstream
     /// reference guard is needed yet.
     pub fn delete_object(&mut self, id: &ObjectAssetId) -> Result<ObjectBlueprint, ProjectError> {
+        self.ensure_no_external_changes("delete object")?;
         let blueprint = self.objects.get(id).cloned().ok_or_else(|| {
             ProjectError::new(
                 "delete object",
@@ -372,6 +426,7 @@ impl AssetProject {
         })?;
         let path = object_path(&self.art_root, &blueprint)?;
         fs::remove_file(&path).map_err(|error| ProjectError::at("delete object", &path, error))?;
+        self.remove_written_source(&path)?;
         drop(self.objects.remove(id));
         Ok(blueprint)
     }
@@ -446,6 +501,65 @@ impl AssetProject {
 
     fn validate_graph(&self) -> Result<(), ProjectError> {
         validate_graph(&self.palette, &self.styles, &self.objects)
+    }
+
+    fn ensure_no_external_changes(&self, operation: &'static str) -> Result<(), ProjectError> {
+        let changes = self.external_changes()?;
+        if changes.is_empty() {
+            return Ok(());
+        }
+        Err(external_conflict(operation, &changes))
+    }
+
+    fn ensure_catalog_sources_unchanged(
+        &self,
+        operation: &'static str,
+    ) -> Result<(), ProjectError> {
+        let current = scan_art_sources(&self.art_root)?;
+        let changes = [PathBuf::from(PALETTE_FILE), PathBuf::from(STYLE_FILE)]
+            .into_iter()
+            .filter_map(|path| {
+                source_change(&path, self.loaded_sources.get(&path), current.get(&path))
+            })
+            .collect::<Vec<_>>();
+        if changes.is_empty() {
+            return Ok(());
+        }
+        Err(external_conflict(operation, &changes))
+    }
+
+    fn loaded_source(&self, path: &Path) -> Result<&[u8], ProjectError> {
+        let key = relative_art_path(&self.art_root, path)?;
+        self.loaded_sources
+            .get(&key)
+            .map(Vec::as_slice)
+            .ok_or_else(|| {
+                ProjectError::at(
+                    "read loaded source snapshot",
+                    path,
+                    "the file was not present when the project loaded",
+                )
+            })
+    }
+
+    fn record_written_source(&mut self, path: &Path, source: Vec<u8>) -> Result<(), ProjectError> {
+        let key = relative_art_path(&self.art_root, path)?;
+        drop(self.loaded_sources.insert(key, source));
+        Ok(())
+    }
+
+    fn record_serialized_source<T: Serialize>(
+        &mut self,
+        path: &Path,
+        value: &T,
+    ) -> Result<(), ProjectError> {
+        self.record_written_source(path, pretty_ron(value)?.into_bytes())
+    }
+
+    fn remove_written_source(&mut self, path: &Path) -> Result<(), ProjectError> {
+        let key = relative_art_path(&self.art_root, path)?;
+        drop(self.loaded_sources.remove(&key));
+        Ok(())
     }
 }
 
@@ -646,11 +760,11 @@ fn format_object_usage(usage: &[ObjectUsage]) -> String {
 
 fn with_rollback(
     original: ProjectError,
-    rollback: Result<(), ProjectError>,
+    rollback: Result<Vec<u8>, ProjectError>,
     restored_asset: &str,
 ) -> ProjectError {
     match rollback {
-        Ok(()) => ProjectError::new(
+        Ok(_) => ProjectError::new(
             original.operation(),
             original.path().map(Path::to_path_buf),
             format!(
@@ -669,14 +783,25 @@ fn with_rollback(
     }
 }
 
-fn write_ron_atomically<T>(path: &Path, value: &T) -> Result<(), ProjectError>
+fn write_ron_atomically<T>(
+    path: &Path,
+    value: &T,
+    overwrite: OverwriteBehavior,
+) -> Result<Vec<u8>, ProjectError>
 where
     T: Serialize + DeserializeOwned,
 {
     let encoded = pretty_ron(value)?;
     ron::from_str::<T>(&encoded)
         .map_err(|error| ProjectError::at("verify serialized RON", path, error))?;
+    write_bytes_atomically(path, encoded.as_bytes(), overwrite)
+}
 
+fn write_bytes_atomically(
+    path: &Path,
+    source: &[u8],
+    overwrite: OverwriteBehavior,
+) -> Result<Vec<u8>, ProjectError> {
     let parent = path.parent().ok_or_else(|| {
         ProjectError::at(
             "prepare atomic save",
@@ -686,15 +811,10 @@ where
     })?;
     fs::create_dir_all(parent)
         .map_err(|error| ProjectError::at("create asset directory", parent, error))?;
-    let mut file = AtomicWriteFile::open(path)
-        .map_err(|error| ProjectError::at("create atomic asset", path, error))?;
-    file.write_all(encoded.as_bytes())
-        .map_err(|error| ProjectError::at("write temporary asset", path, error))?;
-    file.sync_all()
-        .map_err(|error| ProjectError::at("sync temporary asset", path, error))?;
-    file.commit()
+    AtomicFile::new(path, overwrite)
+        .write(|file| file.write_all(source))
         .map_err(|error| ProjectError::at("atomically replace asset", path, error))?;
-    Ok(())
+    Ok(source.to_vec())
 }
 
 fn pretty_ron<T: Serialize>(value: &T) -> Result<String, ProjectError> {
@@ -705,6 +825,132 @@ fn pretty_ron<T: Serialize>(value: &T) -> Result<String, ProjectError> {
         .map_err(|error| ProjectError::new("serialize RON asset", None, error.to_string()))?;
     encoded.push('\n');
     Ok(encoded)
+}
+
+fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, ProjectError> {
+    let mut sources = BTreeMap::new();
+    for filename in [PALETTE_FILE, STYLE_FILE] {
+        let path = art_root.join(filename);
+        if path
+            .try_exists()
+            .map_err(|error| ProjectError::at("inspect art source", &path, error))?
+        {
+            let bytes = fs::read(&path)
+                .map_err(|error| ProjectError::at("read art source", &path, error))?;
+            drop(sources.insert(PathBuf::from(filename), bytes));
+        }
+    }
+
+    for category in [
+        ObjectCategory::Plant,
+        ObjectCategory::Effect,
+        ObjectCategory::Prop,
+    ] {
+        let relative_directory = PathBuf::from(OBJECT_DIRECTORY).join(category_directory(category));
+        let directory = art_root.join(&relative_directory);
+        if !directory
+            .try_exists()
+            .map_err(|error| ProjectError::at("inspect object directory", &directory, error))?
+        {
+            continue;
+        }
+        let entries = fs::read_dir(&directory)
+            .map_err(|error| ProjectError::at("scan object directory", &directory, error))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| ProjectError::at("scan object directory", &directory, error))?;
+            let path = entry.path();
+            if path.extension().is_none_or(|extension| extension != "ron") {
+                continue;
+            }
+            let file_type = entry
+                .file_type()
+                .map_err(|error| ProjectError::at("inspect object asset", &path, error))?;
+            if !file_type.is_file() {
+                return Err(ProjectError::at(
+                    "scan object directory",
+                    &path,
+                    "object RON entry is not a regular file",
+                ));
+            }
+            let bytes = fs::read(&path)
+                .map_err(|error| ProjectError::at("read art source", &path, error))?;
+            let filename = path.file_name().ok_or_else(|| {
+                ProjectError::at(
+                    "scan object directory",
+                    &path,
+                    "object path has no filename",
+                )
+            })?;
+            drop(sources.insert(relative_directory.join(filename), bytes));
+        }
+    }
+    Ok(sources)
+}
+
+fn compare_sources(
+    loaded: &BTreeMap<PathBuf, Vec<u8>>,
+    current: &BTreeMap<PathBuf, Vec<u8>>,
+) -> Vec<ExternalAssetChange> {
+    loaded
+        .keys()
+        .chain(current.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|path| source_change(path, loaded.get(path), current.get(path)))
+        .collect()
+}
+
+fn source_change(
+    path: &Path,
+    loaded: Option<&Vec<u8>>,
+    current: Option<&Vec<u8>>,
+) -> Option<ExternalAssetChange> {
+    let kind = match (loaded, current) {
+        (None, Some(_)) => ExternalChangeKind::Added,
+        (Some(_), None) => ExternalChangeKind::Removed,
+        (Some(loaded), Some(current)) if loaded != current => ExternalChangeKind::Modified,
+        _ => return None,
+    };
+    Some(ExternalAssetChange {
+        path: path.to_path_buf(),
+        kind,
+    })
+}
+
+fn external_conflict(operation: &'static str, changes: &[ExternalAssetChange]) -> ProjectError {
+    let examples = changes
+        .iter()
+        .take(5)
+        .map(|change| {
+            let action = match change.kind {
+                ExternalChangeKind::Added => "added",
+                ExternalChangeKind::Removed => "removed",
+                ExternalChangeKind::Modified => "modified",
+            };
+            format!("{} ({action})", change.path.display())
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = changes.len().saturating_sub(5);
+    let suffix = if remainder > 0 {
+        format!(", and {remainder} more")
+    } else {
+        String::new()
+    };
+    ProjectError::new(
+        operation,
+        None,
+        format!(
+            "tracked art files changed outside this editor: {examples}{suffix}; reload the project or use Save As for the object draft"
+        ),
+    )
+}
+
+fn relative_art_path(art_root: &Path, path: &Path) -> Result<PathBuf, ProjectError> {
+    path.strip_prefix(art_root)
+        .map(Path::to_path_buf)
+        .map_err(|error| ProjectError::at("resolve art source path", path, error))
 }
 
 #[cfg(test)]
@@ -1189,5 +1435,122 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(names, ["oak.ron"]);
+    }
+
+    #[test]
+    fn formatting_only_external_changes_block_overwrite_until_reload() {
+        let directory = prepare_project();
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let palette_path = directory.art_root().join(PALETTE_FILE);
+        let mut external = fs::read(&palette_path).expect("palette should be readable");
+        external.extend_from_slice(b"\n// external formatting edit\n");
+        fs::write(&palette_path, &external).expect("external edit should be written");
+
+        assert_eq!(
+            project
+                .external_changes()
+                .expect("external changes should scan"),
+            vec![ExternalAssetChange {
+                path: PathBuf::from(PALETTE_FILE),
+                kind: ExternalChangeKind::Modified,
+            }]
+        );
+        let error = project
+            .save_palette(project.palette().clone())
+            .expect_err("an external byte change must block overwrite");
+        assert!(error.detail().contains("palette.ron (modified)"));
+        assert_eq!(
+            fs::read(&palette_path).expect("external palette should remain readable"),
+            external
+        );
+
+        project
+            .reload_from_disk()
+            .expect("a valid external formatting edit should reload");
+        assert!(project
+            .external_changes()
+            .expect("reloaded project should scan")
+            .is_empty());
+    }
+
+    #[test]
+    fn same_length_external_object_edit_blocks_save_but_save_as_preserves_both() {
+        let directory = prepare_project();
+        let oak_path = write_object_fixture(&directory, &tree("plant/oak", "Oak"));
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let mut local = project
+            .object(&object_id("plant/oak"))
+            .cloned()
+            .expect("oak should be indexed");
+        local.display_name = "Local".to_owned();
+
+        let external = pretty_ron(&tree("plant/oak", "Elm"))
+            .expect("external fixture should serialize")
+            .into_bytes();
+        let loaded_len = fs::metadata(&oak_path)
+            .expect("oak metadata should load")
+            .len();
+        assert_eq!(
+            u64::try_from(external.len()).expect("fixture length should fit"),
+            loaded_len
+        );
+        fs::write(&oak_path, &external).expect("external object edit should be written");
+
+        let error = project
+            .save_object(&object_id("plant/oak"), local.clone())
+            .expect_err("ordinary save must preserve an external object edit");
+        assert!(error.detail().contains("objects/plant/oak.ron (modified)"));
+        project
+            .save_object_as(local, object_id("plant/local-oak"))
+            .expect("Save As should preserve a conflicted draft under a new key");
+
+        assert_eq!(
+            fs::read(&oak_path).expect("external oak should remain readable"),
+            external
+        );
+        assert!(directory
+            .art_root()
+            .join("objects/plant/local-oak.ron")
+            .is_file());
+        assert!(project
+            .external_changes()
+            .expect("the source conflict should remain sticky")
+            .iter()
+            .any(|change| change.path == Path::new("objects/plant/oak.ron")));
+    }
+
+    #[test]
+    fn added_and_removed_sources_are_reported_and_block_graph_writes() {
+        let directory = prepare_project();
+        let mut project = AssetProject::load(&directory.path).expect("project should load");
+        let ash_path = write_object_fixture(&directory, &tree("plant/ash", "Ash"));
+        let changes = project
+            .external_changes()
+            .expect("added file should be detected");
+        assert_eq!(
+            changes,
+            vec![ExternalAssetChange {
+                path: PathBuf::from("objects/plant/ash.ron"),
+                kind: ExternalChangeKind::Added,
+            }]
+        );
+        let error = project
+            .save_catalogs(project.palette().clone(), project.styles().clone())
+            .expect_err("catalog writes must account for every saved object");
+        assert!(error.detail().contains("objects/plant/ash.ron (added)"));
+
+        project
+            .reload_from_disk()
+            .expect("valid added object should reload");
+        fs::remove_file(&ash_path).expect("external object deletion should succeed");
+        assert_eq!(
+            project
+                .external_changes()
+                .expect("removed file should be detected"),
+            vec![ExternalAssetChange {
+                path: PathBuf::from("objects/plant/ash.ron"),
+                kind: ExternalChangeKind::Removed,
+            }]
+        );
     }
 }

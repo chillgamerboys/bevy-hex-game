@@ -6,7 +6,7 @@ publish = false
 description = "Standalone authoring tool for palette-backed hex-voxel objects."
 
 [dependencies]
-atomic-write-file = { workspace = true }
+atomicwrites = { workspace = true }
 bevy = { workspace = true }
 bevy_egui = { workspace = true }
 hex_assets = { workspace = true }
