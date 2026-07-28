@@ -2,7 +2,7 @@
 //!
 //! This module deliberately consumes complete, resolved snapshots. It knows nothing
 //! about project files, undo history, editor tools, or mutable object drafts. The UI
-//! translates those concerns into [`ViewportContent`] and consumes the picking
+//! translates those concerns into [`ViewportContent`](self::ViewportContent) and consumes the picking
 //! messages published here.
 
 use std::collections::{BTreeMap, BTreeSet};
