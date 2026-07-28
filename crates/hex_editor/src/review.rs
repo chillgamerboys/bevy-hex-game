@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use bevy::prelude::{Image as BevyImage, Transform, Vec3};
 use hex_assets::{
     ArtPalette, ConnectivityPolicy, LocalAxialCoord, LocalVoxelCoord, ObjectAssetId,
-    ObjectBlueprint, ObjectBounds, ObjectCategory, ObjectPart, SrgbColor, SwatchId,
-    VoxelStyleCatalog, VoxelStyleId,
+    ObjectBlueprint, ObjectBounds, ObjectCategory, ObjectPart, PaletteSwatch, SrgbColor, SwatchId,
+    VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
 use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
 use image::imageops::{self, FilterType as ResizeFilter};
@@ -60,7 +60,6 @@ const LABEL_BACKGROUND_RGBA: Rgba<u8> = Rgba([4, 5, 6, 255]);
 const LABEL_FOREGROUND_RGBA: Rgba<u8> = Rgba([244, 246, 248, 255]);
 const FRAME_VARIATION_THRESHOLD: u8 = 8;
 const MIN_VARIANT_PIXELS: u64 = 32;
-const MIN_FRAME_BRIGHTNESS: u8 = 16;
 const TURN_PITCH_RADIANS: f32 = 0.35;
 const PERSPECTIVE_PITCH_RADIANS: f32 = 0.62;
 const PERSPECTIVE_YAW_RADIANS: f32 = std::f32::consts::FRAC_PI_4;
@@ -74,7 +73,7 @@ static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub enum ReviewPresentation {
     /// Palette-authored materials under the neutral preview rig.
     Authored,
-    /// Voxel bodies recolored by their semantic parts.
+    /// Semantic-part rings drawn over palette-authored voxel bodies.
     SemanticParts,
     /// Exact blocker columns and canopy cells emphasized in a top view.
     BlockerCanopy,
@@ -303,7 +302,7 @@ impl From<ReviewFrameSpec> for ReviewFrameReport {
 }
 
 /// One exact style dependency used by the reviewed object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReviewStyleDependency {
     /// Stable style id.
     pub id: VoxelStyleId,
@@ -313,8 +312,14 @@ pub struct ReviewStyleDependency {
     pub placements: u32,
     /// Base palette reference.
     pub base_swatch: SwatchId,
+    /// Renderer treatment used by every placement of this style.
+    pub surface_mode: VoxelSurfaceMode,
+    /// Exact authored surface opacity.
+    pub opacity: f32,
     /// Optional emitted palette reference.
     pub emission_swatch: Option<SwatchId>,
+    /// Optional finite nonnegative emission strength.
+    pub emission_strength: Option<f32>,
 }
 
 /// One exact palette dependency used transitively by reviewed styles.
@@ -339,49 +344,57 @@ pub enum ReviewValidation {
 
 /// Deterministic semantic manifest for one complete object review.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReviewReport {
     /// Review contract version.
-    pub review_format_version: u16,
+    review_format_version: u16,
     /// Immutable object identity.
-    pub object_id: ObjectAssetId,
+    object_id: ObjectAssetId,
     /// Editable display name captured at review time.
-    pub display_name: String,
+    display_name: String,
     /// Broad object category.
-    pub category: ObjectCategory,
+    category: ObjectCategory,
     /// Authored connectivity contract.
-    pub connectivity: ConnectivityPolicy,
+    connectivity: ConnectivityPolicy,
     /// Authored object canvas.
-    pub bounds: ObjectBounds,
+    bounds: ObjectBounds,
     /// Exact authored object origin.
-    pub origin: LocalVoxelCoord,
+    origin: LocalVoxelCoord,
     /// Number of occupied cells.
-    pub occupied_cells: u32,
+    occupied_cells: u32,
     /// Stable semantic-part label to occupied-cell count.
-    pub part_counts: BTreeMap<String, u32>,
+    part_counts: BTreeMap<String, u32>,
     /// Exact blocker mask in sorted order.
-    pub blocker_footprint: Vec<LocalAxialCoord>,
+    blocker_footprint: Vec<LocalAxialCoord>,
     /// Exact canopy mask in sorted order.
-    pub canopy_occluders: Vec<LocalVoxelCoord>,
+    canopy_occluders: Vec<LocalVoxelCoord>,
     /// Used style dependencies in stable-id order.
-    pub style_dependencies: Vec<ReviewStyleDependency>,
+    style_dependencies: Vec<ReviewStyleDependency>,
     /// Used palette dependencies in stable-id order.
-    pub swatch_dependencies: Vec<ReviewSwatchDependency>,
+    swatch_dependencies: Vec<ReviewSwatchDependency>,
     /// Independent semantic object fingerprint.
-    pub object_fingerprint: u64,
+    object_fingerprint: u64,
     /// Independent semantic style-catalog fingerprint.
-    pub style_catalog_fingerprint: u64,
+    style_catalog_fingerprint: u64,
     /// Independent semantic palette fingerprint.
-    pub palette_fingerprint: u64,
+    palette_fingerprint: u64,
     /// Versioned composite directory identity.
-    pub review_fingerprint: String,
+    review_fingerprint: String,
     /// Common focus and radius used by every view.
-    pub framing: ReviewFraming,
+    framing: ReviewFraming,
     /// Source frame dimensions.
-    pub frame_size: [u32; 2],
+    frame_size: [u32; 2],
     /// Ordered required captures.
-    pub frames: Vec<ReviewFrameReport>,
+    frames: Vec<ReviewFrameReport>,
     /// Result of complete dependency-graph validation.
-    pub validation: ReviewValidation,
+    validation: ReviewValidation,
+    /// Constructor provenance is deliberately absent from serialized reports.
+    ///
+    /// A parsed report remains useful as a read-only artifact, but only a report
+    /// built from a validated live dependency graph may authorize capture or
+    /// publication.
+    #[serde(skip)]
+    trusted_for_publication: bool,
 }
 
 impl ReviewReport {
@@ -428,6 +441,7 @@ impl ReviewReport {
             };
             swatch_ids.insert(style.base_swatch().clone());
             let emission_swatch = style.emission().map(|emission| emission.swatch().clone());
+            let emission_strength = style.emission().map(VoxelEmission::strength);
             if let Some(emission) = &emission_swatch {
                 swatch_ids.insert(emission.clone());
             }
@@ -436,7 +450,10 @@ impl ReviewReport {
                 display_name: style.display_name().to_owned(),
                 placements,
                 base_swatch: style.base_swatch().clone(),
+                surface_mode: style.surface_mode(),
+                opacity: style.opacity(),
                 emission_swatch,
+                emission_strength,
             });
         }
 
@@ -503,9 +520,78 @@ impl ReviewReport {
                 .map(ReviewFrameReport::from)
                 .collect(),
             validation: ReviewValidation::Valid,
+            trusted_for_publication: true,
         };
         report.validate_contract()?;
         Ok(report)
+    }
+
+    pub(crate) fn object_id(&self) -> &ObjectAssetId {
+        &self.object_id
+    }
+
+    pub(crate) fn display_name(&self) -> &str {
+        &self.display_name
+    }
+
+    pub(crate) const fn category(&self) -> ObjectCategory {
+        self.category
+    }
+
+    pub(crate) const fn connectivity(&self) -> ConnectivityPolicy {
+        self.connectivity
+    }
+
+    pub(crate) const fn bounds(&self) -> ObjectBounds {
+        self.bounds
+    }
+
+    pub(crate) const fn origin(&self) -> LocalVoxelCoord {
+        self.origin
+    }
+
+    pub(crate) const fn occupied_cells(&self) -> u32 {
+        self.occupied_cells
+    }
+
+    pub(crate) fn part_counts(&self) -> &BTreeMap<String, u32> {
+        &self.part_counts
+    }
+
+    pub(crate) fn blocker_footprint(&self) -> &[LocalAxialCoord] {
+        &self.blocker_footprint
+    }
+
+    pub(crate) fn canopy_occluders(&self) -> &[LocalVoxelCoord] {
+        &self.canopy_occluders
+    }
+
+    pub(crate) fn style_dependencies(&self) -> &[ReviewStyleDependency] {
+        &self.style_dependencies
+    }
+
+    pub(crate) fn swatch_dependencies(&self) -> &[ReviewSwatchDependency] {
+        &self.swatch_dependencies
+    }
+
+    pub(crate) const fn object_fingerprint(&self) -> u64 {
+        self.object_fingerprint
+    }
+
+    pub(crate) const fn framing(&self) -> ReviewFraming {
+        self.framing
+    }
+
+    pub(crate) fn validate_for_publication(&self) -> Result<(), ReviewError> {
+        self.validate_contract()?;
+        if !self.trusted_for_publication {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                "parsed reports are read-only; rebuild the report from its validated asset graph",
+            ));
+        }
+        Ok(())
     }
 
     /// Serializes this report as canonically formatted, newline-terminated RON.
@@ -532,6 +618,30 @@ impl ReviewReport {
                 ),
             ));
         }
+        if self.display_name.is_empty() || self.display_name.trim() != self.display_name {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                "display name must be non-empty and have no surrounding whitespace",
+            ));
+        }
+        if self.occupied_cells == 0 {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                "occupied-cell count must be positive",
+            ));
+        }
+        if !self.bounds.contains(self.origin) {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                "object origin lies outside the reported authoring bounds",
+            ));
+        }
+        validate_report_counts(self)?;
+        validate_report_masks(self)?;
+        validate_report_dependencies(self)?;
         if self.frame_size != [REVIEW_FRAME_WIDTH, REVIEW_FRAME_HEIGHT] {
             return Err(ReviewError::new(
                 "validate review report",
@@ -568,6 +678,231 @@ impl ReviewReport {
         }
         Ok(())
     }
+}
+
+fn validate_report_counts(report: &ReviewReport) -> Result<(), ReviewError> {
+    if report.part_counts.is_empty() || report.part_counts.values().any(|count| *count == 0) {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "semantic-part counts must be non-empty and positive",
+        ));
+    }
+    let part_total = report
+        .part_counts
+        .values()
+        .try_fold(0_u32, |total, count| total.checked_add(*count))
+        .ok_or_else(|| {
+            ReviewError::new(
+                "validate review report",
+                None,
+                "semantic-part counts overflow u32",
+            )
+        })?;
+    if part_total != report.occupied_cells {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "semantic-part counts do not sum to the occupied-cell count",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_report_masks(report: &ReviewReport) -> Result<(), ReviewError> {
+    if !is_strictly_ordered(&report.blocker_footprint)
+        || report
+            .blocker_footprint
+            .iter()
+            .any(|position| !report.bounds.contains_axial(*position))
+    {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "blocker footprint must be strictly ordered and inside the authoring bounds",
+        ));
+    }
+    if !is_strictly_ordered(&report.canopy_occluders)
+        || report
+            .canopy_occluders
+            .iter()
+            .any(|position| !report.bounds.contains(*position))
+    {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "canopy cells must be strictly ordered and inside the authoring bounds",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_report_dependencies(report: &ReviewReport) -> Result<(), ReviewError> {
+    if report.swatch_dependencies.is_empty()
+        || !is_strictly_ordered_by(&report.swatch_dependencies, |left, right| {
+            left.id < right.id
+        })
+    {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "swatch dependencies must be non-empty and strictly ordered",
+        ));
+    }
+
+    let mut swatches = BTreeMap::new();
+    for dependency in &report.swatch_dependencies {
+        let tags = dependency.tags.iter().cloned().collect::<BTreeSet<_>>();
+        if tags.len() != dependency.tags.len() || !dependency.tags.iter().eq(tags.iter()) {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                format!(
+                    "swatch dependency '{}' tags are not strictly ordered",
+                    dependency.id
+                ),
+            ));
+        }
+        let swatch = PaletteSwatch::new(dependency.display_name.clone(), dependency.color, tags)
+            .map_err(|error| {
+                ReviewError::new(
+                    "validate review report",
+                    None,
+                    format!("invalid swatch dependency '{}': {error}", dependency.id),
+                )
+            })?;
+        swatches.insert(dependency.id.clone(), swatch);
+    }
+    let palette = ArtPalette::new(swatches).map_err(|error| {
+        ReviewError::new(
+            "validate review report",
+            None,
+            format!("invalid review swatch dependencies: {error}"),
+        )
+    })?;
+
+    if report.style_dependencies.is_empty()
+        || !is_strictly_ordered_by(&report.style_dependencies, |left, right| left.id < right.id)
+    {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "style dependencies must be non-empty and strictly ordered",
+        ));
+    }
+
+    let mut styles = BTreeMap::new();
+    let mut referenced_swatches = BTreeSet::new();
+    let mut placement_total = 0_u32;
+    for dependency in &report.style_dependencies {
+        if dependency.placements == 0 {
+            return Err(ReviewError::new(
+                "validate review report",
+                None,
+                format!("style dependency '{}' has no placements", dependency.id),
+            ));
+        }
+        placement_total = placement_total
+            .checked_add(dependency.placements)
+            .ok_or_else(|| {
+                ReviewError::new(
+                    "validate review report",
+                    None,
+                    "style placement counts overflow u32",
+                )
+            })?;
+        referenced_swatches.insert(dependency.base_swatch.clone());
+        let emission = match (&dependency.emission_swatch, dependency.emission_strength) {
+            (Some(swatch), Some(strength)) => {
+                referenced_swatches.insert(swatch.clone());
+                Some(
+                    VoxelEmission::new(swatch.clone(), strength).map_err(|error| {
+                        ReviewError::new(
+                            "validate review report",
+                            None,
+                            format!("invalid style dependency '{}': {error}", dependency.id),
+                        )
+                    })?,
+                )
+            }
+            (None, None) => None,
+            _ => {
+                return Err(ReviewError::new(
+                    "validate review report",
+                    None,
+                    format!(
+                        "style dependency '{}' must specify both emission swatch and strength",
+                        dependency.id
+                    ),
+                ));
+            }
+        };
+        let style = VoxelStyle::new(
+            dependency.display_name.clone(),
+            dependency.base_swatch.clone(),
+            dependency.surface_mode,
+            dependency.opacity,
+            emission,
+        )
+        .map_err(|error| {
+            ReviewError::new(
+                "validate review report",
+                None,
+                format!("invalid style dependency '{}': {error}", dependency.id),
+            )
+        })?;
+        styles.insert(dependency.id.clone(), style);
+    }
+    if placement_total != report.occupied_cells {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "style placement counts do not sum to the occupied-cell count",
+        ));
+    }
+    if referenced_swatches
+        != report
+            .swatch_dependencies
+            .iter()
+            .map(|dependency| dependency.id.clone())
+            .collect()
+    {
+        return Err(ReviewError::new(
+            "validate review report",
+            None,
+            "swatch dependencies differ from the exact set used by reviewed styles",
+        ));
+    }
+    let styles = VoxelStyleCatalog::new(styles).map_err(|error| {
+        ReviewError::new(
+            "validate review report",
+            None,
+            format!("invalid review style dependencies: {error}"),
+        )
+    })?;
+    styles.validate(&palette).map_err(|error| {
+        ReviewError::new(
+            "validate review report",
+            None,
+            format!("invalid review dependency graph: {error}"),
+        )
+    })
+}
+
+fn is_strictly_ordered<T: Ord>(values: &[T]) -> bool {
+    values.windows(2).all(|pair| {
+        pair.first()
+            .zip(pair.last())
+            .is_some_and(|(left, right)| left < right)
+    })
+}
+
+fn is_strictly_ordered_by<T>(values: &[T], less: impl Fn(&T, &T) -> bool) -> bool {
+    values.windows(2).all(|pair| {
+        pair.first()
+            .zip(pair.last())
+            .is_some_and(|(left, right)| less(left, right))
+    })
 }
 
 fn increment_count(count: &mut u32, kind: &str) -> Result<(), ReviewError> {
@@ -724,13 +1059,6 @@ pub fn validate_review_frame(frame: &RgbaImage) -> Result<ReviewFrameStats, Revi
         }
     }
 
-    if brightest <= MIN_FRAME_BRIGHTNESS {
-        return Err(ReviewError::new(
-            "validate review frame",
-            None,
-            "frame is black or too dark to review",
-        ));
-    }
     if variant_pixels < MIN_VARIANT_PIXELS {
         return Err(ReviewError::new(
             "validate review frame",
@@ -957,6 +1285,7 @@ fn publish_review_pack_with_hook(
     frames: &[RgbaImage],
     mut hook: impl FnMut(PublishCheckpoint) -> Result<(), ReviewError>,
 ) -> Result<ReviewPublishOutcome, ReviewError> {
+    report.validate_for_publication()?;
     let report_bytes = report.to_ron_bytes()?;
     if frames.len() != REVIEW_FRAME_COUNT {
         return Err(ReviewError::new(
@@ -984,7 +1313,7 @@ fn publish_review_pack_with_hook(
         .map_err(|error| ReviewError::at("create review directory", parent, error))?;
 
     if path_exists(&final_path, "inspect review destination")? {
-        validate_pack_directory(&final_path, &report_bytes)?;
+        validate_pack_directory(&final_path, &report_bytes, frames, &contact_sheet)?;
         return Ok(ReviewPublishOutcome::AlreadyPublished(final_path));
     }
 
@@ -1008,7 +1337,7 @@ fn publish_review_pack_with_hook(
     hook(PublishCheckpoint::ContactSheet)?;
     write_bytes_create_new(&staging.path().join(REVIEW_REPORT_FILE), &report_bytes)?;
     hook(PublishCheckpoint::Report)?;
-    validate_pack_directory(staging.path(), &report_bytes)?;
+    validate_pack_directory(staging.path(), &report_bytes, frames, &contact_sheet)?;
     hook(PublishCheckpoint::BeforeRename)?;
 
     match fs::rename(staging.path(), &final_path) {
@@ -1017,16 +1346,18 @@ fn publish_review_pack_with_hook(
             Ok(ReviewPublishOutcome::Published(final_path))
         }
         Err(rename_error) if path_exists(&final_path, "inspect concurrent review publication")? => {
-            validate_pack_directory(&final_path, &report_bytes).map_err(|existing_error| {
-                ReviewError::at(
-                    "publish review pack",
-                    &final_path,
-                    format!(
-                        "destination appeared during publication and conflicts with this pack \
-                         ({rename_error}); existing pack is invalid: {existing_error}"
-                    ),
-                )
-            })?;
+            validate_pack_directory(&final_path, &report_bytes, frames, &contact_sheet).map_err(
+                |existing_error| {
+                    ReviewError::at(
+                        "publish review pack",
+                        &final_path,
+                        format!(
+                            "destination appeared during publication and conflicts with this pack \
+                             ({rename_error}); existing pack is invalid: {existing_error}"
+                        ),
+                    )
+                },
+            )?;
             Ok(ReviewPublishOutcome::AlreadyPublished(final_path))
         }
         Err(error) => Err(ReviewError::at("publish review pack", &final_path, error)),
@@ -1085,20 +1416,16 @@ impl Drop for StagingDirectory {
 }
 
 fn write_png_create_new(path: &Path, image: &RgbaImage) -> Result<(), ReviewError> {
+    let bytes = encode_png(image)?;
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .map_err(|error| ReviewError::at("create review PNG", path, error))?;
     let mut writer = BufWriter::new(file);
-    PngEncoder::new_with_quality(&mut writer, CompressionType::Fast, PngFilterType::Paeth)
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            ExtendedColorType::Rgba8,
-        )
-        .map_err(|error| ReviewError::at("encode review PNG", path, error))?;
+    writer
+        .write_all(&bytes)
+        .map_err(|error| ReviewError::at("write review PNG", path, error))?;
     writer
         .flush()
         .map_err(|error| ReviewError::at("flush review PNG", path, error))?;
@@ -1106,6 +1433,24 @@ fn write_png_create_new(path: &Path, image: &RgbaImage) -> Result<(), ReviewErro
         .get_ref()
         .sync_all()
         .map_err(|error| ReviewError::at("sync review PNG", path, error))
+}
+
+fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, ReviewError> {
+    let mut bytes = Vec::new();
+    let mut writer = BufWriter::new(&mut bytes);
+    PngEncoder::new_with_quality(&mut writer, CompressionType::Fast, PngFilterType::Paeth)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ExtendedColorType::Rgba8,
+        )
+        .map_err(|error| ReviewError::new("encode review PNG", None, error.to_string()))?;
+    writer
+        .flush()
+        .map_err(|error| ReviewError::new("flush encoded review PNG", None, error.to_string()))?;
+    drop(writer);
+    Ok(bytes)
 }
 
 fn write_bytes_create_new(path: &Path, bytes: &[u8]) -> Result<(), ReviewError> {
@@ -1120,7 +1465,12 @@ fn write_bytes_create_new(path: &Path, bytes: &[u8]) -> Result<(), ReviewError> 
         .map_err(|error| ReviewError::at("sync review report", path, error))
 }
 
-fn validate_pack_directory(directory: &Path, expected_report: &[u8]) -> Result<(), ReviewError> {
+fn validate_pack_directory(
+    directory: &Path,
+    expected_report: &[u8],
+    expected_frames: &[RgbaImage],
+    expected_contact_sheet: &RgbaImage,
+) -> Result<(), ReviewError> {
     let expected_names = expected_pack_names();
     let mut actual_names = BTreeSet::new();
     let entries = fs::read_dir(directory)
@@ -1173,13 +1523,33 @@ fn validate_pack_directory(directory: &Path, expected_report: &[u8]) -> Result<(
         ));
     }
 
-    for spec in REVIEW_FRAME_SPECS {
+    for (spec, expected_frame) in REVIEW_FRAME_SPECS.into_iter().zip(expected_frames) {
         let path = directory.join(spec.file_name);
+        let bytes =
+            fs::read(&path).map_err(|error| ReviewError::at("read review PNG", &path, error))?;
+        let expected_bytes = encode_png(expected_frame)?;
+        if bytes != expected_bytes {
+            return Err(ReviewError::at(
+                "validate review pack",
+                &path,
+                "existing frame bytes differ for the same review fingerprint",
+            ));
+        }
         let image = decode_png(&path)?;
         validate_review_frame(&image)
             .map_err(|error| ReviewError::at("validate review pack", &path, error.detail()))?;
     }
     let contact_path = directory.join(REVIEW_CONTACT_SHEET_FILE);
+    let contact_bytes = fs::read(&contact_path)
+        .map_err(|error| ReviewError::at("read review PNG", &contact_path, error))?;
+    let expected_contact_bytes = encode_png(expected_contact_sheet)?;
+    if contact_bytes != expected_contact_bytes {
+        return Err(ReviewError::at(
+            "validate review pack",
+            &contact_path,
+            "existing contact-sheet bytes differ from the source frames",
+        ));
+    }
     let contact = decode_png(&contact_path)?;
     if contact.width() != CONTACT_SHEET_WIDTH || contact.height() != CONTACT_SHEET_HEIGHT {
         return Err(ReviewError::at(
@@ -1480,7 +1850,13 @@ mod tests {
         assert!(first_bytes.ends_with(b"\n"));
         let source = std::str::from_utf8(&first_bytes).expect("report should be UTF-8");
         let round_trip: ReviewReport = ron::from_str(source).expect("report should parse");
-        assert_eq!(round_trip, first);
+        assert_eq!(
+            round_trip
+                .to_ron_bytes()
+                .expect("parsed report should remain readable"),
+            first_bytes
+        );
+        assert!(round_trip.validate_for_publication().is_err());
         assert_eq!(first.occupied_cells, 3);
         assert_eq!(
             first.part_counts,
@@ -1538,7 +1914,7 @@ mod tests {
                 PaletteSwatch::new(
                     "Unused",
                     SrgbColor::new(0.8, 0.1, 0.2).expect("changed color should be valid"),
-                    BTreeSet::new(),
+                    BTreeSet::from(["test".to_owned()]),
                 )
                 .expect("changed swatch should be valid"),
             )
@@ -1549,6 +1925,22 @@ mod tests {
             baseline.review_fingerprint,
             palette_report.review_fingerprint
         );
+    }
+
+    #[test]
+    fn report_validation_rejects_mutated_rendering_dependencies() {
+        let (object, styles, palette) = art_fixture();
+        let mut report =
+            ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let dependency = report
+            .style_dependencies
+            .first_mut()
+            .expect("fixture report should contain a style dependency");
+        dependency.opacity = 0.0;
+        let error = report
+            .to_ron_bytes()
+            .expect_err("invalid mutated style semantics must not serialize");
+        assert!(error.to_string().contains("opacity"));
     }
 
     #[test]
@@ -1577,6 +1969,12 @@ mod tests {
         let single_color_object = valid_frame(Rgba([60, 170, 80, 255]));
         let stats = validate_review_frame(&single_color_object)
             .expect("one-color object should remain reviewable");
+        assert!(stats.variant_pixels >= 96 * 96);
+
+        let black_object = valid_frame(Rgba([0, 0, 0, 255]));
+        let stats = validate_review_frame(&black_object)
+            .expect("a black silhouette on the review clear should remain reviewable");
+        assert_eq!(stats.brightest, REVIEW_CLEAR_RGBA[2]);
         assert!(stats.variant_pixels >= 96 * 96);
     }
 
@@ -1730,6 +2128,45 @@ mod tests {
         assert_eq!(
             fs::read(&report_path).expect("corrupt report should remain"),
             b"corrupt"
+        );
+    }
+
+    #[test]
+    fn valid_but_different_existing_images_are_preserved_and_rejected() {
+        let directory = TestDirectory::new("image-collision");
+        let (object, styles, palette) = art_fixture();
+        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let frames = frame_set();
+        let outcome =
+            publish_review_pack(&directory.path, &report, &frames).expect("pack should publish");
+        let frame_path = outcome.path().join(REVIEW_FRAME_SPECS[0].file_name);
+        fs::remove_file(&frame_path).expect("test frame should be removable");
+        let conflicting = valid_frame(Rgba([220, 80, 40, 255]));
+        write_png_create_new(&frame_path, &conflicting).expect("conflicting frame should write");
+
+        let result = publish_review_pack(&directory.path, &report, &frames);
+        assert!(result.is_err());
+        assert_eq!(
+            decode_png(&frame_path).expect("conflicting frame should remain"),
+            conflicting
+        );
+
+        let contact_directory = TestDirectory::new("contact-collision");
+        let outcome = publish_review_pack(&contact_directory.path, &report, &frames)
+            .expect("second pack should publish");
+        let contact_path = outcome.path().join(REVIEW_CONTACT_SHEET_FILE);
+        let mut conflicting_contact =
+            build_contact_sheet(&frames).expect("contact sheet should build");
+        conflicting_contact.put_pixel(0, 0, Rgba([255, 0, 255, 255]));
+        fs::remove_file(&contact_path).expect("test contact sheet should be removable");
+        write_png_create_new(&contact_path, &conflicting_contact)
+            .expect("conflicting contact sheet should write");
+
+        let result = publish_review_pack(&contact_directory.path, &report, &frames);
+        assert!(result.is_err());
+        assert_eq!(
+            decode_png(&contact_path).expect("conflicting contact sheet should remain"),
+            conflicting_contact
         );
     }
 

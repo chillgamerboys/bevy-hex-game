@@ -156,6 +156,10 @@ pub struct WorkshopUiSnapshot {
     pub recovery_conflict: bool,
     /// Whether any tracked replacement is currently blocked.
     pub tracked_writes_blocked: bool,
+    /// Whether the current document satisfies every one-click review precondition.
+    pub review_ready: bool,
+    /// Whether the deterministic renderer is currently producing a review pack.
+    pub review_in_progress: bool,
     /// Whether the native close button requested a dirty-document decision.
     pub close_confirmation: bool,
     /// Open object document.
@@ -187,6 +191,8 @@ impl WorkshopUiSnapshot {
         external_changes: &[ExternalAssetChange],
         recovery_prompt: Option<RecoveryPrompt>,
         recovery_conflict: bool,
+        review_ready: bool,
+        review_in_progress: bool,
         close_confirmation: bool,
         status: Option<WorkshopStatus>,
     ) {
@@ -204,6 +210,8 @@ impl WorkshopUiSnapshot {
         self.recovery_prompt = recovery_prompt;
         self.recovery_conflict = recovery_conflict;
         self.tracked_writes_blocked = recovery_conflict || !external_changes.is_empty();
+        self.review_ready = review_ready;
+        self.review_in_progress = review_in_progress;
         self.close_confirmation = close_confirmation;
         self.editor = Some(ObjectEditorSnapshot::from_model(editor));
         self.status = status;
@@ -222,6 +230,8 @@ impl WorkshopUiSnapshot {
         self.recovery_prompt = None;
         self.recovery_conflict = false;
         self.tracked_writes_blocked = true;
+        self.review_ready = false;
+        self.review_in_progress = false;
         self.close_confirmation = false;
         self.objects.clear();
         self.editor = None;
@@ -278,6 +288,8 @@ pub enum WorkshopUiAction {
     SaveCatalogs,
     /// Discard local drafts and reload the complete tracked art graph.
     ReloadProject,
+    /// Render and atomically publish the deterministic review pack.
+    ExportReview,
     /// Restore the validated startup recovery draft.
     RestoreRecovery,
     /// Explicitly delete the pending startup recovery file.
@@ -728,12 +740,18 @@ fn draw_workshop_ui(
     draw_reload_confirmation(context, &snapshot, &mut state, &mut actions);
     draw_recovery_prompt(context, &snapshot, &mut actions);
     draw_close_confirmation(context, &snapshot, &mut actions);
+    draw_review_progress(context, &snapshot);
     collect_keyboard_shortcuts(context, &snapshot, &mut state, &mut actions);
 
     suppression.viewport_rect = central.inner.rect;
     let pointer_position = context.input(|input| input.pointer.hover_pos());
-    let overlay_open =
-        state.object_dialog.is_some() || state.pending_delete.is_some() || context.any_popup_open();
+    let overlay_open = state.object_dialog.is_some()
+        || state.pending_delete.is_some()
+        || state.pending_reload
+        || snapshot.recovery_prompt.is_some()
+        || snapshot.close_confirmation
+        || snapshot.review_in_progress
+        || context.any_popup_open();
     suppression.pointer = viewport_pointer_is_suppressed(
         suppression.viewport_rect,
         pointer_position,
@@ -774,6 +792,7 @@ fn collect_keyboard_shortcuts(
         || state.pending_reload
         || snapshot.recovery_prompt.is_some()
         || snapshot.close_confirmation
+        || snapshot.review_in_progress
     {
         return;
     }
@@ -912,12 +931,15 @@ fn draw_top_toolbar(
         )
         .show_inside(root_ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("ASSET WORKSHOP")
-                        .strong()
-                        .color(egui::Color32::WHITE),
-                );
-                ui.separator();
+                let compact = ui.available_width() < 1_180.0;
+                if !compact {
+                    ui.label(
+                        egui::RichText::new("ASSET WORKSHOP")
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    );
+                    ui.separator();
+                }
 
                 let mode = snapshot.mode.unwrap_or(WorkshopMode::VoxelStyles);
                 if ui
@@ -1019,6 +1041,15 @@ fn draw_top_toolbar(
                             });
                         }
                     }
+                    if ui
+                        .add_enabled(snapshot.review_ready, egui::Button::new("Review"))
+                        .on_hover_text(
+                            "Export perspective, top, six turns, semantic and mask views",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ExportReview);
+                    }
                 }
                 if ui
                     .add_enabled(project_ready, egui::Button::new("Reload"))
@@ -1052,26 +1083,48 @@ fn draw_top_toolbar(
                     .on_hover_text("Choose deterministic preview lighting");
 
                 ui.separator();
-                for (label, snap, tooltip) in [
-                    (
-                        "3D",
-                        EditorCameraSnap::Perspective,
-                        "Snap to perspective view",
-                    ),
-                    ("Top", EditorCameraSnap::Top, "Snap to top view"),
-                    ("Front", EditorCameraSnap::Front, "Snap to front view"),
-                    ("Side", EditorCameraSnap::Side, "Snap to side view"),
-                ] {
-                    if ui.button(label).on_hover_text(tooltip).clicked() {
-                        actions.push(WorkshopUiAction::SnapCamera(snap));
+                if compact {
+                    ui.menu_button("View", |ui| {
+                        for (label, snap) in [
+                            ("Perspective", EditorCameraSnap::Perspective),
+                            ("Top", EditorCameraSnap::Top),
+                            ("Front", EditorCameraSnap::Front),
+                            ("Side", EditorCameraSnap::Side),
+                        ] {
+                            if ui.button(label).clicked() {
+                                actions.push(WorkshopUiAction::SnapCamera(snap));
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Frame All").clicked() {
+                            actions.push(WorkshopUiAction::FrameCamera);
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Camera snaps and framing");
+                } else {
+                    for (label, snap, tooltip) in [
+                        (
+                            "3D",
+                            EditorCameraSnap::Perspective,
+                            "Snap to perspective view",
+                        ),
+                        ("Top", EditorCameraSnap::Top, "Snap to top view"),
+                        ("Front", EditorCameraSnap::Front, "Snap to front view"),
+                        ("Side", EditorCameraSnap::Side, "Snap to side view"),
+                    ] {
+                        if ui.button(label).on_hover_text(tooltip).clicked() {
+                            actions.push(WorkshopUiAction::SnapCamera(snap));
+                        }
                     }
-                }
-                if ui
-                    .button("Frame")
-                    .on_hover_text("Frame all visible authored voxels")
-                    .clicked()
-                {
-                    actions.push(WorkshopUiAction::FrameCamera);
+                    if ui
+                        .button("Frame")
+                        .on_hover_text("Frame all visible authored voxels")
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::FrameCamera);
+                    }
                 }
 
                 let dirty = match mode {
@@ -1811,27 +1864,32 @@ fn draw_voxel_style_inspector(
                         surface_mode_label(mode),
                     );
                 }
-            });
+            })
+            .response
+            .on_hover_text("Choose opaque, alpha-to-coverage, blended, or additive rendering");
     });
     if state.style_form.surface_mode == VoxelSurfaceMode::Opaque {
         state.style_form.opacity = 1.0;
         ui.add_enabled(
             false,
             egui::Slider::new(&mut state.style_form.opacity, 0.01..=1.0).text("Opacity"),
-        );
+        )
+        .on_hover_text("Opaque styles always use full opacity");
     } else {
         ui.add(
             egui::Slider::new(&mut state.style_form.opacity, 0.01..=1.0)
                 .text("Opacity")
                 .clamping(egui::SliderClamping::Always),
-        );
+        )
+        .on_hover_text("Surface opacity stored by this reusable style");
     }
 
     ui.separator();
     ui.checkbox(
         &mut state.style_form.emission_enabled,
         "Independent emission",
-    );
+    )
+    .on_hover_text("Use a separate palette swatch and strength for emitted light colour");
     ui.add_enabled_ui(state.style_form.emission_enabled, |ui| {
         swatch_combo(
             ui,
@@ -2072,13 +2130,17 @@ fn draw_object_inspector(
     }
     let slice_changed = ui
         .checkbox(&mut state.isolate_active_level, "Isolate active level")
+        .on_hover_text("Hide occupied voxels outside the active integer level")
         .changed();
     if slice_changed {
         actions.push(WorkshopUiAction::IsolateActiveLevel(
             state.isolate_active_level,
         ));
     }
-    let grid_changed = ui.checkbox(&mut state.show_grid, "Hex guide").changed();
+    let grid_changed = ui
+        .checkbox(&mut state.show_grid, "Hex guide")
+        .on_hover_text("Show empty placement cells on the active level")
+        .changed();
     if grid_changed {
         actions.push(WorkshopUiAction::ShowGrid(state.show_grid));
     }
@@ -2116,6 +2178,7 @@ fn draw_object_inspector(
         }
         if ui
             .add_enabled(editor.selection_count > 0, egui::Button::new("Clear"))
+            .on_hover_text("Keep voxels unchanged and clear only the current selection")
             .clicked()
         {
             actions.push(WorkshopUiAction::ClearSelection);
@@ -2134,6 +2197,7 @@ fn draw_object_inspector(
         ] {
             if ui
                 .add_enabled(editor.selection_count > 0, egui::Button::new(label))
+                .on_hover_text("Move every selected voxel and its exact mask annotations")
                 .clicked()
             {
                 actions.push(WorkshopUiAction::NudgeSelection { q, r, level });
@@ -2153,7 +2217,11 @@ fn draw_object_inspector(
 
     if editor.selection_count > 0 {
         ui.add_space(5.0);
-        if ui.button("Apply Active Role").clicked() {
+        if ui
+            .button("Apply Active Role")
+            .on_hover_text("Assign the selected semantic role to every selected voxel")
+            .clicked()
+        {
             actions.push(WorkshopUiAction::RepaintSelectionPart(editor.active_part));
         }
         match editor.object.category {
@@ -2568,6 +2636,18 @@ fn draw_close_confirmation(
                 actions.push(WorkshopUiAction::CancelClose);
             }
         });
+    });
+}
+
+fn draw_review_progress(context: &egui::Context, snapshot: &WorkshopUiSnapshot) {
+    if !snapshot.review_in_progress {
+        return;
+    }
+    egui::Modal::new(egui::Id::new("review_export_progress")).show(context, |ui| {
+        ui.set_min_width(360.0);
+        ui.heading("Exporting Review Pack");
+        ui.label("Rendering ten deterministic views and validating the complete artifact...");
+        ui.add(egui::Spinner::new());
     });
 }
 

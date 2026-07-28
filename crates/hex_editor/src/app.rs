@@ -18,6 +18,8 @@ use crate::launch::resolve_repository_root;
 use crate::model::{EditorModel, EditorTool, PreviewRig, WorkshopMode};
 use crate::project::{AssetProject, ExternalAssetChange, ProjectRevisionSet};
 use crate::recovery::{RecoveryDocument, RecoveryEnvelope, RecoveryStore, RecoveryWorkshopDraft};
+use crate::review::{ReviewPresentation, ReviewPublishOutcome, ReviewReport, REVIEW_FRAME_SPECS};
+use crate::review_capture::{ReviewCaptureFinished, ReviewCapturePlugin, ReviewCaptureRequest};
 use crate::ui::{
     EditorCameraSnap, RecoveryPrompt, WorkshopDocumentState, WorkshopStatus, WorkshopStatusKind,
     WorkshopUiAction, WorkshopUiSnapshot,
@@ -92,6 +94,7 @@ struct WorkshopRuntime {
     recovery_base_revisions: Option<ProjectRevisionSet>,
     recovery_conflict: bool,
     recovery_autosave: RecoveryAutosave,
+    review_in_progress: bool,
     close_confirmation: bool,
     exit_requested: bool,
     needs_sync: bool,
@@ -152,6 +155,7 @@ impl WorkshopRuntime {
                 recovery_base_revisions: None,
                 recovery_conflict: false,
                 recovery_autosave: RecoveryAutosave::default(),
+                review_in_progress: false,
                 close_confirmation: false,
                 exit_requested: false,
                 needs_sync: true,
@@ -173,6 +177,7 @@ impl WorkshopRuntime {
                 recovery_base_revisions: None,
                 recovery_conflict: false,
                 recovery_autosave: RecoveryAutosave::default(),
+                review_in_progress: false,
                 close_confirmation: false,
                 exit_requested: false,
                 needs_sync: true,
@@ -256,12 +261,14 @@ pub fn run() {
         )
         .add_plugins(EguiPlugin::default())
         .add_plugins(crate::viewport::plugin)
+        .add_plugins(ReviewCapturePlugin)
         .add_plugins(crate::ui::plugin)
         .init_resource::<PointerStroke>()
         .init_resource::<ProjectChangePoll>()
         .add_systems(
             Update,
             (
+                handle_review_capture_finished,
                 intercept_window_close_requests,
                 handle_ui_actions,
                 handle_pointer_editing,
@@ -281,6 +288,7 @@ fn handle_ui_actions(
     mut runtime: ResMut<WorkshopRuntime>,
     mut camera_snaps: MessageWriter<CameraSnapRequest>,
     mut frame_requests: MessageWriter<FrameViewportRequest>,
+    mut review_requests: MessageWriter<ReviewCaptureRequest>,
     mut exit: MessageWriter<AppExit>,
 ) {
     for action in actions.read().cloned() {
@@ -291,6 +299,20 @@ fn handle_ui_actions(
             }
             WorkshopUiAction::FrameCamera => {
                 frame_requests.write(FrameViewportRequest);
+                continue;
+            }
+            WorkshopUiAction::ExportReview => {
+                match build_review_capture_request(&runtime) {
+                    Ok(request) => {
+                        review_requests.write(request);
+                        runtime.review_in_progress = true;
+                        runtime.set_status(
+                            WorkshopStatusKind::Info,
+                            "Rendering deterministic review pack",
+                        );
+                    }
+                    Err(error) => runtime.set_status(WorkshopStatusKind::Error, error),
+                }
                 continue;
             }
             action => {
@@ -311,6 +333,29 @@ fn handle_ui_actions(
     if runtime.exit_requested {
         runtime.exit_requested = false;
         exit.write(AppExit::Success);
+    }
+}
+
+fn handle_review_capture_finished(
+    mut finished: MessageReader<ReviewCaptureFinished>,
+    mut runtime: ResMut<WorkshopRuntime>,
+) {
+    for finished in finished.read() {
+        runtime.review_in_progress = false;
+        match &finished.result {
+            Ok(ReviewPublishOutcome::Published(path)) => runtime.set_status(
+                WorkshopStatusKind::Success,
+                format!("Published review pack to {}", path.display()),
+            ),
+            Ok(ReviewPublishOutcome::AlreadyPublished(path)) => runtime.set_status(
+                WorkshopStatusKind::Info,
+                format!("Review pack already exists at {}", path.display()),
+            ),
+            Err(error) => runtime.set_status(
+                WorkshopStatusKind::Error,
+                format!("Review export failed: {error}"),
+            ),
+        }
     }
 }
 
@@ -365,6 +410,9 @@ fn apply_ui_action(
             Ok(Some("Saved palette and voxel styles".to_owned()))
         }
         WorkshopUiAction::ReloadProject => reload_project(runtime),
+        WorkshopUiAction::ExportReview => {
+            Err("review export must be handled by the capture adapter".to_owned())
+        }
         WorkshopUiAction::RestoreRecovery => restore_pending_recovery(runtime),
         WorkshopUiAction::DiscardRecovery => discard_pending_recovery(runtime),
         WorkshopUiAction::SaveAllAndClose => {
@@ -911,6 +959,7 @@ fn reload_project(runtime: &mut WorkshopRuntime) -> Result<Option<String>, Strin
     runtime.recovery_base_revisions = None;
     runtime.recovery_conflict = false;
     runtime.recovery_autosave = RecoveryAutosave::default();
+    runtime.review_in_progress = false;
     runtime.close_confirmation = false;
     runtime.load_failure = None;
     runtime.needs_sync = true;
@@ -1445,9 +1494,17 @@ fn tool_label(tool: EditorTool) -> &'static str {
 fn intercept_window_close_requests(
     mut requests: MessageReader<WindowCloseRequested>,
     mut runtime: ResMut<WorkshopRuntime>,
+    mut pointer_stroke: ResMut<PointerStroke>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if requests.read().next().is_none() {
+        return;
+    }
+    if runtime.review_in_progress {
+        runtime.set_status(
+            WorkshopStatusKind::Warning,
+            "Wait for the review export to finish before closing the Workshop",
+        );
         return;
     }
     if runtime.pending_recovery.is_some() || !has_unsaved_work(&runtime) {
@@ -1455,6 +1512,23 @@ fn intercept_window_close_requests(
         return;
     }
 
+    let open_transaction = runtime
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.editor().is_transaction_open());
+    if open_transaction {
+        match runtime.draft_mut().and_then(|draft| {
+            draft
+                .commit_object_transaction()
+                .map_err(|error| error.to_string())
+        }) {
+            Ok(_) => *pointer_stroke = PointerStroke::default(),
+            Err(error) => {
+                runtime.set_status(WorkshopStatusKind::Error, error);
+                return;
+            }
+        }
+    }
     if let Err(error) = write_recovery_now(&mut runtime) {
         runtime.set_status(WorkshopStatusKind::Error, error);
     }
@@ -1510,15 +1584,7 @@ fn autosave_recovery(time: Res<Time>, mut runtime: ResMut<WorkshopRuntime>) {
         return;
     }
 
-    let idle_elapsed = runtime
-        .recovery_autosave
-        .last_change_seconds
-        .is_some_and(|changed| now - changed >= RECOVERY_IDLE_SECONDS);
-    let maximum_elapsed = runtime
-        .recovery_autosave
-        .dirty_since_seconds
-        .is_some_and(|started| now - started >= RECOVERY_MAX_INTERVAL_SECONDS);
-    if !idle_elapsed && !maximum_elapsed {
+    if !recovery_write_due(&runtime.recovery_autosave, now) {
         return;
     }
     match write_recovery_now(&mut runtime) {
@@ -1532,6 +1598,15 @@ fn autosave_recovery(time: Res<Time>, mut runtime: ResMut<WorkshopRuntime>) {
             runtime.set_status(WorkshopStatusKind::Error, error);
         }
     }
+}
+
+fn recovery_write_due(autosave: &RecoveryAutosave, now_seconds: f64) -> bool {
+    autosave
+        .last_change_seconds
+        .is_some_and(|changed| now_seconds - changed >= RECOVERY_IDLE_SECONDS)
+        || autosave
+            .dirty_since_seconds
+            .is_some_and(|started| now_seconds - started >= RECOVERY_MAX_INTERVAL_SECONDS)
 }
 
 fn has_unsaved_work(runtime: &WorkshopRuntime) -> bool {
@@ -1671,6 +1746,8 @@ fn synchronize_views(
         &runtime.external_changes,
         recovery_prompt,
         runtime.recovery_conflict,
+        review_is_ready(&runtime),
+        runtime.review_in_progress,
         runtime.close_confirmation,
         runtime.status.clone(),
     );
@@ -1710,9 +1787,124 @@ fn pending_recovery_prompt(runtime: &WorkshopRuntime) -> Option<RecoveryPrompt> 
     }
 }
 
+fn review_is_ready(runtime: &WorkshopRuntime) -> bool {
+    if runtime.review_in_progress
+        || runtime.pending_recovery.is_some()
+        || !runtime.external_changes.is_empty()
+        || !matches!(runtime.document, OpenDocument::Saved(_))
+        || has_unsaved_work(runtime)
+    {
+        return false;
+    }
+    runtime
+        .draft
+        .as_ref()
+        .is_some_and(|draft| draft.editor().blueprint_for_save(draft.styles()).is_ok())
+}
+
+fn build_review_capture_request(runtime: &WorkshopRuntime) -> Result<ReviewCaptureRequest, String> {
+    if !review_is_ready(runtime) {
+        return Err(
+            "review export requires a clean saved object with no recovery or disk conflicts"
+                .to_owned(),
+        );
+    }
+    let project = runtime
+        .project
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?;
+    let draft = runtime
+        .draft
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?;
+    let object = draft
+        .editor()
+        .blueprint_for_save(draft.styles())
+        .map_err(|error| error.to_string())?;
+    let report = ReviewReport::new(&object, draft.styles(), draft.palette())
+        .map_err(|error| error.to_string())?;
+
+    let contents = build_review_viewport_contents(draft);
+
+    ReviewCaptureRequest::new(project.repository_root().to_path_buf(), report, contents)
+}
+
+fn build_review_viewport_contents(draft: &WorkshopDraft) -> Vec<ViewportContent> {
+    let mut authored = build_object_viewport_content(draft, OverlaySettings::default());
+    authored.selected_cells.clear();
+    let mut semantic = authored.clone();
+    semantic.show_semantic_overlay = true;
+    let mut blocker_canopy = authored.clone();
+    blocker_canopy.show_blocker_overlay = true;
+    blocker_canopy.show_canopy_overlay = true;
+    REVIEW_FRAME_SPECS
+        .iter()
+        .map(|spec| match spec.presentation {
+            ReviewPresentation::Authored => authored.clone(),
+            ReviewPresentation::SemanticParts => semantic.clone(),
+            ReviewPresentation::BlockerCanopy => blocker_canopy.clone(),
+        })
+        .collect()
+}
+
 fn build_viewport_content(
     draft: &WorkshopDraft,
     preview: &PreviewSubject,
+    overlays: OverlaySettings,
+) -> ViewportContent {
+    let mut content = build_object_viewport_content(draft, overlays);
+
+    if draft.editor().mode() == WorkshopMode::Objects {
+        return content;
+    }
+
+    content.voxels.clear();
+    match preview {
+        PreviewSubject::Swatch(id) => {
+            if let Some(swatch) = draft.palette().get(id) {
+                if let Ok(preview_id) = VoxelStyleId::new("editor/swatch-preview") {
+                    content.styles.insert(
+                        preview_id.clone(),
+                        ViewportStyle {
+                            color: swatch.color(),
+                            surface_mode: hex_assets::VoxelSurfaceMode::Opaque,
+                            opacity: 1.0,
+                            emission: None,
+                        },
+                    );
+                    content.set_voxels(vec![RenderedVoxel {
+                        position: LocalVoxelCoord::new(0, 0, 0),
+                        style: preview_id,
+                    }]);
+                }
+            }
+        }
+        PreviewSubject::Style(id) => {
+            if content.styles.contains_key(id) {
+                content.set_voxels(vec![RenderedVoxel {
+                    position: LocalVoxelCoord::new(0, 0, 0),
+                    style: id.clone(),
+                }]);
+            }
+        }
+        PreviewSubject::ActiveStyle => {
+            if let Some(id) = draft
+                .editor()
+                .active_style()
+                .filter(|id| content.styles.contains_key(*id))
+            {
+                content.set_voxels(vec![RenderedVoxel {
+                    position: LocalVoxelCoord::new(0, 0, 0),
+                    style: id.clone(),
+                }]);
+            }
+        }
+    }
+    content
+}
+
+fn build_object_viewport_content(
+    draft: &WorkshopDraft,
     overlays: OverlaySettings,
 ) -> ViewportContent {
     let mut content = ViewportContent {
@@ -1749,64 +1941,18 @@ fn build_viewport_content(
     };
     let resolved = resolve_styles(draft.palette(), draft.styles());
     content.set_styles(resolved);
-
-    match draft.editor().mode() {
-        WorkshopMode::Objects => {
-            content.set_voxels(
-                draft
-                    .editor()
-                    .object()
-                    .placements
-                    .iter()
-                    .map(|placement| RenderedVoxel {
-                        position: placement.position,
-                        style: placement.style.clone(),
-                    })
-                    .collect(),
-            );
-        }
-        WorkshopMode::VoxelStyles => match preview {
-            PreviewSubject::Swatch(id) => {
-                if let Some(swatch) = draft.palette().get(id) {
-                    if let Ok(preview_id) = VoxelStyleId::new("editor/swatch-preview") {
-                        content.styles.insert(
-                            preview_id.clone(),
-                            ViewportStyle {
-                                color: swatch.color(),
-                                surface_mode: hex_assets::VoxelSurfaceMode::Opaque,
-                                opacity: 1.0,
-                                emission: None,
-                            },
-                        );
-                        content.set_voxels(vec![RenderedVoxel {
-                            position: LocalVoxelCoord::new(0, 0, 0),
-                            style: preview_id,
-                        }]);
-                    }
-                }
-            }
-            PreviewSubject::Style(id) => {
-                if content.styles.contains_key(id) {
-                    content.set_voxels(vec![RenderedVoxel {
-                        position: LocalVoxelCoord::new(0, 0, 0),
-                        style: id.clone(),
-                    }]);
-                }
-            }
-            PreviewSubject::ActiveStyle => {
-                if let Some(id) = draft
-                    .editor()
-                    .active_style()
-                    .filter(|id| content.styles.contains_key(*id))
-                {
-                    content.set_voxels(vec![RenderedVoxel {
-                        position: LocalVoxelCoord::new(0, 0, 0),
-                        style: id.clone(),
-                    }]);
-                }
-            }
-        },
-    }
+    content.set_voxels(
+        draft
+            .editor()
+            .object()
+            .placements
+            .iter()
+            .map(|placement| RenderedVoxel {
+                position: placement.position,
+                style: placement.style.clone(),
+            })
+            .collect(),
+    );
     content
 }
 
@@ -1852,7 +1998,8 @@ const fn camera_snap(snap: EditorCameraSnap) -> CameraSnap {
 #[cfg(test)]
 mod tests {
     use hex_assets::{
-        ObjectPart, PaletteSwatch, PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode,
+        LocalAxialCoord, ObjectBlueprint, ObjectBounds, ObjectPart, ObjectPlacement, PaletteSwatch,
+        PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
 
     use super::*;
@@ -1934,6 +2081,21 @@ mod tests {
     }
 
     #[test]
+    fn recovery_waits_for_idle_but_caps_continuous_editing() {
+        let mut autosave = RecoveryAutosave {
+            dirty_since_seconds: Some(10.0),
+            last_change_seconds: Some(20.0),
+            ..default()
+        };
+        assert!(!recovery_write_due(&autosave, 22.9));
+        assert!(recovery_write_due(&autosave, 23.0));
+
+        autosave.last_change_seconds = Some(39.9);
+        assert!(!recovery_write_due(&autosave, 39.9));
+        assert!(recovery_write_due(&autosave, 40.0));
+    }
+
+    #[test]
     fn repaint_stroke_applies_the_active_style_and_semantic_role() {
         let base_swatch = SwatchId::new("plant/base").expect("fixture swatch id should be valid");
         let accent_swatch =
@@ -2008,5 +2170,93 @@ mod tests {
             .expect("repainted placement should remain");
         assert_eq!(placement.style, accent_style);
         assert_eq!(placement.part, ObjectPart::Plant(PlantPart::Foliage));
+    }
+
+    #[test]
+    fn review_contents_ignore_transient_editor_presentation() {
+        let swatch_id =
+            SwatchId::new("plant/review-green").expect("fixture swatch id should be valid");
+        let palette = hex_assets::ArtPalette::new(BTreeMap::from([(
+            swatch_id.clone(),
+            PaletteSwatch::new(
+                "Review Green".to_owned(),
+                SrgbColor::new(0.2, 0.7, 0.3).expect("fixture colour should be valid"),
+                BTreeSet::from(["plant".to_owned()]),
+            )
+            .expect("fixture swatch should be valid"),
+        )]))
+        .expect("fixture palette should be valid");
+        let style_id =
+            VoxelStyleId::new("plant/review-leaf").expect("fixture style id should be valid");
+        let styles = VoxelStyleCatalog::new(BTreeMap::from([(
+            style_id.clone(),
+            VoxelStyle::new(
+                "Review Leaf".to_owned(),
+                swatch_id,
+                VoxelSurfaceMode::Opaque,
+                1.0,
+                None,
+            )
+            .expect("fixture style should be valid"),
+        )]))
+        .expect("fixture style catalog should be valid");
+        let root = LocalVoxelCoord::new(0, 0, 0);
+        let canopy = LocalVoxelCoord::new(0, 0, 1);
+        let object = ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id: ObjectAssetId::new("plant/review-sprout")
+                .expect("fixture object id should be valid"),
+            display_name: "Review Sprout".to_owned(),
+            category: ObjectCategory::Plant,
+            origin: root,
+            bounds: ObjectBounds {
+                radius: 2,
+                min_level: 0,
+                height: 4,
+            },
+            connectivity: ConnectivityPolicy::Grounded,
+            blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
+            canopy_occluders: vec![canopy],
+            placements: vec![
+                ObjectPlacement {
+                    position: root,
+                    style: style_id.clone(),
+                    part: ObjectPart::Plant(PlantPart::Root),
+                },
+                ObjectPlacement {
+                    position: canopy,
+                    style: style_id,
+                    part: ObjectPart::Plant(PlantPart::Foliage),
+                },
+            ],
+        };
+        let mut editor =
+            EditorModel::from_blueprint(object).expect("fixture editor should be valid");
+        editor.set_mode(WorkshopMode::VoxelStyles);
+        assert!(editor.select(canopy, false));
+        let draft = WorkshopDraft::new(palette, styles, editor);
+
+        let contents = build_review_viewport_contents(&draft);
+
+        assert_eq!(contents.len(), REVIEW_FRAME_SPECS.len());
+        for (content, spec) in contents.iter().zip(REVIEW_FRAME_SPECS) {
+            assert_eq!(content.voxels.len(), 2);
+            assert!(!content.show_grid);
+            assert!(!content.isolate_active_level);
+            assert!(content.selected_cells.is_empty());
+            let expected = match spec.presentation {
+                ReviewPresentation::Authored => (false, false, false),
+                ReviewPresentation::SemanticParts => (true, false, false),
+                ReviewPresentation::BlockerCanopy => (false, true, true),
+            };
+            assert_eq!(
+                (
+                    content.show_semantic_overlay,
+                    content.show_blocker_overlay,
+                    content.show_canopy_overlay,
+                ),
+                expected
+            );
+        }
     }
 }

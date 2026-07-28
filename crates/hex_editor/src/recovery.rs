@@ -1,8 +1,9 @@
 //! Editor-only crash recovery for unsaved Asset Workshop drafts.
 //!
-//! Recovery data is deliberately separate from production [`ObjectBlueprint`]
-//! deserialization. An interrupted authoring session may contain temporarily invalid
-//! geometry, while tracked assets must continue to fail closed.
+//! Recovery data is deliberately separate from production
+//! [`ObjectBlueprint`] deserialization. An interrupted
+//! authoring session may contain temporarily invalid geometry, while tracked assets
+//! must continue to fail closed.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -286,7 +287,50 @@ impl RecoveryWorkshopDraft {
         self.saved_styles
             .validate(&self.saved_palette)
             .map_err(|error| RecoveryError::new("validate recovery", None, error.to_string()))?;
-        self.editor.normalize_and_validate()
+        self.editor.normalize_and_validate()?;
+        if !self
+            .editor
+            .object
+            .bounds
+            .contains(LocalVoxelCoord::new(0, 0, self.editor.active_level))
+        {
+            return Err(RecoveryError::new(
+                "validate recovery",
+                None,
+                format!(
+                    "active recovery level {} lies outside the recovered object bounds",
+                    self.editor.active_level
+                ),
+            ));
+        }
+        if self
+            .editor
+            .active_style
+            .as_ref()
+            .is_some_and(|style| !self.styles.contains(style))
+        {
+            return Err(RecoveryError::new(
+                "validate recovery",
+                None,
+                "active recovery style does not exist in the recovered style catalog",
+            ));
+        }
+        if recovery_part_category(self.editor.active_part) != self.editor.object.category {
+            return Err(RecoveryError::new(
+                "validate recovery",
+                None,
+                "active recovery part does not match the recovered object category",
+            ));
+        }
+        Ok(())
+    }
+}
+
+const fn recovery_part_category(part: ObjectPart) -> ObjectCategory {
+    match part {
+        ObjectPart::Plant(_) => ObjectCategory::Plant,
+        ObjectPart::Effect(_) => ObjectCategory::Effect,
+        ObjectPart::Prop(_) => ObjectCategory::Prop,
     }
 }
 
@@ -640,8 +684,8 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
-        ConnectivityPolicy, ObjectCategory, PaletteSwatch, PlantPart, SrgbColor, SwatchId,
-        VoxelStyle, VoxelSurfaceMode,
+        ConnectivityPolicy, EffectPart, ObjectCategory, PaletteSwatch, PlantPart, SrgbColor,
+        SwatchId, VoxelStyle, VoxelSurfaceMode,
     };
 
     use super::*;
@@ -945,6 +989,25 @@ mod tests {
             .placements
             .resize(MAX_OBJECT_VOXELS + 1, placement);
         assert!(encode_recovery(&excessive_placements).is_err());
+    }
+
+    #[test]
+    fn recovery_rejects_inconsistent_authoring_controls() {
+        let base = recovery(&fixture());
+
+        let mut outside_level = base.clone();
+        outside_level.workshop.editor.active_level =
+            i32::from(outside_level.workshop.editor.object.bounds.height);
+        assert!(encode_recovery(&outside_level).is_err());
+
+        let mut missing_style = base.clone();
+        missing_style.workshop.editor.active_style =
+            Some(style_id("editor/missing-recovery-style"));
+        assert!(encode_recovery(&missing_style).is_err());
+
+        let mut wrong_part = base;
+        wrong_part.workshop.editor.active_part = ObjectPart::Effect(EffectPart::Core);
+        assert!(encode_recovery(&wrong_part).is_err());
     }
 
     #[test]

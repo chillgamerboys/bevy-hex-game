@@ -321,26 +321,28 @@ impl AssetProject {
 
         if palette_first {
             let palette_source = write_ron_atomically(&palette_path, &palette, AllowOverwrite)?;
-            if let Err(error) = write_ron_atomically(&style_path, &styles, AllowOverwrite) {
-                return Err(with_rollback(
-                    error,
-                    write_bytes_atomically(&palette_path, &old_palette_source, AllowOverwrite),
-                    "palette",
-                ));
-            }
+            let style_source =
+                write_ron_atomically(&style_path, &styles, AllowOverwrite).map_err(|error| {
+                    with_rollback(
+                        error,
+                        write_bytes_atomically(&palette_path, &old_palette_source, AllowOverwrite),
+                        "palette",
+                    )
+                })?;
             self.record_written_source(&palette_path, palette_source)?;
-            self.record_serialized_source(&style_path, &styles)?;
+            self.record_written_source(&style_path, style_source)?;
         } else if styles_first {
             let style_source = write_ron_atomically(&style_path, &styles, AllowOverwrite)?;
-            if let Err(error) = write_ron_atomically(&palette_path, &palette, AllowOverwrite) {
-                return Err(with_rollback(
-                    error,
-                    write_bytes_atomically(&style_path, &old_style_source, AllowOverwrite),
-                    "voxel styles",
-                ));
-            }
+            let palette_source = write_ron_atomically(&palette_path, &palette, AllowOverwrite)
+                .map_err(|error| {
+                    with_rollback(
+                        error,
+                        write_bytes_atomically(&style_path, &old_style_source, AllowOverwrite),
+                        "voxel styles",
+                    )
+                })?;
             self.record_written_source(&style_path, style_source)?;
-            self.record_serialized_source(&palette_path, &palette)?;
+            self.record_written_source(&palette_path, palette_source)?;
         } else {
             return Err(ProjectError::new(
                 "save art catalogs",
@@ -404,7 +406,8 @@ impl AssetProject {
         new_id: ObjectAssetId,
     ) -> Result<(), ProjectError> {
         self.ensure_catalog_sources_unchanged("save object as")?;
-        if self.objects.contains_key(&new_id) {
+        let mut refreshed = Self::load(&self.repository_root)?;
+        if refreshed.objects.contains_key(&new_id) {
             return Err(ProjectError::new(
                 "save object as",
                 None,
@@ -412,7 +415,7 @@ impl AssetProject {
             ));
         }
         blueprint.id = new_id.clone();
-        let path = object_path(&self.art_root, &blueprint)?;
+        let path = object_path(&refreshed.art_root, &blueprint)?;
         if path
             .try_exists()
             .map_err(|error| ProjectError::at("inspect Save As destination", &path, error))?
@@ -424,12 +427,13 @@ impl AssetProject {
             ));
         }
 
-        let mut objects = self.objects.clone();
+        let mut objects = refreshed.objects.clone();
         drop(objects.insert(new_id, blueprint.clone()));
-        validate_graph(&self.palette, &self.styles, &objects)?;
+        validate_graph(&refreshed.palette, &refreshed.styles, &objects)?;
         let source = write_ron_atomically(&path, &blueprint, DisallowOverwrite)?;
-        self.record_written_source(&path, source)?;
-        self.objects = objects;
+        refreshed.record_written_source(&path, source)?;
+        refreshed.objects = objects;
+        *self = refreshed;
         Ok(())
     }
 
@@ -586,14 +590,6 @@ impl AssetProject {
         let key = relative_art_path(&self.art_root, path)?;
         drop(self.loaded_sources.insert(key, source));
         Ok(())
-    }
-
-    fn record_serialized_source<T: Serialize>(
-        &mut self,
-        path: &Path,
-        value: &T,
-    ) -> Result<(), ProjectError> {
-        self.record_written_source(path, pretty_ron(value)?.into_bytes())
     }
 
     fn remove_written_source(&mut self, path: &Path) -> Result<(), ProjectError> {
@@ -1099,6 +1095,29 @@ mod tests {
         }
     }
 
+    fn prop(id: &str, display_name: &str) -> ObjectBlueprint {
+        ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id: object_id(id),
+            display_name: display_name.to_owned(),
+            category: ObjectCategory::Prop,
+            bounds: ObjectBounds {
+                radius: 1,
+                min_level: 0,
+                height: 2,
+            },
+            connectivity: ConnectivityPolicy::Grounded,
+            origin: LocalVoxelCoord::new(0, 0, 0),
+            placements: vec![ObjectPlacement {
+                position: LocalVoxelCoord::new(0, 0, 0),
+                style: style_id("plant/trunk"),
+                part: ObjectPart::Prop(PropPart::Structure),
+            }],
+            blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
+            canopy_occluders: Vec::new(),
+        }
+    }
+
     fn floating_effect(id: &str, display_name: &str) -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(0, 0, -2);
         ObjectBlueprint {
@@ -1126,29 +1145,6 @@ mod tests {
                 },
             ],
             blocker_footprint: Vec::new(),
-            canopy_occluders: Vec::new(),
-        }
-    }
-
-    fn prop(id: &str, display_name: &str) -> ObjectBlueprint {
-        ObjectBlueprint {
-            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
-            id: object_id(id),
-            display_name: display_name.to_owned(),
-            category: ObjectCategory::Prop,
-            bounds: ObjectBounds {
-                radius: 1,
-                min_level: 0,
-                height: 2,
-            },
-            connectivity: ConnectivityPolicy::Grounded,
-            origin: LocalVoxelCoord::new(0, 0, 0),
-            placements: vec![ObjectPlacement {
-                position: LocalVoxelCoord::new(0, 0, 0),
-                style: style_id("plant/trunk"),
-                part: ObjectPart::Prop(PropPart::Structure),
-            }],
-            blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
             canopy_occluders: Vec::new(),
         }
     }
@@ -1625,11 +1621,18 @@ mod tests {
             .art_root()
             .join("objects/plant/local-oak.ron")
             .is_file());
+        assert_eq!(
+            project
+                .object(&object_id("plant/oak"))
+                .expect("refreshed external object should be indexed")
+                .display_name,
+            "Elm"
+        );
+        assert!(project.object(&object_id("plant/local-oak")).is_some());
         assert!(project
             .external_changes()
-            .expect("the source conflict should remain sticky")
-            .iter()
-            .any(|change| change.path == Path::new("objects/plant/oak.ron")));
+            .expect("successful Save As should refresh object sources")
+            .is_empty());
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod model;
 pub mod project;
 pub mod recovery;
 pub mod review;
+pub mod review_capture;
 pub mod ui;
 pub mod viewport;
 pub mod workshop;

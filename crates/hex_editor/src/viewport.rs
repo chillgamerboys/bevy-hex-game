@@ -1092,21 +1092,13 @@ fn draw_guides(
     if content.show_canopy_overlay {
         for position in &content.canopy_cells {
             if cell_is_visible(&content, *position) {
-                draw_hex_ring(
-                    &mut gizmos,
-                    overlay_ring_center(*position, 0.060),
-                    Color::srgb(0.20, 0.86, 0.92),
-                );
+                draw_canopy_marker(&mut gizmos, overlay_ring_center(*position, 0.060));
             }
         }
     }
     if content.show_blocker_overlay {
         for column in &content.blocker_columns {
-            draw_hex_ring(
-                &mut gizmos,
-                axial_world_center(*column, GRID_LINE_LIFT + 0.020),
-                Color::srgb(0.96, 0.24, 0.22),
-            );
+            draw_blocker_marker(&mut gizmos, blocker_overlay_center(&content, *column));
         }
     }
 
@@ -1160,6 +1152,58 @@ fn overlay_ring_center(position: LocalVoxelCoord, lift: f32) -> Vec3 {
         level_floor(position.level) + DEFAULT_LEVEL_HEIGHT + lift,
         center.z,
     )
+}
+
+fn blocker_overlay_center(content: &ViewportContent, column: LocalAxialCoord) -> Vec3 {
+    let top = content
+        .voxels
+        .iter()
+        .filter(|voxel| {
+            voxel.position.axial() == column && cell_is_visible(content, voxel.position)
+        })
+        .map(|voxel| voxel.position.level)
+        .max();
+    top.map_or_else(
+        || axial_world_center(column, GRID_LINE_LIFT + 0.020),
+        |level| {
+            let position = LocalVoxelCoord::new(column.q, column.r, level);
+            overlay_ring_center(position, 0.080)
+        },
+    )
+}
+
+fn draw_blocker_marker(gizmos: &mut Gizmos, center: Vec3) {
+    let color = Color::srgb(0.96, 0.24, 0.22);
+    draw_hex_ring(gizmos, center, color);
+    let radius = HEX_CIRCUMRADIUS * 0.72;
+    for direction in [
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(3.0f32.sqrt() * 0.5, 0.0, 0.5),
+        Vec3::new(3.0f32.sqrt() * 0.5, 0.0, -0.5),
+    ] {
+        gizmos.line(
+            center - direction * radius,
+            center + direction * radius,
+            color,
+        );
+    }
+}
+
+fn draw_canopy_marker(gizmos: &mut Gizmos, center: Vec3) {
+    let color = Color::srgb(0.20, 0.86, 0.92);
+    draw_hex_ring(gizmos, center, color);
+    gizmos.line(center + Vec3::Y * 0.015, center + Vec3::Y * 0.34, color);
+    let cross_radius = HEX_CIRCUMRADIUS * 0.32;
+    gizmos.line(
+        center + Vec3::new(-cross_radius, 0.34, 0.0),
+        center + Vec3::new(cross_radius, 0.34, 0.0),
+        color,
+    );
+    gizmos.line(
+        center + Vec3::new(0.0, 0.34, -cross_radius),
+        center + Vec3::new(0.0, 0.34, cross_radius),
+        color,
+    );
 }
 
 const fn semantic_color(part: ObjectPart) -> Color {
@@ -1380,26 +1424,6 @@ mod tests {
     }
 
     #[test]
-    fn active_level_grid_omits_occupied_pick_cells() {
-        let Ok(style) = VoxelStyleId::new("test/opaque") else {
-            unreachable!("fixture style id should be valid")
-        };
-        let occupied_cell = LocalVoxelCoord::new(0, 0, 3);
-        let occupied = BTreeMap::from([(occupied_cell, style)]);
-        let content = ViewportContent {
-            grid_radius: 1,
-            active_level: 3,
-            show_grid: true,
-            ..default()
-        };
-
-        let grid = desired_grid_cells(&content, ViewportMode::Object, &occupied);
-
-        assert_eq!(grid.len(), 6);
-        assert!(!grid.contains(&occupied_cell));
-    }
-
-    #[test]
     fn max_size_one_cell_edit_plans_one_entity_update() {
         let Ok(original_style) = VoxelStyleId::new("test/original") else {
             unreachable!("fixture style id should be valid")
@@ -1446,6 +1470,51 @@ mod tests {
                 style: repainted_style,
             })]
         );
+    }
+
+    #[test]
+    fn active_level_grid_omits_occupied_pick_cells() {
+        let Ok(style) = VoxelStyleId::new("test/opaque") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let occupied_cell = LocalVoxelCoord::new(0, 0, 3);
+        let occupied = BTreeMap::from([(occupied_cell, style)]);
+        let content = ViewportContent {
+            grid_radius: 1,
+            active_level: 3,
+            show_grid: true,
+            ..default()
+        };
+
+        let grid = desired_grid_cells(&content, ViewportMode::Object, &occupied);
+
+        assert_eq!(grid.len(), 6);
+        assert!(!grid.contains(&occupied_cell));
+    }
+
+    #[test]
+    fn blocker_overlay_stays_above_the_highest_visible_voxel() {
+        let Ok(style) = VoxelStyleId::new("test/opaque") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let mut content = ViewportContent::default();
+        content.set_voxels(vec![
+            RenderedVoxel {
+                position: LocalVoxelCoord::new(0, 0, 1),
+                style: style.clone(),
+            },
+            RenderedVoxel {
+                position: LocalVoxelCoord::new(0, 0, 3),
+                style,
+            },
+        ]);
+        let center = blocker_overlay_center(&content, LocalAxialCoord::new(0, 0));
+        assert!((center.y - 1.68).abs() < 1e-5);
+
+        content.isolate_active_level = true;
+        content.active_level = 1;
+        let sliced = blocker_overlay_center(&content, LocalAxialCoord::new(0, 0));
+        assert!((sliced.y - 0.88).abs() < 1e-5);
     }
 
     #[test]
