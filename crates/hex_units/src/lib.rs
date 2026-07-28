@@ -32,6 +32,8 @@ pub mod selection;
 pub mod targeting;
 /// The units themselves: the player, enemies, and click-to-move.
 pub mod units;
+/// Turning a spell's shape into the exact voxels it reaches.
+pub mod volumes;
 
 pub use movement::{route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing};
 pub use pathing::HexPathingLine;
@@ -43,6 +45,10 @@ pub use units::{
     Archetype, Enemy, Faction, MovingTo, Party, Player, StandsOn, StopMovingAt, UnitAllocator,
     UnitRegistry,
 };
+// `volumes` is deliberately not re-exported here. Its names are bare verbs —
+// `line`, `column`, `path`, `resolve` — that only read correctly qualified, and
+// flattening them into the crate root would put them one collision away from
+// anything else this list ever grows.
 
 /// Adds every unit system.
 ///

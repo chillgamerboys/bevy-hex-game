@@ -44,7 +44,7 @@ pub use settings::{
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
-    TargetingSpec,
+    TargetingSpec, VoxelOffset,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable};
 

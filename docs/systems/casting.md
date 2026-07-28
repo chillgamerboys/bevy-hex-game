@@ -179,18 +179,43 @@ from knowing it — that is precisely the dependency the crate split exists to p
 So a radius-3 sphere reaches three hexes out and three levels up or down, and looks
 slightly squashed on screen. That is the correct trade.
 
+The shape vocabulary resolves to exact voxel sets in
+[`hex_units::volumes`](../../crates/hex_units/src/volumes.rs) (**built**), and
+`TargetShape` in `spells.ron` names the same seven (**built**). What consumes a
+resolved volume — the legality ladder, the announcement — does not exist yet.
+
 | Shape | Volume |
 |---|---|
-| `Self` | the caster's own voxel |
+| `SelfCast` | the caster's own voxel |
 | `Single` | the anchor voxel |
-| `Sphere(radius)` | grid-space ball around the anchor |
-| `Column(height)` | the anchor and the voxels above it |
-| `Line(length, width)` | from the caster toward the facing |
-| `Cone(length, spread)` | widening from the caster toward the facing |
+| `Sphere(radius)` | grid-space ball around the anchor: `radius` hexes out **and** `radius` levels either way |
+| `Column(height)` | the anchor and the voxels above it, `height` counting the anchor |
+| `Line(length, width)` | from the caster toward the facing; `width` is a half-thickness in hexes, `0` being a single file |
+| `Cone(length, spread)` | widening from the caster toward the facing; `spread` is 60° sectors each side, `1` being the familiar cone and `3` a full disc |
 | `Path(offsets)` | an authored offset list, rotated to the facing |
 
+Three rulings the table cannot carry:
+
+- **`Line` and `Cone` start one hex out.** The caster's own voxel is never in its own
+  line or cone, including when a thickened line's near end would otherwise round back
+  over it. `SelfCast` is how a spell reaches the caster.
+- **`Path` hangs on the anchor, not the caster.** A wall is authored where it is
+  built, and the anchor is the one thing every cast names.
+- **`Column` and `Path` are the only shapes with authored vertical extent.** `Line`
+  and `Cone` are planar at the caster's level; a spell wanting a wall of flame needs a
+  `Path`.
+
 `Path` rotates in sextants — 60° steps are exact on cube coordinates, so an authored
-pattern keeps its shape in all six directions.
+pattern keeps its shape in all six directions. The rotation is about the vertical
+axis, so an offset's `level` survives it untouched and a staircase rotates into a
+staircase.
+
+Resolvers hand back volumes already in `TerrainImpact`'s canonical sorted,
+deduplicated form, so a `Sphere` and a `Column` that overlap name each shared voxel
+once. Degenerate extents are total rather than special-cased: radius 0 is the anchor
+alone, and a zero-height column, a zero-length line or cone, and an empty path are all
+the empty volume. Content validation refuses to author most of those, but the geometry
+does not depend on it having done so.
 
 **One volume affects every unit and terrain voxel inside it**, including allies,
 enemies, and the caster. A blast that reaches a bridge deck hits whoever is standing

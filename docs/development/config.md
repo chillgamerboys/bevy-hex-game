@@ -652,8 +652,46 @@ Each spell by name:
 - **`co_castable`** allows casting alongside another spell. A spell that is both
   `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
   "ritual"; it follows from the two flags.
-- **`targeting`** is `range` (in hexes), `shape` (`SelfCast`, `Single`, `Line` or
-  `Blast`) and `needs_los` (whether line of sight is required).
+- **`targeting`** is `range` (how far away the target may be, in hexes), `shape` (what
+  the spell covers once it gets there) and `needs_los` (whether line of sight is
+  required — parsed, but not enforced until obstruction lands).
+
+  `range` and a shape's own extents are different numbers. Fireball's `range: 4` is
+  how far it is thrown; its `Sphere(radius: 2)` is how big the ball is.
+
+  | Shape | What it covers |
+  |---|---|
+  | `SelfCast` | the caster's own voxel; `range` must be `0` |
+  | `Single` | one target voxel |
+  | `Sphere(radius: N)` | everything within `N` of the target — `N` hexes out *and* `N` levels up or down |
+  | `Column(height: N)` | the target voxel and the `N - 1` voxels above it; a conjured wall is `2` |
+  | `Line(length: N, width: W)` | out from the caster; `W` is a half-thickness, so `0` is a single file. Rounded ends mean it reaches `N + W` |
+  | `Cone(length: N, spread: S)` | widening out from the caster; `S` is 60° sectors *each side*, so `0` is a ray, `1` the usual cone, `3` a full disc |
+  | `Path(offsets: [...])` | a hand-authored voxel list, `(coord: (q: 1, r: 0), level: 2)` each, rotated to the facing |
+
+  **Vertical and horizontal count equally.** A radius-3 sphere reaches three hexes out
+  and three levels up or down, so it looks slightly squashed on screen. That is
+  deliberate: gameplay is not allowed to know how tall a voxel is drawn, so there is no
+  other honest answer.
+
+  `Line`, `Cone` and `Path` point somewhere, so a cast using one has to name a facing;
+  the other four look the same in every direction. `Line` and `Cone` never include the
+  caster's own voxel.
+
+  Extents are capped at **16**, a `Path` at **64 voxels**, and cone spread at **3** (a
+  full disc). That is a guard rail, not balance: a resolved volume is a real list of
+  voxels, so a radius typed with an extra digit is tens of millions of them. A file that
+  names one fails to load with the spell and the field in the message. `Column.height`,
+  `Line.length` and `Cone.length` also have a *minimum* of 1, since a shape with no
+  extent is a spell that does nothing.
+
+  **`Line.width` is capped at 1**, lower than the rest, and that one is provisional. The
+  spine starts a hex ahead of the caster, so a width-2 line's near end rounds back past
+  them and covers every neighbour — including the hex directly behind. A line that burns
+  the ally behind you is not what the word means, and choosing between subtracting that
+  rear arc and renaming the shape is a design call the ticket that first wants a wide
+  line should make. Width 1 stops exactly at the caster's own voxel, which is already
+  excluded, so content is held there meanwhile.
 - **`effects`** is a **fixed list** of what a spell can do — you cannot invent new ones
   without a programmer, which is deliberate:
 
