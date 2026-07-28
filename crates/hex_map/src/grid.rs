@@ -193,14 +193,40 @@ fn generate_world(
             commands.insert_resource(TerrainReady);
         }
         crate::settings::ProceduralSettings::V3(v3) => {
-            let reason = match procedural_v3::ensure_recipe_available(v3) {
-                Ok(()) => "procedural V3 recipe has no generation runner".to_owned(),
-                Err(error) => error.to_string(),
+            let generated = match procedural_v3::build(
+                settings.grid_radius,
+                settings.level_height,
+                v3,
+                seed.0,
+                &palette,
+                &|substance| table.is_solid(substance),
+            ) {
+                Ok(generated) => generated,
+                Err(error) => {
+                    error!("cannot build procedural V3 terrain: {error}");
+                    commands.insert_resource(GameplaySetupFailure::new(format!(
+                        "The selected procedural terrain cannot be built: {error}."
+                    )));
+                    return;
+                }
             };
-            error!("cannot build procedural V3 terrain: {reason}");
-            commands.insert_resource(GameplaySetupFailure::new(format!(
-                "The selected procedural terrain cannot be built: {reason}."
-            )));
+            info!(
+                "generated procedural V3 map seed={} candidate={:?} fingerprint={} in {}us",
+                generated.report.seed,
+                generated.report.selected_candidate,
+                generated.report.map_fingerprint,
+                generated.report.elapsed_micros
+            );
+            commands.insert_resource(generated.map);
+            commands.insert_resource(generated.anchors);
+            commands.insert_resource(generated.special_regions);
+            commands.insert_resource(generated.interiors);
+            commands.insert_resource(generated.blockers);
+            commands.insert_resource(generated.biome_regions);
+            commands.insert_resource(generated.view_hint);
+            commands.insert_resource(generated.presentation);
+            commands.insert_resource(generated.report);
+            commands.insert_resource(TerrainReady);
         }
     }
 }

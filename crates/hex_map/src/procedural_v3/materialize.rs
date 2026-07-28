@@ -63,6 +63,7 @@ impl MapPresentationProjection {
     }
 
     /// Iterates exact liquid voxels in deterministic [`TilePos`] order.
+    #[cfg(test)]
     pub(crate) fn iter_liquids(
         &self,
     ) -> impl ExactSizeIterator<Item = (&TilePos, &MaterializedLiquidVoxel)> {
@@ -71,6 +72,7 @@ impl MapPresentationProjection {
 
     /// Returns the presentation descriptor for one exact liquid voxel.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn liquid_at(&self, position: TilePos) -> Option<&MaterializedLiquidVoxel> {
         self.liquids.get(&position)
     }

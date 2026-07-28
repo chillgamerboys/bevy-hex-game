@@ -5,17 +5,21 @@
 //! setup explicitly rather than publishing an empty or partially validated world.
 
 use std::fmt;
+use std::time::Instant;
 
+use hex_core::{
+    BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
+    TraversalBlockers,
+};
+
+use crate::procedural::{GenerationReport, TacticalMetrics};
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
+use crate::terrain::TerrainPalette;
+use crate::voxel::VoxelMap;
+use materialize::{MaterializationError, MaterializedV3World};
+use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the encoder is consumed as V3 plan and materialization layers land"
-    )
-)]
 mod fingerprint;
 #[expect(
     dead_code,
@@ -29,13 +33,6 @@ pub(crate) use layout::HexSide;
 )]
 mod liquid;
 pub(crate) use liquid::LiquidFlowState;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "materialization is consumed once the first V3 recipe is runnable"
-    )
-)]
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 #[cfg_attr(
@@ -60,6 +57,7 @@ mod selection;
 )]
 mod volume;
 pub(crate) use volume::FillMaterialRole;
+mod waterfall;
 #[expect(
     dead_code,
     reason = "the complete semantic plan is consumed by the V3 selection runner"
@@ -87,6 +85,8 @@ pub(crate) enum V3GenerationError {
     InvalidFallback(Vec<WorldValidationIssue>),
     /// A deterministic fingerprint could not encode a semantic value.
     Fingerprint(String),
+    /// A validated semantic plan could not be materialized atomically.
+    Materialization(MaterializationError),
 }
 
 impl fmt::Display for V3GenerationError {
@@ -129,6 +129,9 @@ impl fmt::Display for V3GenerationError {
             Self::Fingerprint(reason) => {
                 write!(formatter, "procedural V3 fingerprint failed: {reason}")
             }
+            Self::Materialization(error) => {
+                write!(formatter, "procedural V3 materialization failed: {error}")
+            }
         }
     }
 }
@@ -139,6 +142,7 @@ impl std::error::Error for V3GenerationError {
             Self::FatalCandidateConstruction { source, .. }
             | Self::FatalCandidateRepair { source, .. }
             | Self::FatalFallbackConstruction(source) => Some(source),
+            Self::Materialization(error) => Some(error),
             Self::RecipeUnavailable(_)
             | Self::RecipeContract(_)
             | Self::InvalidFallback(_)
@@ -151,14 +155,219 @@ impl std::error::Error for V3GenerationError {
 ///
 /// Returning an explicit error is part of the foundation contract: construction
 /// never fabricates an empty semantic plan for an unsupported layout or recipe.
+#[cfg(test)]
 pub(crate) fn ensure_recipe_available(
     settings: &ProceduralV3Settings,
 ) -> Result<(), V3GenerationError> {
-    let name = match &settings.layout {
-        V3LayoutSettings::Single(patch) => recipe_name(&patch.recipe),
-        V3LayoutSettings::Ring7(_) => "Ring7",
+    match &settings.layout {
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
+        {
+            Ok(())
+        }
+        V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
+            &patch.recipe,
+        ))),
+        V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+    }
+}
+
+/// Fully materialized runtime publication for one admitted V3 world.
+#[derive(Debug)]
+pub(crate) struct ProceduralBuild {
+    pub(crate) map: VoxelMap,
+    pub(crate) anchors: MapAnchors,
+    pub(crate) special_regions: SpecialMovementRegions,
+    pub(crate) interiors: InteriorRegions,
+    pub(crate) blockers: TraversalBlockers,
+    pub(crate) biome_regions: BiomeRegions,
+    pub(crate) view_hint: MapViewHint,
+    pub(crate) presentation: MapPresentationProjection,
+    pub(crate) report: GenerationReport,
+}
+
+/// Selects, validates, materializes, and reports one complete V3 world.
+pub(crate) fn build(
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+) -> Result<ProceduralBuild, V3GenerationError> {
+    let started = Instant::now();
+    let selection = match &settings.layout {
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
+        {
+            waterfall::generate(grid_radius, level_height, settings, seed)?
+        }
+        V3LayoutSettings::Single(patch) => {
+            return Err(V3GenerationError::RecipeUnavailable(recipe_name(
+                &patch.recipe,
+            )));
+        }
+        V3LayoutSettings::Ring7(_) => {
+            return Err(V3GenerationError::RecipeUnavailable("Ring7"));
+        }
     };
-    Err(V3GenerationError::RecipeUnavailable(name))
+    finish_waterfall_build(
+        selection,
+        grid_radius,
+        level_height,
+        settings,
+        seed,
+        palette,
+        is_solid,
+        started,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the V3 report boundary explicitly records every generation input"
+)]
+fn finish_waterfall_build(
+    selection: ValidatedWorldSelection<waterfall::WaterfallMetrics>,
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    seed: u64,
+    palette: &TerrainPalette,
+    is_solid: &dyn Fn(SubstanceId) -> bool,
+    started: Instant,
+) -> Result<ProceduralBuild, V3GenerationError> {
+    let ValidatedWorldSelection {
+        validated,
+        metrics,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_rounds,
+        used_fallback,
+        notes,
+    } = selection;
+    let materialized = materialize::materialize(validated, palette, is_solid)
+        .map_err(V3GenerationError::Materialization)?;
+    let MaterializedV3World {
+        map,
+        anchors,
+        special_regions,
+        interiors,
+        blockers,
+        biome_regions,
+        view_hint,
+        semantic_fingerprint,
+        materialized_fingerprint,
+        presentation,
+    } = materialized;
+    let repair_actions = repair_rounds
+        .iter()
+        .flat_map(|round| {
+            round.actions.iter().map(move |action| {
+                format!("round {} {}: {}", round.index, action.code, action.detail)
+            })
+        })
+        .collect();
+    let repair_round_count = u8::try_from(repair_rounds.len()).unwrap_or(u8::MAX);
+    let elapsed_micros = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+    let settings_fingerprint =
+        fingerprint::settings_fingerprint(grid_radius, level_height, settings)
+            .map_err(V3GenerationError::Fingerprint)?;
+    let report = GenerationReport {
+        generator_version: 3,
+        seed,
+        selected_candidate,
+        candidates_evaluated,
+        valid_candidates,
+        repair_rounds: repair_round_count,
+        repair_actions,
+        used_fallback,
+        settings_fingerprint,
+        semantic_plan_fingerprint: Some(semantic_fingerprint),
+        map_fingerprint: materialized_fingerprint,
+        metrics: waterfall_report_metrics(&metrics),
+        elapsed_micros,
+        notes: candidate_notes(notes),
+    };
+
+    Ok(ProceduralBuild {
+        map,
+        anchors,
+        special_regions,
+        interiors,
+        blockers,
+        biome_regions,
+        view_hint,
+        presentation,
+        report,
+    })
+}
+
+fn waterfall_report_metrics(metrics: &waterfall::WaterfallMetrics) -> TacticalMetrics {
+    let relief = i32::try_from(metrics.fall_height).unwrap_or(i32::MAX);
+    let environment_signature_percent = if metrics.ordinary_surfaces == 0 {
+        0
+    } else {
+        metrics
+            .raised_terrain
+            .saturating_mul(100)
+            .checked_div(metrics.ordinary_surfaces)
+            .unwrap_or_default()
+    };
+    TacticalMetrics {
+        relief,
+        barrier_cells: metrics.water_nodes,
+        critical_route_steps: metrics.bypass_steps,
+        spawn_height_difference: relief,
+        bank_high_ground_difference: relief,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent,
+    }
+}
+
+fn candidate_notes(notes: Vec<CandidateNote>) -> Vec<String> {
+    let mut reported = Vec::new();
+    for note in notes {
+        match note {
+            CandidateNote::ConstructionRejected { candidate, issues } => {
+                append_issues(&mut reported, candidate, "construction", None, issues);
+            }
+            CandidateNote::ValidationRejected { candidate, issues } => {
+                append_issues(&mut reported, candidate, "validation", None, issues);
+            }
+            CandidateNote::RepairRejected {
+                candidate,
+                round,
+                issues,
+            } => {
+                append_issues(&mut reported, candidate, "repair", Some(round), issues);
+            }
+            CandidateNote::FallbackSelected => {
+                reported.push("canonical fallback selected".to_owned());
+            }
+        }
+    }
+    reported
+}
+
+fn append_issues(
+    reported: &mut Vec<String>,
+    candidate: u8,
+    stage: &str,
+    round: Option<u8>,
+    issues: Vec<WorldValidationIssue>,
+) {
+    let round = round.map_or_else(String::new, |round| format!(" round {round}"));
+    for issue in issues {
+        reported.push(format!(
+            "candidate {candidate} {stage}{round} {:?}: {}",
+            issue.code, issue.detail
+        ));
+    }
 }
 
 const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {

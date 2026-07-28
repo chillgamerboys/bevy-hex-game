@@ -53,12 +53,14 @@ pub(crate) struct WaterfallMetrics {
     pub(crate) fall_nodes: u32,
     pub(crate) fall_height: u32,
     pub(crate) ordinary_surfaces: u32,
+    pub(crate) reachable_elevation_levels: u32,
     pub(crate) bypass_steps: u32,
     pub(crate) raised_terrain: u32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct WaterfallRecipe {
+    level_height: f32,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -66,12 +68,27 @@ struct WaterfallRecipe {
 /// Runs the common eight-candidate V3 selector for one Waterfall world.
 pub(crate) fn generate(
     grid_radius: u32,
+    level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
 ) -> Result<ValidatedWorldSelection<WaterfallMetrics>, V3GenerationError> {
+    if !level_height.is_finite() || level_height <= 0.0 {
+        return Err(V3GenerationError::RecipeContract(
+            "Waterfall level height must be positive and finite".to_owned(),
+        ));
+    }
     validate_recipe_settings(settings)?;
     validate_footprint_capacity(grid_radius, settings)?;
-    run_recipe(&WaterfallRecipe::default(), settings, grid_radius, seed)
+    run_recipe(
+        &WaterfallRecipe {
+            level_height,
+            #[cfg(test)]
+            reject_candidates: false,
+        },
+        settings,
+        grid_radius,
+        seed,
+    )
 }
 
 impl V3Recipe for WaterfallRecipe {
@@ -97,7 +114,8 @@ impl V3Recipe for WaterfallRecipe {
         })?;
         let stream = SeedStreams::new(context.seed, context.candidate, PatchId(0).0)
             .stage("waterfall.relief");
-        construct_plan(layout, Some(stream)).map_err(CandidateAttemptError::Rejected)
+        construct_plan(layout, Some(stream), self.level_height)
+            .map_err(CandidateAttemptError::Rejected)
     }
 
     fn validate(
@@ -137,7 +155,7 @@ impl V3Recipe for WaterfallRecipe {
         validate_recipe_settings(settings)?;
         let layout = resolve_layout(context.grid_radius, settings)
             .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
-        construct_plan(layout, None).map_err(|issues| {
+        construct_plan(layout, None, self.level_height).map_err(|issues| {
             V3GenerationError::RecipeContract(
                 issues
                     .into_iter()
@@ -210,6 +228,7 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
 fn construct_plan(
     layout: ResolvedLayoutPlan,
     relief: Option<SeedStream<'_>>,
+    level_height: f32,
 ) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
     let patch = layout
         .patches
@@ -283,6 +302,7 @@ fn construct_plan(
         .copied()
         .map(|surface| (surface, biome_region))
         .collect();
+    let view_hint = waterfall_view_hint(layout.grid_radius, level_height)?;
 
     Ok(GeneratedWorldPlan {
         layout,
@@ -303,8 +323,25 @@ fn construct_plan(
         biome_regions,
         interiors: InteriorPlan::default(),
         anchors,
-        view_hint: MapViewHint::new((0.0, 42.0, 38.0), (0.0, 8.0, 0.0)),
+        view_hint,
     })
+}
+
+fn waterfall_view_hint(
+    grid_radius: u32,
+    level_height: f32,
+) -> Result<MapViewHint, Vec<WorldValidationIssue>> {
+    let radius = u16::try_from(grid_radius).map_err(|error| {
+        vec![recipe_issue(format!(
+            "Waterfall radius is too large: {error}"
+        ))]
+    })?;
+    let focus_height = 20.0 * level_height;
+    let frame = (f32::from(radius) * 3.5).max(8.0 * level_height * 3.0);
+    Ok(MapViewHint::new(
+        (0.0, focus_height + frame, frame),
+        (0.0, focus_height, 0.0),
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -616,6 +653,13 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
         fall_nodes: count_u32(fall_nodes.len()),
         fall_height,
         ordinary_surfaces: count_u32(ordinary_surfaces),
+        reachable_elevation_levels: count_u32(
+            ordinary_by_coord
+                .values()
+                .map(|position| position.level)
+                .collect::<BTreeSet<_>>()
+                .len(),
+        ),
         bypass_steps: route_length.unwrap_or_default(),
         raised_terrain: count_u32(raised_terrain),
     };
@@ -944,7 +988,7 @@ mod tests {
         for radius in [12, 20, 40] {
             for seed in [0, 1, 808, 4_294_967_311] {
                 let selected =
-                    generate(radius, &settings(), seed).expect("Waterfall should generate");
+                    generate(radius, 0.4, &settings(), seed).expect("Waterfall should generate");
                 assert!(!selected.used_fallback);
                 assert_eq!(selected.metrics.fall_nodes, 3);
                 assert_eq!(selected.metrics.fall_height, 8);
@@ -956,7 +1000,7 @@ mod tests {
 
     #[test]
     fn authored_flow_contains_every_required_stage_and_exact_three_wide_fall() {
-        let selected = generate(12, &settings(), 77).expect("Waterfall should generate");
+        let selected = generate(12, 0.4, &settings(), 77).expect("Waterfall should generate");
         let metrics = &selected.metrics;
 
         assert!(metrics.calm_nodes >= 9);
@@ -969,7 +1013,7 @@ mod tests {
 
     #[test]
     fn bypass_is_two_wide_climbable_and_connects_every_ordinary_surface() {
-        let selected = generate(12, &settings(), 91).expect("Waterfall should generate");
+        let selected = generate(12, 0.4, &settings(), 91).expect("Waterfall should generate");
         let plan = &selected.validated.plan;
         let bypass = bypass_tiles(12, &plan.layout.footprint).expect("fixed bypass");
 
@@ -1015,7 +1059,7 @@ mod tests {
 
     #[test]
     fn every_water_column_has_a_non_standable_gravel_bed() {
-        let selected = generate(12, &settings(), 22).expect("Waterfall should generate");
+        let selected = generate(12, 0.4, &settings(), 22).expect("Waterfall should generate");
         let plan = &selected.validated.plan;
         let body = plan
             .liquids
@@ -1046,9 +1090,9 @@ mod tests {
 
     #[test]
     fn named_relief_is_deterministic_and_seed_sensitive() {
-        let first = generate(12, &settings(), 12).expect("Waterfall should generate");
-        let repeated = generate(12, &settings(), 12).expect("Waterfall should repeat");
-        let other = generate(12, &settings(), 13).expect("other seed should generate");
+        let first = generate(12, 0.4, &settings(), 12).expect("Waterfall should generate");
+        let repeated = generate(12, 0.4, &settings(), 12).expect("Waterfall should repeat");
+        let other = generate(12, 0.4, &settings(), 13).expect("other seed should generate");
 
         assert_eq!(
             first.validated.semantic_fingerprint,
@@ -1065,9 +1109,30 @@ mod tests {
     }
 
     #[test]
+    fn generated_view_uses_world_space_level_height_and_rejects_invalid_scale() {
+        let compact = generate(12, 0.4, &settings(), 12).expect("Waterfall should generate");
+        let tall = generate(12, 0.8, &settings(), 12).expect("Waterfall should generate");
+        assert_ne!(
+            compact.validated.plan.view_hint,
+            tall.validated.plan.view_hint
+        );
+        assert_eq!(
+            compact.validated.plan.view_hint.focus.1 * 2.0,
+            tall.validated.plan.view_hint.focus.1
+        );
+        for invalid in [0.0, -0.4, f32::NAN, f32::INFINITY] {
+            assert!(matches!(
+                generate(12, invalid, &settings(), 12),
+                Err(V3GenerationError::RecipeContract(_))
+            ));
+        }
+    }
+
+    #[test]
     fn forced_candidate_failure_uses_the_independent_canonical_fallback() {
         let selected = run_recipe(
             &WaterfallRecipe {
+                level_height: 0.4,
                 reject_candidates: true,
             },
             &settings(),
@@ -1092,7 +1157,7 @@ mod tests {
         patch.recipe = V3RecipeSettings::Forest(crate::settings::V3ForestSettings);
 
         assert!(matches!(
-            generate(12, &wrong, 1),
+            generate(12, 0.4, &wrong, 1),
             Err(V3GenerationError::RecipeUnavailable("Forest"))
         ));
     }
@@ -1106,7 +1171,8 @@ mod tests {
         patch.mask =
             PatchMaskSettings::Explicit((-12..=12).map(|x| CubeCoord { x, y: 0, z: -x }).collect());
 
-        let error = generate(12, &narrow, 1).expect_err("a one-wide mask cannot fit Waterfall");
+        let error =
+            generate(12, 0.4, &narrow, 1).expect_err("a one-wide mask cannot fit Waterfall");
         assert!(matches!(error, V3GenerationError::RecipeContract(_)));
         assert!(
             error
