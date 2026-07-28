@@ -54,6 +54,7 @@ mod seed;
     )
 )]
 mod selection;
+mod traversal;
 #[expect(
     dead_code,
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"

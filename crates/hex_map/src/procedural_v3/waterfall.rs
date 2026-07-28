@@ -4,11 +4,9 @@
 //! around one three-wide watercourse and a separate two-wide ordinary-walker bypass.
 //! Rendering and ECS publication remain downstream of this module.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{
-    HexCoord, MapViewHint, SpecialMovementRegion, TilePos, TraversalEndpoint, TraversalProfile,
-};
+use hex_core::{HexCoord, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
@@ -17,6 +15,7 @@ use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
 };
+use super::traversal::OrdinaryGraph;
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
@@ -1089,7 +1088,7 @@ fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMet
                 Vec::new()
             }
         };
-    let ordinary = OrdinaryGraph::from_plan(plan);
+    let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
     validate_bypass(
         plan,
         &ordinary,
@@ -1700,11 +1699,11 @@ fn validate_secondary_apron(
             )));
             continue;
         }
-        if !ordinary.neighbors.get(expected).is_some_and(|neighbors| {
-            neighbors
-                .iter()
-                .any(|neighbor| apron_set.contains(neighbor) || neighbor.level == expected.level)
-        }) {
+        if !ordinary
+            .neighbors(*expected)
+            .iter()
+            .any(|neighbor| apron_set.contains(neighbor) || neighbor.level == expected.level)
+        {
             issues.push(recipe_issue(format!(
                 "Waterfall secondary-slope apron tile {expected:?} is not integrated into the terrace"
             )));
@@ -1738,130 +1737,6 @@ fn validate_route_redundancy(
                 "removing the Waterfall {name} bypass disconnects the alternate high/low route"
             )));
         }
-    }
-}
-
-#[derive(Debug)]
-struct OrdinaryGraph {
-    positions_by_coord: BTreeMap<HexCoord, TilePos>,
-    neighbors: BTreeMap<TilePos, Vec<TilePos>>,
-}
-
-impl OrdinaryGraph {
-    fn from_plan(plan: &GeneratedWorldPlan) -> Self {
-        let positions_by_coord: BTreeMap<_, _> = plan
-            .volume
-            .surfaces
-            .iter()
-            .filter_map(|(position, metadata)| {
-                (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
-            })
-            .collect();
-        let endpoints: BTreeMap<_, _> = positions_by_coord
-            .values()
-            .copied()
-            .map(|position| {
-                let headroom = plan.volume.surface_headroom(position).unwrap_or_default();
-                (position, TraversalEndpoint::new(position, true, headroom))
-            })
-            .collect();
-        let mut neighbors: BTreeMap<_, Vec<_>> = endpoints
-            .keys()
-            .copied()
-            .map(|position| (position, Vec::new()))
-            .collect();
-
-        for (coord, from) in &positions_by_coord {
-            for neighbor_coord in coord.neighbors() {
-                if neighbor_coord <= *coord {
-                    continue;
-                }
-                let Some(to) = positions_by_coord.get(&neighbor_coord).copied() else {
-                    continue;
-                };
-                let Some(from_endpoint) = endpoints.get(from).copied() else {
-                    continue;
-                };
-                let Some(to_endpoint) = endpoints.get(&to).copied() else {
-                    continue;
-                };
-                if TraversalProfile::WALKER.admits_transition(from_endpoint, to_endpoint)
-                    && TraversalProfile::WALKER.admits_transition(to_endpoint, from_endpoint)
-                {
-                    if let Some(from_neighbors) = neighbors.get_mut(from) {
-                        from_neighbors.push(to);
-                    }
-                    if let Some(to_neighbors) = neighbors.get_mut(&to) {
-                        to_neighbors.push(*from);
-                    }
-                }
-            }
-        }
-        for adjacent in neighbors.values_mut() {
-            adjacent.sort_unstable();
-        }
-        Self {
-            positions_by_coord,
-            neighbors,
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.positions_by_coord.len()
-    }
-
-    fn contains(&self, position: TilePos) -> bool {
-        self.neighbors.contains_key(&position)
-    }
-
-    fn positions(&self) -> impl Iterator<Item = TilePos> + '_ {
-        self.positions_by_coord.values().copied()
-    }
-
-    fn admits(&self, from: TilePos, to: TilePos) -> bool {
-        self.neighbors
-            .get(&from)
-            .is_some_and(|neighbors| neighbors.binary_search(&to).is_ok())
-    }
-
-    fn distances_from(&self, start: TilePos) -> BTreeMap<TilePos, u32> {
-        let mut distances = BTreeMap::from([(start, 0_u32)]);
-        let mut frontier = VecDeque::from([start]);
-        while let Some(position) = frontier.pop_front() {
-            let Some(distance) = distances.get(&position).copied() else {
-                continue;
-            };
-            let Some(neighbors) = self.neighbors.get(&position) else {
-                continue;
-            };
-            for neighbor in neighbors {
-                if distances.contains_key(neighbor) {
-                    continue;
-                }
-                distances.insert(*neighbor, distance.saturating_add(1));
-                frontier.push_back(*neighbor);
-            }
-        }
-        distances
-    }
-
-    fn reachable_avoiding(&self, start: TilePos, blocked: &BTreeSet<TilePos>) -> BTreeSet<TilePos> {
-        if blocked.contains(&start) {
-            return BTreeSet::new();
-        }
-        let mut reachable = BTreeSet::from([start]);
-        let mut frontier = VecDeque::from([start]);
-        while let Some(position) = frontier.pop_front() {
-            let Some(neighbors) = self.neighbors.get(&position) else {
-                continue;
-            };
-            for neighbor in neighbors {
-                if !blocked.contains(neighbor) && reachable.insert(*neighbor) {
-                    frontier.push_back(*neighbor);
-                }
-            }
-        }
-        reachable
     }
 }
 
@@ -2068,7 +1943,7 @@ mod tests {
         let bypass = bypass_tiles(12, &plan.layout.footprint).expect("fixed bypass");
         let secondary =
             secondary_bypass_tiles(12, &plan.layout.footprint).expect("secondary bypass");
-        let ordinary = OrdinaryGraph::from_plan(plan);
+        let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
 
         for (route, expected_length) in [
             (&bypass, inclusive_span_len(BYPASS_HIGH_X, BYPASS_LOW_X)),
