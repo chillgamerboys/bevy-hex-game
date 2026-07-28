@@ -7,7 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use bevy::window::{PresentMode, WindowCloseRequested, WindowResizeConstraints, WindowResolution};
+use bevy::window::{
+    PresentMode, PrimaryWindow, WindowCloseRequested, WindowResizeConstraints, WindowResolution,
+};
 use bevy_egui::EguiPlugin;
 use hex_assets::{
     ConnectivityPolicy, LocalVoxelCoord, ObjectAssetId, ObjectCategory, SwatchId,
@@ -34,6 +36,7 @@ use crate::workshop::WorkshopDraft;
 
 const RECOVERY_IDLE_SECONDS: f64 = 3.0;
 const RECOVERY_MAX_INTERVAL_SECONDS: f64 = 30.0;
+const POINTER_STROKE_DRAG_THRESHOLD: f32 = 4.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum OpenDocument {
@@ -214,6 +217,27 @@ impl WorkshopRuntime {
 struct PointerStroke {
     active: bool,
     last_cell: Option<LocalVoxelCoord>,
+    last_cursor_position: Option<Vec2>,
+}
+
+impl PointerStroke {
+    fn accepts_cell(&mut self, cell: LocalVoxelCoord, cursor_position: Option<Vec2>) -> bool {
+        if self.last_cell == Some(cell) {
+            return false;
+        }
+        if self.last_cell.is_some() {
+            let (Some(previous), Some(current)) = (self.last_cursor_position, cursor_position)
+            else {
+                return false;
+            };
+            if previous.distance_squared(current) < POINTER_STROKE_DRAG_THRESHOLD.powi(2) {
+                return false;
+            }
+        }
+        self.last_cell = Some(cell);
+        self.last_cursor_position = cursor_position;
+        true
+    }
 }
 
 #[derive(Resource)]
@@ -1292,12 +1316,14 @@ fn handle_pointer_editing(
     keys: Res<ButtonInput<KeyCode>>,
     input_enabled: Res<ViewportInputEnabled>,
     hovered: Res<HoveredFaceTarget>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut stroke: ResMut<PointerStroke>,
     mut runtime: ResMut<WorkshopRuntime>,
 ) {
     if stroke.active && buttons.just_released(MouseButton::Left) {
         stroke.active = false;
         stroke.last_cell = None;
+        stroke.last_cursor_position = None;
         let result = runtime.draft_mut().and_then(|draft| {
             draft
                 .commit_object_transaction()
@@ -1337,6 +1363,7 @@ fn handle_pointer_editing(
                     Ok(()) => {
                         stroke.active = true;
                         stroke.last_cell = None;
+                        stroke.last_cursor_position = None;
                     }
                     Err(error) => {
                         runtime.set_status(WorkshopStatusKind::Error, error);
@@ -1387,10 +1414,10 @@ fn handle_pointer_editing(
     let Some(cell) = editing_cell(tool, target) else {
         return;
     };
-    if stroke.last_cell == Some(cell) {
+    let cursor_position = windows.single().ok().and_then(Window::cursor_position);
+    if !stroke.accepts_cell(cell, cursor_position) {
         return;
     }
-    stroke.last_cell = Some(cell);
     let Some(editor) = runtime.draft.as_ref().map(WorkshopDraft::editor) else {
         return;
     };
@@ -2070,6 +2097,25 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn stationary_pointer_cannot_cascade_across_new_hover_targets() {
+        let mut stroke = PointerStroke::default();
+        let cursor = Some(Vec2::new(400.0, 300.0));
+
+        assert!(stroke.accepts_cell(LocalVoxelCoord::new(0, 0, 0), cursor));
+        assert!(!stroke.accepts_cell(LocalVoxelCoord::new(0, 0, 1), cursor));
+        assert!(!stroke.accepts_cell(LocalVoxelCoord::new(0, 0, 1), Some(Vec2::new(403.0, 300.0))));
+        assert!(stroke.accepts_cell(LocalVoxelCoord::new(0, 0, 1), Some(Vec2::new(404.0, 300.0))));
+    }
+
+    #[test]
+    fn pointer_stroke_without_cursor_data_places_only_its_first_cell() {
+        let mut stroke = PointerStroke::default();
+
+        assert!(stroke.accepts_cell(LocalVoxelCoord::new(0, 0, 0), None));
+        assert!(!stroke.accepts_cell(LocalVoxelCoord::new(1, 0, 0), None));
     }
 
     fn boundary_stroke_editor() -> EditorModel {
