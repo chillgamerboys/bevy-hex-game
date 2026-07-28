@@ -5,8 +5,8 @@
 //! viewport content is temporarily replaced with each validated review
 //! snapshot.
 
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bevy::camera::{ClearColorConfig, RenderTarget};
@@ -20,6 +20,7 @@ use hex_assets::{
 };
 use image::RgbaImage;
 
+use crate::project::{current_project_revisions, ProjectRevisionSet};
 use crate::review::{
     captured_rgba, publish_review_pack, ReviewPresentation, ReviewPublishOutcome, ReviewReport,
     REVIEW_CLEAR_RGBA, REVIEW_FRAME_COUNT, REVIEW_FRAME_HEIGHT, REVIEW_FRAME_SPECS,
@@ -58,6 +59,8 @@ impl Plugin for ReviewCapturePlugin {
 pub struct ReviewCaptureRequest {
     /// Repository root under which the untracked review pack is published.
     pub repository_root: PathBuf,
+    /// Exact tracked art-source revisions from which this review was prepared.
+    pub expected_revisions: ProjectRevisionSet,
     /// Deterministic semantic report for the exact saved asset snapshot.
     pub report: ReviewReport,
     /// Ordered authored and diagnostic viewport presentations.
@@ -68,11 +71,13 @@ impl ReviewCaptureRequest {
     /// Creates and validates a complete capture request.
     pub fn new(
         repository_root: PathBuf,
+        expected_revisions: ProjectRevisionSet,
         report: ReviewReport,
         contents: Vec<ViewportContent>,
     ) -> Result<Self, String> {
         let request = Self {
             repository_root,
+            expected_revisions,
             report,
             contents,
         };
@@ -82,6 +87,15 @@ impl ReviewCaptureRequest {
 
     /// Validates renderer-facing invariants before any viewport state changes.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_payload()?;
+        verify_project_revisions(
+            &self.repository_root,
+            &self.expected_revisions,
+            RevisionCheckPoint::RequestCreation,
+        )
+    }
+
+    fn validate_payload(&self) -> Result<(), String> {
         if self.repository_root.as_os_str().is_empty() {
             return Err("review repository root cannot be empty".to_owned());
         }
@@ -100,6 +114,86 @@ impl ReviewCaptureRequest {
         validate_review_contents(&self.contents)?;
         validate_report_snapshot(&self.report, &self.contents)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevisionCheckPoint {
+    RequestCreation,
+    CaptureStart,
+    Publication,
+}
+
+fn verify_project_revisions(
+    repository_root: &Path,
+    expected: &ProjectRevisionSet,
+    checkpoint: RevisionCheckPoint,
+) -> Result<(), String> {
+    let current = current_project_revisions(repository_root).map_err(|error| {
+        let action = match checkpoint {
+            RevisionCheckPoint::RequestCreation => "creating the review request",
+            RevisionCheckPoint::CaptureStart => "starting the review capture",
+            RevisionCheckPoint::Publication => "publishing the review capture",
+        };
+        format!(
+            "could not verify tracked art sources while {action}: {error}; \
+             resolve the filesystem error, reload the project, and retry the review export"
+        )
+    })?;
+    if &current == expected {
+        return Ok(());
+    }
+
+    let changes = expected
+        .files
+        .keys()
+        .chain(current.files.keys())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|path| {
+            let change = match (expected.files.get(path), current.files.get(path)) {
+                (None, Some(_)) => "added",
+                (Some(_), None) => "removed",
+                (Some(expected), Some(current)) if expected != current => "modified",
+                _ => return None,
+            };
+            Some(format!("{path} ({change})"))
+        })
+        .collect::<Vec<_>>();
+    let examples = changes
+        .iter()
+        .take(5)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let remainder = changes.len().saturating_sub(5);
+    let suffix = if remainder == 0 {
+        String::new()
+    } else {
+        format!(", and {remainder} more")
+    };
+    let timing = match checkpoint {
+        RevisionCheckPoint::RequestCreation => "after the saved asset snapshot was prepared",
+        RevisionCheckPoint::CaptureStart => "before the review renderer started",
+        RevisionCheckPoint::Publication => "while the review capture was running",
+    };
+    Err(format!(
+        "tracked art sources changed {timing}: {examples}{suffix}; \
+         no review pack was published, so reload the project and retry the review export"
+    ))
+}
+
+fn publish_review_pack_if_sources_current(
+    repository_root: &Path,
+    expected_revisions: &ProjectRevisionSet,
+    report: &ReviewReport,
+    frames: &[RgbaImage],
+) -> Result<ReviewPublishOutcome, String> {
+    verify_project_revisions(
+        repository_root,
+        expected_revisions,
+        RevisionCheckPoint::Publication,
+    )?;
+    publish_review_pack(repository_root, report, frames).map_err(|error| error.to_string())
 }
 
 /// Completion result for one accepted capture request.
@@ -151,6 +245,7 @@ struct ReviewCaptureState {
 struct ActiveCapture {
     token: u64,
     repository_root: PathBuf,
+    expected_revisions: ProjectRevisionSet,
     report: ReviewReport,
     contents: Vec<ViewportContent>,
     frames: Vec<RgbaImage>,
@@ -335,11 +430,16 @@ fn drive_review_capture(
                             }
                         } else {
                             let repository_root = active.repository_root.clone();
+                            let expected_revisions = active.expected_revisions.clone();
                             let report = active.report.clone();
                             let frames = std::mem::take(&mut active.frames);
                             let task = AsyncComputeTaskPool::get().spawn(async move {
-                                publish_review_pack(&repository_root, &report, &frames)
-                                    .map_err(|error| error.to_string())
+                                publish_review_pack_if_sources_current(
+                                    &repository_root,
+                                    &expected_revisions,
+                                    &report,
+                                    &frames,
+                                )
                             });
                             active.phase = CapturePhase::Publishing { task };
                             *progress = ReviewCaptureProgress::Publishing;
@@ -404,7 +504,12 @@ fn begin_capture(
     hovered: &mut HoveredFaceTarget,
     images: &mut Assets<Image>,
 ) -> Result<(), String> {
-    request.validate()?;
+    request.validate_payload()?;
+    verify_project_revisions(
+        &request.repository_root,
+        &request.expected_revisions,
+        RevisionCheckPoint::CaptureStart,
+    )?;
     let first_content = request
         .contents
         .first()
@@ -460,6 +565,7 @@ fn begin_capture(
     state.active = Some(ActiveCapture {
         token,
         repository_root: request.repository_root,
+        expected_revisions: request.expected_revisions,
         report: request.report,
         contents: request.contents,
         frames: Vec::with_capacity(REVIEW_FRAME_COUNT),
@@ -1068,7 +1174,12 @@ mod tests {
     #[test]
     fn validated_request_accepts_exact_ordered_presentations() {
         let (root, report, contents, _style_id) = fixture();
-        let request = ReviewCaptureRequest::new(root.clone(), report, contents);
+        let request = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        );
         assert!(request.is_ok());
         fs::remove_dir_all(root).expect("fixture repository should be removable");
     }
@@ -1077,8 +1188,13 @@ mod tests {
     fn request_rejects_wrong_frame_count_without_touching_viewport() {
         let (root, report, mut contents, _style_id) = fixture();
         drop(contents.pop());
-        let error = ReviewCaptureRequest::new(root.clone(), report, contents)
-            .expect_err("missing review frame must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        )
+        .expect_err("missing review frame must be rejected");
         assert!(error.contains("9 viewport snapshots"));
         fs::remove_dir_all(root).expect("fixture repository should be removable");
     }
@@ -1090,8 +1206,13 @@ mod tests {
             .first_mut()
             .expect("fixture should include the first frame")
             .show_grid = true;
-        let error = ReviewCaptureRequest::new(root.clone(), report.clone(), contents.clone())
-            .expect_err("authoring grid must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report.clone(),
+            contents.clone(),
+        )
+        .expect_err("authoring grid must be rejected");
         assert!(error.contains("must hide the authoring grid"));
 
         let first = contents
@@ -1099,8 +1220,13 @@ mod tests {
             .expect("fixture should include the first frame");
         first.show_grid = false;
         first.show_semantic_overlay = true;
-        let error = ReviewCaptureRequest::new(root.clone(), report, contents)
-            .expect_err("authored frame cannot carry a semantic overlay");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        )
+        .expect_err("authored frame cannot carry a semantic overlay");
         assert!(error.contains("do not match Authored"));
         fs::remove_dir_all(root).expect("fixture repository should be removable");
     }
@@ -1112,8 +1238,13 @@ mod tests {
             .first_mut()
             .expect("fixture should include the first frame");
         assert!(first.styles.remove(&style_id).is_some());
-        let error = ReviewCaptureRequest::new(root.clone(), report.clone(), contents.clone())
-            .expect_err("missing style must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report.clone(),
+            contents.clone(),
+        )
+        .expect_err("missing style must be rejected");
         assert!(error.contains("references missing style"));
 
         let (other_root, _other_report, mut valid_contents, _other_style_id) = fixture();
@@ -1126,8 +1257,13 @@ mod tests {
             content.voxels.push(duplicate.clone());
             content.voxels.sort_by(voxel_order);
         }
-        let error = ReviewCaptureRequest::new(root.clone(), report, valid_contents)
-            .expect_err("overlapping placements must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            valid_contents,
+        )
+        .expect_err("overlapping placements must be rejected");
         assert!(error.contains("overlapping voxel placements"));
         fs::remove_dir_all(root).expect("fixture repository should be removable");
         fs::remove_dir_all(other_root).expect("second fixture repository should be removable");
@@ -1141,16 +1277,26 @@ mod tests {
             .expect("fixture should include the second frame")
             .voxels
             .pop();
-        let error = ReviewCaptureRequest::new(root.clone(), report.clone(), contents)
-            .expect_err("cross-frame geometry mismatch must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report.clone(),
+            contents,
+        )
+        .expect_err("cross-frame geometry mismatch must be rejected");
         assert!(error.contains("canonical object geometry"));
 
         let (other_root, _other_report, mut contents, _other_style_id) = fixture();
         for content in &mut contents {
             content.blocker_columns.clear();
         }
-        let error = ReviewCaptureRequest::new(root.clone(), report, contents)
-            .expect_err("report-mask mismatch must be rejected");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        )
+        .expect_err("report-mask mismatch must be rejected");
         assert!(error.contains("blocker mask differs"));
         fs::remove_dir_all(root).expect("fixture repository should be removable");
         fs::remove_dir_all(other_root).expect("second fixture repository should be removable");
@@ -1168,9 +1314,60 @@ mod tests {
                 .expect("fixture should resolve its used style");
             style.color = conflicting_color;
         }
-        let error = ReviewCaptureRequest::new(root.clone(), report, contents)
-            .expect_err("rendering semantics must match the report dependencies");
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        )
+        .expect_err("rendering semantics must match the report dependencies");
         assert!(error.contains("resolved style"));
+        fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    #[test]
+    fn request_creation_rejects_a_stale_tracked_source_snapshot() {
+        let (root, report, contents, _style_id) = fixture();
+        let art_root = root.join("assets/art");
+        fs::create_dir_all(&art_root).expect("fixture art root should be created");
+        let palette_path = art_root.join("palette.ron");
+        fs::write(&palette_path, b"version-a").expect("fixture source should be written");
+        let expected =
+            current_project_revisions(&root).expect("initial tracked source revisions should scan");
+        fs::write(&palette_path, b"version-b").expect("fixture source should be modified");
+
+        let error = ReviewCaptureRequest::new(root.clone(), expected, report, contents)
+            .expect_err("a stale source snapshot must reject request creation");
+        assert!(error.contains("palette.ron (modified)"));
+        assert!(error.contains("reload the project"));
+        fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    #[test]
+    fn tracked_source_change_during_capture_blocks_publication() {
+        let (root, report, contents, _style_id) = fixture();
+        let art_root = root.join("assets/art");
+        fs::create_dir_all(&art_root).expect("fixture art root should be created");
+        let palette_path = art_root.join("palette.ron");
+        fs::write(&palette_path, b"version-a").expect("fixture source should be written");
+        let expected =
+            current_project_revisions(&root).expect("initial tracked source revisions should scan");
+        let request = ReviewCaptureRequest::new(root.clone(), expected, report, contents)
+            .expect("current source revisions should allow capture");
+
+        fs::write(&palette_path, b"version-b").expect("fixture source should change mid-capture");
+        let error = publish_review_pack_if_sources_current(
+            &root,
+            &request.expected_revisions,
+            &request.report,
+            &[],
+        )
+        .expect_err("a source change during capture must block publication");
+
+        assert!(error.contains("while the review capture was running"));
+        assert!(error.contains("palette.ron (modified)"));
+        assert!(error.contains("no review pack was published"));
+        assert!(!root.join(".context/asset-workshop/reviews").exists());
         fs::remove_dir_all(root).expect("fixture repository should be removable");
     }
 

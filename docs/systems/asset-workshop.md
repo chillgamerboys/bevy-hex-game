@@ -173,6 +173,10 @@ Place uses the outward face of an occupied voxel when one is clicked. Clicking a
 empty guide cell places on the active level. UI panels own the pointer while hovered,
 so dragging a control never edits or moves the scene behind it.
 
+Placement strokes clip cells outside the authored radius or level range and report one
+summary when the stroke ends; valid cells remain one undoable command. Any other model
+failure cancels the complete stroke and restores its starting state.
+
 ### Keyboard controls
 
 On macOS, `Command` is the command modifier; on Windows and Linux it is `Ctrl`.
@@ -300,6 +304,10 @@ publishes it with one rename, so a failure cannot expose a partial review. Expor
 the same bytes again reuses the existing directory; a different pack claiming the
 same fingerprint is reported as a collision and never overwrites it. Review output is
 derived and untracked. A saved object remains the only source of truth.
+
+Request creation, renderer startup, and publication each verify the exact tracked
+source-byte revisions used to prepare the review. A source change at any of those
+points aborts the export before publication and requires a project reload.
 
 ## Procedural follow-up
 

@@ -243,21 +243,7 @@ impl AssetProject {
     /// Captures the exact loaded byte revisions for crash-recovery conflict checks.
     #[must_use]
     pub fn revision_snapshot(&self) -> ProjectRevisionSet {
-        ProjectRevisionSet {
-            files: self
-                .loaded_sources
-                .iter()
-                .map(|(path, source)| {
-                    (
-                        normalized_relative_path(path),
-                        ByteRevision {
-                            byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
-                            fingerprint: xxh3_64(source),
-                        },
-                    )
-                })
-                .collect(),
-        }
+        revision_set_from_sources(&self.loaded_sources)
     }
 
     /// Discards the loaded project snapshot and reloads the complete art graph.
@@ -921,6 +907,35 @@ fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Proje
     Ok(sources)
 }
 
+/// Reads the exact current byte revisions below a repository's tracked art tree.
+///
+/// This intentionally shares the same source discovery as project loading and
+/// external-change detection so capture transactions cannot omit a source that
+/// either of those paths considers authoritative.
+pub(crate) fn current_project_revisions(
+    repository_root: &Path,
+) -> Result<ProjectRevisionSet, ProjectError> {
+    let sources = scan_art_sources(&repository_root.join(ART_PATH))?;
+    Ok(revision_set_from_sources(&sources))
+}
+
+fn revision_set_from_sources(sources: &BTreeMap<PathBuf, Vec<u8>>) -> ProjectRevisionSet {
+    ProjectRevisionSet {
+        files: sources
+            .iter()
+            .map(|(path, source)| {
+                (
+                    normalized_relative_path(path),
+                    ByteRevision {
+                        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
+                        fingerprint: xxh3_64(source),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
 fn compare_sources(
     loaded: &BTreeMap<PathBuf, Vec<u8>>,
     current: &BTreeMap<PathBuf, Vec<u8>>,
@@ -1577,6 +1592,39 @@ mod tests {
             .external_changes()
             .expect("reloaded project should scan")
             .is_empty());
+    }
+
+    #[test]
+    fn current_project_revisions_track_exact_on_disk_bytes() {
+        let directory = prepare_project();
+        let project = AssetProject::load(&directory.path).expect("project should load");
+        let loaded = project.revision_snapshot();
+        assert_eq!(
+            current_project_revisions(&directory.path)
+                .expect("unchanged tracked sources should scan"),
+            loaded
+        );
+
+        let palette_path = directory.art_root().join(PALETTE_FILE);
+        let mut modified = fs::read(&palette_path).expect("palette should be readable");
+        let byte = modified
+            .first_mut()
+            .expect("fixture palette should contain source bytes");
+        *byte = byte.wrapping_add(1);
+        fs::write(&palette_path, modified).expect("equal-length edit should be written");
+
+        let current = current_project_revisions(&directory.path)
+            .expect("modified tracked sources should scan");
+        let loaded_palette = loaded
+            .files
+            .get(PALETTE_FILE)
+            .expect("loaded revisions should include the palette");
+        let current_palette = current
+            .files
+            .get(PALETTE_FILE)
+            .expect("current revisions should include the palette");
+        assert_eq!(current_palette.byte_len, loaded_palette.byte_len);
+        assert_ne!(current_palette.fingerprint, loaded_palette.fingerprint);
     }
 
     #[test]

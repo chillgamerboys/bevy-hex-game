@@ -218,6 +218,8 @@ struct PointerStroke {
     active: bool,
     last_cell: Option<LocalVoxelCoord>,
     last_cursor_position: Option<Vec2>,
+    skipped_boundary_cells: usize,
+    first_boundary_warning: Option<String>,
 }
 
 impl PointerStroke {
@@ -237,6 +239,23 @@ impl PointerStroke {
         self.last_cell = Some(cell);
         self.last_cursor_position = cursor_position;
         true
+    }
+
+    fn record_boundary_skip(&mut self, warning: String) {
+        self.skipped_boundary_cells = self.skipped_boundary_cells.saturating_add(1);
+        if self.first_boundary_warning.is_none() {
+            self.first_boundary_warning = Some(warning);
+        }
+    }
+
+    fn boundary_skip_summary(&self) -> Option<String> {
+        let first = self.first_boundary_warning.as_deref()?;
+        let count = self.skipped_boundary_cells;
+        let noun = if count == 1 { "cell" } else { "cells" };
+        Some(format!(
+            "Skipped {count} out-of-bounds placement {noun}; valid cells in the stroke were kept. \
+             First skipped cell: {first}"
+        ))
     }
 }
 
@@ -1321,16 +1340,20 @@ fn handle_pointer_editing(
     mut runtime: ResMut<WorkshopRuntime>,
 ) {
     if stroke.active && buttons.just_released(MouseButton::Left) {
-        stroke.active = false;
-        stroke.last_cell = None;
-        stroke.last_cursor_position = None;
+        let boundary_warning = stroke.boundary_skip_summary();
+        *stroke = PointerStroke::default();
         let result = runtime.draft_mut().and_then(|draft| {
             draft
                 .commit_object_transaction()
                 .map_err(|error| error.to_string())
         });
         match result {
-            Ok(_) => runtime.needs_sync = true,
+            Ok(_) => {
+                runtime.needs_sync = true;
+                if let Some(warning) = boundary_warning {
+                    runtime.set_status(WorkshopStatusKind::Warning, warning);
+                }
+            }
             Err(error) => runtime.set_status(WorkshopStatusKind::Error, error),
         }
     }
@@ -1361,9 +1384,10 @@ fn handle_pointer_editing(
                 });
                 match begin {
                     Ok(()) => {
-                        stroke.active = true;
-                        stroke.last_cell = None;
-                        stroke.last_cursor_position = None;
+                        *stroke = PointerStroke {
+                            active: true,
+                            ..default()
+                        };
                     }
                     Err(error) => {
                         runtime.set_status(WorkshopStatusKind::Error, error);
@@ -1422,7 +1446,7 @@ fn handle_pointer_editing(
         return;
     };
     if let Err(warning) = preflight_pointer_stroke_cell(editor, tool, cell) {
-        runtime.set_status(WorkshopStatusKind::Warning, warning);
+        stroke.record_boundary_skip(warning);
         return;
     }
     let result = apply_stroke_cell(runtime.draft_mut(), tool, cell);
@@ -1453,9 +1477,7 @@ fn preflight_pointer_stroke_cell(
     if tool != EditorTool::Place {
         return Ok(());
     }
-    validate_position(editor.object(), cell).map_err(|error| {
-        format!("{error}; skipped this boundary cell without rolling back the current stroke")
-    })
+    validate_position(editor.object(), cell).map_err(|error| error.to_string())
 }
 
 fn apply_stroke_cell(
@@ -1873,7 +1895,12 @@ fn build_review_capture_request(runtime: &WorkshopRuntime) -> Result<ReviewCaptu
 
     let contents = build_review_viewport_contents(draft);
 
-    ReviewCaptureRequest::new(project.repository_root().to_path_buf(), report, contents)
+    ReviewCaptureRequest::new(
+        project.repository_root().to_path_buf(),
+        project.revision_snapshot(),
+        report,
+        contents,
+    )
 }
 
 fn build_review_viewport_contents(draft: &WorkshopDraft) -> Vec<ViewportContent> {
@@ -2153,7 +2180,6 @@ mod tests {
         let warning = preflight_pointer_stroke_cell(&editor, EditorTool::Place, beyond_top)
             .expect_err("boundary contact should be skipped");
         assert!(warning.contains("above authoring maximum 5"));
-        assert!(warning.contains("without rolling back the current stroke"));
         assert_eq!(editor.commit_transaction(), Ok(true));
 
         assert!(editor
@@ -2166,6 +2192,23 @@ mod tests {
             .placements
             .iter()
             .any(|placement| placement.position == beyond_top));
+    }
+
+    #[test]
+    fn boundary_skips_are_coalesced_into_one_stroke_summary() {
+        let mut stroke = PointerStroke::default();
+        assert!(stroke.boundary_skip_summary().is_none());
+
+        stroke.record_boundary_skip("first boundary detail".to_owned());
+        stroke.record_boundary_skip("second boundary detail".to_owned());
+
+        let summary = stroke
+            .boundary_skip_summary()
+            .expect("recorded skips should produce one summary");
+        assert!(summary.contains("Skipped 2 out-of-bounds placement cells"));
+        assert!(summary.contains("valid cells in the stroke were kept"));
+        assert!(summary.contains("First skipped cell: first boundary detail"));
+        assert!(!summary.contains("second boundary detail"));
     }
 
     #[test]
