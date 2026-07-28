@@ -302,6 +302,56 @@ fn restoring_a_hex_leaves_the_broken_enchantment_broken() {
     assert!(!state.is_locked(fire), "and its lock stays cleared");
 }
 
+/// Restoring an unrelated hex leaves a *live* enchantment alone.
+///
+/// The sibling test above only proves a lock stays cleared once its enchantment has
+/// already broken — which `apply_disables` did, so it would pass whether or not
+/// `restore` touched locks at all. This is the case that actually constrains it: a
+/// shield still standing, funded by one gem, while a different gem goes down and comes
+/// back. A `restore` that reached into `locks` would free the funding gem here and
+/// orphan the enchantment holding it.
+#[test]
+fn restoring_one_hex_leaves_another_gems_live_enchantment_alone() {
+    let spell = LatticeCoord::new(0, 0);
+    let [funding, bystander, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(funding, gem(FIRE))
+        .with(bystander, gem(FIRE));
+
+    let mut state = LatticeState::new(&spec, &basic_stats());
+    let plan = castable(&spec, &state, spell, &Content).expect("the shield can be raised");
+    apply_cast(&mut state, &plan, &Content);
+    let locked_before = state.total_locked_mana();
+
+    // Which of the two gems funded it is `castable`'s choice — candidates are tried in
+    // `LatticeCoord` order, not neighbour order — so ask rather than assume. The
+    // bystander is whichever one it left alone.
+    let (funding, bystander) = if state.is_locked(funding) {
+        (funding, bystander)
+    } else {
+        (bystander, funding)
+    };
+    assert!(state.is_locked(funding), "one of the two funds the shield");
+    assert!(!state.is_locked(bystander), "and the other does not");
+
+    apply_disables(&mut state, &[bystander]);
+    assert_eq!(
+        state.enchantment_count(),
+        1,
+        "the bystander funds nothing, so the shield survives"
+    );
+
+    assert_eq!(restore(&mut state, &[bystander]), 1);
+    assert!(state.is_locked(funding), "the funding gem is still locked");
+    assert_eq!(state.enchantment_count(), 1, "the shield still stands");
+    assert_eq!(
+        state.total_locked_mana(),
+        locked_before,
+        "and its mana is still tied up"
+    );
+}
+
 /// The count is what a caller reports, so it must be what actually happened.
 #[test]
 fn restoring_counts_only_the_hexes_that_were_down() {

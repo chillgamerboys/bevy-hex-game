@@ -115,6 +115,12 @@ pub enum GameCommand {
         /// Whose lattice — **the unit taking the damage**, not the one dealing it.
         unit: UnitId,
         /// The exact cells to disable, as many as the decision asked for.
+        ///
+        /// Serde-defaulted like [`Self::Cast`]'s optional fields, per this type's own
+        /// rule: a field added to a shipped variant decodes an older line as empty
+        /// rather than failing it. An empty answer is meaningful anyway — it is what a
+        /// decision for zero hexes looks like.
+        #[serde(default)]
         cells: Vec<LatticeCoord>,
     },
 }

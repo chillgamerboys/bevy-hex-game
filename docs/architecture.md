@@ -60,14 +60,21 @@ settles none of [the design's open questions](design/game.md#open-questions) —
 initiative, action economy, fight length, the functional-death threshold — it exposes
 primitives and leaves the policy to the crates above it.
 
-It still depends only on `hex_core`, and three crates now depend on it, each for a
-different half of the job. `hex_assets` implements the engine's content lookup traits
-over `elements.ron`/`spells.ron` and turns authored lattices into a `LatticeSpec`, so
-the engine reads content without knowing what a file is. `hex_units` carries the result:
-a unit's spec, state and stats go on at spawn, keyed by its archetype. `hex_combat`
-drives it — casting through the command funnel, damage through `apply_disables`, and the
-defender-chooses decision the engine deliberately refuses to own. Like the map, it is
-one person's, and its contract is the types it exposes.
+It still depends only on `hex_core`, and three crates now declare an edge to it — drawn
+ahead of the code so the damage-loop PRs stop contending over the same manifests. Each
+edge is for a different half of the job. **`hex_assets`** will implement the engine's
+content lookup traits over `elements.ron`/`spells.ron` and turn authored lattices into a
+`LatticeSpec`, so the engine reads content without knowing what a file is. **`hex_units`**
+will carry the result: a unit's spec, state and stats go on at spawn, keyed by its
+archetype. **`hex_combat`** drives it — casting through the command funnel, damage
+through `apply_disables`, and the defender-chooses decision the engine deliberately
+refuses to own; today it reads the lattice types only in `knowledge.rs`.
+
+Drawing an edge early costs something worth naming: the compiler stops being the review
+signal for that boundary, since anything in those crates can now reach the engine. The
+trade is deliberate and temporary — the alternative was three PRs each editing the same
+two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
+the types it exposes.
 
 ### Ownership cuts both ways
 

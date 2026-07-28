@@ -19,8 +19,17 @@ use crate::spec::{CellKind, LatticeSpec};
 /// A `Component` alongside [`LatticeSpec`] and [`LatticeState`], because all three are
 /// per-unit and a unit that carries a lattice carries its own mana rules — an enemy's
 /// lattice is its entire stat block, and Attunement is part of that block rather than a
-/// global constant. Serde for the same reason [`LatticeState`] has it: a save has to
-/// restore the numbers a unit's mana was resolved against, not re-derive them.
+/// global constant.
+///
+/// # Save compatibility
+///
+/// Serde matches [`LatticeState`], but the map is **keyed by [`ElementId`], which is
+/// session-local** — ids are dealt from sorted element names at load. Sorting means a
+/// reorder is harmless and an *insertion* is not: shipping a content patch that adds an
+/// element shifts every id after it, and a save written before the patch would read one
+/// element's attunement as its neighbour's. Nothing persists this yet. Whoever lands
+/// saves resolves it the way the command log already did — by storing stable names and
+/// re-resolving on load — rather than by trusting these ids across versions.
 #[derive(Component, Reflect, Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
 pub struct LatticeStats {
     capacity: BTreeMap<ElementId, u16>,

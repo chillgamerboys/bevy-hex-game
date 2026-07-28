@@ -11,9 +11,10 @@
 //!
 //! It is rebuilt only outside [`Screen::Gameplay`], like the tables it draws on, so
 //! resolved ids never shift under a live world. It also holds the spell requirements
-//! **resolved to [`ElementId`]s**, the exact shape `hex_lattice::SpellTable` will read
-//! once that seam is wired (HEX-12): this crate does not depend on `hex_lattice`, so
-//! the trait implementation lands there, not here.
+//! **resolved to [`ElementId`]s**, the exact shape `hex_lattice::SpellTable` reads. The
+//! `hex_lattice` edge is drawn as of HEX-12's prep, so the trait implementation belongs
+//! in this crate, beside the content it reads — the engine's designed seat. Nothing
+//! implements it yet; the accessors below are the whole input it needs.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
