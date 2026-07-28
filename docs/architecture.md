@@ -8,7 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_units → hex_perception → hex_combat  (planned)
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → hex_lattice → hex_combat   (the pure rules engine, and its first consumer)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 ```
@@ -31,7 +31,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
 | `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` | gameplay |
 | `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI, faction knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 

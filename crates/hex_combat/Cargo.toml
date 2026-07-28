@@ -18,6 +18,11 @@ hex_anim = { workspace = true }
 # work out where it can walk and how fast to animate getting there.
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+# The knowledge seam holds lattice facts, so it needs the lattice vocabulary. This
+# edge is the designed one -- `hex_core -> hex_lattice` is the dependency direction,
+# so `hex_core` cannot see `LatticeState`, and a store of lattice knowledge therefore
+# cannot live there. It had simply not been drawn yet.
+hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 
 [lints]

@@ -62,6 +62,15 @@ lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). 
 are one hex wide; there is no footprint for anything larger, and units do not obstruct
 each other — so a route may be drawn straight through another piece.
 
+The **knowledge seam exists** as `hex_combat::knowledge`: `FactionKnowledge::view` is
+the one read path for what a faction knows about a hostile lattice, entries carry
+their source and their own expiry so a divination-written fact decays on its own
+schedule, and decay ticks on `RoundElapsed`. It is **empty in the running game** —
+publishing keys on a `LatticeSpec` no unit carries yet — so the HUD readout and
+pointing the AI at `view()` both wait on HEX-12, and the integration tests attach the
+components by hand rather than pass while doing nothing. The dev reveal-all toggle is
+`K` under the `dev` feature.
+
 Around the game sits its own verification tooling. A **lattice-demo screen** on the
 title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
@@ -85,7 +94,7 @@ place** — they are meant to be replaced.
 | **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
 | **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
-| **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
+| **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast and a rout threshold to know when to stop. The hidden-information half now has its seam (`FactionKnowledge::view`), but the AI reads only positions — the *spatial* channel — so there is nothing to route through it until units carry lattices |
 | **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
 | **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
 | **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
