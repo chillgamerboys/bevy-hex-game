@@ -350,7 +350,7 @@ uncapped. Sight is not reach, and they should be tuned apart.
 
 Until that epic lands, the constants remain the compatibility default in code.
 
-## K — Liquid edit policy (an open decision, not a hydraulics ask)
+## K — Liquid edit policy (accepted conservative admission rule)
 
 `substances.ron` currently marks **water and lava as `diggable: true`**. That flag
 allows a direct edit of a liquid voxel; setting it to `false` would reject that direct
@@ -358,11 +358,18 @@ edit. It does **not** protect a diggable support voxel beneath the liquid and do
 repair V3's private steady-state flow topology after either edit. Merely flipping the
 flag therefore cannot prevent hanging liquid or stale current/fall metadata.
 
-This remains an explicit policy question for the liquid and terrain-impact work, not a
-request for fluid simulation: reject support removal while retained liquid occupies
-the column, clear the affected liquid with its support, or rebuild the authored
-steady-state topology. Keep the current clearable liquids until one of those behaviors
-is selected and tested.
+**Accepted policy**: until a topology-aware rebuild exists, `hex_map` must reject
+changes to authored V3 liquid voxels and every lower voxel in the same column while a
+retained authored liquid run remains above. Its private classifier is keyed by exact
+`TilePos` and returns all affected stacked runs. Rejection is atomic: neither
+occupancy nor current/fall metadata changes, and liquid never redistributes.
+
+This does not make water or lava globally non-diggable. Legacy and non-topological
+liquids remain governed by their existing `diggable` material behavior. The
+classifier lands with the semantic topology; runtime enforcement waits for the first
+runnable V3 recipe, because no current gameplay map can yet carry that topology.
+Topology-aware clearing or rebuilding may replace this conservative rule later, but
+must update occupancy and all derived flow metadata in one operation.
 
 ## L — Conjurable substance admission
 
