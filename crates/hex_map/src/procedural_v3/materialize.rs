@@ -8,6 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use bevy::prelude::Resource;
 use hex_core::{
     BiomeRegionId, BiomeRegions, Headroom, HexCoord, IlluminationLevel, InteriorRegionId,
     InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, SpecialMovementRegion,
@@ -15,7 +16,6 @@ use hex_core::{
 };
 
 use super::fingerprint::{semantic_plan_fingerprint, FingerprintEncoder};
-use super::layout::HexSide;
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::selection::ValidatedWorldPlan;
 use super::volume::{
@@ -40,27 +40,60 @@ pub(crate) struct MaterializedV3World {
     pub(crate) view_hint: MapViewHint,
     pub(crate) semantic_fingerprint: u64,
     pub(crate) materialized_fingerprint: u64,
-    pub(super) presentation: MapPresentationProjection,
+    pub(crate) presentation: MapPresentationProjection,
 }
 
 /// Ordered map-owned descriptors retained for later presentation spawning.
 ///
 /// Gameplay receives only the public exact consequences on [`MaterializedV3World`].
 /// These semantic descriptors remain private to the V3 map pipeline.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub(super) struct MapPresentationProjection {
-    pub(super) liquids: BTreeMap<TilePos, MaterializedLiquidVoxel>,
-    pub(super) features: BTreeMap<FeatureId, PlannedFeature>,
-    pub(super) structures: BTreeMap<StructureId, PlannedStructure>,
-    pub(super) lights: BTreeMap<LightId, PlannedGameplayLight>,
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct MapPresentationProjection {
+    liquids: BTreeMap<TilePos, MaterializedLiquidVoxel>,
+    features: BTreeMap<FeatureId, PlannedFeature>,
+    structures: BTreeMap<StructureId, PlannedStructure>,
+    lights: BTreeMap<LightId, PlannedGameplayLight>,
+}
+
+impl MapPresentationProjection {
+    /// Returns the exact ordered liquid presentation projection.
+    #[must_use]
+    pub(crate) const fn liquids(&self) -> &BTreeMap<TilePos, MaterializedLiquidVoxel> {
+        &self.liquids
+    }
+
+    /// Iterates exact liquid voxels in deterministic [`TilePos`] order.
+    pub(crate) fn iter_liquids(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&TilePos, &MaterializedLiquidVoxel)> {
+        self.liquids.iter()
+    }
+
+    /// Returns the presentation descriptor for one exact liquid voxel.
+    #[must_use]
+    pub(crate) fn liquid_at(&self, position: TilePos) -> Option<&MaterializedLiquidVoxel> {
+        self.liquids.get(&position)
+    }
+
+    /// Reports whether clearing a voxel would remove or undercut authored liquid.
+    ///
+    /// V3 liquid topology cannot currently be rebuilt after a terrain edit. An
+    /// edit is therefore protected when the same column contains any authored
+    /// liquid voxel at that level or above it.
+    #[must_use]
+    pub(crate) fn protects_liquid_edit(&self, position: TilePos) -> bool {
+        self.liquids
+            .keys()
+            .any(|liquid| liquid.coord == position.coord && liquid.level >= position.level)
+    }
 }
 
 /// Presentation metadata expanded to every occupied voxel in one liquid run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct MaterializedLiquidVoxel {
-    pub(super) material: FillMaterialRole,
-    pub(super) flow: LiquidFlowState,
-    pub(super) direction: Option<HexSide>,
+pub(crate) struct MaterializedLiquidVoxel {
+    pub(crate) material: FillMaterialRole,
+    pub(crate) flow: LiquidFlowState,
+    pub(crate) downstream: Option<TilePos>,
 }
 
 /// Failure after selection admitted a semantic plan but before runtime publication.
@@ -230,20 +263,17 @@ fn project_liquids(
                     body.material, fill.material
                 )));
             }
-            let direction = node
-                .downstream
-                .map(|downstream| {
-                    hex_side_between(run_top.coord, downstream.coord).ok_or_else(|| {
-                        MaterializationError::Projection(format!(
-                            "liquid body {body_id:?} node {run_top:?} has non-adjacent downstream {downstream:?}"
-                        ))
-                    })
-                })
-                .transpose()?;
+            if let Some(downstream) = node.downstream {
+                if run_top.coord.distance(downstream.coord) != 1 {
+                    return Err(MaterializationError::Projection(format!(
+                        "liquid body {body_id:?} node {run_top:?} has non-adjacent downstream {downstream:?}"
+                    )));
+                }
+            }
             let descriptor = MaterializedLiquidVoxel {
                 material: body.material,
                 flow: node.state,
-                direction,
+                downstream: node.downstream,
             };
 
             for level in fill.levels.bottom..fill.levels.top {
@@ -272,13 +302,6 @@ fn project_liquids(
 
     Ok(projected)
 }
-
-fn hex_side_between(source: HexCoord, target: HexCoord) -> Option<HexSide> {
-    HexSide::ALL
-        .into_iter()
-        .find(|side| side.neighbor(source) == target)
-}
-
 fn verify_materialized_consequences(
     plan: &GeneratedWorldPlan,
     map: &VoxelMap,
@@ -674,11 +697,11 @@ fn encode_liquids(
             LiquidFlowState::Rapid => 2,
             LiquidFlowState::Fall => 3,
         });
-        match liquid.direction {
+        match liquid.downstream {
             None => encoder.tag(0),
-            Some(direction) => {
+            Some(downstream) => {
                 encoder.tag(1);
-                encoder.tag(hex_side_tag(direction));
+                encoder.tile_pos(downstream);
             }
         }
     }
@@ -739,22 +762,11 @@ fn encode_lights(
     Ok(())
 }
 
-const fn hex_side_tag(side: HexSide) -> u8 {
-    match side {
-        HexSide::East => 0,
-        HexSide::SouthEast => 1,
-        HexSide::SouthWest => 2,
-        HexSide::West => 3,
-        HexSide::NorthWest => 4,
-        HexSide::NorthEast => 5,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::procedural_v3::layout::{
-        LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
+        HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
     };
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{
@@ -784,7 +796,7 @@ mod tests {
     }
 
     #[test]
-    fn expands_a_fall_run_and_derives_its_exact_horizontal_direction() {
+    fn expands_a_fall_run_and_retains_its_exact_downstream_position() {
         let source_coord = HexCoord::ORIGIN;
         let target_coord = HexSide::East.neighbor(source_coord);
         let source = TilePos::new(source_coord, 5);
@@ -834,7 +846,7 @@ mod tests {
                 Some(&MaterializedLiquidVoxel {
                     material: FillMaterialRole::Water,
                     flow: LiquidFlowState::Fall,
-                    direction: Some(HexSide::East),
+                    downstream: Some(target),
                 })
             );
         }
@@ -843,22 +855,172 @@ mod tests {
             Some(&MaterializedLiquidVoxel {
                 material: FillMaterialRole::Water,
                 flow: LiquidFlowState::Still,
-                direction: None,
+                downstream: None,
             })
         );
     }
 
     #[test]
-    fn resolves_every_horizontal_downstream_side() {
+    fn projection_rejects_non_adjacent_downstream_coordinates() {
+        let source_coord = HexCoord::ORIGIN;
+        let target_coord = HexCoord::new_cubic(2, 0, -2);
+        let source = TilePos::new(source_coord, 5);
+        let target = TilePos::new(target_coord, 3);
+        let mut volume = VolumePlan::new(BTreeSet::from([source_coord, target_coord]));
+        volume
+            .columns
+            .get_mut(&source_coord)
+            .expect("the source is in the mask")
+            .elements = vec![VolumeElement::Fill(NonSolidFill {
+            levels: LevelInterval::new(5, 6),
+            material: FillMaterialRole::Water,
+        })];
+        volume
+            .columns
+            .get_mut(&target_coord)
+            .expect("the target is in the mask")
+            .elements = vec![VolumeElement::Fill(NonSolidFill {
+            levels: LevelInterval::new(3, 4),
+            material: FillMaterialRole::Water,
+        })];
+        let liquids = LiquidPlan {
+            bodies: BTreeMap::from([(
+                LiquidBodyId(4),
+                LiquidBodyPlan {
+                    material: FillMaterialRole::Water,
+                    nodes: BTreeMap::from([
+                        (
+                            source,
+                            LiquidNode {
+                                state: LiquidFlowState::Fall,
+                                downstream: Some(target),
+                            },
+                        ),
+                        (
+                            target,
+                            LiquidNode {
+                                state: LiquidFlowState::Still,
+                                downstream: None,
+                            },
+                        ),
+                    ]),
+                },
+            )]),
+        };
+
+        let error = project_liquids(&liquids, &volume)
+            .expect_err("a non-adjacent downstream cannot be projected");
+        assert!(error.to_string().contains("non-adjacent downstream"));
+    }
+
+    #[test]
+    fn all_six_adjacent_downstream_coordinates_are_retained_exactly() {
         for side in HexSide::ALL {
+            let source = TilePos::new(HexCoord::ORIGIN, 5);
+            let downstream = TilePos::new(side.neighbor(source.coord), 2);
+            let mut volume = VolumePlan::new(BTreeSet::from([source.coord, downstream.coord]));
+            for (position, bottom) in [(source, 5), (downstream, 2)] {
+                volume
+                    .columns
+                    .get_mut(&position.coord)
+                    .expect("both liquid columns are in the mask")
+                    .elements = vec![VolumeElement::Fill(NonSolidFill {
+                    levels: LevelInterval::new(bottom, bottom + 1),
+                    material: FillMaterialRole::Water,
+                })];
+            }
+            let liquids = LiquidPlan {
+                bodies: BTreeMap::from([(
+                    LiquidBodyId(4),
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Water,
+                        nodes: BTreeMap::from([
+                            (
+                                source,
+                                LiquidNode {
+                                    state: LiquidFlowState::Fall,
+                                    downstream: Some(downstream),
+                                },
+                            ),
+                            (
+                                downstream,
+                                LiquidNode {
+                                    state: LiquidFlowState::Still,
+                                    downstream: None,
+                                },
+                            ),
+                        ]),
+                    },
+                )]),
+            };
+
+            let projection =
+                project_liquids(&liquids, &volume).expect("adjacent liquid nodes project");
             assert_eq!(
-                hex_side_between(HexCoord::ORIGIN, side.neighbor(HexCoord::ORIGIN)),
-                Some(side)
+                projection.get(&source).map(|liquid| liquid.downstream),
+                Some(Some(downstream))
             );
         }
+    }
+
+    #[test]
+    fn presentation_accessors_are_exact_ordered_and_protect_liquid_support() {
+        let coord = HexCoord::ORIGIN;
+        let lower = TilePos::new(coord, 3);
+        let upper = TilePos::new(coord, 5);
+        let descriptor = MaterializedLiquidVoxel {
+            material: FillMaterialRole::Water,
+            flow: LiquidFlowState::Current,
+            downstream: Some(TilePos::new(HexSide::East.neighbor(coord), 2)),
+        };
+        let projection = MapPresentationProjection {
+            liquids: BTreeMap::from([(upper, descriptor), (lower, descriptor)]),
+            ..Default::default()
+        };
+
+        assert_eq!(projection.liquids().len(), 2);
+        assert_eq!(projection.liquid_at(lower), Some(&descriptor));
         assert_eq!(
-            hex_side_between(HexCoord::ORIGIN, HexCoord::new_cubic(2, 0, -2)),
-            None
+            projection
+                .iter_liquids()
+                .map(|(position, _liquid)| *position)
+                .collect::<Vec<_>>(),
+            vec![lower, upper]
+        );
+
+        assert!(projection.protects_liquid_edit(TilePos::new(coord, 5)));
+        assert!(projection.protects_liquid_edit(TilePos::new(coord, 4)));
+        assert!(projection.protects_liquid_edit(TilePos::new(coord, 0)));
+        assert!(!projection.protects_liquid_edit(TilePos::new(coord, 6)));
+        assert!(!projection.protects_liquid_edit(TilePos::new(HexSide::West.neighbor(coord), 0)));
+    }
+
+    #[test]
+    fn materialized_liquid_identity_covers_exact_downstream_level() {
+        fn fingerprint(
+            descriptor: MaterializedLiquidVoxel,
+            position: TilePos,
+        ) -> Result<u64, String> {
+            let mut encoder = FingerprintEncoder::new();
+            encode_liquids(&mut encoder, &BTreeMap::from([(position, descriptor)]))?;
+            Ok(encoder.finish_materialized_world())
+        }
+
+        let position = TilePos::new(HexCoord::ORIGIN, 5);
+        let downstream_coord = HexSide::East.neighbor(position.coord);
+        let baseline = MaterializedLiquidVoxel {
+            material: FillMaterialRole::Water,
+            flow: LiquidFlowState::Fall,
+            downstream: Some(TilePos::new(downstream_coord, 3)),
+        };
+        let changed_level = MaterializedLiquidVoxel {
+            downstream: Some(TilePos::new(downstream_coord, 2)),
+            ..baseline
+        };
+
+        assert_ne!(
+            fingerprint(baseline, position).expect("the baseline encodes"),
+            fingerprint(changed_level, position).expect("the changed descriptor encodes")
         );
     }
 
@@ -1105,6 +1267,10 @@ mod tests {
         assert_eq!(
             first.materialized_fingerprint,
             repeated.materialized_fingerprint
+        );
+        assert_eq!(
+            first.materialized_fingerprint, 8_365_186_683_002_973_576,
+            "update only with an explicit materialized V3 fingerprint decision"
         );
         assert_ne!(
             first.materialized_fingerprint,
