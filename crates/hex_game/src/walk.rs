@@ -170,9 +170,15 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Escape" => Ok(KeyCode::Escape),
         "Space" => Ok(KeyCode::Space),
         "Enter" => Ok(KeyCode::Enter),
-        "Digit1" => Ok(KeyCode::Digit1),
+        // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
+        // `Enter` confirms an aim, and the casting walk drives that through the panel's
+        // Confirm button instead: a `Click` that never finds its button stalls the walk
+        // and fails it, which is a stronger assertion than a key that can be pressed
+        // into a screen with no aiming UI on it at all.
+        "Tab" => Ok(KeyCode::Tab),
+        "KeyQ" => Ok(KeyCode::KeyQ),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, or Digit1"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, Tab, or KeyQ"
         )),
     }
 }
