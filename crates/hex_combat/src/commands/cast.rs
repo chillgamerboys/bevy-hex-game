@@ -20,7 +20,7 @@
 
 use bevy::prelude::*;
 
-use hex_assets::{Effect, TargetShape};
+use hex_assets::{Effect, Spell, TargetShape};
 use hex_core::{Busy, LatticeCoord, PendingDecision, TilePos, UnitId};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
@@ -70,6 +70,14 @@ pub(super) fn apply(
     let Some(spec) = book.spell(spell) else {
         return Err("spell has no definition");
     };
+    // Rung 0: does casting this *do* anything yet. Checked before the action, the range
+    // and above all the payment, because a spell whose every effect is still waiting on
+    // another lane would otherwise spend the caster's mana and its whole turn and produce
+    // nothing but `warn!` lines — invisible in a release build, where the console is
+    // hidden. See `delivers_anything`.
+    if !delivers_anything(spec) {
+        return Err(UNDELIVERABLE);
+    }
 
     let (standing, busy) = {
         let Ok((standing, _, turn, busy, _, _)) = actors.get(entity) else {
@@ -165,6 +173,7 @@ pub(super) fn apply(
     // --- effects -----------------------------------------------------------
 
     let target_unit = unit_standing_on(ctx, actors, target);
+    let round = ctx.turn_order.round;
     let mut refusals: Vec<&'static str> = Vec::new();
     for effect in &spec.effects {
         match effect {
@@ -194,7 +203,35 @@ pub(super) fn apply(
             Effect::SetTerrain { .. } | Effect::ClearTerrain | Effect::SpawnWall { .. } => {
                 refusals.push("terrain effects wait on RunBottom and the announce path");
             }
-            Effect::Burn { .. } => refusals.push("Burn waits on the persistent-effect runtime"),
+            Effect::Burn { turns } => {
+                let Some(defender) = target_unit else {
+                    // Same rule as `DisableHexes` above: a spell that reaches nobody is
+                    // a legal cast that set nothing alight, and it is already paid for.
+                    continue;
+                };
+                // **Nothing goes down now, and the lattice is not told.** Burn's whole
+                // shape is that it arrives at the start of each of the target's own
+                // turns, so what a cast does is open a ledger entry; `crate::effects`
+                // collects on it and routes the result through the same
+                // defender-chooses seam as any other damage.
+                //
+                // A lattice-less target cannot be set alight — `hex_units` spawns a unit
+                // inert when its archetype names no lattice, and the design's answer for
+                // one is "playable but cannot be damaged". Booking the fire anyway would
+                // charge the caster for damage that has nowhere to land, so this refuses
+                // by name. `effects::open_due_decision` guards the same case again at the
+                // seam, because a ledger entry can outlive the components it was made
+                // against.
+                if lattices.get(defender.1).is_err() {
+                    refusals.push("the target has no lattice to set alight");
+                    continue;
+                }
+                crate::effects::apply_burn(ctx.effects, round, unit, defender.0, *turns);
+                info!(
+                    "cast: {unit:?} sets {:?} alight for {turns} of its turns",
+                    defender.0
+                );
+            }
             Effect::RestoreHexes { .. } => {
                 refusals.push("RestoreHexes waits on choosing which hexes come back");
             }
@@ -303,6 +340,47 @@ pub(super) fn open_disable_decision(
         count,
         source,
     };
+}
+
+/// The refusal a spell gets when nothing it does is built yet.
+///
+/// A `&'static str` shared with the interface rather than each writing its own, so the
+/// panel's reason and the applier's are the same sentence — and so a reader grepping for
+/// one finds both.
+pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
+
+/// Whether the applier delivers **any** of a spell's effects today.
+///
+/// The gate the interface and the applier share, and the reason it exists is a specific
+/// failure: several shipped spells — Renewal, Earthen Wall, Stone Shaper, Scrying Eye,
+/// Daylight — are legal casts whose every effect is still waiting on a lane that has not
+/// landed. Offering one is worse than hiding it. The cast is legal, so it is charged: the
+/// mana goes, the turn goes, and the only trace is a log line the player cannot see.
+///
+/// **Any, not all.** A partially built spell still does something, and refusing it would
+/// take away a real effect because a second one is pending; the applier already reports
+/// each unbuilt effect it skips. A spell with no effects at all is undeliverable by the
+/// same rule — `[]` does nothing, however legal it is.
+///
+/// Kept beside the match it mirrors so the two move together. Adding an effect arm above
+/// without adding it here fails closed, which is the safe direction: the spell stays
+/// unoffered until somebody notices.
+#[must_use]
+pub fn delivers_anything(spell: &Spell) -> bool {
+    spell.effects.iter().any(|effect| match effect {
+        // Damage the defender chooses hexes for, and fire. Both land today.
+        Effect::DisableHexes { targeted, .. } => !targeted,
+        Effect::Burn { .. } => true,
+        // Everything below is refused by name in the match above; see the reasons there.
+        Effect::Reveal { .. }
+        | Effect::Illuminate { .. }
+        | Effect::SetTerrain { .. }
+        | Effect::ClearTerrain
+        | Effect::SpawnWall { .. }
+        | Effect::RestoreHexes { .. }
+        | Effect::ModifyIncomingDisables { .. }
+        | Effect::Displace { .. } => false,
+    })
 }
 
 /// The unit standing on `pos`, if any.

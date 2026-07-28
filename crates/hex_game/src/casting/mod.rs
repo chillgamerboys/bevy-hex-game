@@ -1,0 +1,1294 @@
+//! Choosing a spell, aiming it, and seeing what it will touch.
+//!
+//! The interface to what `docs/systems/casting.md` specifies, and nothing more. This
+//! module decides what a click *means* and pushes a [`GameCommand::Cast`] into the
+//! funnel; **the applier in `hex_combat` is authoritative**. Everything here is a
+//! pre-filter for click feel, and only one direction of disagreement is a bug: offering
+//! a cast the applier then refuses. Every refusal shown below therefore names the
+//! applier check it mirrors, so the two can be read side by side when either moves.
+//!
+//! # Three surfaces, one derivation
+//!
+//! The panel ("what can I cast"), the world preview ("what would it touch") and the
+//! input handler ("what does this click do") could each compute their own answer — and
+//! could then disagree. A panel offering a spell whose preview lights nothing is worse
+//! than either surface alone. [`CastReadout`] is derived once per frame and all three
+//! read it.
+//!
+//! # Aiming does not take the map away
+//!
+//! While a spell is aimed, every legal anchor carries a clickable marker, and a marker
+//! is a picking blocker — so a click on a lit surface aims, and never also moves. Off
+//! the lit set there is no marker, the click reaches the tile underneath, and it means
+//! what a click has always meant: walk there.
+//!
+//! Repositioning to get into range is part of aiming rather than an escape from it: the
+//! aim survives the walk and its anchors are recomputed from wherever the caster ends up.
+//!
+//! That takes distinguishing two things the panel says in the same voice. Being `Busy`
+//! mid-walk, or waiting on somebody else's decision, **suspends** casting — you will be
+//! able to in a moment, and the spell you picked is still the spell you want. Your turn
+//! ending, or your action being spent, **ends** it. `keeps_the_aim` draws that line, and
+//! without it the `Busy` a walk sets would put the aim down one frame after the click
+//! that started the walk, which is the opposite of the sentence above.
+//!
+//! The aim is still dropped when it stops being castable, and after a walk the check that
+//! earns its keep is range: stepping away can carry an anchor out of reach exactly as
+//! stepping toward it brings one in.
+
+use bevy::prelude::*;
+use hex_assets::{
+    CastingAxis, CombatSettings, ContentIndex, ElementCatalog, ManaAxis, Spell, SpellBook,
+    TargetShape,
+};
+use hex_combat::TurnOrder;
+use hex_core::{
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, HexCoord, IssuedCommand,
+    LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen, Sextant, SpellId,
+    TilePos, Turn, UnitId,
+};
+use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
+use hex_units::{targeting, volumes};
+use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
+
+use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
+
+mod panel;
+mod preview;
+
+/// Steps to the next unit worth aiming at.
+const NEXT_TARGET_KEY: KeyCode = KeyCode::Tab;
+
+/// Commits the aimed cast.
+const CONFIRM_KEY: KeyCode = KeyCode::Enter;
+
+/// Puts the aimed spell down again.
+///
+/// Not `Escape`, which pauses, and not `Backspace`, which quits to the title — both of
+/// those already mean something louder, and a mis-hit would cost more than the aim.
+const CANCEL_KEY: KeyCode = KeyCode::KeyQ;
+
+/// Height-per-range-bonus when `combat.ron` has not loaded.
+///
+/// The same fallback and the same number as `hex_combat`'s cast applier, deliberately:
+/// the interface decides which surfaces to light and the applier decides which it
+/// accepts, and the two disagreeing about the high-ground bonus would light exactly the
+/// surfaces a cast is then refused for.
+const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
+
+/// Registers the spell panel, the shape preview, and the cast emitter.
+pub fn plugin(app: &mut App) {
+    app.init_resource::<CastReadout>();
+    app.init_resource::<Aiming>();
+    app.init_resource::<preview::AimVolume>();
+    app.init_resource::<preview::DrawnPreviewKey>();
+    // Global, like every picking observer in this codebase. It is written for that —
+    // see its own docs — and registering it here rather than per marker keeps one
+    // observer instead of one for each of the hundred surfaces an aim can light.
+    app.add_observer(preview::on_anchor_clicked);
+
+    app.add_systems(OnEnter(Screen::Gameplay), panel::spawn_panel);
+    app.add_systems(
+        OnExit(Screen::Gameplay),
+        (forget_aim, preview::clear_preview),
+    );
+    app.add_systems(
+        Update,
+        (refresh_readout, resolve_aim_input)
+            .chain()
+            .in_set(AppSystems::RecordInput)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    // The preview runs before the panel because the panel reports what the preview
+    // resolved — how many voxels the shape covers, and how many of them are surfaces
+    // there is anything to paint.
+    app.add_systems(
+        Update,
+        (preview::redraw_preview, panel::rebuild_panel)
+            .chain()
+            .after(resolve_aim_input)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+}
+
+/// What the casting interface knows this frame.
+///
+/// Derived once by [`refresh_readout`] and read by everything else, so the panel, the
+/// preview and the input handler cannot answer the same question differently.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct CastReadout {
+    /// The unit the interface is talking about, when there is one.
+    pub caster: Option<Caster>,
+    /// Why no cast is possible at all, or `None` when one is.
+    pub unavailable: Option<&'static str>,
+    /// One row per distinct spell the caster inscribes, sorted by name.
+    pub spells: Vec<SpellRow>,
+    /// `combat.ron`'s levels-per-bonus-hex knob, carried so the panel, the preview and
+    /// the emitter all measure range exactly the way the applier does.
+    pub levels_per_bonus: u32,
+}
+
+impl CastReadout {
+    /// The row for a spell, by name.
+    #[must_use]
+    pub fn row(&self, name: &str) -> Option<&SpellRow> {
+        self.spells.iter().find(|row| row.name == name)
+    }
+}
+
+/// The unit a cast would come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Caster {
+    /// The sim id, which is what a command names.
+    pub unit: UnitId,
+    /// The seat that owns it, stamped onto the command at emission.
+    pub seat: PlayerSeat,
+    /// Which surface it stands on — the origin of every range and shape question.
+    pub standing: TilePos,
+}
+
+/// One spell, as the panel shows it and the preview reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpellRow {
+    /// The spell's name. Also the command payload, and the button's handle.
+    pub name: String,
+    /// The identity line: tier, casting axis, element.
+    pub detail: String,
+    /// The price line: mana, range, shape.
+    pub cost: String,
+    /// Why the lattice refuses this spell, or `None` when it can pay.
+    pub blocked: Option<&'static str>,
+    /// The tint this spell is presented in, taken from its element.
+    pub color: Color,
+    /// Base range in hexes, before any high-ground bonus.
+    pub range: u32,
+    /// The shape whose volume the preview resolves.
+    pub shape: TargetShape,
+}
+
+/// The spell currently being aimed, if any.
+#[derive(Resource, Default, Debug)]
+pub struct Aiming(pub Option<Aim>);
+
+/// A spell chosen, and the anchor it is pointed at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Aim {
+    /// Which spell, **by name** — ids are session-local, and the command carries a name.
+    pub spell: String,
+    /// The one positional anchor the cast will name.
+    pub anchor: TilePos,
+}
+
+/// Marks the button that starts aiming a named spell.
+///
+/// Carries the name rather than a row index, because entity order is not stable across
+/// UI rebuilds and this panel is rebuilt wholesale — the same reason the lattice demo's
+/// cast buttons carry their spell's coordinate.
+#[derive(Component, Debug, Clone)]
+struct AimsSpell(String);
+
+/// Marks one of the three buttons that act on the aim in flight.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+enum AimControl {
+    /// Emit the cast.
+    Confirm,
+    /// Point at the next unit in range.
+    Next,
+    /// Put the spell down.
+    Cancel,
+}
+
+/// The words the interface uses for a blocked cast.
+///
+/// Shared with the lattice demo so the two screens say the same thing about the same
+/// refusal; they used to carry a copy each, which is one edit away from disagreeing.
+/// These are the *lattice's* reasons — the applier's wording for the same three cases
+/// is deliberately more specific, because it is talking about a command that has
+/// already been issued rather than a button that has not been pressed.
+#[must_use]
+pub fn blocked_reason(blocked: &CastBlocked) -> &'static str {
+    match blocked {
+        CastBlocked::NotASpell => "no spell here",
+        CastBlocked::SpellDisabled => "spell hex disabled",
+        CastBlocked::Unsatisfiable => "not enough adjacent mana",
+    }
+}
+
+/// Whether a caster standing at `from` can anchor a range-`range` spell on `to`.
+///
+/// The one range question the interface asks, routed through the same
+/// [`targeting::in_reach`] the applier uses, so spells inherit high-ground-buys-range
+/// here exactly as they do there.
+#[must_use]
+pub fn in_range(from: TilePos, to: TilePos, range: u32, levels_per_bonus: u32) -> bool {
+    targeting::in_reach(from, to, range, levels_per_bonus)
+}
+
+/// Rebuilds the readout, and drops an aim the caster can no longer make good on.
+///
+/// Every resource is an `Option`: this runs inside gameplay, but content parses
+/// asynchronously and a scenario can be entered before `spells.ron` has landed. The
+/// panel then says nothing rather than the system deciding its first frame by ordering.
+fn refresh_readout(
+    mut readout: ResMut<CastReadout>,
+    mut aiming: ResMut<Aiming>,
+    mode: Option<Res<State<Mode>>>,
+    order: Option<Res<TurnOrder>>,
+    registry: Option<Res<UnitRegistry>>,
+    pending: Option<Res<PendingDecision>>,
+    spells: Option<Res<SpellBook>>,
+    index: Option<Res<ContentIndex>>,
+    elements: Option<Res<ElementCatalog>>,
+    combat: Option<Res<CombatSettings>>,
+    casters: Query<CasterData, (With<Player>, Without<Downed>)>,
+    selected: Query<Entity, (With<Player>, With<Selected>, Without<Downed>)>,
+) {
+    let next = build_readout(
+        Sources {
+            mode: mode.as_deref(),
+            order: order.as_deref(),
+            registry: registry.as_deref(),
+            pending: pending.as_deref(),
+            spells: spells.as_deref(),
+            index: index.as_deref(),
+            elements: elements.as_deref(),
+            combat: combat.as_deref(),
+        },
+        &casters,
+        &selected,
+    );
+    // Assign only on a real difference. The panel rebuild is driven by change
+    // detection, and a `ResMut` written every frame would rebuild the whole panel every
+    // frame — sixty despawn-and-respawn cycles a second behind an interface that never
+    // moved.
+    if *readout != next {
+        *readout = next;
+    }
+
+    // An aim outlives the frame it was made in, so it is re-checked against the readout
+    // rather than trusted: the turn can end, a funding gem can be struck, or the unit
+    // can go down between choosing a spell and casting it.
+    //
+    // **Re-anchored, not dropped, when the caster moves.** Walking sets `Busy`, which is
+    // a transient reason — the spell is still the spell — so the aim is kept and the
+    // anchor is re-measured from wherever the caster now stands. It is put down only when
+    // it has actually stopped being castable: the range check below is the one that
+    // matters after a walk, because stepping *away* can carry the anchor out of reach
+    // just as stepping toward it brings one in.
+    let valid = aiming.0.as_ref().is_some_and(|aim| {
+        let survives = readout.unavailable.is_none_or(keeps_the_aim);
+        let Some(row) = readout.row(&aim.spell) else {
+            return false;
+        };
+        let reachable = matches!(row.shape, TargetShape::SelfCast)
+            || readout.caster.is_some_and(|caster| {
+                in_range(
+                    caster.standing,
+                    aim.anchor,
+                    row.range,
+                    readout.levels_per_bonus,
+                )
+            });
+        survives && row.blocked.is_none() && reachable
+    });
+    if aiming.0.is_some() && !valid {
+        aiming.0 = None;
+    }
+}
+
+/// The caster's columns, as the readout reads them.
+type CasterData = (
+    &'static UnitId,
+    Option<&'static ControlOwner>,
+    &'static StandsOn,
+    &'static LatticeSpec,
+    &'static LatticeState,
+    Option<&'static Turn>,
+    Has<Busy>,
+);
+
+/// Everything outside the ECS queries that the readout is built from.
+///
+/// A struct rather than eight parameters so the derivation can be called from a test
+/// without re-listing them, and so an added source cannot be silently dropped at one
+/// call site.
+struct Sources<'a> {
+    mode: Option<&'a State<Mode>>,
+    order: Option<&'a TurnOrder>,
+    registry: Option<&'a UnitRegistry>,
+    pending: Option<&'a PendingDecision>,
+    spells: Option<&'a SpellBook>,
+    index: Option<&'a ContentIndex>,
+    elements: Option<&'a ElementCatalog>,
+    combat: Option<&'a CombatSettings>,
+}
+
+/// Assembles the readout from whatever content and world state exists.
+fn build_readout(
+    sources: Sources,
+    casters: &Query<CasterData, (With<Player>, Without<Downed>)>,
+    selected: &Query<Entity, (With<Player>, With<Selected>, Without<Downed>)>,
+) -> CastReadout {
+    let levels_per_bonus = sources.combat.map_or(DEFAULT_LEVELS_PER_BONUS, |settings| {
+        settings.levels_per_bonus_range
+    });
+    let empty = CastReadout {
+        levels_per_bonus,
+        ..CastReadout::default()
+    };
+    let (Some(spells), Some(index), Some(elements)) =
+        (sources.spells, sources.index, sources.elements)
+    else {
+        return empty;
+    };
+
+    // The acting unit when it is one of ours, and the selection otherwise. Those are
+    // the same entity in every shipped encounter — there is one player piece — but they
+    // are different questions, and the panel is about whoever is going to cast.
+    let acting = sources
+        .order
+        .and_then(TurnOrder::current)
+        .and_then(|unit| sources.registry?.entity_of(unit))
+        .filter(|entity| casters.contains(*entity));
+    let Some(entity) = acting.or_else(|| selected.iter().next()) else {
+        return empty;
+    };
+    let Ok((unit, owner, standing, spec, state, turn, busy)) = casters.get(entity) else {
+        return empty;
+    };
+
+    let tables = index.tables(elements);
+    let mut rows: Vec<SpellRow> = inscribed_spells(spec)
+        .into_iter()
+        .filter_map(|spell| {
+            let name = spells.name(spell)?;
+            let definition = spells.spell(spell)?;
+            let cell = casting_cell(spec, state, spell)?;
+            // Deliverability first, and it outranks payment. A spell whose every effect
+            // is still waiting on another lane is a legal cast, so the applier charges
+            // for it: the mana goes, the turn goes, and the only trace is a log line a
+            // release build does not show. Saying "not built yet" here is the difference
+            // between an interface that is honest about what is finished and one that
+            // eats your turn. `hex_combat` owns the answer so both sides give the same
+            // one — see `hex_combat::delivers_anything`.
+            let blocked = if hex_combat::delivers_anything(definition) {
+                castable(spec, state, cell, &tables)
+                    .err()
+                    .map(|reason| blocked_reason(&reason))
+            } else {
+                Some(hex_combat::UNDELIVERABLE)
+            };
+            Some(spell_row(name, definition, blocked, elements))
+        })
+        .collect();
+    rows.sort_by(|left, right| left.name.cmp(&right.name));
+
+    CastReadout {
+        caster: Some(Caster {
+            unit: *unit,
+            seat: owner.copied().unwrap_or_default().0,
+            standing: standing.0.pos,
+        }),
+        unavailable: unavailable_reason(
+            sources.mode.is_some_and(|mode| *mode.get() == Mode::Combat),
+            sources.order.and_then(TurnOrder::current),
+            sources.pending.is_some_and(PendingDecision::is_open),
+            *unit,
+            turn,
+            busy,
+        ),
+        spells: rows,
+        levels_per_bonus,
+    }
+}
+
+/// Why nothing can be cast right now, mirroring `hex_combat::commands::cast`.
+///
+/// Every arm here has a counterpart in the applier, and the applier is the one that
+/// counts. Showing a castable spell it would then refuse is the failure this exists to
+/// prevent, so the two lists have to be read together whenever either moves. The order
+/// differs from the applier's deliberately: it checks combat, turn, then decision,
+/// while a human reading a panel wants the most permanent reason first.
+///
+/// Plain values rather than the ECS types they came from, so the whole ladder can be
+/// walked in a test without an `App` — the rung that goes missing here is a rung the
+/// player is invited to fall off.
+fn unavailable_reason(
+    in_combat: bool,
+    acting: Option<UnitId>,
+    decision_open: bool,
+    unit: UnitId,
+    turn: Option<&Turn>,
+    busy: bool,
+) -> Option<&'static str> {
+    if !in_combat {
+        return Some(OUT_OF_COMBAT);
+    }
+    if acting != Some(unit) {
+        return Some(NOT_YOUR_TURN);
+    }
+    // Rung 1 is "action available", and a cast is an action. Without this the panel
+    // keeps offering casts for a turn that has already spent its one.
+    match turn {
+        None => return Some(NO_TURN),
+        Some(turn) if turn.acted => return Some(ACTION_SPENT),
+        Some(_) => {}
+    }
+    if busy {
+        return Some(BUSY);
+    }
+    if decision_open {
+        return Some(DECISION_OPEN);
+    }
+    None
+}
+
+/// Whether an aim survives this reason, or is put down by it.
+///
+/// **Two kinds of "you cannot cast right now" wear the same sentence**, and collapsing
+/// them is what made walking-while-aiming impossible. A unit that is mid-walk or waiting
+/// on somebody else's decision will be able to cast again in a moment, and the spell it
+/// had chosen is still the spell it wants; a unit whose turn is over, or that is no
+/// longer the one acting, has nothing left to aim with.
+///
+/// Matched on the named constants rather than the literals so a reworded message cannot
+/// quietly flip an aim from surviving to not.
+fn keeps_the_aim(reason: &'static str) -> bool {
+    matches!(reason, BUSY | DECISION_OPEN)
+}
+
+/// Casting is combat-only in wave 3; see `docs/systems/casting.md`.
+const OUT_OF_COMBAT: &str = "casting is combat-only for now";
+
+/// Somebody else is acting.
+const NOT_YOUR_TURN: &str = "not this unit's turn";
+
+/// The unit holds no turn at all.
+const NO_TURN: &str = "no turn to take the action from";
+
+/// The turn's one action is gone.
+const ACTION_SPENT: &str = "action already spent this turn";
+
+/// Mid-walk or mid-animation. **Transient** — see [`keeps_the_aim`].
+const BUSY: &str = "still finishing the last action";
+
+/// Resolution is parked on a defender's choice. **Transient** — see [`keeps_the_aim`].
+const DECISION_OPEN: &str = "a decision is still open";
+
+/// The distinct spells a lattice inscribes, in lattice order.
+fn inscribed_spells(spec: &LatticeSpec) -> Vec<SpellId> {
+    let mut spells = Vec::new();
+    for (_, kind) in spec.cells() {
+        if let CellKind::Spell { spell } = kind {
+            if !spells.contains(&spell) {
+                spells.push(spell);
+            }
+        }
+    }
+    spells
+}
+
+/// The cell the applier would cast `spell` from.
+///
+/// **A deliberate copy of `hex_combat::commands::cast::spell_cell`**, which is private
+/// to that crate. A lattice may inscribe one spell twice so that losing a hex does not
+/// lose the spell, and the applier resolves the ambiguity by taking the first live cell
+/// and only then the lowest disabled one. Asking a different cell here would show a
+/// blocked spell the applier happily casts, or the reverse — so if that rule ever
+/// changes, this is the other half of it.
+fn casting_cell(spec: &LatticeSpec, state: &LatticeState, spell: SpellId) -> Option<LatticeCoord> {
+    let matching = spec.cells().filter_map(|(coord, kind)| match kind {
+        CellKind::Spell { spell: found } if found == spell => Some(coord),
+        _ => None,
+    });
+    let mut fallback = None;
+    for coord in matching {
+        if !state.is_disabled(coord) {
+            return Some(coord);
+        }
+        fallback = fallback.or(Some(coord));
+    }
+    fallback
+}
+
+/// One row's presentation, built from content alone.
+fn spell_row(
+    name: &str,
+    definition: &Spell,
+    blocked: Option<&'static str>,
+    elements: &ElementCatalog,
+) -> SpellRow {
+    let element = definition
+        .requirements
+        .first()
+        .map(|requirement| requirement.element.as_str());
+    let axis = match definition.casting {
+        CastingAxis::Evocation => "evocation".to_owned(),
+        CastingAxis::Enchantment { defense } => format!("enchantment {defense}"),
+    };
+    let ritual = if definition.is_ritual() {
+        " · ritual"
+    } else {
+        ""
+    };
+    let cost: u32 = definition
+        .requirements
+        .iter()
+        .map(|requirement| u32::from(requirement.mana))
+        .sum();
+    // A variable-mana spell has no chooser yet, so the command always carries `None`
+    // and the applier spends the plan the lattice already agreed. Writing the cost as a
+    // floor is how that stays visible instead of reading as a wrong number.
+    let mana = match definition.mana {
+        ManaAxis::Fixed => format!("{cost} mana"),
+        ManaAxis::Variable => format!("{cost}+ mana"),
+    };
+
+    SpellRow {
+        name: name.to_owned(),
+        detail: format!(
+            "tier {} · {axis}{ritual} · {}",
+            definition.tier(),
+            element.unwrap_or("no element")
+        ),
+        cost: format!(
+            "{mana} · range {} · {}",
+            definition.targeting.range,
+            shape_label(&definition.targeting.shape)
+        ),
+        blocked,
+        color: element_color(element, elements),
+        range: u32::from(definition.targeting.range),
+        shape: definition.targeting.shape.clone(),
+    }
+}
+
+/// A shape written the way a player would say it.
+fn shape_label(shape: &TargetShape) -> String {
+    match shape {
+        TargetShape::SelfCast => "on yourself".to_owned(),
+        TargetShape::Single => "one voxel".to_owned(),
+        TargetShape::Sphere { radius } => format!("sphere r{radius}"),
+        TargetShape::Column { height } => format!("column {height} tall"),
+        TargetShape::Line { length, width } => format!("line {length} long, {width} wide"),
+        TargetShape::Cone { length, spread } => format!("cone {length} long, spread {spread}"),
+        TargetShape::Path { offsets } => format!("path of {}", offsets.len()),
+    }
+}
+
+/// The colour a spell is presented in, from the element it draws on.
+///
+/// # Why the wheel decides the hue
+///
+/// [`GEM_COLOR`] and [`FUSION_COLOR`] are the lattice demo's palette, shared so the two
+/// screens agree about what a gem and a fusion look like — but a colour *per element*
+/// needs six of them, and inventing six literals would compile a content file's element
+/// names into the interface. So the hue is rotated around the circle by the element's
+/// position on `elements.ron`'s wheel, keeping [`GEM_COLOR`]'s saturation and lightness.
+/// Two properties fall out of that, and neither is an accident: six elements land on six
+/// evenly spaced hues, which is exactly what makes a legend readable, and **opposed
+/// elements get opposed hues**, because the wheel's opposition rule is a half turn and
+/// so is theirs.
+///
+/// A fusion output is not on the wheel — it is not an element anybody holds — so it
+/// takes [`FUSION_COLOR`], which is what the demo paints a fusion cell.
+///
+/// The hues are therefore not semantic: fire is not necessarily red. Making them so
+/// means a colour field on the element content, which is a schema change this has no
+/// business making on the way past.
+fn element_color(element: Option<&str>, elements: &ElementCatalog) -> Color {
+    let Some(id) = element.and_then(|name| elements.id(name)) else {
+        return GEM_COLOR;
+    };
+    let wheel = elements.wheel();
+    let Some(step) = wheel.iter().position(|on_wheel| *on_wheel == id) else {
+        return FUSION_COLOR;
+    };
+    // `u16` rather than a cast: a wheel is single digits, and this keeps the function
+    // free of the precision-loss suppressions a lossy conversion would need.
+    let step = u16::try_from(step).unwrap_or(0);
+    let spokes = u16::try_from(wheel.len()).unwrap_or(1).max(1);
+    let base = Hsla::from(GEM_COLOR);
+    let hue = (base.hue + 360.0 * f32::from(step) / f32::from(spokes)).rem_euclid(360.0);
+    Color::from(Hsla::new(hue, base.saturation, base.lightness, base.alpha))
+}
+
+/// Applies whatever the player asked of the aim this frame.
+///
+/// One system for the buttons and the keys together, because both mean the same four
+/// things and splitting them would give the confirm path two places to push a command
+/// from — which is one ordering change away from casting twice.
+fn resolve_aim_input(
+    readout: Res<CastReadout>,
+    mut aiming: ResMut<Aiming>,
+    mut queue: ResMut<CommandQueue>,
+    keys: Res<ButtonInput<KeyCode>>,
+    chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
+    controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
+    units: Query<(&Faction, &StandsOn), Without<Downed>>,
+) {
+    let Some(request) = requested(&keys, &chooses, &controls) else {
+        return;
+    };
+    let Some(caster) = readout.caster else {
+        return;
+    };
+
+    let next = match request {
+        AimRequest::Cancel => None,
+        AimRequest::Choose(spell) => {
+            let Some(row) = readout.row(&spell) else {
+                return;
+            };
+            if readout.unavailable.is_some() || row.blocked.is_some() {
+                return;
+            }
+            let targets = targets_in_range(&readout, &caster, row, &units);
+            Some(Aim {
+                spell,
+                // Nothing in range is not a reason to refuse the choice: the caster's
+                // own surface is always within its own range, so aiming always starts
+                // somewhere and the player moves the anchor from there.
+                anchor: targets.first().copied().unwrap_or(caster.standing),
+            })
+        }
+        AimRequest::Next => {
+            let Some(aim) = aiming.0.clone() else { return };
+            let Some(row) = readout.row(&aim.spell) else {
+                return;
+            };
+            let targets = targets_in_range(&readout, &caster, row, &units);
+            Some(Aim {
+                anchor: step_target(&targets, aim.anchor).unwrap_or(aim.anchor),
+                spell: aim.spell,
+            })
+        }
+        AimRequest::Confirm => {
+            let Some(aim) = aiming.0.clone() else { return };
+            if !emit_cast(&mut queue, &readout, &caster, &aim) {
+                return;
+            }
+            // The intent is spent whether or not the applier likes it. Leaving the aim
+            // up would invite a second confirm against a lattice that is about to
+            // change, and the applier's own answer arrives a schedule later.
+            None
+        }
+    };
+
+    if aiming.0 != next {
+        aiming.0 = next;
+    }
+}
+
+/// What the player asked of the aim.
+enum AimRequest {
+    /// Start aiming this spell.
+    Choose(String),
+    /// Point at the next unit in range.
+    Next,
+    /// Emit the cast.
+    Confirm,
+    /// Put the spell down.
+    Cancel,
+}
+
+/// The one request this frame, from a button or a key.
+///
+/// Exactly one, which is the point: a confirm arriving from both a button and its
+/// keyboard shortcut in the same frame must still be one cast.
+fn requested(
+    keys: &ButtonInput<KeyCode>,
+    chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
+    controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
+) -> Option<AimRequest> {
+    for (interaction, spell) in chooses {
+        if *interaction == Interaction::Pressed {
+            return Some(AimRequest::Choose(spell.0.clone()));
+        }
+    }
+    for (interaction, control) in controls {
+        if *interaction == Interaction::Pressed {
+            return Some(match control {
+                AimControl::Confirm => AimRequest::Confirm,
+                AimControl::Next => AimRequest::Next,
+                AimControl::Cancel => AimRequest::Cancel,
+            });
+        }
+    }
+    if keys.just_pressed(CONFIRM_KEY) {
+        return Some(AimRequest::Confirm);
+    }
+    if keys.just_pressed(NEXT_TARGET_KEY) {
+        return Some(AimRequest::Next);
+    }
+    if keys.just_pressed(CANCEL_KEY) {
+        return Some(AimRequest::Cancel);
+    }
+    None
+}
+
+/// Pushes the cast, or reports that it was folded.
+///
+/// An emitter, like every other input in this codebase: legality belongs to the one
+/// applier, so a cast it refuses is refused there with a reason rather than silently
+/// doing nothing here.
+fn emit_cast(queue: &mut CommandQueue, readout: &CastReadout, caster: &Caster, aim: &Aim) -> bool {
+    if readout.unavailable.is_some() {
+        return false;
+    }
+    let Some(row) = readout.row(&aim.spell) else {
+        return false;
+    };
+    if row.blocked.is_some() {
+        return false;
+    }
+    // Two confirms in one frame are one intent — the same fold the click-to-move
+    // emitter does, and for the same reason: the second would reach the applier only to
+    // die in its busy gate as a warned drop.
+    if queue.holds_command_for(caster.unit) {
+        return false;
+    }
+
+    queue.push(IssuedCommand {
+        seat: caster.seat,
+        command: GameCommand::Cast {
+            unit: caster.unit,
+            spell: aim.spell.clone(),
+            target: aim.anchor,
+            // Only the shapes that point somewhere carry a facing. Sending one anyway
+            // would put a direction nobody chose into the replay log, where every field
+            // is a permanent save commitment.
+            facing: volumes::needs_facing(&row.shape)
+                .then(|| facing_toward(caster.standing.coord, aim.anchor.coord)),
+            // Variable mana has no chooser yet; see `spell_row`.
+            mana: None,
+        },
+    });
+    true
+}
+
+/// The surfaces of units this spell could be aimed at, nearest hostile first.
+///
+/// The cycle list, and deliberately not the whole legal anchor set: a range-4 spell
+/// covers dozens of surfaces, and stepping a key through all of them is not a targeting
+/// interface. Clicking is how a bare surface is chosen; this is how a *unit* is.
+///
+/// Ordered by hostility, then grid distance, then the whole [`TilePos`] — never by the
+/// bare coordinate, which would collapse a bridge onto the ground beneath it and leave
+/// the order depending on query iteration.
+///
+/// The caster is in its own list when it is in its own range, because there is no
+/// ally-or-enemy targeting filter and there will not be one: you may heal an enemy and
+/// immolate a friend.
+fn targets_in_range(
+    readout: &CastReadout,
+    caster: &Caster,
+    row: &SpellRow,
+    units: &Query<(&Faction, &StandsOn), Without<Downed>>,
+) -> Vec<TilePos> {
+    if matches!(row.shape, TargetShape::SelfCast) {
+        return vec![caster.standing];
+    }
+    let mut ranked: Vec<(bool, u32, TilePos)> = units
+        .iter()
+        .map(|(faction, standing)| (faction, standing.0.pos))
+        .filter(|(_, pos)| in_range(caster.standing, *pos, row.range, readout.levels_per_bonus))
+        .map(|(faction, pos)| {
+            (
+                !Faction::Player.is_hostile_to(*faction),
+                volumes::grid_distance(caster.standing, pos),
+                pos,
+            )
+        })
+        .collect();
+    ranked.sort_unstable();
+    ranked.into_iter().map(|(_, _, pos)| pos).collect()
+}
+
+/// The entry after `current` in a cycle, wrapping.
+///
+/// An anchor that is not in the list — a bare surface the player clicked — steps to the
+/// first entry rather than nowhere, so the key always moves.
+fn step_target(targets: &[TilePos], current: TilePos) -> Option<TilePos> {
+    match targets.iter().position(|target| *target == current) {
+        Some(at) => targets.get((at + 1) % targets.len()).copied(),
+        None => targets.first().copied(),
+    }
+}
+
+/// The sextant pointing from one coordinate toward another.
+///
+/// The direction a `Line`, `Cone` or `Path` is fired in, taken from where the player
+/// aimed rather than asked for separately: pointing a flamethrower at somebody is the
+/// same gesture as choosing them.
+///
+/// Picked by trying all six and keeping the step that lands nearest, which is exact on
+/// cube coordinates and needs no angle. Ties break by [`Sextant::ALL`]'s order, so a
+/// target exactly between two directions always resolves the same way — including the
+/// degenerate case of aiming at your own coordinate, which is every direction at once.
+#[must_use]
+pub fn facing_toward(from: HexCoord, to: HexCoord) -> Sextant {
+    let mut best = Sextant::A;
+    let mut nearest = u32::MAX;
+    for sextant in Sextant::ALL {
+        let distance = from.neighbor(sextant).distance(to);
+        if distance < nearest {
+            nearest = distance;
+            best = sextant;
+        }
+    }
+    best
+}
+
+/// Puts the aimed spell down on leaving gameplay.
+///
+/// The aim names a `TilePos` and a unit that will not exist in the next session — unit
+/// ids are dealt from zero at every launch — so carrying one over would point the next
+/// fight at whatever happens to be standing there.
+fn forget_aim(mut aiming: ResMut<Aiming>) {
+    aiming.0 = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_assets::{ElementFile, SpellFile, SubstanceFile, SubstanceTable};
+    use hex_core::Level;
+
+    use super::*;
+
+    fn shipped_content() -> (ElementCatalog, SpellBook) {
+        let element_file: ElementFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/elements.ron"
+        )))
+        .expect("elements.ron parses");
+        let spell_file: SpellFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/spells.ron"
+        )))
+        .expect("spells.ron parses");
+        let substance_file: SubstanceFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/substances.ron"
+        )))
+        .expect("substances.ron parses");
+
+        let elements = ElementCatalog::from_file(&element_file);
+        let spells = SpellBook::from_file(&spell_file);
+        let substances = SubstanceTable::from_file(&substance_file);
+        ContentIndex::build(&elements, &spells, &substances)
+            .expect("shipped content cross-references resolve");
+        (elements, spells)
+    }
+
+    fn at(x: i32, y: i32, level: Level) -> TilePos {
+        TilePos::new(HexCoord::from_axial(x, y), level)
+    }
+
+    /// Aiming at a hex several steps out resolves to the direction it lies in.
+    ///
+    /// The property a directed spell depends on: if this and `hex_units::volumes`'s
+    /// rotation ever disagree, a flamethrower burns a different sextant from the one
+    /// the player pointed at, and nothing else in the game would notice.
+    #[test]
+    fn a_facing_points_at_what_was_aimed_at() {
+        for sextant in Sextant::ALL {
+            let mut target = HexCoord::ORIGIN;
+            for step in 1..=5 {
+                target = target.neighbor(sextant);
+                assert_eq!(
+                    facing_toward(HexCoord::ORIGIN, target),
+                    sextant,
+                    "{step} steps along {sextant:?} should read back as {sextant:?}"
+                );
+            }
+        }
+    }
+
+    /// Aiming at your own coordinate is every direction at once, and must still be one.
+    #[test]
+    fn a_facing_at_no_distance_is_deterministic() {
+        assert_eq!(
+            facing_toward(HexCoord::ORIGIN, HexCoord::ORIGIN),
+            Sextant::A
+        );
+    }
+
+    /// Cycling visits every target and comes back, from any starting point.
+    #[test]
+    fn stepping_targets_wraps_and_starts_from_an_unlisted_anchor() {
+        let targets = [at(1, 0, 4), at(2, 0, 4), at(1, 0, 9)];
+        assert_eq!(step_target(&targets, at(1, 0, 4)), Some(at(2, 0, 4)));
+        assert_eq!(step_target(&targets, at(2, 0, 4)), Some(at(1, 0, 9)));
+        // Two surfaces stacked at one coordinate are separate targets, so the wrap has
+        // to come off the third rather than the second.
+        assert_eq!(step_target(&targets, at(1, 0, 9)), Some(at(1, 0, 4)));
+        assert_eq!(step_target(&targets, at(7, 7, 0)), Some(at(1, 0, 4)));
+        assert_eq!(step_target(&[], at(1, 0, 4)), None);
+    }
+
+    /// Every element on the wheel gets its own colour, and a fusion gets the demo's.
+    #[test]
+    fn the_wheel_gives_every_element_a_distinct_colour() {
+        let (elements, _) = shipped_content();
+        let mut seen: Vec<Color> = Vec::new();
+        for id in elements.wheel() {
+            let name = elements.name(*id).expect("a wheel element has a name");
+            let color = element_color(Some(name), &elements);
+            assert!(
+                !seen.contains(&color),
+                "{name} shares a colour with an element already on the wheel"
+            );
+            seen.push(color);
+        }
+        assert_eq!(
+            element_color(Some("Lightning"), &elements),
+            FUSION_COLOR,
+            "a fusion output is not on the wheel and should read as a fusion"
+        );
+        assert_eq!(
+            element_color(Some("not an element"), &elements),
+            GEM_COLOR,
+            "an unresolvable element falls back rather than vanishing"
+        );
+    }
+
+    /// Opposed elements sit half a turn apart on the hue circle, because they sit half
+    /// a turn apart on the wheel. The property the rotation was chosen for.
+    #[test]
+    fn opposed_elements_get_opposed_hues() {
+        let (elements, _) = shipped_content();
+        let wheel = elements.wheel();
+        let half = wheel.len() / 2;
+        for (step, id) in wheel.iter().enumerate() {
+            let Some(opposite) = wheel.get((step + half) % wheel.len()) else {
+                continue;
+            };
+            let name = elements.name(*id).expect("a wheel element has a name");
+            let against = elements.name(*opposite).expect("its opposite has a name");
+            let hue = Hsla::from(element_color(Some(name), &elements)).hue;
+            let other = Hsla::from(element_color(Some(against), &elements)).hue;
+            let apart = (hue - other).abs();
+            assert!(
+                (apart - 180.0).abs() < 0.5,
+                "{name} and {against} are {apart} degrees apart, not 180"
+            );
+        }
+    }
+
+    /// Every shipped spell becomes a row that says what it costs and how far it reaches.
+    ///
+    /// Content-driven end to end: if a spell is renamed or its targeting changes, this
+    /// is what notices before a player does.
+    #[test]
+    fn every_shipped_spell_becomes_a_row() {
+        let (elements, spells) = shipped_content();
+        for (_, name, definition) in spells.iter() {
+            let row = spell_row(name, definition, None, &elements);
+            assert_eq!(row.name, name);
+            assert!(!row.detail.is_empty(), "{name} has no identity line");
+            assert!(row.cost.contains("range"), "{name} does not say its range");
+            assert_eq!(row.range, u32::from(definition.targeting.range));
+            assert_eq!(row.shape, definition.targeting.shape);
+        }
+    }
+
+    /// A blocked row carries the reason, not just the absence of a button.
+    #[test]
+    fn a_blocked_row_says_why() {
+        let (elements, spells) = shipped_content();
+        let ember = spells.id("Ember").expect("Ember ships");
+        let definition = spells.spell(ember).expect("Ember has a definition");
+        let row = spell_row(
+            "Ember",
+            definition,
+            Some(blocked_reason(&CastBlocked::Unsatisfiable)),
+            &elements,
+        );
+        assert_eq!(row.blocked, Some("not enough adjacent mana"));
+    }
+
+    /// Height buys range for a spell exactly as it does for engagement.
+    ///
+    /// The interface has to agree with the applier about this or it lights surfaces a
+    /// cast is then refused for — the one direction of disagreement that is a bug.
+    #[test]
+    fn the_interface_measures_range_the_way_the_applier_does() {
+        let high = at(0, 0, 9);
+        let low = at(4, -4, 4);
+        assert!(
+            !in_range(at(0, 0, 4), low, 3, 5),
+            "level ground falls short"
+        );
+        assert!(in_range(high, low, 3, 5), "five levels up buys the hex");
+        assert!(!in_range(low, high, 3, 5), "the low ground gains nothing");
+    }
+
+    /// Every rung the applier refuses a cast on is a rung the panel refuses to offer
+    /// one on, and it says which.
+    ///
+    /// The direction that matters: a panel that offered a cast the applier then refused
+    /// would spend a player's attention on a button that does nothing.
+    #[test]
+    fn the_panel_stops_where_the_applier_would() {
+        let unit = UnitId(1);
+        let ready = Turn {
+            movement_left: 4,
+            acted: false,
+        };
+        let spent = Turn {
+            movement_left: 4,
+            acted: true,
+        };
+        assert_eq!(
+            unavailable_reason(false, Some(unit), false, unit, Some(&ready), false),
+            Some("casting is combat-only for now")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(UnitId(2)), false, unit, Some(&ready), false),
+            Some("not this unit's turn")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(unit), false, unit, None, false),
+            Some("no turn to take the action from")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(unit), false, unit, Some(&spent), false),
+            Some("action already spent this turn")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(unit), false, unit, Some(&ready), true),
+            Some("still finishing the last action")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(unit), true, unit, Some(&ready), false),
+            Some("a decision is still open")
+        );
+        assert_eq!(
+            unavailable_reason(true, Some(unit), false, unit, Some(&ready), false),
+            None,
+            "an acting unit with its action still in hand should be offered its spells"
+        );
+    }
+
+    /// A readout for one caster holding the named spells, as the panel would show them.
+    fn readout_of(names: &[&str]) -> (CastReadout, Caster) {
+        let (elements, spells) = shipped_content();
+        let caster = Caster {
+            unit: UnitId(1),
+            seat: PlayerSeat::default(),
+            standing: at(0, 0, 4),
+        };
+        let rows = names
+            .iter()
+            .map(|name| {
+                let id = spells.id(name).expect("the test names a shipped spell");
+                let definition = spells.spell(id).expect("a shipped spell has a definition");
+                spell_row(name, definition, None, &elements)
+            })
+            .collect();
+        (
+            CastReadout {
+                caster: Some(caster),
+                unavailable: None,
+                spells: rows,
+                levels_per_bonus: 5,
+            },
+            caster,
+        )
+    }
+
+    /// A confirmed cast carries the exact anchor, and a facing only when the shape
+    /// points somewhere.
+    ///
+    /// The facing is a permanent save commitment — the command log is the replay log —
+    /// so an anchored shape must not acquire a direction nobody chose.
+    #[test]
+    fn a_confirmed_cast_names_its_anchor_and_only_the_facing_it_needs() {
+        let (readout, caster) = readout_of(&["Ember", "Flamethrower"]);
+        let mut queue = CommandQueue::default();
+        let anchor = at(2, -2, 4);
+
+        assert!(emit_cast(
+            &mut queue,
+            &readout,
+            &caster,
+            &Aim {
+                spell: "Ember".to_owned(),
+                anchor,
+            }
+        ));
+        match queue.pop().map(|issued| issued.command) {
+            Some(GameCommand::Cast {
+                unit,
+                spell,
+                target,
+                facing,
+                mana,
+            }) => {
+                assert_eq!(unit, caster.unit);
+                assert_eq!(spell, "Ember");
+                assert_eq!(target, anchor);
+                assert_eq!(facing, None, "a Single shape points nowhere");
+                assert_eq!(mana, None);
+            }
+            other => panic!("expected a cast, got {other:?}"),
+        }
+
+        assert!(emit_cast(
+            &mut queue,
+            &readout,
+            &caster,
+            &Aim {
+                spell: "Flamethrower".to_owned(),
+                anchor,
+            }
+        ));
+        match queue.pop().map(|issued| issued.command) {
+            Some(GameCommand::Cast { facing, .. }) => assert_eq!(
+                facing,
+                Some(facing_toward(caster.standing.coord, anchor.coord)),
+                "a Line shape fires the way the player aimed"
+            ),
+            other => panic!("expected a cast, got {other:?}"),
+        }
+    }
+
+    /// Nothing is emitted for a spell the interface is not offering, and one intent is
+    /// one command however many times confirm arrives in a frame.
+    #[test]
+    fn a_cast_is_not_emitted_twice_or_for_a_spell_that_is_not_offered() {
+        let (mut readout, caster) = readout_of(&["Ember"]);
+        let aim = Aim {
+            spell: "Ember".to_owned(),
+            anchor: at(1, -1, 4),
+        };
+        let mut queue = CommandQueue::default();
+
+        assert!(emit_cast(&mut queue, &readout, &caster, &aim));
+        assert!(
+            !emit_cast(&mut queue, &readout, &caster, &aim),
+            "a second confirm against an unconsumed queue is the same intent"
+        );
+        assert_eq!(queue.len(), 1);
+
+        let unknown = Aim {
+            spell: "Not A Spell".to_owned(),
+            anchor: aim.anchor,
+        };
+        assert!(!emit_cast(
+            &mut CommandQueue::default(),
+            &readout,
+            &caster,
+            &unknown
+        ));
+
+        readout.unavailable = Some("not this unit's turn");
+        assert!(!emit_cast(
+            &mut CommandQueue::default(),
+            &readout,
+            &caster,
+            &aim
+        ));
+
+        readout.unavailable = None;
+        if let Some(row) = readout.spells.first_mut() {
+            row.blocked = Some("not enough adjacent mana");
+        }
+        assert!(!emit_cast(
+            &mut CommandQueue::default(),
+            &readout,
+            &caster,
+            &aim
+        ));
+    }
+
+    /// A walk suspends casting without putting the aim down; the turn ending ends it.
+    ///
+    /// The distinction this asserts is the whole of `keeps_the_aim`, and collapsing it is
+    /// what made the module's advertised "reposition, then cast" flow impossible: the
+    /// `Busy` a walk sets arrives one frame after the click that started it, so an aim
+    /// dropped on any unavailability is an aim dropped by the act of walking.
+    #[test]
+    fn transient_unavailability_suspends_an_aim_and_a_finished_turn_ends_it() {
+        assert!(keeps_the_aim(BUSY), "mid-walk, and about to arrive");
+        assert!(keeps_the_aim(DECISION_OPEN), "waiting on somebody else");
+        assert!(!keeps_the_aim(ACTION_SPENT), "the action is gone");
+        assert!(!keeps_the_aim(NOT_YOUR_TURN));
+        assert!(!keeps_the_aim(NO_TURN));
+        assert!(!keeps_the_aim(OUT_OF_COMBAT));
+    }
+
+    /// Walking carries the aim, and the anchor is re-measured from where the caster lands.
+    ///
+    /// Both directions matter, and only the second is obvious. Stepping *toward* a target
+    /// brings an out-of-reach anchor into range, which is the point of repositioning.
+    /// Stepping *away* carries a chosen anchor out of it, and an aim that survived that
+    /// would let the player confirm a cast the applier then refuses — the one direction
+    /// of disagreement this module's header calls a bug.
+    #[test]
+    fn an_aim_is_re_measured_from_wherever_the_caster_lands() {
+        let (mut readout, _) = readout_of(&["Ember"]);
+        let range = readout.row("Ember").expect("Ember is offered").range;
+        let levels = readout.levels_per_bonus;
+
+        // An anchor just inside Ember's range from the origin.
+        let anchor = at(i32::try_from(range).expect("a small range"), 0, 4);
+        let reachable = |from: TilePos| in_range(from, anchor, range, levels);
+        assert!(
+            reachable(at(0, 0, 4)),
+            "precondition: in reach to begin with"
+        );
+
+        // Walking one hex further away puts it out, and the aim goes with it.
+        let retreated = at(-1, 0, 4);
+        assert!(
+            !reachable(retreated),
+            "precondition: the fixture must actually leave range"
+        );
+
+        // And being Busy alone — the state a walk leaves behind — does not.
+        readout.unavailable = Some(BUSY);
+        assert!(
+            readout.unavailable.is_none_or(keeps_the_aim),
+            "a walk in progress must not be a reason to drop the aim"
+        );
+        readout.unavailable = Some(ACTION_SPENT);
+        assert!(
+            !readout.unavailable.is_none_or(keeps_the_aim),
+            "a spent action must be"
+        );
+    }
+
+    /// A spell whose every effect is unbuilt is offered as blocked, never as a button.
+    ///
+    /// The failure without this is invisible and expensive: the cast is *legal*, so the
+    /// applier charges for it — the mana goes, the turn goes — and the only trace is a
+    /// `warn!` a release build does not show a console for. Several shipped spells are in
+    /// that state, so this is the live case rather than a hypothetical one.
+    #[test]
+    fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
+        let (_, spells) = shipped_content();
+        let undeliverable = ["Renewal", "Earthen Wall", "Stone Shaper", "Daylight"];
+        for name in undeliverable {
+            let id = spells.id(name).expect("the test names a shipped spell");
+            let definition = spells.spell(id).expect("a shipped spell has a definition");
+            assert!(
+                !hex_combat::delivers_anything(definition),
+                "{name} has nothing built, so the panel must not offer it"
+            );
+        }
+        // The control, and the reason this is not just a ban on everything: the spells
+        // the wave actually delivers stay castable.
+        for name in ["Ember", "Kindle"] {
+            let Some(id) = spells.id(name) else { continue };
+            let definition = spells.spell(id).expect("a shipped spell has a definition");
+            assert!(
+                hex_combat::delivers_anything(definition),
+                "{name} lands damage today and must stay offered"
+            );
+        }
+    }
+}

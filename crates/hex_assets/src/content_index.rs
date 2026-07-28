@@ -355,7 +355,7 @@ mod tests {
     fn a_dangling_element_reference_fails() {
         let book = book(vec![(
             "Ghost",
-            spell(vec![gem("Aether")], vec![Effect::Burn { amount: 1 }]),
+            spell(vec![gem("Aether")], vec![Effect::Burn { turns: 1 }]),
         )]);
         let errors = ContentIndex::build(&elements(), &book, &substances())
             .expect_err("Aether is not an element");
@@ -418,7 +418,7 @@ mod tests {
         // A spell book with a dangling element replaces the old one; the rebuild fails.
         app.insert_resource(book(vec![(
             "Broken",
-            spell(vec![gem("Aether")], vec![Effect::Burn { amount: 1 }]),
+            spell(vec![gem("Aether")], vec![Effect::Burn { turns: 1 }]),
         )]));
         app.update();
 

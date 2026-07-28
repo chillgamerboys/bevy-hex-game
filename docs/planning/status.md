@@ -64,6 +64,18 @@ is in the replay log rather than made inside the applier. A unit whose every hex
 disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
 deals damage the same way, through the same decision.
 
+**And casting has an interface.** A spell panel lists what the acting unit inscribes,
+each row carrying its live blocked reason from `castable` and, above the list, whichever
+of the applier's own refusals is standing in the way — not this unit's turn, action
+already spent, a decision still open. Choosing a spell starts aiming: every legal anchor
+takes a clickable marker, `hex_units::volumes` resolves the shape, and the surfaces
+inside that volume are painted in the spell's element colour. The anchor moves by
+clicking a lit surface or by cycling the units in range; `ENTER` casts and `Q` puts the
+spell down. Only *surfaces* are painted — gameplay cannot know how tall a level is in
+world units — so the panel reports the whole voxel count beside the number it could
+show. The `1`-casts-something placeholder that made the damage loop playable before any
+of this existed is gone.
+
 Bodies are one hex wide; there is no footprint for anything larger, and units do not
 obstruct each other — so a route may be drawn straight through another piece.
 
@@ -118,10 +130,22 @@ leaves the turn order revivable. How many hexes a spell disables, how long a fig
 and what a strike costs are all knobs rather than answers; `strike_disables` sits in
 `combat.ron` beside the rest precisely so it can be moved without touching code.
 
-Two things a landed cast still cannot do: reach terrain (rungs 4 and 5 of the ladder wait
-on `RunBottom` from the world lane) and last beyond the moment it resolves (`Burn` and
-every other persistent effect wait on the effect runtime). Both refuse by name rather
-than silently doing nothing.
+One thing a landed cast still cannot do: reach terrain, because rungs 4 and 5 of the
+ladder wait on `RunBottom` from the world lane. It refuses by name rather than silently
+doing nothing.
+
+**A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
+(`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
+the effect ledger, and one hex goes down at the start of each of that target's own turns.
+The countdown lives **only** there. An earlier shape parked a `Vec<Burn>` inside
+`LatticeState` and it was pulled back out before anything persisted it — a burn has a
+source the lattice has no vocabulary for, and a tick point a rules engine with no turn
+order cannot see. The two settled rules hold — the tick point is **personal, not the round
+boundary**, and burn **ignores armour** while still going through the defender's choice,
+so its damage lands in the replay log like every other hit. What that does *not* settle
+is anything about the negative spiral it accelerates: fight length, functional death, and
+the brakes the design names (rout, surrender) are all still deferred, and burn deliberately
+ships without one. See [systems/combat.md](../systems/combat.md#effects-that-outlast-their-cast).
 
 ## Not built, and not next
 
@@ -166,9 +190,11 @@ One piece of it is now built. **The shape vocabulary resolves to exact voxels**
 `Path`, over `TilePos` in the grid-space metric where hexes and levels count equally,
 handing back the sorted, deduplicated form an announcement requires. `spells.ron`'s
 `TargetShape` carries the matching extents — `Blast` is now `Sphere(radius: N)` — and
-validation caps them. It is pure geometry with no consumer: nothing announces a
-volume, nothing checks legality against one, and nothing clips one to what a caster
-can see. Those are the rest of terrain magic.
+validation caps them. **It has one consumer now** — the casting preview resolves the
+aimed shape and paints every surface in it, and the cast applier refuses a shape that
+cannot resolve. What is still missing is the other half: nothing announces a volume,
+nothing applies a unit effect across one, and nothing clips one to what a caster can
+see. Those are the rest of terrain magic.
 
 The binding parts are:
 
@@ -205,6 +231,27 @@ The first implementation also ships with explicit limitations:
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and remains revivable; functional death and permadeath remain open.
+- **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
+  area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
+  list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever
+  stands on the target voxel. The friendly-fire contract above is unchanged and
+  unweakened — nothing filters by faction — but a fireball *would* damage one unit
+  rather than every unit inside it.
+
+  Rather than ship that as a silent lie, `lattices.ron` **rejects an inscribed spell
+  whose shape covers more than the anchor and whose effects reach units**
+  (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
+  cast, so the preview cannot promise what the applier will not deliver. The refusal
+  lifts the day the applier iterates the volume and queues one decision per unit inside
+  it; it is the same seam `RunBottom` and the announce path close for terrain.
+- **The HUD counts your own party's hexes, not the enemy's.** Damage you take is legible
+  — the count drops — and damage you deal is not. That is a presentation gap rather than
+  a rules one: `FactionKnowledge` already carries what a faction knows about an enemy
+  lattice, and nothing reads it into the HUD yet.
+- **Burn attributes one source per tick.** Several burns on one target come due as a
+  single count and therefore a single decision, which has room for one `source`. The
+  earliest-lit fire fills it. The rules never read `source`, so the imprecision is
+  confined to the combat log.
 
 ## Not yet done, at the toolchain level
 

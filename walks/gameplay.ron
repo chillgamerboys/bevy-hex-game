@@ -1,7 +1,7 @@
-// The gameplay walk: both scenario families, the pause overlay, and the
-// return trip. Complements walks/menus.ron; run the same way. The long
-// settles after AwaitTerrain mirror the map-review harness's frame budget so
-// the camera and lighting have settled before the photograph.
+// The gameplay walk: both scenario families, the pause overlay, the casting
+// interface, and the return trip. Complements walks/menus.ron; run the same way.
+// The long settles after AwaitTerrain mirror the map-review harness's frame
+// budget so the camera and lighting have settled before the photograph.
 [
     AwaitScreen("Title"),
     StartScenario(name: "The Crossing"),
@@ -35,22 +35,39 @@
     AwaitTerrain,
     Settle(120),
     Capture("13-close-quarters-combat"),
-    // The wave's proof, in two halves.
+    // The wave's proof, in four frames.
     //
-    // `1` casts the acting unit's first *damaging* inscribed spell at the nearest
-    // hostile — a placeholder emitter until the casting UX lands. Frame 14 cannot show
-    // that damage: the HUD counts your own party's hexes, and nothing draws a hostile
-    // lattice yet, so the cast's effect is in the log rather than on screen.
-    //
-    // Frame 15 is where damage becomes visible, and it is the enemy's doing: its strike
-    // takes one of *your* hexes, and the readout falls. Both halves matter — one proves
-    // a cast resolves, the other proves damage lands somewhere a player can see.
-    Key("Digit1"),
+    // Every `Click` here is also an assertion. The runner waits for a button whose
+    // `Name` starts with the given string and fails the whole walk if it never
+    // appears, so "Cast Ember" existing means the panel found the hedge-mage's
+    // lattice, asked `castable`, and offered the spell — and "Confirm Cast"
+    // existing means aiming actually started.
+    Click(name: "Cast Ember"),
+    Settle(30),
+    Capture("14-close-quarters-aiming"),
+    // Cycle to the next unit in range, then put the spell down again. With one
+    // hostile on the board the cycle lands back where it started; what frame 15
+    // shows is the preview *gone*, which is the half of aiming that has no other
+    // way of being checked.
+    Key("Tab"),
+    Settle(10),
+    Key("KeyQ"),
+    Settle(20),
+    Capture("15-close-quarters-aim-cancelled"),
+    Click(name: "Cast Ember"),
+    Settle(30),
+    Click(name: "Confirm Cast"),
     Settle(120),
-    Capture("14-close-quarters-after-cast"),
+    // Frame 16 is the applier answering: the panel's rows lose their buttons and
+    // say the action is spent, which only happens if the cast was accepted. The
+    // damage itself is still not on screen — the HUD counts your own party's hexes
+    // and nothing draws a hostile lattice — so the interface is the witness.
+    Capture("16-close-quarters-after-cast"),
+    // And frame 17 is where damage becomes visible, by the enemy's doing: its
+    // strike takes one of *your* hexes and the party readout falls.
     Key("Space"),
     Settle(90),
-    Capture("15-close-quarters-enemy-turn"),
+    Capture("17-close-quarters-enemy-turn"),
     Key("Backspace"),
     AwaitScreen("Title"),
 ]

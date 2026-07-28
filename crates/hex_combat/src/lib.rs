@@ -34,11 +34,15 @@ use hex_core::AppSystems;
 mod ai;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
+/// Effects that outlast the action that caused them.
+pub mod effects;
 /// What a faction knows about a hostile lattice.
 pub mod knowledge;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
+pub use commands::{delivers_anything, UNDELIVERABLE};
+pub use effects::PersistentEffects;
 pub use hex_core::Turn;
 pub use knowledge::{BaseVisibility, FactionKnowledge, KnownCell, LatticeKnowledge, RevealAll};
 pub use turns::{Initiative, TurnOrder};
@@ -90,6 +94,7 @@ pub fn plugin(app: &mut App) {
         turns::plugin,
         ai::plugin,
         commands::plugin,
+        effects::plugin,
         knowledge::plugin,
     ));
 }

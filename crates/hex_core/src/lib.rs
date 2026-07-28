@@ -12,6 +12,7 @@
 pub mod app;
 pub mod commands;
 pub mod config;
+pub mod effects;
 pub mod elements;
 pub mod hex;
 pub mod lattice_ids;
@@ -30,6 +31,7 @@ pub use app::{
     AppSystems, GameplaySetup, Mode, PausableSystems, Pause, RoundElapsed, Screen, Turn,
 };
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
+pub use effects::{EffectEnd, EffectId, EffectPayload, PersistentEffect};
 pub use elements::{ElementId, SpellId};
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
 pub use lattice_ids::{EnchantId, LatticeCoord};

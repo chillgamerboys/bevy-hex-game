@@ -6,8 +6,10 @@
 //! capacity versus channelling throughput, damage disables, and enchantment
 //! mana locking. Fusion resolution now has content behind it — the hedge-mage's
 //! Lightning Bolt is the one shipped spell requiring a higher-order element —
-//! though this demo's own fixture does not use it. Burn ticks stay dormant:
-//! burn *effects* are applied above the engine, which is HEX-12's job. Nothing
+//! though this demo's own fixture does not use it. **Burn is not here at all**: it
+//! stopped being something a lattice carries and now lives in `hex_combat`'s effect
+//! ledger, which this screen deliberately cannot see — a burn needs a turn order to
+//! tick against, and a sandbox has none. Nothing
 //! persists — the lattice is rebuilt from content on every entry, and `Reset`
 //! rebuilds the battle state. Reset is no longer the *only* way back from a
 //! strike (`hex_lattice::restore` exists now), but it stays the demo's, because
@@ -28,12 +30,14 @@ use bevy::prelude::*;
 use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, tick_burns, CastBlocked, Casting, CellKind,
-    LatticeSpec, LatticeState, LatticeStats, SpellTable,
+    apply_cast, apply_disables, castable, channel, Casting, CellKind, LatticeSpec, LatticeState,
+    LatticeStats, SpellTable,
 };
 
+use crate::casting::blocked_reason;
 use crate::menus::widgets::{
-    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets, LABEL,
+    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets,
+    FUSION_COLOR, GEM_COLOR, LABEL, SMALL_BUTTON_WIDTH,
 };
 
 use super::{despawn_screen, screen_root};
@@ -66,10 +70,9 @@ const ROW_STEP: f32 = 56.0;
 /// How many log lines the demo keeps.
 const LOG_LINES: usize = 6;
 
-/// Tints multiplied over the white hex sprite. Saturated and mostly opaque —
-/// the first walk photograph showed the old low-alpha fills washing out.
-const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
-const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
+/// Tints multiplied over the white hex sprite. `GEM_COLOR` and `FUSION_COLOR` moved to
+/// [`widgets`](crate::menus::widgets) when the gameplay casting panel started drawing
+/// the same vocabulary: two copies of a palette is one edit away from two palettes.
 const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
 const LOCKED_COLOR: Color = Color::srgba(0.72, 0.54, 0.18, 0.95);
 const DISABLED_COLOR: Color = Color::srgba(0.46, 0.13, 0.11, 0.95);
@@ -120,7 +123,7 @@ struct DemoCell(LatticeCoord);
 #[derive(Component)]
 struct CastsSpell(LatticeCoord);
 
-/// The button that channels mana back and ticks burns.
+/// The button that channels mana back toward capacity.
 #[derive(Component)]
 struct EndsTurn;
 
@@ -361,18 +364,15 @@ fn handle_action_buttons(
             log,
         } = &mut *demo;
         channel(state, spec, stats);
-        let due = tick_burns(state);
-        if due == 0 {
-            push_log(
-                log,
-                "end of turn: channelled mana back toward capacity".to_owned(),
-            );
-        } else {
-            push_log(
-                log,
-                format!("end of turn: channelled, and {due} burn(s) came due"),
-            );
-        }
+        // No burn tick here any more. Burn stopped being something a lattice carries —
+        // it lives in `hex_combat`'s effect ledger, which this screen deliberately
+        // cannot see, because the demo is a sandbox for the *rules engine* rather than
+        // for the fight. A burn needs a turn order to tick against, and there is not one
+        // here.
+        push_log(
+            log,
+            "end of turn: channelled mana back toward capacity".to_owned(),
+        );
     }
     if resets
         .iter()
@@ -455,14 +455,6 @@ fn strike(demo: &mut DemoLattice, coord: LatticeCoord, spells: &SpellBook) {
                 ),
             );
         }
-    }
-}
-
-fn blocked_reason(blocked: &CastBlocked) -> &'static str {
-    match blocked {
-        CastBlocked::NotASpell => "no spell here",
-        CastBlocked::SpellDisabled => "spell hex disabled",
-        CastBlocked::Unsatisfiable => "not enough adjacent mana",
     }
 }
 
@@ -725,7 +717,7 @@ fn spawn_control_panel(
                         },
                     ))
                     .with_children(|row| {
-                        // The action slot is a fixed 132px whether it holds a
+                        // The action slot is a button's width whether it holds a
                         // button or a blocked reason, so every row aligns.
                         match castable(&demo.spec, &demo.state, coord, tables) {
                             Ok(plan) => {
@@ -747,7 +739,7 @@ fn spawn_control_panel(
                                 row.spawn((
                                     Name::new("Blocked Reason"),
                                     Node {
-                                        width: Val::Px(132.0),
+                                        width: Val::Px(SMALL_BUTTON_WIDTH),
                                         ..default()
                                     },
                                     children![fine(
@@ -772,11 +764,10 @@ fn spawn_control_panel(
             controls.spawn(blurb(
                 assets,
                 format!(
-                    "free mana {}   ·   locked {}   ·   enchantments {}   ·   burns {}",
+                    "free mana {}   ·   locked {}   ·   enchantments {}",
                     demo.state.total_gem_mana(),
                     demo.state.total_locked_mana(),
                     demo.state.enchantment_count(),
-                    demo.state.burns().len(),
                 ),
             ));
 

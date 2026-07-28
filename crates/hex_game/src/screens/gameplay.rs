@@ -5,17 +5,17 @@
 //! on `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any
 //! of them. It reads `Mode` and `TurnOrder` to describe what is happening, and
 //! writes neither.
+//!
+//! Casting is [`crate::casting`]'s — the spell panel, the shape preview and the cast
+//! command all live there. This module used to carry a placeholder that cast the first
+//! damaging spell at the nearest hostile on `1`, so the damage loop could be played
+//! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
-use hex_assets::{Effect, SpellBook};
 use hex_combat::{Turn, TurnOrder};
-use hex_core::{
-    AppSystems, CommandQueue, GameCommand, IssuedCommand, Mode, PausableSystems, Pause, PlayerSeat,
-    Screen, TilePos,
-};
-use hex_lattice::{CellKind, LatticeSpec, LatticeState};
-use hex_units::volumes::grid_distance;
-use hex_units::{Downed, Faction, Player, StandsOn, UnitRegistry};
+use hex_core::{Mode, Pause, Screen};
+use hex_lattice::{LatticeSpec, LatticeState};
+use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
 use crate::menus::widgets::UiAssets;
@@ -29,13 +29,6 @@ pub(super) fn plugin(app: &mut App) {
     app.register_type::<Mode>();
 
     app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
-    app.add_systems(
-        Update,
-        cast_first_spell
-            .in_set(AppSystems::RecordInput)
-            .in_set(PausableSystems)
-            .run_if(in_state(Screen::Gameplay)),
-    );
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
@@ -46,7 +39,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
         toggle_reveal_all
-            .in_set(PausableSystems)
+            .in_set(hex_core::PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
     app.add_systems(
@@ -129,8 +122,8 @@ fn update_hud(
                 Err(_) => "…".to_owned(),
             };
             format!(
-                "COMBAT   ·   round {}   ·   {}{}   ·   SPACE to end turn   \
-                 ·   ESC to pause",
+                "COMBAT   ·   round {}   ·   {}{}   ·   cast from the panel   \
+                 ·   SPACE to end turn   ·   ESC to pause",
                 order.round + 1,
                 whose,
                 lattice_readout(&party)
@@ -228,94 +221,6 @@ fn handle_input(
     if keys.just_pressed(KeyCode::Backspace) {
         next_screen.set(Screen::Title);
     }
-}
-
-/// Casts the acting player unit's first inscribed spell at the nearest hostile.
-///
-/// **A placeholder emitter, and it should read as one.** Choosing a spell, previewing
-/// its shape, and picking a target are HEX-21's, and this exists so the loop underneath
-/// them is playable and photographable before that lands — a cast you cannot issue is a
-/// cast nobody can see go wrong.
-///
-/// It emits rather than acts, like every other input in this codebase: the applier owns
-/// legality, so pressing this on a spell the lattice cannot pay logs a refusal with the
-/// reason rather than doing nothing.
-fn cast_first_spell(
-    keys: Res<ButtonInput<KeyCode>>,
-    order: Res<TurnOrder>,
-    registry: Res<UnitRegistry>,
-    spells: Option<Res<SpellBook>>,
-    mut queue: ResMut<CommandQueue>,
-    casters: Query<(&LatticeSpec, &StandsOn), (With<Player>, Without<Downed>)>,
-    hostiles: Query<(&Faction, &StandsOn), Without<Downed>>,
-) {
-    if !keys.just_pressed(KeyCode::Digit1) {
-        return;
-    }
-    let (Some(spells), Some(acting)) = (spells, order.current()) else {
-        return;
-    };
-    let Some(entity) = registry.entity_of(acting) else {
-        return;
-    };
-    let Ok((spec, standing)) = casters.get(entity) else {
-        return;
-    };
-    // Prefer a spell that actually damages. A placeholder the player cannot see into
-    // should at least pick something whose effect is *built*, or pressing the key looks
-    // broken: the hedge-mage's lowest-coordinate spell is Renewal, whose effects all
-    // still refuse, so first-in-coordinate-order would cast and visibly do nothing.
-    let mut inscribed: Vec<&str> = spec
-        .cells()
-        .filter_map(|(_, kind)| match kind {
-            CellKind::Spell { spell } => spells.name(spell),
-            _ => None,
-        })
-        .collect();
-    inscribed.sort_by_key(|name| {
-        let damaging = spells
-            .id(name)
-            .and_then(|id| spells.spell(id))
-            .is_some_and(|spell| {
-                spell
-                    .effects
-                    .iter()
-                    .any(|effect| matches!(effect, Effect::DisableHexes { .. }))
-            });
-        (!damaging, *name)
-    });
-    let Some(name) = inscribed.first().copied() else {
-        info!("cast: this unit inscribes no spells");
-        return;
-    };
-
-    // Nearest hostile by grid distance, ties broken by position so the same board always
-    // picks the same target — a placeholder still has to be deterministic.
-    let mut targets: Vec<(u32, TilePos)> = hostiles
-        .iter()
-        .filter(|(faction, _)| Faction::Player.is_hostile_to(**faction))
-        // Grid distance over the whole `TilePos`, not the coordinate: discarding the
-        // level is what once put a unit on a bridge and one on the ground beneath it
-        // zero hexes apart. Ranking by coordinate could pick a target the applier then
-        // refuses as out of range while a genuinely reachable one is never tried.
-        .map(|(_, target)| (grid_distance(standing.0.pos, target.0.pos), target.0.pos))
-        .collect();
-    targets.sort_unstable();
-    let Some(&(_, target)) = targets.first() else {
-        info!("cast: nothing hostile to aim at");
-        return;
-    };
-
-    queue.push(IssuedCommand {
-        seat: PlayerSeat::default(),
-        command: GameCommand::Cast {
-            unit: acting,
-            spell: name.to_owned(),
-            target,
-            facing: Some(hex_core::Sextant::A),
-            mana: None,
-        },
-    });
 }
 
 #[cfg(test)]

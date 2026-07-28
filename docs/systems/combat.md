@@ -81,9 +81,11 @@ A crystal lattice is a structured arrangement of gems, which is what the thing i
 it carries the connectedness that adjacency-based power depends on. It reads correctly
 everywhere: a twelve-hex lattice, lattice damage, a lattice hex disabled.
 
-**The rules engine exists** as `hex_lattice`, and knowledge *about* a lattice
-exists as the store below. **No unit carries one yet** — that is HEX-12 — so the
-word is settled and the engine proven before either becomes load-bearing.
+**The rules engine exists** as `hex_lattice`, knowledge *about* a lattice exists as the
+store below, and **units now carry one**: `spawn_unit` looks the archetype up in
+`lattices.ron` and attaches a `LatticeSpec`, a `LatticeState` and the `LatticeStats` that
+say what its gems hold. An enemy's lattice is its entire stat block, so that one lookup
+is what makes a wolf a wolf.
 
 ## What a faction knows
 
@@ -152,13 +154,92 @@ The dev reveal-all toggle is `K`, behind the `dev` feature: the shipped build ha
 no key that exposes hidden information, since hidden information is this game's
 source of uncertainty rather than dice.
 
+## Effects that outlast their cast
+
+Damage over time, enchantment upkeep and decaying divination are the same system wearing
+three hats, so [casting.md](casting.md#persistent-effects) builds it once, around one
+shape:
+
+```
+{ source, target, payload, start, end }
+```
+
+The vocabulary is `hex_core::effects`; the runtime is `hex_combat::effects`; lattice
+payloads go through `hex_lattice`'s existing functions. Today the only payload is
+`Burn`, and it is a payload rather than a special case — what burning means can be
+redefined without touching the framework.
+
+### Two tick points, because tick point is per payload
+
+| Hook | When | What ticks there |
+|---|---|---|
+| `tick_turn_effects` | start of the acting unit's turn, before `CombatSystems::Act` | personal payloads — today, `Burn` |
+| `expire_round_effects` | on `RoundElapsed`, after `CombatSystems::Advance` | end conditions that can only come due on a round boundary |
+
+**Burn is personal.** It ticks at the start of the *affected unit's* turn, not at the
+round boundary — the design words fire's damage over time that way, and a round-boundary
+burn would hit a unit that had just acted and one that had not at the same moment.
+
+The tick is driven by a `(round, unit)` cursor rather than by a one-frame signal, because
+a turn is many frames long: anything keyed on "the acting unit is burning" would fire
+every frame and empty a lattice in about a second.
+
+### Burn ignores armour, but not the defender
+
+Two halves that are easy to conflate, and the design settles both.
+
+A due burn **skips `resolve_incoming`**, the flat subtraction that defensive
+enchantments apply. Fire's identity is beating defences by ignoring them rather than
+overpowering them, so a shield that turns an ember into nothing does not slow a fire.
+
+A due burn **still parks `PendingDecision::ChooseDisables`**, exactly as a spell's
+damage does. Damage names a count; the defender picks which hexes. A fight replays by
+re-running its commands, so a choice made inside the runtime and never written down
+would be re-derived on replay rather than replayed — and burn would become the one
+damage source a fight could not reproduce.
+
+The seam holds one decision at a time, so a tick that comes due while another decision
+is open **queues** rather than skipping itself or overwriting the open one. Both
+alternatives lose damage silently.
+
+### One countdown, and it is the ledger's
+
+A burn is entirely a ledger entry — source, start round, end condition, and
+`PersistentEffect::ticks`, the count of personal ticks that have fired. `is_live` is a
+total function of the record; nothing else is consulted and nothing has to agree.
+
+It was briefly built the other way, with a `Vec<Burn>` inside `LatticeState` ticked by the
+rules engine, and the seam was wrong in both directions. A burn has a *source* and the
+lattice has no vocabulary for one, so attribution lived in the ledger regardless and the
+two stores described a single fact between them. The engine's counter also advanced per
+engine call rather than per the target's turn — the tick point this document specifies —
+which a sandbox with no turn order could drive at all. `hex_lattice` now holds hexes,
+mana and enchantments; fire is none of those.
+
+`ticks` counts up rather than down for the same reason `start` does: a number that only
+increases cannot be double-decremented by a repeated frame, and comparing it against the
+end condition is a total function of two facts.
+
+The ledger is cleared on leaving gameplay, because unit ids restart each session and
+nothing ever drains an effect: an inherited burn would tick on a stranger forever. A
+fight *ending* drops only what could not be delivered — nothing in the design puts a fire
+out because the party walked away from it.
+
+### What this does not settle
+
+Burn is a named accelerant of the design's negative spiral, and the brakes are
+[explicitly deferred](../design/game.md#recovery-and-death). This adds the accelerant and
+no brake, on purpose: **initiative**, **action economy**, **fight length**, **permadeath**
+and **functional death** are all still open, and how much a burn should hurt is a feel
+question nobody has played with yet.
+
 ## Where it lives
 
 | Crate | Holds |
 |---|---|
-| `hex_core` | `Mode`, `Turn` and `RoundElapsed` — shared because `hex_combat` writes them and `hex_units` reads them, and neither can see the other. Also `KnowledgeSource` / `KnowledgeExpiry`, which both knowledge channels need |
+| `hex_core` | `Mode`, `Turn` and `RoundElapsed` — shared because `hex_combat` writes them and `hex_units` reads them, and neither can see the other. Also `KnowledgeSource` / `KnowledgeExpiry`, which both knowledge channels need, and the `{source, target, payload, start, end}` persistent-effect vocabulary |
 | `hex_units` | Bodies, positions, factions, where a unit may step |
-| `hex_combat` | The turn order, engagement, the placeholder AI, and the lattice-knowledge store |
+| `hex_combat` | The turn order, engagement, the placeholder AI, the lattice-knowledge store, and the persistent-effect runtime |
 | `hex_lattice` | The pure rules engine. `hex_combat` depends on it because knowledge *of* a lattice needs the lattice vocabulary — and because `hex_core → hex_lattice` is the dependency direction, so the store cannot live in `hex_core` |
 | `hex_anim` | Moving a transform over time. Knows nothing about any of the above |
 

@@ -238,3 +238,71 @@ fn shipped_wheel_opposition_is_symmetric() {
         assert_ne!(opposite, *id, "no element opposes itself");
     }
 }
+
+/// An area spell on a lattice must not load while the applier only reaches the anchor.
+///
+/// This is the wave's one place where the interface could tell a lie the player has no
+/// way to catch. `hex_units::volumes` resolves a shape to an exact voxel set and the
+/// casting preview paints every surface in it; `hex_combat`'s applier still routes each
+/// unit-affecting effect through the single unit standing on the anchor. Inscribe
+/// Fireball on a lattice and the player would light up thirty-odd surfaces, spend the
+/// mana and the turn, and hurt one of them.
+///
+/// So it is refused at load. The test builds the failing content on purpose rather than
+/// asserting the shipped file happens to be clean, because the shipped file being clean
+/// is what would make this silently stop covering anything: every current lattice
+/// inscribes `Single` spells, so nothing here exercises the check by accident.
+#[test]
+fn an_area_spell_on_a_lattice_is_refused_while_the_applier_only_reaches_the_anchor() {
+    use hex_assets::{AxialPair, UnvalidatedArchetype, UnvalidatedCell, UnvalidatedEntry};
+    use std::collections::BTreeMap;
+
+    let elements =
+        ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+
+    // Fireball is shipped, and its shape is a sphere — see spells.ron.
+    let cell = |kind| UnvalidatedEntry {
+        at: AxialPair { q: 0, r: 0 },
+        kind,
+    };
+    let with_spell = |name: &str, q: i32| UnvalidatedEntry {
+        at: AxialPair { q, r: 0 },
+        kind: UnvalidatedCell::Spell(name.to_owned()),
+    };
+    let archetype = |entries: Vec<UnvalidatedEntry>| UnvalidatedArchetype {
+        cells: entries,
+        attunement: BTreeMap::from([("Fire".to_owned(), 3)]),
+        channelling: BTreeMap::from([("Fire".to_owned(), 3)]),
+    };
+
+    let mut file = LatticeFile {
+        archetypes: BTreeMap::from([(
+            "area-caster".to_owned(),
+            archetype(vec![
+                cell(UnvalidatedCell::Gem("Fire".to_owned())),
+                with_spell("Fireball", 1),
+            ]),
+        )]),
+    };
+    let errors = LatticeLibrary::build(&file, &elements, &spells)
+        .expect_err("an area damage spell on a lattice must not resolve");
+    let reported = format!("{:?}", errors);
+    assert!(
+        reported.contains("AreaEffectUnapplied"),
+        "the refusal must name the gap it waits on, got: {reported}"
+    );
+
+    // The positive control, and the one that keeps the check from being a blanket ban on
+    // shapes: the same lattice with a Single spell resolves. Without this, deleting the
+    // shape test and refusing every spell cell would still pass.
+    file.archetypes.insert(
+        "area-caster".to_owned(),
+        archetype(vec![
+            cell(UnvalidatedCell::Gem("Fire".to_owned())),
+            with_spell("Ember", 1),
+        ]),
+    );
+    LatticeLibrary::build(&file, &elements, &spells)
+        .expect("a Single-shaped spell on the same lattice resolves");
+}

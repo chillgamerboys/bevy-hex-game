@@ -10,9 +10,8 @@ use std::collections::BTreeMap;
 
 use hex_core::{ElementId, LatticeCoord, SpellId};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, resolve_incoming, restore, tick_burns,
-    CastBlocked, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
-    Requirement, SpellTable,
+    apply_cast, apply_disables, castable, channel, resolve_incoming, restore, CastBlocked, Casting,
+    CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement, SpellTable,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -659,19 +658,6 @@ fn defensive_enchantments_subtract_from_incoming_disables() {
     assert_eq!(resolve_incoming(&state, 3), 2);
     assert_eq!(resolve_incoming(&state, 1), 0);
     assert_eq!(resolve_incoming(&state, 0), 0);
-}
-
-#[test]
-fn burns_disable_one_hex_per_turn_and_expire() {
-    let spec = LatticeSpec::default();
-    let mut state = LatticeState::new(&spec, &basic_stats());
-    state.add_burn(2);
-    state.add_burn(2);
-
-    assert_eq!(tick_burns(&mut state), 2, "two burns disable two hexes");
-    assert_eq!(tick_burns(&mut state), 2, "and again on the next turn");
-    assert_eq!(tick_burns(&mut state), 0, "then both have expired");
-    assert!(state.burns().is_empty());
 }
 
 #[test]
