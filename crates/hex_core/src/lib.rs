@@ -34,8 +34,9 @@ pub use elements::{ElementId, SpellId};
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use perception::{
-    ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeState, KnownTraversal,
-    LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand, SightProfile,
+    ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeExpiry, KnowledgeSource,
+    KnowledgeState, KnownTraversal, LightDomain, LocalMapKnowledge, PerceptionSystems, SightBand,
+    SightProfile,
 };
 pub use presentation::{PresentationOcclusion, PresentationOcclusionReason};
 pub use setup::GameplaySetupFailure;

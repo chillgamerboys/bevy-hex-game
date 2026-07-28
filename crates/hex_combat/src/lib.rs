@@ -34,10 +34,13 @@ use hex_core::AppSystems;
 mod ai;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
+/// What a faction knows about a hostile lattice.
+pub mod knowledge;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
 pub use hex_core::Turn;
+pub use knowledge::{BaseVisibility, FactionKnowledge, KnownCell, LatticeKnowledge, RevealAll};
 pub use turns::{Initiative, TurnOrder};
 
 /// The order a turn resolves in.
@@ -83,5 +86,10 @@ pub fn plugin(app: &mut App) {
             .chain()
             .in_set(AppSystems::Update),
     );
-    app.add_plugins((turns::plugin, ai::plugin, commands::plugin));
+    app.add_plugins((
+        turns::plugin,
+        ai::plugin,
+        commands::plugin,
+        knowledge::plugin,
+    ));
 }

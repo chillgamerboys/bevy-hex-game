@@ -24,6 +24,8 @@ pub(super) fn plugin(app: &mut App) {
 
     app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
+    #[cfg(feature = "dev")]
+    app.add_systems(Update, toggle_reveal_all.run_if(in_state(Screen::Gameplay)));
     app.add_systems(
         OnEnter(Screen::Gameplay),
         (reset_pause, reset_mode, spawn_hud),
@@ -113,6 +115,29 @@ fn update_hud(
 
     if text.0 != wanted {
         text.0 = wanted;
+    }
+}
+
+/// Flips the dev reveal-all toggle, so a designer can see the truth behind the
+/// fog while playing.
+///
+/// Behind the `dev` feature deliberately: the shipped build has no key that
+/// exposes hidden information, and hidden information is the game's source of
+/// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
+/// `Space`, `C`, `Enter` and `WASD` are all taken.
+///
+/// The resource is initialised by `hex_combat`'s plugin, which the binary always
+/// adds, so this cannot be the observer-on-the-title-screen crash: it is a
+/// system, it is gated on the gameplay screen, and its parameter always resolves.
+///
+/// Logs the new state because there is nothing to see today — no unit carries a
+/// lattice yet, so the toggle reveals an empty store until HEX-12 lands. A silent
+/// key that appears to do nothing is indistinguishable from a broken one.
+#[cfg(feature = "dev")]
+fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_combat::RevealAll>) {
+    if keys.just_pressed(KeyCode::KeyK) {
+        reveal.0 = !reveal.0;
+        info!("reveal-all {}", if reveal.0 { "on" } else { "off" });
     }
 }
 

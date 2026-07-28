@@ -1,0 +1,357 @@
+//! Integration tests for the knowledge and divination seam.
+//!
+//! The store's own rules are unit-tested beside it. What these prove is the
+//! wiring: that the publishing systems actually run, that decay is ordered
+//! against the round rollover rather than left to luck, and that the dev toggle
+//! reaches [`FactionKnowledge::view`].
+//!
+//! **These tests attach `LatticeSpec` and `LatticeState` to units by hand.**
+//! Nothing in the shipped game does that yet — HEX-12 wires lattices onto units
+//! from `lattices.ron`. Without this, every system here would match no entities
+//! and pass while doing nothing, which is exactly the silent-success failure the
+//! repo's troubleshooting doc warns about.
+//!
+//! Nothing here is visual, and the readout that would make any of it visible
+//! waits on HEX-12 too.
+
+use std::collections::BTreeMap;
+
+use bevy::app::PluginsState;
+use bevy::input::keyboard::{Key, KeyboardInput};
+use bevy::input::ButtonState;
+use bevy::prelude::*;
+use bevy::state::app::StatesPlugin;
+
+use hex_combat::{FactionKnowledge, Initiative, KnownCell, RevealAll, TurnOrder};
+use hex_core::{
+    ElementId, HexCoord, HexSpan, KnowledgeExpiry, KnowledgeSource, LatticeCoord, Mode, Screen,
+    TilePos, UnitId,
+};
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_units::{Faction, Standing, StandsOn};
+
+fn test_app() -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
+    app.init_state::<Screen>();
+    app.insert_resource(hex_assets::CombatSettings::default());
+    app.add_sub_state::<Mode>();
+    app.add_plugins(hex_combat::plugin);
+
+    while app.plugins_state() != PluginsState::Cleaned {
+        app.finish();
+        app.cleanup();
+    }
+    app
+}
+
+/// A three-cell lattice: two gems and a blank.
+fn spec() -> LatticeSpec {
+    LatticeSpec::default()
+        .with(
+            LatticeCoord::ORIGIN,
+            CellKind::Gem {
+                element: ElementId(0),
+            },
+        )
+        .with(
+            LatticeCoord::new(1, 0),
+            CellKind::Gem {
+                element: ElementId(1),
+            },
+        )
+        .with(LatticeCoord::new(0, 1), CellKind::Blank)
+}
+
+/// Element 0 holds five mana a gem; element 1 is unattuned and holds none.
+fn stats() -> LatticeStats {
+    LatticeStats::new(BTreeMap::from([(ElementId(0), 5)]), BTreeMap::new())
+}
+
+/// A unit carrying only what `hex_combat` reads, optionally with a lattice.
+fn spawn_unit(
+    app: &mut App,
+    faction: Faction,
+    coord: HexCoord,
+    initiative: u32,
+    lattice: bool,
+) -> Entity {
+    let mut unit = app.world_mut().spawn((
+        faction,
+        StandsOn(Standing {
+            pos: TilePos::new(coord, 1),
+            span: HexSpan::new(0.0, 1.0),
+        }),
+        Initiative(initiative),
+    ));
+    if lattice {
+        let spec = spec();
+        let state = LatticeState::new(&spec, &stats());
+        unit.insert((spec, state));
+    }
+    unit.id()
+}
+
+fn enter_gameplay(app: &mut App) {
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Gameplay);
+    app.update();
+    app.update();
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "test helper outside a #[test] fn; a missing id IS the failure"
+)]
+fn unit_id(app: &App, entity: Entity) -> UnitId {
+    *app.world()
+        .entity(entity)
+        .get::<UnitId>()
+        .expect("combat should have dealt this unit a stable id")
+}
+
+/// Ends the acting unit's turn with a real key press. See `loop.rs` for why a
+/// synthetic `KeyboardInput` is required rather than pressing the resource.
+fn end_turn(app: &mut App) {
+    let window = app.world_mut().spawn(()).id();
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::Space,
+        logical_key: Key::Space,
+        state: ButtonState::Pressed,
+        text: None,
+        repeat: false,
+        window,
+    });
+    app.update();
+    app.world_mut().write_message(KeyboardInput {
+        key_code: KeyCode::Space,
+        logical_key: Key::Space,
+        state: ButtonState::Released,
+        text: None,
+        repeat: false,
+        window,
+    });
+    app.update();
+}
+
+/// A faction whose own units carry no lattice must still be able to look at one.
+#[test]
+fn base_visibility_reaches_a_faction_that_owns_no_lattice() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, false);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+
+    let enemy_id = unit_id(&app, enemy);
+    let knowledge = app.world().resource::<FactionKnowledge>();
+    let view = knowledge
+        .view(Faction::Player, enemy_id)
+        .expect("the player should know a hostile lattice exists");
+
+    assert_eq!(view.base().faction, Faction::Hostile);
+    assert_eq!(view.base().capacity, 3, "a lattice's shape is public");
+    assert!(
+        view.is_opaque(),
+        "seeing a unit must reveal nothing about its lattice contents"
+    );
+    assert_eq!(view.unknown_count(), 3);
+}
+
+/// Seeing a unit establishes where it is and nothing else. This is the whole
+/// point of the two channels being separate, so it is pinned rather than assumed.
+#[test]
+fn observation_alone_reveals_no_cell_contents() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, true);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    for _ in 0..8 {
+        app.update();
+    }
+
+    let enemy_id = unit_id(&app, enemy);
+    let knowledge = app.world().resource::<FactionKnowledge>();
+    let view = knowledge.view(Faction::Player, enemy_id).expect("a view");
+    assert_eq!(
+        view.revealed_count(),
+        0,
+        "no amount of looking should reveal a gem"
+    );
+    assert!(view.cell(LatticeCoord::ORIGIN).is_none());
+}
+
+/// The ordering that must not be left to luck: decay reads `RoundElapsed`, which
+/// is written inside `CombatSystems::Advance`, so a reveal placed during a round
+/// must survive that round and lapse at the rollover.
+#[test]
+fn a_one_time_reveal_lapses_at_the_round_rollover() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, false);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+
+    let enemy_id = unit_id(&app, enemy);
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(unit_id(&app, player))
+    );
+
+    // A divination lands mid-round.
+    let accepted = app.world_mut().resource_mut::<FactionKnowledge>().learn(
+        Faction::Player,
+        enemy_id,
+        LatticeCoord::ORIGIN,
+        KnownCell {
+            kind: CellKind::Gem {
+                element: ElementId(0),
+            },
+            mana: Some(5),
+            disabled: false,
+            source: KnowledgeSource::Divination,
+            expiry: KnowledgeExpiry::Rounds(0),
+        },
+    );
+    assert!(
+        accepted,
+        "base visibility should already have been published"
+    );
+
+    // Passing one turn is not a round.
+    end_turn(&mut app);
+    assert_eq!(app.world().resource::<TurnOrder>().round, 0);
+    assert_eq!(
+        app.world()
+            .resource::<FactionKnowledge>()
+            .view(Faction::Player, enemy_id)
+            .expect("a view")
+            .revealed_count(),
+        1,
+        "a reveal must survive the turns inside its own round"
+    );
+
+    // Wrapping to the front is.
+    end_turn(&mut app);
+    assert_eq!(app.world().resource::<TurnOrder>().round, 1);
+    let view = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, enemy_id)
+        .expect("a view");
+    assert!(view.is_opaque(), "the one-time reveal should have lapsed");
+    assert_eq!(
+        view.base().capacity,
+        3,
+        "base visibility must outlive the reveal that decayed"
+    );
+}
+
+/// The dev toggle has to surface the truth through the same accessor the game
+/// reads, or a designer is looking at a second path that can drift from it.
+#[test]
+fn reveal_all_shows_the_truth_through_the_accessor() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, false);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+    let enemy_id = unit_id(&app, enemy);
+
+    assert!(app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, enemy_id)
+        .expect("a view")
+        .is_opaque());
+
+    *app.world_mut().resource_mut::<RevealAll>() = RevealAll(true);
+    app.update();
+
+    let view = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, enemy_id)
+        .expect("a view");
+    assert_eq!(view.revealed_count(), 3, "every cell should be exposed");
+    let gem = view.cell(LatticeCoord::ORIGIN).expect("the origin gem");
+    assert_eq!(
+        gem.mana,
+        Some(5),
+        "an attuned gem opens full to its capacity"
+    );
+    assert_eq!(
+        view.cell(LatticeCoord::new(1, 0)).map(|cell| cell.mana),
+        Some(Some(0)),
+        "an unattuned element's gem holds nothing"
+    );
+
+    // And turning it off restores the honest answer rather than leaving the
+    // revealed cells behind as knowledge the game never earned.
+    *app.world_mut().resource_mut::<RevealAll>() = RevealAll(false);
+    app.update();
+    assert!(app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, enemy_id)
+        .expect("a view")
+        .is_opaque());
+}
+
+/// A new session must not inherit views of units that no longer exist.
+#[test]
+fn leaving_gameplay_forgets_everything() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, false);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+    assert!(!app.world().resource::<FactionKnowledge>().is_empty());
+
+    *app.world_mut().resource_mut::<RevealAll>() = RevealAll(true);
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+
+    assert!(
+        app.world().resource::<FactionKnowledge>().is_empty(),
+        "knowledge should not survive leaving gameplay"
+    );
+    assert_eq!(
+        *app.world().resource::<RevealAll>(),
+        RevealAll(false),
+        "the dev toggle should not persist into a new session"
+    );
+}

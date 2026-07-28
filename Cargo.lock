@@ -3219,6 +3219,7 @@ dependencies = [
  "hex_anim",
  "hex_assets",
  "hex_core",
+ "hex_lattice",
  "hex_units",
 ]
 
