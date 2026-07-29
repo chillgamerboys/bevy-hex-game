@@ -954,10 +954,6 @@ mod tests {
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
     }
 
-    #[expect(
-        clippy::expect_used,
-        reason = "invalid compile-time fixture data should fail the unit test immediately"
-    )]
     fn liquid_table() -> SubstanceTable {
         let swatches = [
             ("terrain/stone", "Stone", (0.5, 0.5, 0.5)),
