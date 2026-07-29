@@ -19,7 +19,10 @@
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, needs_los: true),
-            effects: [DisableHexes(count: 1, targeted: false)],
+            effects: [
+                DisableHexes(count: 1, targeted: false),
+                Burn(turns: 2),
+            ],
         ),
 
         // Tier-6 evocation: a full ring of Fire gems, disables three and knocks back.
@@ -35,11 +38,24 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 4, shape: Blast, needs_los: true),
+            targeting: (range: 4, shape: Sphere(radius: 2), needs_los: true),
             effects: [
                 DisableHexes(count: 3, targeted: false),
                 Displace(distance: 1),
             ],
+        ),
+
+        // The roster's only higher-order spell, and the only thing that consumes a
+        // fusion. Tier 1 by requirement count, but Lightning is not a gem anyone holds:
+        // it has to be fused from an adjacent Light and Fire, so the real cost is the
+        // three cells that arrangement takes up. Cheap to cast, expensive to be able to.
+        "Lightning Bolt": (
+            requirements: [(element: "Lightning", mana: 1)],
+            casting: Evocation,
+            mana: Fixed,
+            co_castable: false,
+            targeting: (range: 4, shape: Single, needs_los: true),
+            effects: [DisableHexes(count: 2, targeted: false)],
         ),
 
         // Ritual: variable mana AND co-castable — a flamethrower that scales with fuel
@@ -52,8 +68,8 @@
             casting: Evocation,
             mana: Variable,
             co_castable: true,
-            targeting: (range: 2, shape: Line, needs_los: true),
-            effects: [Burn(amount: 2)],
+            targeting: (range: 2, shape: Line(length: 2, width: 0), needs_los: true),
+            effects: [Burn(turns: 2)],
         ),
 
         // Defensive enchantment: ties up Metal mana to subtract from incoming disables.
@@ -96,7 +112,7 @@
             ],
         ),
 
-        // Divination: a Light spell that reveals part of a hidden lattice.
+        // Divination: reveals the complete live lattice for a round-scaled duration.
         "Scrying Eye": (
             requirements: [(element: "Light", mana: 1)],
             casting: Evocation,
@@ -115,7 +131,7 @@
             casting: Evocation,
             mana: Fixed,
             co_castable: false,
-            targeting: (range: 3, shape: Blast, needs_los: false),
+            targeting: (range: 3, shape: Sphere(radius: 3), needs_los: false),
             effects: [Illuminate(radius: 3)],
         ),
 

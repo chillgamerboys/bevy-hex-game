@@ -12,10 +12,12 @@ you do not need to recompile the game.
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
-| `combat.ron` | Engagement thresholds, movement budget, height bonus, and the open design questions as policy knobs that reject unbuilt variants with a reason |
+| `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | What the title screen offers: a map, a sky and where the units start |
+| `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
+| `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
+| `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
 | `display.ron` | Vsync / frame rate behaviour |
 
@@ -44,6 +46,8 @@ How quickly you *see* the change depends on which file:
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
+| `encounters/*.ron` | On the next world rebuild |
+| `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
 **To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
@@ -506,17 +510,19 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-`scenarios.ron` entries can name a lighting file and choose how units are placed:
+A scenario names a world, a sky, and an encounter, and makes one required menu
+placement decision. The title screen has independently scrollable `Map`, `Combat`,
+and `Demo` columns; `category` chooses one. Scenario-backed demos share the Demo
+column with the static **Lattice Demo** card.
 
 ```ron
 (
     name: "Rolling Hills",
+    category: Map,
+    blurb: "Open procedural ground under heavy cloud.",
     world: "config/worlds/rolling-hills.ron",
     lighting: "config/lighting/overcast.ron",
-    units: (
-        player: Fixed((x: 0, y: 0, z: 0)),
-        enemy: Fixed((x: 5, y: -5, z: 0)),
-    ),
+    encounter: "config/encounters/open-ground.ron",
 ),
 ```
 
@@ -524,18 +530,18 @@ Leave `lighting` out and the scenario gets `config/lighting.ron`, which is what 
 should do. A lighting file is a complete copy of that file's contents — start by
 copying it and changing what you want.
 
-`Fixed(...)` is for authored terrain whose landmarks never move. Generated terrain
-instead uses anchors published by the generator and owns its reproducible seed here:
+An `encounter` is required, and several scenarios may share one — every generated map
+ships pointing at the same anchored skirmish. Generated terrain also owns its
+reproducible seed here:
 
 ```ron
 (
     name: "Procedural Hills",
+    category: Map,
+    blurb: "Seeded temperate hills split by a river.",
     world: "config/worlds/procedural-hills.ron",
     generation_seed: Some(1592598566),
-    units: (
-        player: Anchor("party_start"),
-        enemy: Anchor("hostile_start"),
-    ),
+    encounter: "config/encounters/anchored-skirmish.ron",
 ),
 ```
 
@@ -561,15 +567,152 @@ map, so you only see the lower band of the sky dome — `sky_color` is effective
 whole background. That is why the shipped alternative is weather rather than a sunset:
 a warm horizon colour fills the screen with terracotta and reads as clay, not evening.
 
-Both `world` and `lighting` are paths, and neither is checked by the compiler. A typo
-fails `cargo test` rather than at the loading screen, but only because a test opens
-every file the scenarios name — keep it that way.
+`world`, `lighting` and `encounter` are all paths, and none of them is checked by the
+compiler. A typo fails `cargo test` rather than at the loading screen, but only because
+tests open every file the scenarios name — keep it that way.
+
+## Writing an encounter
+
+An encounter is a **roster**: one entry per unit, each naming an archetype and one
+placement. It replaced a scaffold that could only say "one player here, one enemy
+there".
+
+```ron
+(
+    name: "Bridge Ambush",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Anchor("party_start"), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Anchor("hostile_start"), spread: 2),
+            units: [
+                (archetype: "wolf"),
+                (archetype: "wolf"),
+                // One unit that has to be somewhere exact, while the rest of its side
+                // comes in as a formation.
+                (archetype: "raider", placement: Some(Anchor("bridge"))),
+            ],
+        ),
+    ],
+)
+```
+
+`faction` is `Player` or `Hostile`, and a faction may appear in **more than one
+roster** — that is how two hostile groups hold different ground, with no second
+mechanism for it.
+
+`archetype` is looked up in [`lattices.ron`](#writing-a-lattice), which is where the
+unit's gems, fusions and spells come from — and, since a lattice *is* the stat block,
+most of what the unit is. It still resolves to no mesh and no body size; every unit is
+drawn the same and walks the same.
+
+### The three placements
+
+| Placement | Holds | Use it for |
+|---|---|---|
+| `Fixed((x: 0, y: 4, z: -4))` | one unit | authored maps, whose landmarks never move. Takes the **lowest** surface at that coordinate the unit fits on — the ground, not a bridge over it. Cube coordinates must sum to zero |
+| `Anchor("party_start")` | one unit | generated maps. One exact surface, level included, published by the generator after it validates the map — so rerolling a seed moves the ground and the anchor with it |
+| `Formation(center: …, spread: N)` | a group | a party. `center` is a `Fixed` coordinate or an `Anchor`; the first unit stands on it and each one after takes the next free surface, closest first |
+
+A formation's `spread` is in **walking steps**, not hexes. The candidate surfaces come
+out of the same flood fill movement uses, so a formation will not spread across a
+chasm, onto a ledge the body cannot climb, or under a ceiling it does not fit beneath.
+A **named spawn zone** is written exactly this way: the anchor names it, `spread`
+bounds it, and the fill order is deterministic — walking distance, then position — so
+the same encounter on the same seed always deals the same surfaces.
+
+Two units may not share a `Fixed` or an `Anchor`: those hold exactly one unit each, and
+the file is rejected when it parses with a message telling you to use a formation.
+Exact placements are resolved *before* formations, so the sentry who must stand on the
+bridge keeps his surface and the crowd flows around him.
+
+### When a unit cannot be placed
+
+**Every rostered unit is placed, or the game returns to the title screen with the
+reason on it** — naming the side, the archetype, and what was wrong. An anchor that the
+active map does not publish, an authored coordinate with nothing standable under it, and
+a formation with more units than room all fail that way. None of them is a unit that
+quietly does not appear, which is the class of bug this repo is worst at noticing.
+
+A scenario is also checked against the world it names: procedural terrain requires every
+placement to resolve through an anchor, and authored terrain requires every placement to
+be fixed. That pairing is checked once both files have loaded, and a mismatch returns to
+the title screen rather than starting a fight with a unit missing.
+
+## Writing a lattice
+
+`lattices.ron` is where enemies are designed. **An enemy's lattice is its entire stat
+block** — there is no separate stats system, no hit points, and no difficulty slider. A
+wolf is four hexes and a bite. A raider is eight around a metal shield. A hedge-mage is
+thirteen with a fusion chain and Scrying Eye. Difficulty is the size and complexity of
+the drawing.
+
+An archetype named here is what `archetype: "raider"` in an encounter roster looks up.
+
+Four kinds of cell:
+
+| Cell | What it does |
+|---|---|
+| `Gem("Fire")` | Holds mana of one element, and powers **adjacent** spells |
+| `Fusion("Lightning")` | Combines *its own* adjacent gems into a higher-order element, which adjacent spells may then draw on |
+| `Spell("Ember")` | Castable, if its adjacent cells can pay the requirements |
+| `Blank` | Part of the lattice, holds nothing — still takes a hit |
+
+**Adjacency is the entire power mechanism.** There is no action at a distance inside a
+lattice: a spell draws only from the six cells touching it. Laying one out *is* the design
+problem, and a spell whose neighbours cannot pay is simply offline — it is not an error,
+it is a lattice that cannot cast that spell.
+
+That is also the mistake worth knowing about because it is not a load error. A spell
+cell one hex too far from the gems meant to fund it parses, loads and spawns perfectly;
+the cast panel reports it as blocked when that unit is controlled. **A test catches it
+earlier for shipped content** — every shipped archetype must be able to cast everything
+it inscribes on a fresh lattice — so a misplaced cell fails `cargo test` rather than
+waiting for a playtest.
+
+```ron
+"raider": (
+    cells: [
+        (at: (q: 0, r: 0), kind: Spell("Metal Shield")),
+        (at: (q: 1, r: 0), kind: Gem("Metal")),
+        (at: (q: 1, r: -1), kind: Gem("Metal")),
+        // …five more
+    ],
+    attunement: {"Metal": 3, "Earth": 2},
+    channelling: {"Metal": 2, "Earth": 1},
+),
+```
+
+Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
+matters, not where it sits.
+
+`attunement` is how much mana one gem of that element holds when full. `channelling` is
+how much a channel action puts back per turn. An element with no attunement entry resolves
+to **zero**, which makes a gem of it inert — a legal way to say "this thing does not
+cast", which is exactly what the wolf does. Every shipped spell costs 1 mana per required
+gem, so an attunement of 3 is three casts before that gem needs channelling back up.
+
+Which cells to break is the interesting part of a fight. The two Metal gems touching a
+raider's shield are what fund it, so taking either down drops the shield *and* burns the
+mana locked in it. A hedge-mage's fusion holds nothing itself, so its feeder gems are
+worth more than their own hexes: kill one and everything downstream dies with it.
+
+A name that does not resolve — an element not in `elements.ron`, a spell not in
+`spells.ron`, or a `Fusion` naming something with no recipe — fails to load with the
+archetype and the name in the message.
 
 ## Elements and spells
 
-Two files define the magic system as content. Nothing in the game reads them *yet* —
-the lattice that actually casts spells is being built alongside this — but they load,
-validate and cross-check now, so authoring can begin.
+Two files define the magic system as content. The lattice renderer, cast panel, command
+applier, combat log, and knowledge projection all read the resolved catalogs. They also
+load, validate, and cross-check together, so a dangling name cannot ship silently.
 
 ### `elements.ron`
 
@@ -613,7 +756,10 @@ Each spell by name:
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, needs_los: true),
-            effects: [DisableHexes(count: 1, targeted: false)],
+            effects: [
+                DisableHexes(count: 1, targeted: false),
+                Burn(turns: 2),
+            ],
         ),
     },
 )
@@ -629,8 +775,46 @@ Each spell by name:
 - **`co_castable`** allows casting alongside another spell. A spell that is both
   `Variable` and `co_castable` is what the design calls a **ritual** — you do not write
   "ritual"; it follows from the two flags.
-- **`targeting`** is `range` (in hexes), `shape` (`SelfCast`, `Single`, `Line` or
-  `Blast`) and `needs_los` (whether line of sight is required).
+- **`targeting`** is `range` (how far away the target may be, in hexes), `shape` (what
+  the spell covers once it gets there) and `needs_los` (whether line of sight is
+  required — parsed, but not enforced until obstruction lands).
+
+  `range` and a shape's own extents are different numbers. Fireball's `range: 4` is
+  how far it is thrown; its `Sphere(radius: 2)` is how big the ball is.
+
+  | Shape | What it covers |
+  |---|---|
+  | `SelfCast` | the caster's own voxel; `range` must be `0` |
+  | `Single` | one target voxel |
+  | `Sphere(radius: N)` | everything within `N` of the target — `N` hexes out *and* `N` levels up or down |
+  | `Column(height: N)` | the target voxel and the `N - 1` voxels above it; a conjured wall is `2` |
+  | `Line(length: N, width: W)` | out from the caster; `W` is a half-thickness, so `0` is a single file. Rounded ends mean it reaches `N + W` |
+  | `Cone(length: N, spread: S)` | widening out from the caster; `S` is 60° sectors *each side*, so `0` is a ray, `1` the usual cone, `3` a full disc |
+  | `Path(offsets: [...])` | a hand-authored voxel list, `(coord: (q: 1, r: 0), level: 2)` each, rotated to the facing |
+
+  **Vertical and horizontal count equally.** A radius-3 sphere reaches three hexes out
+  and three levels up or down, so it looks slightly squashed on screen. That is
+  deliberate: gameplay is not allowed to know how tall a voxel is drawn, so there is no
+  other honest answer.
+
+  `Line`, `Cone` and `Path` point somewhere, so a cast using one has to name a facing;
+  the other four look the same in every direction. `Line` and `Cone` never include the
+  caster's own voxel.
+
+  Extents are capped at **16**, a `Path` at **64 voxels**, and cone spread at **3** (a
+  full disc). That is a guard rail, not balance: a resolved volume is a real list of
+  voxels, so a radius typed with an extra digit is tens of millions of them. A file that
+  names one fails to load with the spell and the field in the message. `Column.height`,
+  `Line.length` and `Cone.length` also have a *minimum* of 1, since a shape with no
+  extent is a spell that does nothing.
+
+  **`Line.width` is capped at 1**, lower than the rest, and that one is provisional. The
+  spine starts a hex ahead of the caster, so a width-2 line's near end rounds back past
+  them and covers every neighbour — including the hex directly behind. A line that burns
+  the ally behind you is not what the word means, and choosing between subtracting that
+  rear arc and renaming the shape is a design call the ticket that first wants a wide
+  line should make. Width 1 stops exactly at the caster's own voxel, which is already
+  excluded, so content is held there meanwhile.
 - **`effects`** is a **fixed list** of what a spell can do — you cannot invent new ones
   without a programmer, which is deliberate:
 

@@ -142,6 +142,14 @@ impl FailedSubstanceTableBuild {
     }
 }
 
+/// Marks the change tick of the builder's most recent accepted-source restoration.
+///
+/// This is separate from [`FailedSubstanceTableBuild`] because repeated identical
+/// rejected events must refresh the restored resources without changing the failure
+/// latch used to suppress duplicate diagnostics.
+#[derive(Resource, Debug, Clone, Copy)]
+struct AcceptedSubstanceSourceRestoration;
+
 /// A cross-file failure while resolving authored substances through the art palette.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SubstanceTableError {
@@ -348,17 +356,63 @@ fn build_table_when_loaded(
     palette: Option<Res<ArtPalette>>,
     table: Option<Res<SubstanceTable>>,
     failed_build: Option<Res<FailedSubstanceTableBuild>>,
+    accepted_restoration: Option<Res<AcceptedSubstanceSourceRestoration>>,
 ) {
     let (Some(file), Some(palette)) = (file, palette) else {
         return;
     };
-    if table
+    let mut effective_failed = failed_build.as_deref().cloned();
+    let mut failed_was_rebased = false;
+    if let (Some(failed), Some(restoration), Some(table)) = (
+        effective_failed.as_mut(),
+        accepted_restoration.as_ref(),
+        table.as_deref(),
+    ) {
+        let file_reverted = failed.source_substances != table.source_substances
+            && table.source_substances == file.substances
+            && file.last_changed() != restoration.last_changed();
+        let palette_reverted = failed.source_palette.semantic_fingerprint()
+            != table.source_palette_fingerprint
+            && table.source_palette_fingerprint == palette.semantic_fingerprint()
+            && palette.last_changed() != restoration.last_changed();
+        if file_reverted || palette_reverted {
+            if let Some((accepted_file, accepted_palette)) = table.accepted_sources() {
+                // Rebase reverted halves before candidate selection. This must happen
+                // even when the opposite file changed in the same frame, otherwise
+                // that edit would be combined with stale rejected semantics.
+                if file_reverted {
+                    failed.source_substances = accepted_file.substances.clone();
+                }
+                if palette_reverted {
+                    failed.source_palette = accepted_palette.clone();
+                }
+                failed_was_rebased = true;
+                if failed.matches_sources(&accepted_file, &accepted_palette) {
+                    effective_failed = None;
+                }
+            }
+        }
+    }
+    if let Some(table) = table
         .as_deref()
-        .is_some_and(|table| table.matches_sources(&file, &palette))
+        .filter(|table| table.matches_sources(&file, &palette))
     {
+        if failed_was_rebased {
+            if let Some(retained) = effective_failed {
+                if let Some((accepted_file, accepted_palette)) = table.accepted_sources() {
+                    commands.insert_resource(retained);
+                    commands.insert_resource(accepted_file);
+                    commands.insert_resource(accepted_palette);
+                    commands.insert_resource(AcceptedSubstanceSourceRestoration);
+                }
+            } else {
+                commands.remove_resource::<FailedSubstanceTableBuild>();
+                commands.remove_resource::<AcceptedSubstanceSourceRestoration>();
+            }
+        }
         return;
     }
-    let (candidate_file, candidate_palette) = match (failed_build.as_deref(), table.as_deref()) {
+    let (candidate_file, candidate_palette) = match (effective_failed.as_ref(), table.as_deref()) {
         (Some(failed), Some(table)) => {
             let file_is_accepted = table.source_substances == file.substances;
             let palette_is_accepted =
@@ -373,21 +427,28 @@ fn build_table_when_loaded(
             (file.as_ref().clone(), palette.as_ref().clone())
         }
     };
-    if failed_build
-        .as_deref()
+    if effective_failed
+        .as_ref()
         .is_some_and(|failed| failed.matches_sources(&candidate_file, &candidate_palette))
     {
+        if failed_was_rebased {
+            if let Some(retained) = effective_failed {
+                commands.insert_resource(retained);
+            }
+        }
         if let Some((accepted_file, accepted_palette)) =
             table.as_deref().and_then(SubstanceTable::accepted_sources)
         {
             commands.insert_resource(accepted_file);
             commands.insert_resource(accepted_palette);
+            commands.insert_resource(AcceptedSubstanceSourceRestoration);
         }
         return;
     }
     match SubstanceTable::from_file(&candidate_file, &candidate_palette) {
         Ok(rebuilt) => {
             commands.remove_resource::<FailedSubstanceTableBuild>();
+            commands.remove_resource::<AcceptedSubstanceSourceRestoration>();
             commands.insert_resource(candidate_file);
             commands.insert_resource(candidate_palette);
             commands.insert_resource(rebuilt);
@@ -406,6 +467,7 @@ fn build_table_when_loaded(
                 );
                 commands.insert_resource(accepted_file);
                 commands.insert_resource(accepted_palette);
+                commands.insert_resource(AcceptedSubstanceSourceRestoration);
             } else {
                 error!(
                     "could not resolve initial config/substances.ron through art/palette.ron: \
@@ -878,6 +940,38 @@ mod tests {
                 .is_changed(),
             "a repeated rejected candidate should reuse its diagnostic latch"
         );
+
+        app.update();
+        assert!(
+            app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "an idle frame after a repeated restoration must retain the rejected candidate"
+        );
+        let accepted_palette = app.world().resource::<ArtPalette>().clone();
+        app.world_mut().insert_resource(accepted_palette);
+        app.update();
+        assert!(
+            app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "reloading the already accepted palette must not discard the rejected substance file"
+        );
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .insert(
+                swatch_id("unknown"),
+                test_swatch("Unknown", [0.7, 0.6, 0.4]),
+            )
+            .expect("the repair swatch should be valid");
+        app.update();
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.7, 0.6, 0.4),
+            "the repeated restoration lost the retained candidate before its repair"
+        );
+        assert!(!app.world().contains_resource::<FailedSubstanceTableBuild>());
+        assert!(!app
+            .world()
+            .contains_resource::<AcceptedSubstanceSourceRestoration>());
     }
 
     #[test]
@@ -926,6 +1020,35 @@ mod tests {
                 .matches_sources(app.world().resource::<SubstanceFile>(), &rejected),
             "the rejected palette should remain latched after source restoration"
         );
+
+        let accepted_file = app.world().resource::<SubstanceFile>().clone();
+        app.world_mut().insert_resource(accepted_file);
+        app.update();
+        assert!(
+            app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "reloading the already accepted substance file must not discard the rejected palette"
+        );
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("clay"));
+        app.update();
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.6, 0.3, 0.2)
+        );
+        assert!(
+            app.world()
+                .resource::<ArtPalette>()
+                .get(&swatch_id("stone"))
+                .is_none(),
+            "the no-op opposite-half reload lost the retained rejected palette"
+        );
+        assert!(!app.world().contains_resource::<FailedSubstanceTableBuild>());
     }
 
     #[test]
@@ -1016,6 +1139,184 @@ mod tests {
                 .get(&swatch_id("stone"))
                 .is_none(),
             "the valid retained palette candidate should replace the accepted fallback"
+        );
+        assert!(!app.world().contains_resource::<FailedSubstanceTableBuild>());
+    }
+
+    #[test]
+    fn reverting_a_rejected_half_discards_it_before_the_other_file_changes() {
+        let file = test_file();
+        let palette = test_palette();
+        let original =
+            SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Title);
+        app.insert_resource(original);
+        app.insert_resource(file.clone());
+        app.insert_resource(palette.clone());
+        register_table_builder(&mut app);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("sand"));
+        app.update();
+        assert!(app.world().contains_resource::<FailedSubstanceTableBuild>());
+
+        app.update();
+        assert!(
+            app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "the builder's own accepted-source restoration should retain the rejected candidate"
+        );
+
+        // The loader publishes a fresh resource even when the authored semantics
+        // were reverted to the accepted bytes.
+        app.world_mut().insert_resource(file.clone());
+        app.update();
+        assert!(
+            !app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "reverting the rejected substance candidate should abandon its latch"
+        );
+
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .insert(swatch_id("stone"), test_swatch("Stone", [0.2, 0.3, 0.4]))
+            .expect("the replacement swatch should be valid");
+        app.update();
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.2, 0.3, 0.4),
+            "a stale rejected substance candidate blocked the valid palette edit"
+        );
+
+        let original =
+            SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Title);
+        app.insert_resource(original);
+        app.insert_resource(file.clone());
+        app.insert_resource(palette.clone());
+        register_table_builder(&mut app);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .remove(&swatch_id("stone"))
+            .expect("the stone swatch should be removable");
+        app.update();
+        assert!(app.world().contains_resource::<FailedSubstanceTableBuild>());
+
+        app.world_mut().insert_resource(palette);
+        app.update();
+        assert!(
+            !app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "reverting the rejected palette candidate should abandon its latch"
+        );
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("clay"));
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ArtPalette>()
+                .get(&swatch_id("stone"))
+                .is_some(),
+            "a stale rejected palette candidate replaced the reverted palette"
+        );
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.6, 0.3, 0.2)
+        );
+    }
+
+    #[test]
+    fn same_frame_reversion_and_opposite_edit_use_the_authored_pair() {
+        let file = test_file();
+        let palette = test_palette();
+        let original =
+            SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Title);
+        app.insert_resource(original);
+        app.insert_resource(file.clone());
+        app.insert_resource(palette.clone());
+        register_table_builder(&mut app);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("sand"));
+        app.update();
+
+        app.world_mut().insert_resource(file.clone());
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .insert(swatch_id("stone"), test_swatch("Stone", [0.2, 0.3, 0.4]))
+            .expect("the replacement swatch should be valid");
+        app.update();
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.2, 0.3, 0.4),
+            "a same-frame file reversion resurrected its stale rejected semantics"
+        );
+        assert!(!app.world().contains_resource::<FailedSubstanceTableBuild>());
+
+        let original =
+            SubstanceTable::from_file(&file, &palette).expect("the original table should resolve");
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Title);
+        app.insert_resource(original);
+        app.insert_resource(file.clone());
+        app.insert_resource(palette.clone());
+        register_table_builder(&mut app);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .remove(&swatch_id("stone"))
+            .expect("the stone swatch should be removable");
+        app.update();
+
+        app.world_mut().insert_resource(palette);
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("clay"));
+        app.update();
+        let table = app.world().resource::<SubstanceTable>();
+        let stone = table.id("stone").expect("stone should remain registered");
+        assert_eq!(
+            table.get(stone).expect("stone should resolve").color,
+            (0.6, 0.3, 0.2)
+        );
+        assert!(
+            app.world()
+                .resource::<ArtPalette>()
+                .get(&swatch_id("stone"))
+                .is_some(),
+            "a same-frame palette reversion resurrected its stale rejected semantics"
         );
         assert!(!app.world().contains_resource::<FailedSubstanceTableBuild>());
     }

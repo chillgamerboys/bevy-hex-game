@@ -14,13 +14,11 @@
 //! That is the same trick the settings loader already uses: the generic machinery lives
 //! here and gets instantiated at a concrete type from wherever that type is defined.
 //!
-//! The cost is that a typo in a path is not a compile error. It is caught by a test in
-//! `hex_game` that opens every world file a scenario names.
+//! The cost is that a typo in a path is not a compile error. It is caught by tests in
+//! `hex_game` that open every world, lighting and encounter file a scenario names.
 
 use bevy::prelude::*;
 use serde::{de::Error as _, Deserialize, Deserializer};
-
-use crate::settings::ScenarioSettings;
 
 /// `assets/config/scenarios.ron` — everything the title screen offers.
 ///
@@ -34,10 +32,12 @@ pub struct ScenarioLibrary {
 }
 
 /// One playable setup: a world, and where the units start on it.
-#[derive(Reflect, Debug, Clone, Deserialize)]
+#[derive(Reflect, Debug, Clone)]
 pub struct Scenario {
     /// What the title screen calls it.
     pub name: String,
+    /// Which framed title-screen column owns this scenario.
+    pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
     /// Asset path of the world file, relative to `assets/`.
@@ -51,22 +51,92 @@ pub struct Scenario {
     /// mean every new entry copying a path it will never change. Called `lighting`
     /// rather than `sky` because it also decides the sun's angle and colour, and so
     /// which way the shadows fall.
-    #[serde(default = "shipped_lighting")]
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
     /// Authored scenarios omit this. The title screen can replace a configured seed
     /// for the current process, but never writes that replacement back to this asset.
-    #[serde(default)]
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
     ///
     /// Only cyclic lighting profiles accept an override. That cross-asset contract is
     /// checked after both this scenario and its lighting file have loaded.
-    #[serde(default, deserialize_with = "deserialize_optional_hour")]
     pub starting_time_hours: Option<f32>,
-    /// Where the units start.
-    pub units: ScenarioSettings,
+    /// Asset path of the encounter file: the roster standing on this world.
+    ///
+    /// A path for the same reason `world` is one — a scenario is a world, a sky and an
+    /// encounter, each authored on its own and reusable by the next scenario. Six
+    /// generated maps share one anchored skirmish today.
+    ///
+    /// Not optional: a scenario with no encounter has nothing to play.
+    pub encounter: String,
+}
+
+/// The three title-screen lanes a scenario can inhabit.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub enum ScenarioCategory {
+    /// Worlds whose terrain or traversal is the main attraction.
+    Map,
+    /// Setups authored to exercise the combat loop.
+    Combat,
+    /// Focused mechanics showcases and rules probes.
+    Demo,
+}
+
+/// Deserialization mirror used so a missing category can name the scenario it broke.
+///
+/// A derived `Deserialize` on [`Scenario`] can only report `missing field category`.
+/// That is needlessly hostile in a nine-entry content file: the designer then has to
+/// count parentheses to discover which entry failed. Reading the other fields first
+/// lets the error identify the exact scenario while keeping category genuinely required.
+#[derive(Deserialize)]
+struct ScenarioFields {
+    name: String,
+    #[serde(default, deserialize_with = "deserialize_present_category")]
+    category: Option<ScenarioCategory>,
+    blurb: String,
+    world: String,
+    #[serde(default = "shipped_lighting")]
+    lighting: String,
+    #[serde(default)]
+    generation_seed: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_hour")]
+    starting_time_hours: Option<f32>,
+    encounter: String,
+}
+
+impl<'de> Deserialize<'de> for Scenario {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let fields = ScenarioFields::deserialize(deserializer)?;
+        let Some(category) = fields.category else {
+            return Err(D::Error::custom(format!(
+                "scenario {:?} is missing required field `category`",
+                fields.name
+            )));
+        };
+        Ok(Self {
+            name: fields.name,
+            category,
+            blurb: fields.blurb,
+            world: fields.world,
+            lighting: fields.lighting,
+            generation_seed: fields.generation_seed,
+            starting_time_hours: fields.starting_time_hours,
+            encounter: fields.encounter,
+        })
+    }
+}
+
+fn deserialize_present_category<'de, D>(
+    deserializer: D,
+) -> Result<Option<ScenarioCategory>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ScenarioCategory::deserialize(deserializer).map(Some)
 }
 
 /// The lighting a scenario gets when it does not name one.
@@ -91,8 +161,6 @@ where
 mod tests {
     use std::collections::HashSet;
 
-    use crate::ScenarioPlacement;
-
     use super::*;
 
     /// The shipped file parses, and says enough to build a menu from.
@@ -113,6 +181,10 @@ mod tests {
         for scenario in &library.scenarios {
             assert!(!scenario.name.is_empty(), "a scenario needs a name");
             assert!(!scenario.world.is_empty(), "a scenario needs a world");
+            assert!(
+                !scenario.encounter.is_empty(),
+                "a scenario needs an encounter"
+            );
         }
     }
 
@@ -136,13 +208,11 @@ mod tests {
             format!(
                 r#"(
                     name: "Time",
+                    category: Demo,
                     blurb: "Time validation.",
                     world: "config/world.ron",
                     starting_time_hours: {hours},
-                    units: (
-                        player: Fixed((x: 0, y: 0, z: 0)),
-                        enemy: Fixed((x: 1, y: -1, z: 0)),
-                    ),
+                    encounter: "config/encounters/bridge-crossing.ron",
                 )"#
             )
         };
@@ -164,10 +234,30 @@ mod tests {
         }
     }
 
-    /// Generated scenarios own distinct reproducible seeds and use the stable anchors
-    /// promised by the procedural generator.
     #[test]
-    fn procedural_scenarios_use_distinct_seeds_and_spawn_anchors() {
+    fn a_missing_category_error_names_the_scenario() {
+        let error = ron::from_str::<Scenario>(
+            r#"(
+                name: "Forgotten Lane",
+                blurb: "Invalid on purpose.",
+                world: "config/world.ron",
+                encounter: "config/encounters/bridge-crossing.ron",
+            )"#,
+        )
+        .expect_err("category is a required authoring decision")
+        .to_string();
+
+        assert!(error.contains("category"), "{error}");
+        assert!(error.contains("Forgotten Lane"), "{error}");
+    }
+
+    /// Generated scenarios own distinct reproducible seeds and name an encounter file.
+    ///
+    /// Whether that encounter places its units through generated *anchors* is a
+    /// cross-file fact — the encounter is a separate asset — so it is checked in
+    /// `hex_game`, which is allowed to open both. This crate can only see the path.
+    #[test]
+    fn procedural_scenarios_use_distinct_seeds_and_name_an_encounter() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -193,16 +283,9 @@ mod tests {
         );
 
         for scenario in generated {
-            assert_eq!(
-                scenario.units.player,
-                ScenarioPlacement::Anchor("party_start".to_owned()),
-                "scenario {:?} does not use the party anchor",
-                scenario.name
-            );
-            assert_eq!(
-                scenario.units.enemy,
-                ScenarioPlacement::Anchor("hostile_start".to_owned()),
-                "scenario {:?} does not use the hostile anchor",
+            assert!(
+                scenario.encounter.starts_with("config/encounters/"),
+                "scenario {:?} does not name an encounter file",
                 scenario.name
             );
         }
