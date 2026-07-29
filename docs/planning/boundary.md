@@ -38,6 +38,23 @@ never to do, so the world owner can build against it without checking:
 - **Never change an owned crate's behavior without its owner's review**, and land a
   shared-type change in its own commit before either side depends on it.
 
+## What the world side commits to
+
+The same restraint applies in the other direction:
+
+- **Publish consequences, never generator instructions.** Gameplay may consume exact
+  surfaces, blockers, biome membership, illumination, and knowledge; it never needs a
+  patch plan, feature candidate, repair action, or liquid graph.
+- **Keep every spatial projection stack-safe.** Published facts are keyed by exact
+  `TilePos` whenever level matters. A horizontal `HexCoord` must not collapse a bridge,
+  cave floor, and ground surface into one answer.
+- **Never hide gameplay policy in presentation.** A rendered object, semantic part,
+  palette swatch, canopy, or material appearance does not become blocking, damaging,
+  visible, or interactive by implication. Those are separate explicit contracts.
+- **Never change gameplay-owned behavior without its owner's review.** A world PR may
+  add isolated shared vocabulary first, but adapters in `hex_units` or `hex_combat`
+  remain gameplay work.
+
 ## V3 publication rule
 
 V3 replaces the assumption that gameplay may need generic access to generator
@@ -66,6 +83,24 @@ V3 implementation and delivery are specified in
 membership and feature blockers; generated gameplay-light entities remain pending
 the cave-light retrofit.
 
+## Shared presentation is a third role, not a loophole
+
+`hex_objects` and `hex_editor` are shared presentation/tooling. They own how authored
+objects are validated, edited, and drawn, but they own no world or gameplay semantics.
+The split for a Forest tree is therefore explicit:
+
+- the world publishes an `ObjectInstance` when it chooses an authored visual;
+- the world separately publishes the exact root in `TraversalBlockers` and canopy
+  cells in the cutaway projection;
+- `hex_objects` renders the object and never derives either projection from object
+  parts;
+- gameplay consumes the blocker and knowledge projections, never the renderer.
+
+This permits authored Forest visuals without moving generation into presentation or
+letting a `root`/`trunk` label become an accidental collision contract. Spell-created
+objects follow the same rule: gameplay may request a shared visual instance, while any
+simulation effect remains in gameplay/world contracts.
+
 ## Delivered by the procedural map pipeline — nothing left to ask
 
 PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
@@ -90,6 +125,16 @@ Those are historical V1/V2 contracts, not a promise to preserve either generator
 indefinitely. V3 uses its own versioned streams while V1/V2 remain frozen review
 oracles; both legacy implementations are removed after active scenarios migrate.
 No production save format may depend on regenerating a V1 or V2 seed.
+
+Three newer crossings are also live:
+
+- V3 Waterfall and Forest publish their exact semantic consequences without exposing
+  their plans;
+- `TraversalBlockers` is consumed by movement previews, clicks, command validation,
+  spawning, review relocation, perception snapshots, and enemy pathfinding;
+- world-owned `FactionMapKnowledge` is the sole spatial-observation authority, and a
+  gameplay-owned adapter projects only the existence/faction facts needed to gate
+  hostile lattice knowledge.
 
 ## A′ — Movement classes (now via traversal profiles)
 
@@ -150,11 +195,13 @@ Initial spatial perception is deliberately obstruction-agnostic and does not nee
 this component. Gameplay lights are radial within one light domain; sight uses exact
 horizontal and vertical bands.
 
-That reasoning holds for *sight*, but casting needs the same datum sooner, and for a
+That reasoning holds for *sight*, but casting still needs the same datum, and for a
 different reason. [casting.md](../systems/casting.md) validates a cast against the
 voxels it would affect — is this voxel solid, is it empty enough to conjure into, is it
 somebody's supporting surface — and none of those are answerable without exact
-occupancy. That lands in **wave 3**, ahead of obstruction-aware sight.
+occupancy. Wave 3 deliberately shipped terrain effects fail-closed rather than
+reconstructing it; `RunBottom` now gates the terrain-casting follow-up and later
+obstruction-aware sight.
 
 One component answers casting legality, conjuration placement, trajectory, cover, and
 pathing alike, using the existing published-data pattern rather than a new API surface.
@@ -173,9 +220,9 @@ You already hold both bounds when merging runs in the spawn pass. Every run enti
 including stacked runs under bridges, overhangs, and caves, carries it. Spawn-bundle
 tests assert the exact inclusive bottom and top for each such run.
 
-This lands before wave 3 terrain casting. If it slips, terrain casting waits; gameplay
-does not reconstruct occupancy or ship terrain effects that cannot distinguish rock
-from air. Obstruction-aware sight may still use its independent approximation while it
+This lands before terrain casting. If it slips, terrain casting waits; gameplay does
+not reconstruct occupancy or ship terrain effects that cannot distinguish rock from
+air. Obstruction-aware sight may still use its independent approximation while it
 waits: a sight line is
 blocked iff some intervening column's highest run top reaches it. Wrong only
 for shooting *under* bridges and overhangs.
@@ -484,11 +531,12 @@ without pinning the response table's version.
   well-known anchor ids (`party_start`, `bridge`, …) become consts on
   `MapAnchorId`, scenarios and encounters can reference every anchor the
   generator already publishes.
-- **Destructible features (trees, structures)**: *not* a separate ask. Ask G's
-  announcement covers the voxels a feature occupies, so whether a tree burns or a wall
-  falls is a row in your response table, decided whenever you want to decide it. The
-  gameplay side ships with fireballs that leave forests standing and says so in
-  [status.md](status.md) until you say otherwise.
+- **Destructible features (trees, structures)**: deliberately not folded into ask G.
+  `TerrainImpact` covers material voxels; V3 features are semantic instances with
+  separate blocker/canopy projections, and authored object parts explicitly carry no
+  gameplay meaning. The first feature-damaging spell therefore needs its own exact
+  occupancy, response, and acknowledgment contract. Until that need is scheduled,
+  fireballs leave forests and structures standing, as [status.md](status.md) records.
 - **A callable query API for terrain**: deliberately not asked for. `hex_map` is a leaf
   and should stay one; gameplay computing `Footing`, occupancy, and trajectories from
   published components is the same pattern that already works for movement. Ask C is

@@ -33,8 +33,8 @@ grass, while a few renderer-private tall exemplars vary the shared low-poly tree
 silhouette without claiming future multi-voxel occupancy. Tree roots are exact map
 blockers and tall grass is presentation-only. Map validation, movement previews,
 click routing, command validation, spawning, review relocation, and enemy pathfinding
-all consume the same exact blocker projection through a separate adapter now awaiting
-gameplay-owner review.
+all consume the same exact blocker projection through the gameplay-owned adapter that
+has now passed review and is live on `dev`.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -43,8 +43,9 @@ lights, pooled faction sight, and independent faction memory over stacked `TileP
 surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
 edits, unseen units disappear immediately, and the player-side traversal projection
 is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
-live in `perception.ron`. Fog/picking presentation, generated cave lamps/crystals,
-unknown-frontier routing, and combat/AI consumers are not wired yet.
+live in `perception.ron`. World observation already gates the gameplay-owned hostile
+lattice-knowledge view. Fog/picking presentation, generated cave lamps/crystals,
+unknown-frontier routing, and engagement/targeting/AI consumers are not wired yet.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the

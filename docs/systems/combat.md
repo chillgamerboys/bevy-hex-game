@@ -3,10 +3,10 @@
 The turn loop as it is built: the two tempos, what a turn costs, how a move is
 committed, and what elevation buys.
 
-Read [the design](../design/game.md) for the game this is heading toward — **most of
-it does not exist yet**, and the gap is deliberate rather than a backlog. Which of
-the numbers here are placeholders, and what each is waiting for, is
-[planning/status.md](../planning/status.md).
+Read [the design](../design/game.md) for the game this is heading toward. The playable
+combat core exists, while party-scale behavior, outcomes, and several policy choices
+remain deliberately open. Which of the numbers here are placeholders, and what each
+is waiting for, is [planning/status.md](../planning/status.md).
 
 ## Two modes, one map
 
@@ -274,7 +274,7 @@ question nobody has played with yet.
 | `hex_core` | `Mode`, `Turn` and `RoundElapsed` — shared because `hex_combat` writes them and `hex_units` reads them, and neither can see the other. Also `KnowledgeSource` / `KnowledgeExpiry`, which both knowledge channels need, and the `{source, target, payload, start, end}` persistent-effect vocabulary |
 | `hex_units` | Bodies, positions, factions, where a unit may step |
 | `hex_combat` | The turn order, engagement, the placeholder AI, the lattice-knowledge store, and the persistent-effect runtime |
-| `hex_lattice` | The pure rules engine. `hex_combat` depends on it because knowledge *of* a lattice needs the lattice vocabulary — and because `hex_core → hex_lattice` is the dependency direction, so the store cannot live in `hex_core` |
+| `hex_lattice` | The pure rules engine for castability, mana, fusions, enchantments, and disables. `hex_combat` drives it and owns turns, effects, defender decisions, and knowledge around it |
 | `hex_anim` | Moving a transform over time. Knows nothing about any of the above |
 
 `hex_combat` depends on `hex_units` because a turn order is a fact *about* units. That

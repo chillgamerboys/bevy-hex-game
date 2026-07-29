@@ -6,8 +6,10 @@ facts the rest of the game needs. V1 and V2 remain in the tree temporarily as
 visual and behavioral oracles while their recipes are rebuilt. They are removed
 after the V3 migration corpus is approved.
 
-This document fixes the boundaries and delivery order before implementation starts.
-Recipe algorithms and tuning remain private to `hex_map`.
+This document fixes the boundaries and delivery order as implementation advances.
+The foundation, directed liquids, Waterfall, and Forest are live; Fort, `Ring7`, and
+the remaining recipe migrations are still planned. Recipe algorithms and tuning
+remain private to `hex_map`.
 
 ## The boundary
 
@@ -51,9 +53,9 @@ operation, it requires rejection of an edit to an authored V3 liquid voxel and a
 edit to every lower voxel in that column while a retained authored liquid run remains
 above it.
 The private liquid plan classifies the exact `TilePos` and identifies every stacked
-run affected. The classifier lands before a runtime hook because no runnable V3
-recipe exists yet; the first runnable recipe must enforce it at the existing
-`TerrainEdit` admission point.
+run affected. Waterfall now enforces that classification at the existing
+`TerrainEdit` admission point, atomically rejecting edits that would leave stale
+occupancy or flow metadata.
 
 This rule does not change `Substance::diggable`. Legacy and non-topological liquids
 continue to use their existing material policy. A rejected V3 edit changes neither
@@ -237,20 +239,22 @@ updated `dev`:
   `hex_perception` crate, then fog presentation and owner-reviewed adapters. It does
   not import map internals.
 
-The intended PR order is:
+The delivery order, with current state, is:
 
-1. contracts and shared vocabulary, with no behavior change;
-2. V3 foundation;
-3. directed steady-state liquid topology, in parallel with headless perception;
-4. the opaque animated flow renderer;
-5. the Waterfall recipe;
-6. fog presentation, cave lighting, and isolated gameplay adapters;
-7. Forest;
-8. Fort;
-9. `Ring7`;
-10. V3 rebuilds of Hills, Frozen, Volcanic, Sky Islands, Mountains, and Caves;
-11. scenario and review-tool migration;
-12. V1/V2 removal.
+1. **Delivered:** contracts and shared vocabulary;
+2. **Delivered:** V3 foundation;
+3. **Delivered:** directed steady-state liquid topology and headless perception;
+4. **Delivered:** the opaque animated flow renderer;
+5. **Delivered:** Waterfall;
+6. **Partial:** the traversal-blocker and lattice-knowledge adapters are live; fog
+   presentation, cave lighting, and the remaining gameplay adapters are pending;
+7. **Delivered:** Forest;
+8. **Pending:** Fort;
+9. **Pending:** `Ring7`;
+10. **Pending:** V3 rebuilds of Hills, Frozen, Volcanic, Sky Islands, Mountains, and
+    Caves;
+11. **Pending:** complete scenario and review-tool migration;
+12. **Pending:** V1/V2 removal.
 
 An adapter that changes movement, AI, targeting, engagement, or command validation is
 a separate PR reviewed by that crate's owner. A map PR may add shared vocabulary in
@@ -282,11 +286,12 @@ V3 foundation tests cover connected masks, exact coverage, six-way edge agreemen
 volume overlap rejection, named-stream independence, ordered fingerprints, bounded
 repair, forced fallback, setup failure, teardown, and re-entry.
 
-Recipe tests enforce directed Waterfall flow and its bypass, Forest clearings and
-protected routes, Fort circulation and headroom, and `Ring7` seam, hydrology, and
-macro-route contracts. A fast fixed corpus runs in CI; ignored 10,000-seed corpora
-must produce 100% valid final maps including fallback and target less than 1% fallback
-use.
+Current recipe tests enforce directed Waterfall flow and its bypass plus Forest
+clearings, blockers, density, and protected routes. Fort tests will enforce
+circulation and headroom; `Ring7` tests will enforce seam, hydrology, and macro-route
+contracts when those recipes become runnable. Fast fixed corpora run in CI; ignored
+10,000-seed Waterfall and Forest corpora must produce 100% valid final maps including
+fallback and target less than 1% fallback use.
 
 Benchmarks cover radius 12, 20, and 40 single patches plus the radius-33 composite,
 including generation time, entity count, and terrain-edit projection. Perception

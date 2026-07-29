@@ -36,9 +36,11 @@ Most customisation comes from the **lattice** that defines a character or enemy.
 consists of gems holding elements, fusions that create higher-order elements, and
 spells that consume them.
 
-**There is no HP.** Damage disables hexes, which prevents casting and powering. When
-every hex is disabled the character dies, permanently, unless a revival spell
-reverses it.
+**There is no HP.** Damage disables hexes, which prevents casting and powering. The
+current playable rule removes a fully disabled character from the turn order as
+**downed** and leaves the lattice available for restoration. Whether downed becomes
+functional death, permanent death, or a recoverable campaign state remains an
+explicit design question below; the overview does not settle it by implication.
 
 ---
 
@@ -204,7 +206,8 @@ thing that can go wrong is something they could in principle have known.
 ### Recovery and death
 
 - Hexes recover through healing spells or rest after combat.
-- Death is permanent unless reversed by a restoring spell.
+- The long-term consequence of total disablement is unresolved. Permanent death unless
+  reversed remains one candidate; the playable implementation uses revivable downing.
 - **Proposed:** functional death arrives before zero. A character whose spell hexes
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
@@ -381,10 +384,12 @@ Brakes not yet in: desperation effects that strengthen as a lattice weakens, a f
 on boss action count, cheap partial recovery as a standard action.
 
 **Ruled 2026-07-27: all of the missing brakes are deferred.** Not because they are
-wrong, but because you cannot tune a spiral you have not felt. Wave 3 ships the loop
-that produces the spiral; whether it actually reads as *nothing, nothing, nothing,
-collapse* is a question for playing it. Fitting brakes first would be tuning against a
-guess, and each one of them changes what the others need to do.
+wrong, but because you cannot tune a spiral you have not felt. Wave 3 has now shipped
+the loop that produces the spiral: defender-chosen disables, downing, Burn, Reveal,
+and the combat readouts are playable. Whether it actually reads as *nothing, nothing,
+nothing, collapse* is now a manual-play question, not an implementation prerequisite.
+Fitting brakes before that evidence would still be tuning against a guess, and each
+one changes what the others need to do.
 
 ### Initiative
 
@@ -478,6 +483,9 @@ question as [surrender consequences](#surrender-consequences) from the other end
 
 ## What exists in code today
 
-Very little of the above. [planning/status.md](../planning/status.md) is the one
-doc allowed to be out of date: what is built, what is a placeholder, and which of
-the open questions above each placeholder is standing in for.
+The playable core now exercises the lattice, content, damage, defender choice,
+persistent Burn, Reveal, encounters, casting interface, combat log, and deterministic
+world/perception foundations described above. It intentionally does not answer the
+open questions in this document. [planning/status.md](../planning/status.md) is the
+one doc allowed to be out of date: it records what is built, what is provisional, and
+which decision each provisional rule is standing in for.

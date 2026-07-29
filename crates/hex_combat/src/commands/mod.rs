@@ -14,9 +14,9 @@
 //! loop owns the refusal path and each handler stays a straight-line function
 //! that can be read on its own.
 //!
-//! That shape is load-bearing rather than tidiness: wave 3 adds casting,
-//! terrain impact and persistent effects, and each becomes **a new file plus
-//! one match arm** instead of another hundred lines inside one function. A verb
+//! That shape is load-bearing rather than tidiness: casting and defender choices
+//! each became **a new file plus one match arm** instead of another hundred lines
+//! inside one function. A verb
 //! needing a fact the handlers lack adds a field to [`Verb`] instead of
 //! changing every signature.
 //!
@@ -112,8 +112,8 @@ struct Verb<'a> {
     /// The ledger of effects that outlast the action that caused them.
     ///
     /// The field this struct's docs promised: persistent effects were named as one of
-    /// wave 3's additions, and casting a burn is a verb needing a fact the handlers
-    /// lacked. One field here rather than a ninth argument on `cast::apply`.
+    /// Casting a burn is a verb needing a fact the handlers lacked. One field here
+    /// rather than a ninth argument on `cast::apply`.
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
     knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
