@@ -217,6 +217,21 @@ their authoritative queries. It may read units and shared map projections.
 `hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`;
 `hex_combat` may use the richer perception API for engagement and target validation.
 
+The live ECS adapter caches each ordered stage. Terrain, substance, interior, or
+blocker changes rebuild the exact `SurfaceSnapshots`; ambient or local-light changes
+reuse that surface cache and restart at illumination; unit positions and
+`perception.ron` changes restart at observation. Unchanged gameplay frames run only
+the change detector. Every update-stage system belongs to `PausableSystems`, while
+the setup pass still resolves one complete initial frame before view framing.
+`PerceptionRuntimeStats` exposes the four recomputation counts in the development
+inspector and headless benchmarks.
+
+`hex_perception` imports only Bevy application, ECS, state, logging, and reflection
+subcrates directly. Its current `hex_assets` and `hex_units` dependencies still bring
+the Bevy facade transitively for their own behavior. “Headless” therefore means that
+authoritative perception is renderer-independent; it does not claim that the whole
+transitive build graph is renderer-free yet.
+
 ## Verification gate
 
 Headless tests must cover static, sun-key, moon-key, and dark ambient resolution;

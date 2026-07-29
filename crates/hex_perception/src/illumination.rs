@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::Resource;
+use bevy_ecs::reflect::ReflectResource;
+use bevy_reflect::Reflect;
 use hex_core::{ExteriorIllumination, GameplayLight, IlluminationLevel, LightDomain, TilePos};
 
 use crate::{PerceptionError, SurfaceSnapshots};
@@ -12,7 +14,7 @@ use crate::{PerceptionError, SurfaceSnapshots};
 /// `GameplayLight` intentionally carries no cached domain. The ECS boundary derives
 /// this snapshot from the source's current [`TilePos`] and generated interior
 /// metadata each time illumination is recomputed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LightSourceSnapshot {
     /// Exact current position of the light source.
     pub pos: TilePos,
@@ -23,7 +25,7 @@ pub struct LightSourceSnapshot {
 }
 
 /// Resolved objective illumination and domain at one exact surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedLight {
     /// Strongest ambient or local gameplay illumination reaching the position.
     pub level: IlluminationLevel,
@@ -35,7 +37,8 @@ pub struct ResolvedLight {
 ///
 /// The map is ordered by [`TilePos`] so iteration, observation, tests, and future
 /// fingerprints do not depend on ECS query order.
-#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Resource, Reflect, Debug, Default, Clone, PartialEq, Eq)]
+#[reflect(Resource)]
 pub struct ResolvedIllumination {
     by_surface: BTreeMap<TilePos, ResolvedLight>,
 }

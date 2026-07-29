@@ -5,6 +5,8 @@ use std::error::Error;
 use std::fmt;
 
 use bevy_ecs::prelude::Resource;
+use bevy_ecs::reflect::ReflectResource;
+use bevy_reflect::Reflect;
 use hex_core::{Headroom, HexSpan, LightDomain, SubstanceId, TilePos, TraversalEndpoint, UnitId};
 use hex_units::Faction;
 
@@ -14,7 +16,7 @@ use hex_units::Faction;
 /// and bridge in one horizontal column remain independent facts. `span` is retained
 /// for presentation consumers, while movement-facing projections use the quantized
 /// position, solidity, headroom, and blocker fields.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq)]
 pub struct SurfaceSnapshot {
     /// Exact top material voxel of this exposed surface.
     pub pos: TilePos,
@@ -44,7 +46,7 @@ impl SurfaceSnapshot {
 ///
 /// Faction knowledge stores these only while the unit is observed. The type contains
 /// no renderer entity id, so its ordering and equality are stable across runs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservedUnit {
     /// Stable simulation identity.
     pub id: UnitId,
@@ -55,7 +57,8 @@ pub struct ObservedUnit {
 }
 
 /// Current exposed surfaces in deterministic exact-position order.
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
+#[derive(Resource, Reflect, Debug, Default, Clone, PartialEq)]
+#[reflect(Resource)]
 pub struct SurfaceSnapshots {
     by_pos: BTreeMap<TilePos, SurfaceSnapshot>,
 }
@@ -113,6 +116,13 @@ pub enum PerceptionError {
     DuplicateSurface(TilePos),
     /// Two current unit snapshots claimed one stable identity.
     DuplicateUnit(UnitId),
+    /// A live unit occupied no current exposed perception surface.
+    UnitMissingSurface {
+        /// Stable identity of the invalid unit.
+        id: UnitId,
+        /// Exact surface claimed by the unit.
+        pos: TilePos,
+    },
 }
 
 impl fmt::Display for PerceptionError {
@@ -122,6 +132,12 @@ impl fmt::Display for PerceptionError {
                 write!(formatter, "duplicate perception surface at {pos:?}")
             }
             Self::DuplicateUnit(id) => write!(formatter, "duplicate perception unit {id:?}"),
+            Self::UnitMissingSurface { id, pos } => {
+                write!(
+                    formatter,
+                    "perception unit {id:?} occupies no exposed surface at {pos:?}"
+                )
+            }
         }
     }
 }

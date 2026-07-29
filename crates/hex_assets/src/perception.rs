@@ -63,10 +63,11 @@ impl PerceptionSettings {
         if self.downhill_levels_per_bonus <= 0 {
             return Err("perception.ron: downhill_levels_per_bonus must be positive".to_owned());
         }
-        if self.max_downhill_bonus > SightProfile::MAX_DOWNHILL_BONUS {
+        let contract_cap = SightProfile::DEFAULT.max_downhill_bonus;
+        if self.max_downhill_bonus > contract_cap {
             return Err(format!(
                 "perception.ron: max_downhill_bonus must not exceed {}",
-                SightProfile::MAX_DOWNHILL_BONUS
+                contract_cap
             ));
         }
         Ok(())

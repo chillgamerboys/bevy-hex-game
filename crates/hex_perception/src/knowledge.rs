@@ -3,6 +3,8 @@
 use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::Resource;
+use bevy_ecs::reflect::ReflectResource;
+use bevy_reflect::Reflect;
 use hex_core::{KnowledgeState, LocalMapKnowledge, TilePos, UnitId};
 use hex_units::Faction;
 
@@ -14,7 +16,7 @@ use crate::{
 ///
 /// Unknown positions are absent from [`FactionKnowledge`] entirely, so this type can
 /// represent only Remembered or Observed facts.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq)]
 pub struct KnownSurface {
     state: KnowledgeState,
     snapshot: SurfaceSnapshot,
@@ -38,7 +40,7 @@ impl KnownSurface {
 ///
 /// Terrain remains as an exact last-seen snapshot after sight is lost. Units are
 /// current-observation facts only and are cleared before every refresh.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Reflect, Debug, Default, Clone, PartialEq)]
 pub struct FactionKnowledge {
     surfaces: BTreeMap<TilePos, KnownSurface>,
     units: BTreeMap<UnitId, ObservedUnit>,
@@ -134,7 +136,8 @@ impl FactionKnowledge {
 ///
 /// The slots stay private and are selected with an exhaustive match. This avoids
 /// pretending `Faction` has a meaningful sort order merely to use it as a map key.
-#[derive(Resource, Debug, Default, Clone, PartialEq)]
+#[derive(Resource, Reflect, Debug, Default, Clone, PartialEq)]
+#[reflect(Resource)]
 pub struct FactionMapKnowledge {
     player: FactionKnowledge,
     hostile: FactionKnowledge,

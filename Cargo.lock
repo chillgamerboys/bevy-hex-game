@@ -3322,8 +3322,12 @@ dependencies = [
 name = "hex_perception"
 version = "0.1.0"
 dependencies = [
- "bevy",
+ "bevy_app",
  "bevy_ecs",
+ "bevy_log",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_state",
  "hex_assets",
  "hex_core",
  "hex_units",

@@ -3,6 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy_ecs::prelude::Resource;
+use bevy_ecs::reflect::ReflectResource;
+use bevy_reflect::Reflect;
 use hex_core::{ExteriorIllumination, LightDomain, SightProfile, TilePos, UnitId};
 use hex_units::Faction;
 
@@ -16,7 +18,7 @@ use crate::{
 /// Surface positions may include a formerly known position that is currently in
 /// sight but has been deleted. Applying the observation purges that stale snapshot.
 /// Units, by contrast, are present only while currently authoritative and observed.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Reflect, Debug, Default, Clone, PartialEq, Eq)]
 pub struct FactionObservation {
     surfaces: BTreeSet<TilePos>,
     units: BTreeMap<UnitId, ObservedUnit>,
@@ -87,7 +89,8 @@ impl FactionObservation {
 }
 
 /// Current spatial observations for both factions without ordering [`Faction`].
-#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Resource, Reflect, Debug, Default, Clone, PartialEq, Eq)]
+#[reflect(Resource)]
 pub struct FactionObservations {
     player: FactionObservation,
     hostile: FactionObservation,
@@ -179,6 +182,14 @@ pub fn resolve_observations(
     profile: SightProfile,
 ) -> Result<FactionObservations, PerceptionError> {
     let units = index_units(units)?;
+    for unit in units.values() {
+        if illumination.get(unit.pos).is_none() {
+            return Err(PerceptionError::UnitMissingSurface {
+                id: unit.id,
+                pos: unit.pos,
+            });
+        }
+    }
     let player = resolve_faction(
         Faction::Player,
         &units,
@@ -223,15 +234,16 @@ fn resolve_faction(
     lights: &[LightSourceSnapshot],
     profile: SightProfile,
 ) -> Result<FactionObservation, PerceptionError> {
-    let observers = units
-        .values()
-        .filter(|unit| unit.faction == faction)
-        .filter_map(|unit| {
-            illumination
-                .get(unit.pos)
-                .map(|resolved| (unit.pos, resolved.domain))
-        })
-        .collect::<Vec<_>>();
+    let mut observers = Vec::new();
+    for unit in units.values().filter(|unit| unit.faction == faction) {
+        let Some(resolved) = illumination.get(unit.pos) else {
+            return Err(PerceptionError::UnitMissingSurface {
+                id: unit.id,
+                pos: unit.pos,
+            });
+        };
+        observers.push((unit.pos, resolved.domain));
+    }
 
     let mut targets = illumination.iter().collect::<BTreeMap<_, _>>();
     for (_, known) in prior_knowledge.faction(faction).surfaces() {
@@ -601,6 +613,34 @@ mod tests {
         let reverse = resolve(units(2, 9));
         assert_eq!(forward, PerceptionError::DuplicateUnit(UnitId(2)));
         assert_eq!(reverse, forward);
+    }
+
+    #[test]
+    fn unit_without_an_exposed_surface_is_rejected() {
+        let surface = pos(0, 0, 5);
+        let missing = pos(1, 0, 5);
+        let illumination = ResolvedIllumination::try_resolve(
+            [(surface, LightDomain::Exterior)],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let id = UnitId(7);
+
+        let error = resolve_observations(
+            [unit(id.0, Faction::Player, missing)],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            SightProfile::default(),
+        )
+        .expect_err("an invalid unit projection must not silently blind its faction");
+
+        assert_eq!(
+            error,
+            PerceptionError::UnitMissingSurface { id, pos: missing }
+        );
     }
 
     #[test]
