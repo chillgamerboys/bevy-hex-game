@@ -50,6 +50,37 @@ scenario again. Which values those are is the hot-reload table in
 git checkout assets/config/
 ```
 
+## Asset Workshop
+
+The complete authoring workflow and controls are in
+[the Asset Workshop contract](../systems/asset-workshop.md).
+
+**The editor cannot find a project.** Run `cargo editor` from inside a checkout, or
+pass its root explicitly with `cargo editor -- --project-root /path/to/repository`.
+The root must contain both `assets/art/palette.ron` and
+`assets/art/voxel_styles.ron`.
+
+**Save is disabled for an object.** Calibration and newly created objects need Save As
+before ordinary Save has a tracked destination. A saved object must also satisfy its
+category, connectivity, style-reference, bounds, origin, and mask contracts. The
+object inspector reports the current intrinsic validation error.
+
+**Every tracked write is blocked.** The toolbar distinguishes an external-file change
+from a recovery conflict. Reload accepts the current disk files as the new baseline
+and discards local drafts. Save As can preserve an object under a new id, but it does
+not silently resolve dirty shared palette or style catalogs.
+
+**A recovery prompt will not go away.** The Workshop deliberately leaves an invalid
+or unknown-version recovery file untouched and pauses autosave. Discard it explicitly
+only after deciding it contains no work to preserve. Recovery files are untracked at
+`.context/asset-workshop/recovery/`; tracked art is never repaired or overwritten by
+the prompt.
+
+**Review is unavailable.** Review export requires a saved, clean object and a valid
+palette-style-object dependency graph. Save or reload first, then resolve the
+validation error shown in the inspector. Output is untracked under
+`.context/asset-workshop/reviews/`.
+
 ## And when the tests are green anyway
 
 Every serious bug in this codebase so far was found by a person looking at the

@@ -10,6 +10,7 @@ use hex_assets::{
 
 use crate::history::DEFAULT_HISTORY_LIMIT;
 use crate::model::{EditorModel, EditorModelError};
+use crate::recovery::{RecoveryError, RecoverySanitization, RecoveryWorkshopDraft};
 
 /// A recoverable workshop draft operation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +100,50 @@ impl WorkshopDraft {
         }
     }
 
+    /// Captures current catalogs, their save checkpoints, and the open object for
+    /// editor-only crash recovery.
+    ///
+    /// Global undo/redo entries and an open paint transaction are intentionally
+    /// session-only and are not included.
+    #[must_use]
+    pub fn recovery_snapshot(&self) -> RecoveryWorkshopDraft {
+        RecoveryWorkshopDraft {
+            palette: self.palette.clone(),
+            styles: self.styles.clone(),
+            saved_palette: self.saved_palette.clone(),
+            saved_styles: self.saved_styles.clone(),
+            editor: self.editor.recovery_snapshot(),
+        }
+    }
+
+    /// Restores a recovery snapshot with empty global and object histories.
+    pub fn from_recovery(
+        mut recovery: RecoveryWorkshopDraft,
+    ) -> Result<(Self, RecoverySanitization), RecoveryError> {
+        recovery.normalize_and_validate()?;
+        let RecoveryWorkshopDraft {
+            palette,
+            styles,
+            saved_palette,
+            saved_styles,
+            editor,
+        } = recovery;
+        let (editor, sanitization) = EditorModel::from_recovery(editor)?;
+        Ok((
+            Self {
+                palette,
+                styles,
+                saved_palette,
+                saved_styles,
+                editor,
+                undo: VecDeque::new(),
+                redo: VecDeque::new(),
+                open_transaction_label: None,
+            },
+            sanitization,
+        ))
+    }
+
     /// Current palette draft.
     #[must_use]
     pub const fn palette(&self) -> &ArtPalette {
@@ -109,6 +154,18 @@ impl WorkshopDraft {
     #[must_use]
     pub const fn styles(&self) -> &VoxelStyleCatalog {
         &self.styles
+    }
+
+    /// Palette checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_palette(&self) -> &ArtPalette {
+        &self.saved_palette
+    }
+
+    /// Style checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_styles(&self) -> &VoxelStyleCatalog {
+        &self.saved_styles
     }
 
     /// Current object editor.
@@ -385,6 +442,32 @@ impl WorkshopDraft {
     pub fn mark_catalogs_saved(&mut self) {
         self.saved_palette = self.palette.clone();
         self.saved_styles = self.styles.clone();
+    }
+
+    /// Rebases recovered catalog drafts onto the current tracked catalogs.
+    ///
+    /// The application performs the three-way merge because it also owns the
+    /// filesystem revision contract. This method adopts its validated result and
+    /// makes the current tracked catalogs the new save checkpoint.
+    pub(crate) fn adopt_rebased_catalogs(
+        &mut self,
+        current_palette: ArtPalette,
+        current_styles: VoxelStyleCatalog,
+        merged_palette: ArtPalette,
+        merged_styles: VoxelStyleCatalog,
+    ) -> Result<(), WorkshopDraftError> {
+        current_styles
+            .validate(&current_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        merged_styles
+            .validate(&merged_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        self.palette = merged_palette;
+        self.styles = merged_styles;
+        self.saved_palette = current_palette;
+        self.saved_styles = current_styles;
+        self.clear_history();
+        Ok(())
     }
 
     /// Marks the object as explicitly saved under its current identity.

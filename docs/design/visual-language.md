@@ -74,6 +74,10 @@ Changing a shared swatch is intentionally visible. Tooling reports every referri
 style and object before the change is saved so a local adjustment cannot quietly
 recolour unrelated art.
 
+Launch instructions, editor controls, explicit-save behavior, recovery, and the
+review workflow live in the
+[Asset Workshop contract](../systems/asset-workshop.md#authoring-workflow).
+
 ## Colour and surface are separate
 
 A palette swatch answers **which colour** an authored part uses. A voxel style answers
