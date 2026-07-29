@@ -89,8 +89,9 @@ archetype their encounter rostered. A cast goes through the command funnel and t
 legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
 is replayable rather than made inside the applier. A unit whose every hex is disabled
-leaves the turn order and is **downed** — retained with its lattice for a future
-restoration flow, not despawned. Reactivation is not implemented. A strike deals
+leaves the turn order and is **downed** — retained with its lattice rather than
+despawned. Renewal restores chosen cells, removes `Downed`, and returns the unit at the
+next round boundary; exploration Rest recovers the party immediately. A strike deals
 damage the same way, through the same decision.
 
 **And casting has an interface.** A spell panel lists what the acting unit inscribes,
@@ -174,9 +175,10 @@ produce the same order across runs and saves.
 It disables hexes and it can put a unit down, and that is deliberately as far as it
 goes. **Downed is provisional**: the design leaves both functional death — a threshold
 arriving before zero — and permadeath open, and a unit whose lattice is spent simply
-leaves the turn order while retaining its lattice for a future restoration flow.
-Reactivation is not implemented. How many hexes a spell disables, how long a fight
-runs, and what a strike costs are all knobs rather than answers; `strike_disables`
+leaves the turn order while retaining its lattice for restoration. Renewal can
+reactivate it for the next round, and exploration Rest recovers it. How many hexes a
+spell disables, how long a fight runs, and what a strike costs are all knobs rather
+than answers; `strike_disables`
 sits in `combat.ron` beside the rest precisely so it can be moved without touching code.
 Further damage against an already downed target is refused before spending the action
 or mana, while non-damaging inspection such as Reveal can still reach the retained
@@ -286,8 +288,8 @@ The first implementation also ships with explicit limitations:
   a unit and edits to its supporting surface until falling and footing reconciliation
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
-  turn order and retains its lattice for a future restoration flow. Reactivation is
-  not implemented; functional death and permadeath remain open.
+  turn order and retains its lattice. Renewal restores it into the next round and Rest
+  recovers it after combat; functional death and permadeath remain open.
 - **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
   area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
   list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever

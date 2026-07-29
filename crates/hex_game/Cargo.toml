@@ -24,6 +24,8 @@ serde = { workspace = true, optional = true }
 [dev-dependencies]
 # Only for the tests that open each scenario's world file and check it parses.
 ron = { workspace = true }
+hex_ai = { workspace = true }
+hex_anim = { workspace = true }
 
 [features]
 # Empty by default so `cargo build --release` ships without the inspector. Use

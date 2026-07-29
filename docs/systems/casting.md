@@ -300,13 +300,17 @@ without touching the framework, which is the point of having one.
   content dump); it has no mechanical effect. Co-casting is entangled with the
   unresolved initiative question.
 - **Downed-first death is provisional.** Version 0.3 removes a fully disabled
-  unit from the turn order and retains its lattice for a future restoration flow.
-  Reactivation is not implemented. Functional death and permadeath remain separate
-  design decisions. Further damaging casts refuse a downed target before payment,
-  while Reveal may still inspect its retained lattice.
-- **One cast may open at most one defender choice.** Content validation rejects a spell
-  with several non-targeted `DisableHexes` effects; the pending-decision resource holds
-  one exact answer, so accepting that authoring shape would overwrite damage silently.
+  unit from the turn order and leaves it revivable by a restoring spell. Functional
+  death and permadeath remain separate design decisions. Further damaging casts refuse
+  a downed target before payment, while Reveal may still inspect its retained lattice.
+- **Renewal is an exact caster choice.** `RestoreHexes` parks
+  `PendingDecision::ChooseRestores`; a player caster selects disabled cells on the
+  target lattice, while a non-player caster uses its registered deterministic
+  algorithm. The answer remains a replayable `ChooseRestores` command rather than an
+  internal healing policy.
+- **One cast may open at most one exact-cell choice.** Content validation counts both
+  non-targeted `DisableHexes` and `RestoreHexes`; the pending-decision resource holds
+  one damage or restoration answer, so accepting more would overwrite it silently.
 - **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
   complete tier-bounded view through the knowledge seam. Spell-created lights still
   wait on the perception lane and must not silently do nothing.

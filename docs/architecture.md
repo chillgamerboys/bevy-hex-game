@@ -8,6 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -27,14 +28,15 @@ will, and no amount of documentation prevents it. A compiler error does.
 |---|---|---|---|
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
-| `hex_units` | Units and their lattices, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
+| `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, command application, deterministic melee AI, persistent effects, and faction lattice knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
+| `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -87,6 +89,13 @@ signal for that boundary, since anything in those crates can now reach the engin
 trade is deliberate — the compiler cannot distinguish an intended consumer from an
 accidental import once the edge exists. Like the map, the engine is one person's, and
 its contract is the types it exposes.
+
+Party state follows the same split. `hex_core` owns the serializable formation
+vocabulary and session resource, `hex_assets` loads and validates named presets,
+`hex_units` owns roster identity and selection/focus projection, and `hex_game` renders
+and edits those facts. The UI never invents an entity ordering: keys and strip slots
+follow the `Party` resource's stable `UnitId` order. See
+[systems/party.md](systems/party.md).
 
 ### Ownership cuts both ways
 

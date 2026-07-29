@@ -169,3 +169,17 @@ pub enum AppSystems {
     /// Everything else. Split this further as the game grows.
     Update,
 }
+
+/// Shared gameplay reconciliation boundaries used across crate ownership.
+///
+/// These are narrower than [`AppSystems`]: they name completed projections that a
+/// presentation consumer may safely read after deferred component commands flush.
+#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum GameplaySystems {
+    /// Selected unit, camera focus, rings, and movement overlays agree.
+    Selection,
+    /// Casting controls are projected from the reconciled actor and selection.
+    Casting,
+    /// The explicit gameplay UI role context is ready for panels to consume.
+    UiContext,
+}

@@ -1,0 +1,18 @@
+[package]
+name = "hex_ai"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Pure, headless contracts and replaceable algorithms for enemy decisions."
+
+[dependencies]
+bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
+bevy_reflect = { workspace = true }
+hex_core = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

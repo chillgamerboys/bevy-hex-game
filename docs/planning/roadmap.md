@@ -29,9 +29,10 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Complete-party combat integration | Finish party selection, deterministic AI hosting, atomic formation traversal, and multi-party combat behavior | units/combat |
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game | <!-- linear: HEX-22 owner: shravan-kumaran -->
-| Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
-| Magic outside combat | casting in real time; rest has settled recovery, but exploration needs its own input, time-cost, and interruption rules | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
+| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
+| Party-combat playtest checkpoint | deterministic 3v3 Party Trial summary/replay gate, focused flat ability/identity walks, and a mandatory human Crossing walk before Part 2 planning | game/docs |
+| Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a Wave 4 Part 1 gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
 | Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
@@ -47,6 +48,17 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
+
+## Delivered
+
+| Epic | Delivered |
+|---|---|
+| Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
+| Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
+| AI host | Wave 4 Part 1: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
+| Party controls | Wave 4 Part 1: stable six-member strip and number-key selection, camera focus, combat-owned acting selection, Group/Solo mode, and preset/member-slot editing |
+| Formation traversal | Wave 4 Part 1: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
+| Outcomes and recovery | Wave 4 Part 1: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -84,9 +96,19 @@ The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collect
 group of ticket PRs in dependency order, a human walks the integrated build once, and
 the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
-- **Wave 4 — combat breadth.** Complete-party combat integration, outcome flow,
-  trajectories and lingering zones, magic outside combat, channelling/co-casting,
-  and the gameplay-owned movement/engagement/targeting/AI perception adapters.
+- **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
+  disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
+  Encounters. `RunBottom` lands before Terrain magic starts, and Terrain magic starts
+  only after the declarative impact, outcome, and conjuration-admission asks G/H/L have
+  an agreed shape. Other wave work need not wait for those boundary contracts. Damage
+  exists at the end of it.
+- **Wave 4 Part 1 — complete party combat.** Algorithm-neutral AI hosting, party
+  controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
+  scenario through a mandatory human playtest checkpoint. Casting UX and combat
+  readability already landed in Wave 3. General real-time casting, Channel,
+  co-casting, initiative, action economy, and rout remain Part 2 decisions.
+  Perception adapters and `RunBottom`-dependent obstruction/trajectory work are
+  optional satellites, not Part 1 gates.
 - **Wave 5 — productization.** Save and load, Settings/persistence/audio, Steam
   packaging and crash reporting, Engine upkeep (pinned to the Bevy 0.20 window).
 
