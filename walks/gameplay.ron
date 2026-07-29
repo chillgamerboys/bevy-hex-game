@@ -40,4 +40,15 @@
     Capture("14-close-quarters-enemy-turn"),
     Key("Backspace"),
     AwaitScreen("Title"),
+    // Volcanic Hills is the only shipped scenario with lava. Keep a capture
+    // in the standard walk so liquid and palette changes cannot leave that
+    // renderer path completely unobserved.
+    Settle(30),
+    StartScenario(name: "Volcanic Hills", seed: 444211238),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("15-volcanic-hills"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
 ]
