@@ -368,7 +368,7 @@ impl FactionLatticeKnowledge {
     /// Drops everything every faction knew about one subject.
     ///
     /// For actual despawn or session teardown, never for downing: a downed entity
-    /// remains revivable and keeps its stable id and lattice.
+    /// keeps its stable id and lattice for a possible future restoration flow.
     pub fn forget_subject(&mut self, subject: UnitId) {
         self.by_view.retain(|&(_, known), _| known != subject);
         self.observed.retain(|&(_, known)| known != subject);

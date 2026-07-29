@@ -51,7 +51,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `LocalMapKnowledge` — publisher live; movement adapter pending | perception | `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` current-unit observations gate lattice views | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
-| `CanopyOccluder` — exact generated canopy cells for camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
+| `CanopyOccluder` — root-keyed generated-feature marker for current camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
 | `PresentationOcclusion` — cave/canopy reasons live; fog reason pending | shared | presentation | **partial** | [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 

@@ -377,11 +377,13 @@ last Blend chunk leaves, which restores true alpha-to-coverage for Cutout styles
 The Workshop and renderer still do not replace Forest's temporary vegetation,
 synthesize plants, import reference images, animate spell effects, or provide a
 runtime construction system. Forest integration is world-side work: the map may
-publish `ObjectInstance` for the authored visual while continuing to publish blockers
-and canopy cells through their separate exact contracts. `hex_objects` must not infer
-either gameplay fact from `root`, `trunk`, or `foliage` parts. Procedural plant
-synthesis follows only after the authored exemplar path is reviewed; neither stage
-widens the object schema with renderer- or biome-specific policy.
+publish `ObjectInstance` for the authored visual while continuing to publish exact
+blockers separately. Authored canopy chunks need a separate world/presentation
+adapter before they can replace Forest's current root-keyed `CanopyOccluder`.
+`hex_objects` must not infer either gameplay fact from `root`, `trunk`, or `foliage`
+parts. Procedural plant synthesis follows only after the authored exemplar path is
+reviewed; neither stage widens the object schema with renderer- or biome-specific
+policy.
 
 Common launch, save, recovery, and review failures are indexed in
 [troubleshooting.md](../development/troubleshooting.md#asset-workshop).

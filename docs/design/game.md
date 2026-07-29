@@ -207,15 +207,16 @@ thing that can go wrong is something they could in principle have known.
 
 - Hexes recover through healing spells or rest after combat.
 - The long-term consequence of total disablement is unresolved. Permanent death unless
-  reversed remains one candidate; the playable implementation uses revivable downing.
+  reversed remains one candidate; the prototype uses restoration-ready downing, but
+  no restoring spell currently reactivates a downed unit.
 - **Proposed:** functional death arrives before zero. A character whose spell hexes
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
   period rather than a slog, and gives enemies a legible rout condition.
 - **Provisional first implementation:** a unit whose hexes are all disabled leaves the
-  turn order and is **downed**, revivable by a restoring spell. This is a testable
-  starting behavior, not the answer to functional death or the
-  [permadeath question](#permadeath).
+  turn order and is **downed**, retaining its unit and lattice for a future restoring
+  flow. Reactivation is not implemented. This is a testable starting behavior, not
+  the answer to functional death or the [permadeath question](#permadeath).
 - **Ruled 2026-07-27: out-of-combat recovery is an explicit rest action.** Channelling
   is a per-turn model and has nothing to say about the time between fights, so the
   alternative was inventing a regeneration curve before there was a fight to pace it
@@ -376,12 +377,13 @@ Some of that is desirable — it makes breaking through defences the whole tacti
 problem, and suits a game with no HP. But the accelerants stack, and permadeath is on
 the other end.
 
-Brakes already in the system: rituals still function on a degraded lattice,
-channelling is always available, rout and surrender end fights before the slog, and
-healing can restore hexes mid-combat.
+Brakes already proposed by the design: rituals can function on a degraded lattice,
+channelling can remain available, rout and surrender can end fights before the slog,
+and healing can restore hexes mid-combat. These are not all implemented: Channel,
+Restore, rout, and surrender are currently deferred.
 
-Brakes not yet in: desperation effects that strengthen as a lattice weakens, a floor
-on boss action count, cheap partial recovery as a standard action.
+Additional candidates: desperation effects that strengthen as a lattice weakens, a
+floor on boss action count, and cheap partial recovery as a standard action.
 
 **Ruled 2026-07-27: all of the missing brakes are deferred.** Not because they are
 wrong, but because you cannot tune a spiral you have not felt. Wave 3 has now shipped
@@ -481,11 +483,7 @@ question as [surrender consequences](#surrender-consequences) from the other end
 
 ---
 
-## What exists in code today
+## Implementation status
 
-The playable core now exercises the lattice, content, damage, defender choice,
-persistent Burn, Reveal, encounters, casting interface, combat log, and deterministic
-world/perception foundations described above. It intentionally does not answer the
-open questions in this document. [planning/status.md](../planning/status.md) is the
-one doc allowed to be out of date: it records what is built, what is provisional, and
-which decision each provisional rule is standing in for.
+Current implementation status, including provisional rules and known gaps, is
+maintained in [planning/status.md](../planning/status.md).

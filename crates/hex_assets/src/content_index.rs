@@ -12,9 +12,8 @@
 //! It is rebuilt only outside [`Screen::Gameplay`], like the tables it draws on, so
 //! resolved ids never shift under a live world. It also holds the spell requirements
 //! **resolved to [`ElementId`]s**, the exact shape `hex_lattice::SpellTable` reads. The
-//! `hex_lattice` edge is drawn as of HEX-12's prep, so the trait implementation belongs
-//! in this crate, beside the content it reads — the engine's designed seat. Nothing
-//! implements it yet; the accessors below are the whole input it needs.
+//! trait implementation belongs in this crate, beside the content it reads — the
+//! engine's designed seat.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -121,8 +120,8 @@ impl ContentIndex {
         }
     }
 
-    /// A spell's requirements resolved to `(element, mana)` — the shape
-    /// `hex_lattice::SpellTable::requirements` will read (HEX-12).
+    /// A spell's requirements resolved to `(element, mana)` — the shape read by
+    /// `hex_lattice::SpellTable::requirements`.
     #[must_use]
     pub fn requirements(&self, spell: SpellId) -> Option<&[(ElementId, u16)]> {
         self.spells
@@ -130,8 +129,8 @@ impl ContentIndex {
             .map(|resolved| resolved.requirements.as_slice())
     }
 
-    /// How a spell spends its mana — the value `hex_lattice::SpellTable::casting` will
-    /// read (HEX-12).
+    /// How a spell spends its mana — the value read by
+    /// `hex_lattice::SpellTable::casting`.
     #[must_use]
     pub fn casting(&self, spell: SpellId) -> Option<CastingAxis> {
         self.spells.get(&spell).map(|resolved| resolved.casting)

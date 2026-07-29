@@ -311,8 +311,8 @@ fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) ->
 /// do early in a fight and exactly what makes late damage hurt, which is the shape the
 /// design predicts and wants to feel before tuning it.
 ///
-/// It answers by pushing a command rather than mutating, because the answer belongs in
-/// the replay log — see [`crate::commands::choose_disables`].
+/// It answers by pushing a command rather than mutating, because a future recorded
+/// command stream must preserve the answer — see [`crate::commands::choose_disables`].
 fn answer_disable_decision(
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,

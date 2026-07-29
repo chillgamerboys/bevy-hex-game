@@ -529,7 +529,7 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .view(Faction::Player, UnitId(1))
             .and_then(|known| known.cell(LatticeCoord::ORIGIN))
             .is_some(),
-        "knowledge of a revivable downed unit must survive until actual despawn"
+        "knowledge of a retained downed unit must survive until actual despawn"
     );
     assert_eq!(
         take_events(&mut app),
@@ -606,7 +606,7 @@ fn a_short_answer_is_accepted_when_the_lattice_has_no_more_to_give() {
     );
 }
 
-/// A downed unit's lattice is still reachable, or nothing could ever revive it.
+/// A downed unit's lattice remains reachable for a possible future restoration flow.
 ///
 /// Filtering the applier's lattice query by `Downed` would have been the obvious thing
 /// and would have quietly made the design's stated recovery impossible: downed exists
@@ -631,7 +631,7 @@ fn a_downed_units_lattice_can_still_be_restored() {
         "a spent lattice should put its unit down"
     );
 
-    // The engine's restore reaches it, which is what a revival spell will do.
+    // The engine's restore reaches the retained lattice; combat reactivation is not built.
     let mut entity = app.world_mut().entity_mut(defender);
     let mut state = entity
         .get_mut::<LatticeState>()

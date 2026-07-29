@@ -111,9 +111,8 @@ struct Verb<'a> {
     pending: &'a mut PendingDecision,
     /// The ledger of effects that outlast the action that caused them.
     ///
-    /// The field this struct's docs promised: persistent effects were named as one of
-    /// Casting a burn is a verb needing a fact the handlers lacked. One field here
-    /// rather than a ninth argument on `cast::apply`.
+    /// Casting a burn needs the persistent-effect ledger. Keeping that fact here avoids
+    /// a ninth argument on `cast::apply`.
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
     knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
