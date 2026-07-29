@@ -23,6 +23,7 @@ use image::imageops::{self, FilterType as ResizeFilter};
 use image::{ExtendedColorType, GenericImage, ImageEncoder, ImageFormat, Rgba, RgbaImage};
 use serde::{Deserialize, Serialize};
 
+use crate::project::ByteRevision;
 use crate::viewport::frame_object_positions;
 
 /// Version of the review layout, camera, presentation, and report contract.
@@ -249,6 +250,28 @@ impl ReviewFraming {
             }
             ReviewCameraView::Top => (focus + Vec3::Y * self.radius, Vec3::NEG_Z),
         };
+        let displacement = focus - eye;
+        let realized_radius = displacement.length();
+        if !eye.is_finite()
+            || eye == focus
+            || !realized_radius.is_finite()
+            || realized_radius < self.radius * 0.5
+            || realized_radius > self.radius * 1.5
+        {
+            return Err(ReviewError::new(
+                "resolve review camera",
+                None,
+                "camera offset cannot be represented reliably at this object's world position",
+            ));
+        }
+        let forward = displacement / realized_radius;
+        if forward.cross(up).length_squared() <= f32::EPSILON {
+            return Err(ReviewError::new(
+                "resolve review camera",
+                None,
+                "camera direction is parallel to its authored up vector",
+            ));
+        }
         Ok(ReviewCameraPose {
             eye: eye.to_array(),
             focus: self.focus,
@@ -378,6 +401,8 @@ pub struct ReviewReport {
     style_catalog_fingerprint: u64,
     /// Independent semantic palette fingerprint.
     palette_fingerprint: u64,
+    /// Exact renderer mesh bytes used for every captured voxel.
+    renderer_mesh_revision: ByteRevision,
     /// Versioned composite directory identity.
     review_fingerprint: String,
     /// Common focus and radius used by every view.
@@ -403,6 +428,7 @@ impl ReviewReport {
         object: &ObjectBlueprint,
         styles: &VoxelStyleCatalog,
         palette: &ArtPalette,
+        renderer_mesh_revision: ByteRevision,
     ) -> Result<Self, ReviewError> {
         palette.validate().map_err(|error| {
             ReviewError::new("validate review palette", None, error.to_string())
@@ -508,10 +534,12 @@ impl ReviewReport {
             object_fingerprint,
             style_catalog_fingerprint,
             palette_fingerprint,
+            renderer_mesh_revision,
             review_fingerprint: composite_fingerprint(
                 object_fingerprint,
                 style_catalog_fingerprint,
                 palette_fingerprint,
+                renderer_mesh_revision,
             ),
             framing: ReviewFraming::from_object(object)?,
             frame_size: [REVIEW_FRAME_WIDTH, REVIEW_FRAME_HEIGHT],
@@ -576,6 +604,10 @@ impl ReviewReport {
 
     pub(crate) const fn object_fingerprint(&self) -> u64 {
         self.object_fingerprint
+    }
+
+    pub(crate) const fn renderer_mesh_revision(&self) -> ByteRevision {
+        self.renderer_mesh_revision
     }
 
     pub(crate) const fn framing(&self) -> ReviewFraming {
@@ -653,6 +685,9 @@ impl ReviewReport {
             ));
         }
         self.framing.validate()?;
+        for spec in REVIEW_FRAME_SPECS {
+            self.framing.camera_pose(spec.camera)?;
+        }
         let expected_frames: Vec<_> = REVIEW_FRAME_SPECS
             .into_iter()
             .map(ReviewFrameReport::from)
@@ -668,6 +703,7 @@ impl ReviewReport {
             self.object_fingerprint,
             self.style_catalog_fingerprint,
             self.palette_fingerprint,
+            self.renderer_mesh_revision,
         );
         if self.review_fingerprint != expected_fingerprint {
             return Err(ReviewError::new(
@@ -932,8 +968,16 @@ const fn part_label(part: ObjectPart) -> &'static str {
     }
 }
 
-fn composite_fingerprint(object: u64, styles: u64, palette: u64) -> String {
-    format!("v{REVIEW_FORMAT_VERSION}-{object:016x}-{styles:016x}-{palette:016x}")
+fn composite_fingerprint(
+    object: u64,
+    styles: u64,
+    palette: u64,
+    renderer_mesh: ByteRevision,
+) -> String {
+    format!(
+        "v{REVIEW_FORMAT_VERSION}-{object:016x}-{styles:016x}-{palette:016x}-{:016x}-{:016x}",
+        renderer_mesh.byte_len, renderer_mesh.fingerprint
+    )
 }
 
 /// Actionable failure while constructing or publishing a review pack.
@@ -1330,6 +1374,7 @@ fn publish_review_pack_with_hook(
 
     if path_exists(&final_path, "inspect review destination")? {
         validate_pack_directory(&final_path, &report_bytes, frames, &contact_sheet)?;
+        hook(PublishCheckpoint::BeforeRename)?;
         return Ok(ReviewPublishOutcome::AlreadyPublished(final_path));
     }
 
@@ -1374,6 +1419,7 @@ fn publish_review_pack_with_hook(
                     )
                 },
             )?;
+            hook(PublishCheckpoint::BeforeRename)?;
             Ok(ReviewPublishOutcome::AlreadyPublished(final_path))
         }
         Err(error) => Err(ReviewError::at("publish review pack", &final_path, error)),
@@ -1426,7 +1472,12 @@ impl StagingDirectory {
 impl Drop for StagingDirectory {
     fn drop(&mut self) {
         if self.armed {
-            drop(fs::remove_dir_all(&self.path));
+            if let Err(error) = fs::remove_dir_all(&self.path) {
+                bevy::log::error!(
+                    "could not remove review staging directory '{}': {error}",
+                    self.path.display()
+                );
+            }
         }
     }
 }
@@ -1616,11 +1667,18 @@ mod tests {
     use bevy::asset::RenderAssetUsages;
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     use hex_assets::{
-        PaletteSwatch, PlantPart, VoxelEmission, VoxelStyle, VoxelSurfaceMode,
+        EffectPart, PaletteSwatch, PlantPart, VoxelEmission, VoxelStyle, VoxelSurfaceMode,
         OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
 
     use super::*;
+
+    const fn test_mesh_revision() -> ByteRevision {
+        ByteRevision {
+            byte_len: 4,
+            fingerprint: 0xfeed_beef,
+        }
+    }
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -1849,14 +1907,15 @@ mod tests {
     #[test]
     fn report_is_order_independent_and_byte_stable() {
         let (object, styles, palette) = art_fixture();
-        let first = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let first = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let first_bytes = first.to_ron_bytes().expect("report should serialize");
 
         let mut reordered = object.clone();
         reordered.placements.reverse();
         reordered.blocker_footprint.reverse();
         reordered.canopy_occluders.reverse();
-        let second = ReviewReport::new(&reordered, &styles, &palette)
+        let second = ReviewReport::new(&reordered, &styles, &palette, test_mesh_revision())
             .expect("reordered report should build");
         let second_bytes = second
             .to_ron_bytes()
@@ -1886,20 +1945,21 @@ mod tests {
         assert_eq!(first.swatch_dependencies.len(), 3);
         assert_eq!(
             first.review_fingerprint,
-            "v1-cf2ac38befa36349-b449adbbc6e91f77-e0e35a51a766f8e2"
+            "v1-cf2ac38befa36349-b449adbbc6e91f77-e0e35a51a766f8e2-0000000000000004-00000000feedbeef"
         );
     }
 
     #[test]
     fn every_semantic_fingerprint_contributes_to_review_identity() {
         let (object, styles, palette) = art_fixture();
-        let baseline =
-            ReviewReport::new(&object, &styles, &palette).expect("baseline report should build");
+        let baseline = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("baseline report should build");
 
         let mut changed_object = object.clone();
         changed_object.display_name = "Changed Tree".to_owned();
-        let object_report = ReviewReport::new(&changed_object, &styles, &palette)
-            .expect("changed object report should build");
+        let object_report =
+            ReviewReport::new(&changed_object, &styles, &palette, test_mesh_revision())
+                .expect("changed object report should build");
         assert_ne!(
             baseline.review_fingerprint,
             object_report.review_fingerprint
@@ -1919,8 +1979,9 @@ mod tests {
                 .expect("changed style should be valid"),
             )
             .expect("style insert should succeed");
-        let style_report = ReviewReport::new(&object, &changed_styles, &palette)
-            .expect("changed style report should build");
+        let style_report =
+            ReviewReport::new(&object, &changed_styles, &palette, test_mesh_revision())
+                .expect("changed style report should build");
         assert_ne!(baseline.review_fingerprint, style_report.review_fingerprint);
 
         let mut changed_palette = palette.clone();
@@ -1935,19 +1996,67 @@ mod tests {
                 .expect("changed swatch should be valid"),
             )
             .expect("swatch insert should succeed");
-        let palette_report = ReviewReport::new(&object, &styles, &changed_palette)
-            .expect("changed palette report should build");
+        let palette_report =
+            ReviewReport::new(&object, &styles, &changed_palette, test_mesh_revision())
+                .expect("changed palette report should build");
         assert_ne!(
             baseline.review_fingerprint,
             palette_report.review_fingerprint
         );
+
+        let mesh_report = ReviewReport::new(
+            &object,
+            &styles,
+            &palette,
+            ByteRevision {
+                byte_len: 5,
+                fingerprint: test_mesh_revision().fingerprint,
+            },
+        )
+        .expect("changed renderer mesh report should build");
+        assert_ne!(baseline.review_fingerprint, mesh_report.review_fingerprint);
+    }
+
+    #[test]
+    fn report_rejects_world_positions_that_cannot_represent_camera_offsets() {
+        let (mut object, styles, palette) = art_fixture();
+        let min_level = i32::MAX - 3;
+        object.id = object_id("effect/review-tree");
+        object.category = ObjectCategory::Effect;
+        object.bounds = ObjectBounds {
+            radius: object.bounds.radius,
+            min_level,
+            height: 3,
+        };
+        object.connectivity = ConnectivityPolicy::Free;
+        object.origin = LocalVoxelCoord::new(0, 0, min_level);
+        for (index, placement) in object.placements.iter_mut().enumerate() {
+            placement.position =
+                LocalVoxelCoord::new(0, 0, min_level + i32::try_from(index).unwrap_or_default());
+            placement.part = match index {
+                0 => ObjectPart::Effect(EffectPart::Core),
+                1 => ObjectPart::Effect(EffectPart::Trail),
+                _ => ObjectPart::Effect(EffectPart::Accent),
+            };
+        }
+        object.blocker_footprint.clear();
+        object.canopy_occluders.clear();
+        object
+            .validate(&styles)
+            .expect("extreme-level fixture should remain schema-valid");
+
+        let error = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect_err("unrepresentable camera offsets must reject the report");
+        assert!(error
+            .to_string()
+            .contains("camera offset cannot be represented reliably"));
     }
 
     #[test]
     fn report_validation_rejects_mutated_rendering_dependencies() {
         let (object, styles, palette) = art_fixture();
-        let mut report =
-            ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let mut report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let dependency = report
             .style_dependencies
             .first_mut()
@@ -2074,7 +2183,8 @@ mod tests {
     fn publication_is_complete_and_idempotent() {
         let directory = TestDirectory::new("publish");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let first =
             publish_review_pack(&directory.path, &report, &frames).expect("pack should publish");
@@ -2084,17 +2194,26 @@ mod tests {
         assert_eq!(first.path(), final_path);
         assert_eq!(actual_file_names(&final_path), expected_pack_names());
 
-        let second = publish_review_pack(&directory.path, &report, &frames)
+        let mut final_check_ran = false;
+        let second =
+            publish_review_pack_with_hook(&directory.path, &report, &frames, |checkpoint| {
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    final_check_ran = true;
+                }
+                Ok(())
+            })
             .expect("identical pack should be idempotent");
         assert!(matches!(second, ReviewPublishOutcome::AlreadyPublished(_)));
         assert_eq!(second.path(), final_path);
+        assert!(final_check_ran);
     }
 
     #[test]
     fn failed_staging_steps_never_publish_or_leave_own_stage() {
         let directory = TestDirectory::new("failure");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let checkpoints = [
             PublishCheckpoint::Frame(1),
@@ -2132,7 +2251,8 @@ mod tests {
     fn conflicting_existing_pack_is_preserved_and_rejected() {
         let directory = TestDirectory::new("collision");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let outcome =
             publish_review_pack(&directory.path, &report, &frames).expect("pack should publish");
@@ -2151,7 +2271,8 @@ mod tests {
     fn valid_but_different_existing_images_are_preserved_and_rejected() {
         let directory = TestDirectory::new("image-collision");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let outcome =
             publish_review_pack(&directory.path, &report, &frames).expect("pack should publish");
@@ -2190,28 +2311,35 @@ mod tests {
     fn concurrent_identical_publication_resolves_idempotently() {
         let directory = TestDirectory::new("identical-race");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let mut nested_published = false;
+        let mut final_checks = 0_u8;
         let outcome =
             publish_review_pack_with_hook(&directory.path, &report, &frames, |checkpoint| {
-                if checkpoint == PublishCheckpoint::BeforeRename && !nested_published {
-                    let nested = publish_review_pack(&directory.path, &report, &frames)?;
-                    assert!(matches!(nested, ReviewPublishOutcome::Published(_)));
-                    nested_published = true;
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    final_checks = final_checks.saturating_add(1);
+                    if !nested_published {
+                        let nested = publish_review_pack(&directory.path, &report, &frames)?;
+                        assert!(matches!(nested, ReviewPublishOutcome::Published(_)));
+                        nested_published = true;
+                    }
                 }
                 Ok(())
             })
             .expect("outer publication should accept the identical winner");
         assert!(matches!(outcome, ReviewPublishOutcome::AlreadyPublished(_)));
         assert!(nested_published);
+        assert_eq!(final_checks, 2);
     }
 
     #[test]
     fn concurrent_conflicting_publication_is_preserved_and_rejected() {
         let directory = TestDirectory::new("conflicting-race");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let final_path =
             review_pack_path(&directory.path, &report).expect("pack path should resolve");
@@ -2239,7 +2367,8 @@ mod tests {
     fn missing_or_extra_existing_artifacts_are_rejected() {
         let directory = TestDirectory::new("artifact-set");
         let (object, styles, palette) = art_fixture();
-        let report = ReviewReport::new(&object, &styles, &palette).expect("report should build");
+        let report = ReviewReport::new(&object, &styles, &palette, test_mesh_revision())
+            .expect("report should build");
         let frames = frame_set();
         let outcome =
             publish_review_pack(&directory.path, &report, &frames).expect("pack should publish");

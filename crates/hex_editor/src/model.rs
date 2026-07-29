@@ -20,6 +20,8 @@ use crate::recovery::{
     sanitized_selection, EditorRecoveryDraft, RawObjectDraft, RecoveryError, RecoverySanitization,
 };
 
+pub(crate) const CALIBRATION_OBJECT_ID: &str = "calibration/scene";
+
 /// The two authoring workspaces sharing one editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkshopMode {
@@ -309,7 +311,7 @@ impl EditorModel {
 
     /// Builds the unsaved, in-memory scene shown when no authored object is open.
     pub fn calibration_scene() -> Result<Self, EditorModelError> {
-        let id = ObjectAssetId::new("calibration/scene")
+        let id = ObjectAssetId::new(CALIBRATION_OBJECT_ID)
             .map_err(|error| EditorModelError::new(error.to_string()))?;
         let style = VoxelStyleId::new("calibration/neutral")
             .map_err(|error| EditorModelError::new(error.to_string()))?;
@@ -1625,6 +1627,27 @@ mod tests {
             assert!(editor.object().placements.is_empty());
             assert!(editor.is_dirty());
         }
+    }
+
+    #[test]
+    fn recovery_preserves_the_absent_checkpoint_for_unsaved_documents() {
+        let mut editor = EditorModel::blank(
+            ObjectCategory::Effect,
+            ConnectivityPolicy::Free,
+            style_id("calibration/neutral"),
+        )
+        .expect("supported blank document should be valid");
+        let origin = editor.object().origin;
+        assert_eq!(editor.erase(origin), Ok(true));
+
+        let recovery = editor.recovery_snapshot();
+        assert!(!recovery.saved_object_is_checkpoint);
+        let (restored, sanitization) =
+            EditorModel::from_recovery(recovery).expect("recovery should restore");
+
+        assert_eq!(sanitization, RecoverySanitization::default());
+        assert!(restored.object().placements.is_empty());
+        assert!(restored.is_dirty());
     }
 
     #[test]
