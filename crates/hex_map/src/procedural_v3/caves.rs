@@ -2887,9 +2887,11 @@ mod tests {
         let patch =
             PatchRecipeContext::resolve(&layout, PatchId(5)).expect("Caves patch should resolve");
         let expected = cave_liquid_sinks(&patch).expect("Caves inlet should resolve");
-        assert_eq!(expected.len(), 1);
-        assert_eq!(expected[0].top_level, SURFACE_WATER_LEVEL);
-        assert_eq!(expected[0].boundary.len(), 3);
+        let [expected_sink] = expected.as_slice() else {
+            panic!("Caves should resolve exactly one incoming liquid sink");
+        };
+        assert_eq!(expected_sink.top_level, SURFACE_WATER_LEVEL);
+        assert_eq!(expected_sink.boundary.len(), 3);
 
         let caves = match &settings.layout {
             V3LayoutSettings::Ring7(ring) => match &ring.caves.recipe {
@@ -2920,14 +2922,14 @@ mod tests {
                 .expect("Caves should publish one sink body");
             assert_eq!(
                 body.nodes.keys().copied().collect::<BTreeSet<_>>(),
-                expected[0]
+                expected_sink
                     .coordinates
                     .iter()
                     .copied()
                     .map(|coord| TilePos::new(coord, SURFACE_WATER_LEVEL))
                     .collect()
             );
-            assert!(expected[0].boundary.iter().all(|coord| {
+            assert!(expected_sink.boundary.iter().all(|coord| {
                 body.nodes
                     .contains_key(&TilePos::new(*coord, SURFACE_WATER_LEVEL))
             }));
@@ -2935,7 +2937,7 @@ mod tests {
                 interior
                     .floors
                     .iter()
-                    .all(|floor| !expected[0].coordinates.contains(&floor.coord))
+                    .all(|floor| !expected_sink.coordinates.contains(&floor.coord))
             }));
         }
     }

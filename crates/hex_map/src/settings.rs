@@ -2818,7 +2818,7 @@ mod tests {
             .validate()
             .expect("the shipped Ring7 settings should validate");
         assert_eq!(settings.grid_radius, 33);
-        assert_eq!(settings.level_height, 0.4);
+        assert_eq!(settings.level_height.to_bits(), 0.4_f32.to_bits());
 
         let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
             layout: V3LayoutSettings::Ring7(ring),
