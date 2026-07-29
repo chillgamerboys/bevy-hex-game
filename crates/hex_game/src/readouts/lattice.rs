@@ -21,7 +21,6 @@ use crate::readouts::HudElement;
 use crate::screens::DespawnOnExit;
 
 const PANEL_WIDTH: f32 = 286.0;
-const TARGET_TOP: f32 = 326.0;
 const PULSE_COLOR: Color = Color::srgba(0.25, 0.10, 0.06, 0.9);
 const FRAME: Pickable = Pickable {
     should_block_lower: true,
@@ -154,60 +153,82 @@ fn spawn_panels(
 
     commands
         .spawn((
-            Name::new("Own Lattice Panel"),
-            OwnPanel,
-            DecisionLattice,
-            HudElement,
-            panel(),
-            FRAME,
+            Name::new("Lattice Readout Stack"),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                left: Val::Px(12.0),
+                width: Val::Px(PANEL_WIDTH),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(12.0),
+                ..default()
+            },
+            Pickable::IGNORE,
             DespawnOnExit(Screen::Gameplay),
         ))
-        .insert(Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Px(12.0),
-            width: Val::Px(PANEL_WIDTH),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(12.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            row_gap: Val::Px(7.0),
-            ..default()
-        })
-        .with_children(|panel| {
-            panel.spawn(heading(&assets, "your lattice"));
-            panel.spawn((Name::new("Own Lattice Body"), OwnBody, Pickable::IGNORE));
-        });
-
-    commands
-        .spawn((
-            Name::new("Target Lattice Panel"),
-            TargetPanel,
-            HudElement,
-            panel(),
-            FRAME,
-            DespawnOnExit(Screen::Gameplay),
-        ))
-        .insert(Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            top: Val::Px(TARGET_TOP),
-            left: Val::Px(12.0),
-            width: Val::Px(PANEL_WIDTH),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(12.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            row_gap: Val::Px(7.0),
-            ..default()
-        })
-        .with_children(|panel| {
-            panel.spawn(heading(&assets, "target lattice"));
-            panel.spawn((
-                Name::new("Target Lattice Body"),
-                TargetBody,
-                Pickable::IGNORE,
-            ));
+        .with_children(|stack| {
+            stack
+                .spawn((
+                    Name::new("Own Lattice Panel"),
+                    OwnPanel,
+                    DecisionLattice,
+                    HudElement,
+                    panel(),
+                    FRAME,
+                ))
+                .insert(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    row_gap: Val::Px(7.0),
+                    ..default()
+                })
+                .with_children(|panel| {
+                    panel.spawn(heading(&assets, "your lattice"));
+                    panel.spawn((
+                        Name::new("Own Lattice Body"),
+                        OwnBody,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.0),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ));
+                });
+            stack
+                .spawn((
+                    Name::new("Target Lattice Panel"),
+                    TargetPanel,
+                    HudElement,
+                    panel(),
+                    FRAME,
+                ))
+                .insert(Node {
+                    display: Display::None,
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(Val::Px(12.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    row_gap: Val::Px(7.0),
+                    ..default()
+                })
+                .with_children(|panel| {
+                    panel.spawn(heading(&assets, "target lattice"));
+                    panel.spawn((
+                        Name::new("Target Lattice Body"),
+                        TargetBody,
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.0),
+                            ..default()
+                        },
+                        Pickable::IGNORE,
+                    ));
+                });
         });
 }
 

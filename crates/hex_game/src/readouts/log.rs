@@ -32,10 +32,15 @@ struct LogLine {
 #[derive(Resource, Default)]
 struct CombatLog {
     lines: VecDeque<LogLine>,
-    /// A cast is followed by damage events that intentionally carry no
-    /// session-local spell id. This remembers the public spell name by stable
-    /// source/target pair until the resulting decision resolves.
-    causes: BTreeMap<(UnitId, UnitId), String>,
+    /// Damage outcomes follow a typed cause event. This freezes that stable cause by
+    /// source/target pair until the resulting defender answer resolves.
+    causes: BTreeMap<(UnitId, UnitId), DamageCause>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DamageCause {
+    Spell(String),
+    Burn,
 }
 
 impl CombatLog {
@@ -109,7 +114,16 @@ fn spawn_panel(mut commands: Commands, assets: Res<UiAssets>) {
         })
         .with_children(|panel| {
             panel.spawn(heading(&assets, "combat log"));
-            panel.spawn((Name::new("Combat Log Body"), LogBody, Pickable::IGNORE));
+            panel.spawn((
+                Name::new("Combat Log Body"),
+                LogBody,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
         });
 }
 
@@ -160,6 +174,9 @@ fn ingest(
         ) {
             log.push(line);
         }
+        if let CombatEvent::HexesDisabled { source, target, .. } = event {
+            log.causes.remove(&(*source, *target));
+        }
     }
 }
 
@@ -176,11 +193,15 @@ fn remember_cause(
             target,
         } => {
             if let Some(subject) = unit_at(*target, registry, identities) {
-                log.causes.insert((*caster, subject), spell.clone());
+                log.causes
+                    .insert((*caster, subject), DamageCause::Spell(spell.clone()));
             }
         }
         CombatEvent::Strike { attacker, target } => {
             log.causes.remove(&(*attacker, *target));
+        }
+        CombatEvent::BurnTicked { source, target, .. } => {
+            log.causes.insert((*source, *target), DamageCause::Burn);
         }
         _ => {}
     }
@@ -262,6 +283,11 @@ fn format_event(
             let actor = cause_name(*source, *target, log, registry, identities);
             let subject = unit_name(*target, registry, identities);
             let text = if known.is_empty() {
+                // `BurnTicked` already emitted the legally safe qualitative line. An
+                // opaque exact answer has no further information to add.
+                if matches!(log.causes.get(&(*source, *target)), Some(DamageCause::Burn)) {
+                    return None;
+                }
                 format!("{actor} damaged {subject}")
             } else if known.len() == cells.len() {
                 format!("{actor} disabled {} on {subject}", known.join(", "))
@@ -352,10 +378,11 @@ fn cause_name(
     registry: &UnitRegistry,
     identities: &IdentityQuery,
 ) -> String {
-    log.causes
-        .get(&(source, target))
-        .cloned()
-        .unwrap_or_else(|| unit_name(source, registry, identities))
+    match log.causes.get(&(source, target)) {
+        Some(DamageCause::Spell(spell)) => spell.clone(),
+        Some(DamageCause::Burn) => "Burn".to_owned(),
+        None => unit_name(source, registry, identities),
+    }
 }
 
 fn disclosed_cells(
@@ -633,5 +660,67 @@ mod tests {
             .unwrap_or("");
         assert!(partial.contains("(0, 0)"), "{partial}");
         assert!(!partial.contains("(1, 0)"), "{partial}");
+    }
+
+    #[test]
+    fn burn_replaces_a_stale_spell_cause_without_duplicating_hidden_damage() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<CombatEvent>()
+            .init_resource::<CombatLog>()
+            .init_resource::<DamagePulse>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<FactionKnowledge>()
+            .add_systems(Update, ingest);
+
+        let source = UnitId(1);
+        let target = UnitId(9);
+        let source_entity = app
+            .world_mut()
+            .spawn((source, Name::new("hedge-mage #1"), Faction::Player, Player))
+            .id();
+        let target_entity = app
+            .world_mut()
+            .spawn((target, Name::new("wolf #9"), Faction::Hostile))
+            .id();
+        {
+            let mut registry = app.world_mut().resource_mut::<UnitRegistry>();
+            registry.register(source, source_entity);
+            registry.register(target, target_entity);
+        }
+        app.world_mut()
+            .resource_mut::<FactionKnowledge>()
+            .observe_base(
+                Faction::Player,
+                target,
+                BaseVisibility {
+                    faction: Faction::Hostile,
+                },
+            );
+        app.world_mut().resource_mut::<CombatLog>().causes.insert(
+            (source, target),
+            DamageCause::Spell("Scrying Eye".to_owned()),
+        );
+
+        let mut events = app.world_mut().resource_mut::<Messages<CombatEvent>>();
+        events.write(CombatEvent::BurnTicked {
+            source,
+            target,
+            count: 1,
+        });
+        events.write(CombatEvent::HexesDisabled {
+            source,
+            target,
+            cells: vec![LatticeCoord::ORIGIN],
+        });
+        app.update();
+
+        let log = app.world().resource::<CombatLog>();
+        let lines: Vec<_> = log.lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(lines, ["Burn damaged wolf #9"]);
+        assert!(
+            !log.causes.contains_key(&(source, target)),
+            "the resolved pair must not leak into a later unrelated hit"
+        );
     }
 }

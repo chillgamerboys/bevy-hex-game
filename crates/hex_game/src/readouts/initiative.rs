@@ -82,6 +82,11 @@ fn spawn_panel(
             panel.spawn((
                 Name::new("Initiative Body"),
                 InitiativeBody,
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                },
                 Pickable::IGNORE,
             ));
         });
