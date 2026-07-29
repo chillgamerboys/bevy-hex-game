@@ -90,7 +90,7 @@ impl GeneratedPatchPlan {
             return issues;
         }
 
-        let isolated = self.clone().into_isolated_world(layout, resolved_patch);
+        let isolated = self.isolated_world_unchecked(layout, resolved_patch);
         issues.extend(isolated.validate().into_iter().map(|issue| {
             PatchValidationIssue::new(
                 self.patch_id,
@@ -101,8 +101,26 @@ impl GeneratedPatchPlan {
         issues
     }
 
-    fn into_isolated_world(
-        self,
+    pub(crate) fn isolated_world(
+        &self,
+        layout: &ResolvedLayoutPlan,
+    ) -> Result<GeneratedWorldPlan, Vec<PatchValidationIssue>> {
+        let issues = self.validate_against(layout);
+        if !issues.is_empty() {
+            return Err(issues);
+        }
+        let Some(resolved_patch) = layout.patches.get(&self.patch_id) else {
+            return Err(vec![PatchValidationIssue::new(
+                self.patch_id,
+                PatchIssueCode::MissingPatch,
+                format!("resolved layout does not contain patch {}", self.patch_id.0),
+            )]);
+        };
+        Ok(self.isolated_world_unchecked(layout, resolved_patch))
+    }
+
+    fn isolated_world_unchecked(
+        &self,
         layout: &ResolvedLayoutPlan,
         resolved_patch: &ResolvedPatch,
     ) -> GeneratedWorldPlan {
@@ -126,20 +144,20 @@ impl GeneratedPatchPlan {
         };
         GeneratedWorldPlan {
             layout: isolated_layout,
-            volume: self.volume,
-            liquids: self.liquids,
-            features: self.features,
-            structures: self.structures,
-            blockers: self.blockers,
-            lights: self.lights,
-            biome_regions: self.biome_regions,
-            interiors: self.interiors,
-            anchors: self.anchors,
+            volume: self.volume.clone(),
+            liquids: self.liquids.clone(),
+            features: self.features.clone(),
+            structures: self.structures.clone(),
+            blockers: self.blockers.clone(),
+            lights: self.lights.clone(),
+            biome_regions: self.biome_regions.clone(),
+            interiors: self.interiors.clone(),
+            anchors: self.anchors.clone(),
             view_hint: self.view_hint,
         }
     }
 
-    fn namespace(mut self) -> Result<Self, WorldCompositionError> {
+    fn namespace(mut self, namespace_names: bool) -> Result<Self, WorldCompositionError> {
         let patch = self.patch_id;
 
         for column in self.volume.columns.values_mut() {
@@ -185,10 +203,12 @@ impl GeneratedPatchPlan {
                     .map(|id| (FeatureId(id), feature))
             })
             .collect::<Result<_, _>>()?;
-        self.features.protected_routes =
-            namespace_named_map(patch, std::mem::take(&mut self.features.protected_routes));
-        self.features.clearings =
-            namespace_named_map(patch, std::mem::take(&mut self.features.clearings));
+        if namespace_names {
+            self.features.protected_routes =
+                namespace_named_map(patch, std::mem::take(&mut self.features.protected_routes));
+            self.features.clearings =
+                namespace_named_map(patch, std::mem::take(&mut self.features.clearings));
+        }
         self.structures.by_id = std::mem::take(&mut self.structures.by_id)
             .into_iter()
             .map(|(id, structure)| {
@@ -209,7 +229,9 @@ impl GeneratedPatchPlan {
                     .map(|id| (InteriorRegionId(id), interior))
             })
             .collect::<Result<_, _>>()?;
-        self.anchors = namespace_named_map(patch, std::mem::take(&mut self.anchors));
+        if namespace_names {
+            self.anchors = namespace_named_map(patch, std::mem::take(&mut self.anchors));
+        }
         Ok(self)
     }
 }
@@ -397,6 +419,7 @@ pub(crate) fn compose_world(
             error.issues().iter().map(ToString::to_string).collect(),
         ));
     }
+    let namespace_names = layout.kind != LayoutKind::Single;
     let mut by_patch = BTreeMap::new();
     for fragment in fragments {
         let patch = fragment.patch_id;
@@ -437,7 +460,7 @@ pub(crate) fn compose_world(
     let mut anchors = BTreeMap::new();
 
     for fragment in by_patch.into_values() {
-        let fragment = fragment.namespace()?;
+        let fragment = fragment.namespace(namespace_names)?;
         merge_map(
             &mut volume.columns,
             fragment.volume.columns,
@@ -762,6 +785,27 @@ fn liquid_body_root(
     current
 }
 
+/// Admits one patch through the same checked composer without changing Single names.
+pub(crate) fn compose_single_patch(
+    layout: ResolvedLayoutPlan,
+    fragment: GeneratedPatchPlan,
+) -> Result<GeneratedWorldPlan, WorldCompositionError> {
+    if layout.kind != LayoutKind::Single {
+        return Err(WorldCompositionError::InvalidLayout(vec![
+            "single-patch composition requires a Single resolved layout".to_owned(),
+        ]));
+    }
+    let view_hint = fragment.view_hint;
+    compose_world(
+        layout,
+        vec![fragment],
+        WorldCompositionSettings {
+            canonical_anchors: BTreeMap::new(),
+            view_hint,
+        },
+    )
+}
+
 fn merge_feature_memberships(
     destination: &mut FeaturePlan,
     routes: BTreeMap<String, super::world::ProtectedFeatureRoute>,
@@ -853,9 +897,11 @@ mod tests {
     use super::*;
     use crate::procedural_v3::layout::resolve_layout;
     use crate::procedural_v3::liquid::{LiquidBodyPlan, LiquidFlowState, LiquidNode};
+    use crate::procedural_v3::patch::PatchRecipeContext;
+    use crate::procedural_v3::seam::shape_walker_seams;
     use crate::procedural_v3::volume::{
         FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole,
-        SurfaceMetadata,
+        SurfaceMetadata, VolumeColumn,
     };
     use crate::procedural_v3::world::{
         FeatureClearing, FeatureKind, PlannedFeature, PlannedInterior, PlannedStructure,
@@ -1371,6 +1417,13 @@ mod tests {
             .patches
             .get(&patch_id)
             .expect("the fixture patch exists");
+        let context =
+            PatchRecipeContext::resolve(layout, patch_id).expect("the fixture patch resolves");
+        let protected = context.protected_approaches();
+        let boundary: BTreeSet<_> = context
+            .shared_edges()
+            .flat_map(|edge| edge.boundary_pairs().into_iter().map(|(local, _)| local))
+            .collect();
         let mut interior_cells = patch
             .mask
             .iter()
@@ -1380,6 +1433,8 @@ mod tests {
                     .neighbors()
                     .iter()
                     .all(|next| patch.mask.contains(next))
+                    && !protected.contains(coord)
+                    && !boundary.contains(coord)
             })
             .take(7);
         let anchor_coord = interior_cells.next().expect("patch has an interior anchor");
@@ -1397,14 +1452,14 @@ mod tests {
         let mut volume = VolumePlan::new(patch.mask.clone());
         for column in volume.columns.values_mut() {
             column.elements.push(VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(0, 1),
+                levels: LevelInterval::new(0, 16),
                 material: SolidMaterialRole::Stone,
                 cutaway_for: None,
             }));
         }
         for coord in &patch.mask {
             volume.surfaces.insert(
-                TilePos::new(*coord, 0),
+                TilePos::new(*coord, 15),
                 SurfaceMetadata {
                     access: SurfaceAccess::Ordinary,
                     interior: None,
@@ -1412,35 +1467,44 @@ mod tests {
             );
         }
 
-        let liquid_top = TilePos::new(liquid_coord, 4);
+        let liquid_top = TilePos::new(liquid_coord, 19);
         volume
             .columns
             .get_mut(&liquid_coord)
             .expect("the liquid column exists")
             .elements
             .push(VolumeElement::Fill(NonSolidFill {
-                levels: LevelInterval::new(4, 5),
+                levels: LevelInterval::new(19, 20),
                 material: FillMaterialRole::Water,
             }));
 
         let interior = InteriorRegionId(3);
         let cave_floor = TilePos::new(cave_coord, 0);
-        let cave_roof = TilePos::new(cave_coord, 6);
-        volume
+        let cave_roof = TilePos::new(cave_coord, 15);
+        *volume
             .columns
             .get_mut(&cave_coord)
-            .expect("the cave column exists")
-            .elements
-            .push(VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(4, 7),
-                material: SolidMaterialRole::Stone,
-                cutaway_for: Some(interior),
-            }));
-        volume
-            .surfaces
-            .get_mut(&cave_floor)
-            .expect("the cave floor exists")
-            .interior = Some(interior);
+            .expect("the cave column exists") = VolumeColumn {
+            elements: vec![
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(0, 1),
+                    material: SolidMaterialRole::Stone,
+                    cutaway_for: None,
+                }),
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(4, 16),
+                    material: SolidMaterialRole::Stone,
+                    cutaway_for: Some(interior),
+                }),
+            ],
+        };
+        volume.surfaces.insert(
+            cave_floor,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: Some(interior),
+            },
+        );
         volume.surfaces.insert(
             cave_roof,
             SurfaceMetadata {
@@ -1449,11 +1513,28 @@ mod tests {
             },
         );
 
-        let anchor = TilePos::new(anchor_coord, 0);
-        let tree = TilePos::new(tree_coord, 0);
-        let route = TilePos::new(route_coord, 0);
-        let clearing = TilePos::new(clearing_coord, 0);
-        let structure_voxel = TilePos::new(structure_coord, 0);
+        if context
+            .shared_edges()
+            .all(|edge| matches!(edge.contract.liquid, ResolvedLiquidPort::Dry))
+        {
+            let mut levels = patch
+                .mask
+                .iter()
+                .copied()
+                .map(|coord| (coord, 15))
+                .collect();
+            let shape =
+                shape_walker_seams(&context, &mut levels).expect("fixture seams should shape");
+            shape
+                .apply(&mut volume)
+                .expect("fixture seams should project");
+        }
+
+        let anchor = TilePos::new(anchor_coord, 15);
+        let tree = TilePos::new(tree_coord, 15);
+        let route = TilePos::new(route_coord, 15);
+        let clearing = TilePos::new(clearing_coord, 15);
+        let structure_voxel = TilePos::new(structure_coord, 15);
         let biome_regions = volume
             .surfaces
             .keys()
@@ -1531,7 +1612,7 @@ mod tests {
                     PlannedInterior {
                         floors: BTreeSet::from([cave_floor]),
                         entrances: BTreeSet::from([cave_floor]),
-                        roof_voxels: (4..7)
+                        roof_voxels: (4..16)
                             .map(|level| TilePos::new(cave_coord, level))
                             .collect(),
                     },
