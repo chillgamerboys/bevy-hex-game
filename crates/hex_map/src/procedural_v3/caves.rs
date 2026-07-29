@@ -2548,8 +2548,9 @@ mod tests {
         for (seed, candidate, semantic_fingerprint, map_fingerprint) in expected {
             let selected =
                 generate(12, 0.4, &settings(), seed).expect("reviewed Caves seed should generate");
-            let build = super::super::build(12, 0.4, &settings(), seed, &palette(), &is_solid)
-                .expect("reviewed Caves seed should materialize");
+            let build =
+                super::super::build(12, 0.4, &settings(), seed, &palette(), &is_solid, None)
+                    .expect("reviewed Caves seed should materialize");
             assert_eq!(selected.selected_candidate, candidate);
             assert_eq!(
                 selected.validated.semantic_fingerprint,
