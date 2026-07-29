@@ -50,6 +50,21 @@ pub enum Screen {
 #[source(Screen = Screen::Gameplay)]
 pub struct Pause(pub bool);
 
+/// Runtime boundary between terrain preparation, human deployment, and live combat.
+///
+/// Ordinary scenarios move directly from `Preparing` to `Active`. Combat Lab
+/// sandboxes pause at `Deployment` while the already-loaded terrain remains visible.
+#[derive(Resource, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub enum GameplayPhase {
+    /// Resources and terrain are being prepared.
+    Preparing,
+    /// The tester is assigning exact terrain surfaces to the frozen roster.
+    Deployment,
+    /// Actors, combat, AI, casting, and ordinary gameplay are live.
+    #[default]
+    Active,
+}
+
 /// Whether the world is running in real time or taking turns.
 ///
 /// The game plays like Baldur's Gate 3: real time while nothing is happening, turn

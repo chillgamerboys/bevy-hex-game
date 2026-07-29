@@ -76,11 +76,13 @@ Combat Lab has two tabs.
 
 ### Sandbox
 
-Sandbox offers Flat Arena, The Crossing, and Procedural Hills with shipped fixed
-seeds. Both Player and Hostile rosters are fully editable and ordered, with one to six
-units per side. Choices come from packaged templates or saved Map-ready characters.
-Player units are human controlled; hostile units use the shipped `baseline-v1` AI.
-The setup and deployment are transient.
+Sandbox offers Flat Arena, The Crossing, and Procedural Hills through the versioned
+`combat_lab_maps.ron` catalog. Each stable map record names its scenario, fixed seed,
+and separate Player and Hostile deployment regions. A region resolves from an authored
+cube coordinate or named map anchor plus a bounded footing radius. Both rosters are
+fully editable and ordered, with one to six units per side. Choices come from packaged
+templates or saved Map-ready characters. Player units are human controlled; hostile
+units use the shipped `baseline-v1` AI. The setup and deployment are transient.
 
 `Test on Map` is enabled only for the current saved, clean, Map-ready character. It
 opens this same Sandbox with that record in Player slot one. The tester still chooses
@@ -88,16 +90,22 @@ the map and completes both rosters.
 
 ### Deployment
 
-Deployment resolves roster placements in roster order against deterministic legal
-surface slots. Picking a slot records the complete resolved `TilePos`, including
-elevation; occupied slots are rejected. Auto-place fills the earliest legal unused
-slots, and Back/Clear supports correction. Start Combat remains disabled until every
-unit has a unique valid placement.
+Sandbox loading has an explicit `Preparing → Deployment → Active` phase boundary.
+Preparing builds the frozen namespace and terrain. During Deployment the terrain and
+camera run, while actors, AI, combat, casting, saves, and the ordinary gameplay HUD
+remain hidden and inactive.
 
-The authored flat maps use exact resolved placements. Procedural Hills uses its fixed
-seed and deterministic formation anchor, preserving roster order and the frozen
-resolved setup. Fixed fixtures bypass deployment because their encounter placements
-are immutable.
+The map renders clickable world-space surface caps inside both authored regions.
+Candidates use the shared walker `Footing`, exact headroom and blockers, and the live
+terrain surface, so a click records the complete `TilePos`, including elevation.
+Occupied or invalid surfaces are rejected. The tester can select an earlier roster
+entry, Undo, Clear either side, or deterministically Auto-place nearest legal unused
+surfaces. Start Combat remains disabled until every unit has a unique valid placement.
+
+Start Combat repositions the frozen roster onto those exact surfaces without
+regenerating terrain, then enters `Active`. Retry retains the content snapshot, map
+seed, roster order, and resolved surfaces. Fixed fixtures bypass Deployment because
+their encounter placements are immutable.
 
 ### Fixed fixtures
 

@@ -420,6 +420,8 @@ fn spawn_wave_six_demo_cards(list: &mut ChildSpawnerCommands, assets: &UiAssets)
         StaticDemoEntry,
         Node {
             width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(8.0),
             ..default()
         },
     ))
@@ -1008,6 +1010,16 @@ mod tests {
         );
 
         let world = app.world_mut();
+        let mut wave_six_wrappers = world.query::<(&Name, &Node)>();
+        let (_, wrapper) = wave_six_wrappers
+            .iter(world)
+            .find(|(name, _)| name.as_str() == "Static Wave 6 Demo Entries")
+            .expect("the two Wave 6 entries share one Demo-lane wrapper");
+        assert_eq!(
+            wrapper.flex_direction,
+            FlexDirection::Column,
+            "Creator and Combat Lab must stack vertically at full width"
+        );
         let mut static_entries = world.query_filtered::<Entity, With<StaticDemoEntry>>();
         assert_eq!(
             static_entries.iter(world).count(),

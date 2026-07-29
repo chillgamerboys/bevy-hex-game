@@ -14,14 +14,16 @@ use hex_assets::{
     creator_spell_issues, normalized_name, ContentIndex, CreationCell, CreationCellKind,
     CreationPresetCatalog, CustomCharacterId, CustomSpellId, Effect, ElementCatalog, LatticeFile,
     LatticeLibrary, PresetAudience, SavedCharacter, SavedSpell, SpellBook, SpellFile,
-    SpellReference, SubstanceTable, TargetShape, UnvalidatedCell, MAX_CREATION_NAME_CHARS,
+    SpellReference, SubstanceTable, TargetShape, MAX_CREATION_NAME_CHARS,
 };
 use hex_core::{LatticeCoord, Screen};
 
+use crate::creation_presentation::{CharacterBuildSummary, SpellBuildSummary};
 use crate::creation_store::CreationStore;
+use crate::menus::lattice_view::short_name;
 use crate::menus::widgets::{
-    blurb, display, fine, heading, label, panel, panel_node, row_button, UiAssets, ACCENT,
-    ACCENT_EDGE, DANGER, EDGE, LABEL,
+    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
+    ACCENT, ACCENT_EDGE, DANGER, EDGE, FUSION_COLOR, LABEL,
 };
 use crate::storage::StoragePaths;
 
@@ -36,6 +38,14 @@ enum CreatorTab {
     Spells,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CreatorView {
+    #[default]
+    Hub,
+    Character,
+    Spell,
+}
+
 #[derive(Debug, Clone)]
 enum CreatorSnapshot {
     Character(SavedCharacter),
@@ -45,9 +55,13 @@ enum CreatorSnapshot {
 #[derive(Resource, Debug, Default)]
 pub(crate) struct CreatorSession {
     tab: CreatorTab,
+    view: CreatorView,
     character: Option<SavedCharacter>,
     spell: Option<SavedSpell>,
     selected_cell: Option<LatticeCoord>,
+    active_tool: Option<CreationCellKind>,
+    erase_tool: bool,
+    zoom_step: i8,
     character_dirty: bool,
     spell_dirty: bool,
     notice: String,
@@ -55,6 +69,7 @@ pub(crate) struct CreatorSession {
     confirm_reset: bool,
     undo: Vec<CreatorSnapshot>,
     redo: Vec<CreatorSnapshot>,
+    return_to_combat_lab: bool,
     revision: u64,
 }
 
@@ -95,8 +110,6 @@ enum CreatorAction {
     SelectSpell(CustomSpellId),
     DuplicateCharacter,
     DuplicateSpell,
-    DuplicateCharacterTemplate(String),
-    DuplicateSpellTemplate(String),
     DuplicatePackagedCharacter(String),
     DuplicatePackagedSpell(String),
     SaveCharacter,
@@ -105,8 +118,12 @@ enum CreatorAction {
     DeleteSpell,
     SelectCell(LatticeCoord),
     AddCell(LatticeCoord),
+    InspectTool,
+    ChooseTool(CreationCellKind),
+    ChooseErase,
+    Zoom(i8),
+    FitLattice,
     RemoveCell,
-    SetCell(CreationCellKind),
     AdjustStat {
         element: String,
         channelling: bool,
@@ -116,8 +133,8 @@ enum CreatorAction {
     RemoveRequirement(usize),
     CycleRequirement(usize),
     AdjustRequirement(usize, i8),
-    ToggleCasting,
-    ToggleTarget,
+    SetEnchantment(bool),
+    SetSingleTarget(bool),
     AdjustRange(i8),
     AdjustDefense(i8),
     AddEffect(EffectKind),
@@ -175,12 +192,14 @@ pub(super) fn plugin(app: &mut App) {
 fn initialize_session(
     mut commands: Commands,
     mut session: ResMut<CreatorSession>,
+    edit_request: Option<Res<super::combat_lab::CreatorEditRequest>>,
     store: Res<CreationStore>,
     spell_file: Option<Res<SpellFile>>,
     lattice_file: Option<Res<LatticeFile>>,
     elements: Option<Res<ElementCatalog>>,
     substances: Option<Res<SubstanceTable>>,
 ) {
+    let editing_from_lab = edit_request.is_some();
     super::combat_lab::restore_shipped_content(
         &mut commands,
         spell_file.as_deref(),
@@ -189,6 +208,22 @@ fn initialize_session(
         substances.as_deref(),
     );
     commands.remove_resource::<super::combat_lab::CombatLabSession>();
+    session.return_to_combat_lab = editing_from_lab;
+    if let Some(request) = edit_request {
+        if let Some(character) = store
+            .file
+            .characters
+            .iter()
+            .find(|character| character.id == request.character)
+        {
+            session.character = Some(character.clone());
+            session.character_dirty = false;
+            session.selected_cell = Some(LatticeCoord::ORIGIN);
+            session.tab = CreatorTab::Characters;
+            session.view = CreatorView::Character;
+        }
+        commands.remove_resource::<super::combat_lab::CreatorEditRequest>();
+    }
     if session.character.is_none() {
         session.character = store.file.characters.first().cloned().or_else(|| {
             Some(SavedCharacter::blank(
@@ -206,7 +241,11 @@ fn initialize_session(
         });
     }
     session.selected_cell = Some(LatticeCoord::ORIGIN);
-    session.notice = store.error.clone().unwrap_or_default();
+    session.notice = if editing_from_lab {
+        "Sandbox setup preserved. Resolve the blockers, save, then return to Combat Lab.".to_owned()
+    } else {
+        store.error.clone().unwrap_or_default()
+    };
     session.confirm_delete = false;
     session.confirm_reset = false;
     session.bump();
@@ -218,7 +257,11 @@ fn handle_escape(
     session: Res<CreatorSession>,
 ) {
     if keys.just_pressed(KeyCode::Escape) && !session.character_dirty && !session.spell_dirty {
-        next.set(Screen::Title);
+        next.set(if session.return_to_combat_lab {
+            Screen::CombatLab
+        } else {
+            Screen::Title
+        });
     }
 }
 
@@ -307,52 +350,68 @@ fn spawn_creator_ui(
             ..screen_root_node()
         })
         .with_children(|root| {
-            root.spawn(display(assets, "Character & Spell Creator"));
             root.spawn(Node {
+                width: Val::Percent(96.0),
                 flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
                 ..default()
             })
-            .with_children(|tabs| {
-                action_button(
-                    tabs,
+            .with_children(|header| {
+                header.spawn(display(
                     assets,
-                    "Characters",
-                    CreatorAction::Tab(CreatorTab::Characters),
-                    170.0,
-                );
-                action_button(
-                    tabs,
-                    assets,
-                    "Spells",
-                    CreatorAction::Tab(CreatorTab::Spells),
-                    170.0,
-                );
-                action_button(tabs, assets, "Undo", CreatorAction::Undo, 100.0);
-                action_button(tabs, assets, "Redo", CreatorAction::Redo, 100.0);
-                if store.error.is_some() {
-                    action_button(
-                        tabs,
-                        assets,
-                        if session.confirm_reset {
-                            "Confirm Reset"
-                        } else {
-                            "Reset Library"
-                        },
-                        CreatorAction::ResetLibrary,
-                        140.0,
-                    );
-                }
-                if session.character_dirty || session.spell_dirty {
-                    action_button(
-                        tabs,
-                        assets,
-                        "Discard Changes",
-                        CreatorAction::DiscardChanges,
-                        160.0,
-                    );
-                }
-                action_button(tabs, assets, "Back", CreatorAction::Back, 100.0);
+                    match session.view {
+                        CreatorView::Hub => "Creator Library",
+                        CreatorView::Character => "Character Workspace",
+                        CreatorView::Spell => "Spell Workspace",
+                    },
+                ));
+                header
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(8.0),
+                        align_items: AlignItems::Center,
+                        ..default()
+                    })
+                    .with_children(|actions| {
+                        if session.view != CreatorView::Hub {
+                            action_button(actions, assets, "Undo", CreatorAction::Undo, 90.0);
+                            action_button(actions, assets, "Redo", CreatorAction::Redo, 90.0);
+                        }
+                        if store.error.is_some() {
+                            action_button(
+                                actions,
+                                assets,
+                                if session.confirm_reset {
+                                    "Confirm Reset"
+                                } else {
+                                    "Reset Library"
+                                },
+                                CreatorAction::ResetLibrary,
+                                140.0,
+                            );
+                        }
+                        if session.character_dirty || session.spell_dirty {
+                            action_button(
+                                actions,
+                                assets,
+                                "Discard Changes",
+                                CreatorAction::DiscardChanges,
+                                150.0,
+                            );
+                        }
+                        action_button(
+                            actions,
+                            assets,
+                            if session.view == CreatorView::Hub {
+                                "Title"
+                            } else {
+                                "Library"
+                            },
+                            CreatorAction::Back,
+                            100.0,
+                        );
+                    });
             });
             if !session.notice.is_empty() {
                 root.spawn(fine(assets, session.notice.clone()))
@@ -372,8 +431,11 @@ fn spawn_creator_ui(
                 column_gap: Val::Px(12.0),
                 ..default()
             })
-            .with_children(|body| match session.tab {
-                CreatorTab::Characters => spawn_character_tab(
+            .with_children(|body| match session.view {
+                CreatorView::Hub => {
+                    spawn_creator_hub(body, assets, session, store, elements, spell_book, presets)
+                }
+                CreatorView::Character => spawn_character_tab(
                     body,
                     assets,
                     session,
@@ -383,10 +445,251 @@ fn spawn_creator_ui(
                     lattice_file,
                     presets,
                 ),
-                CreatorTab::Spells => spawn_spell_tab(
+                CreatorView::Spell => spawn_spell_tab(
                     body, assets, session, store, elements, spell_book, spell_file, presets,
                 ),
             });
+        });
+}
+
+fn spawn_creator_hub(
+    body: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    session: &CreatorSession,
+    store: &CreationStore,
+    elements: Option<&ElementCatalog>,
+    spell_book: Option<&SpellBook>,
+    presets: Option<&CreationPresetCatalog>,
+) {
+    body.spawn(panel())
+        .insert(Node {
+            width: Val::Px(240.0),
+            min_height: Val::Px(0.0),
+            ..panel_node()
+        })
+        .with_children(|navigation| {
+            navigation.spawn(heading(assets, "library"));
+            action_button(
+                navigation,
+                assets,
+                "Characters",
+                CreatorAction::Tab(CreatorTab::Characters),
+                190.0,
+            );
+            action_button(
+                navigation,
+                assets,
+                "Spells",
+                CreatorAction::Tab(CreatorTab::Spells),
+                190.0,
+            );
+            navigation.spawn(blurb(
+                assets,
+                "Only saved, clean, Map-ready characters and Ready spells enter Combat Lab.",
+            ));
+        });
+
+    body.spawn(panel())
+        .insert(Node {
+            min_width: Val::Px(0.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            ..panel_node()
+        })
+        .with_children(|library| match session.tab {
+            CreatorTab::Characters => {
+                library.spawn(heading(assets, "saved characters"));
+                action_button(
+                    library,
+                    assets,
+                    "New Blank Character",
+                    CreatorAction::NewCharacter,
+                    220.0,
+                );
+                library
+                    .spawn((
+                        ScrollArea,
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(360.0),
+                            min_height: Val::Px(160.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        if store.file.characters.is_empty() {
+                            list.spawn(blurb(assets, "No saved characters yet."));
+                        }
+                        for saved in &store.file.characters {
+                            let summary = CharacterBuildSummary::from_saved(
+                                saved,
+                                &store.file,
+                                elements,
+                                spell_book,
+                            );
+                            creator_record_card(
+                                list,
+                                assets,
+                                &saved.name,
+                                if summary.ready() {
+                                    "MAP READY"
+                                } else {
+                                    "BLOCKED"
+                                },
+                                &summary.compact_line(),
+                                CreatorAction::SelectCharacter(saved.id),
+                                summary.ready(),
+                            );
+                        }
+                    });
+                library.spawn(heading(assets, "templates · duplicate to edit"));
+                if let Some(presets) = presets {
+                    library
+                        .spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|shelf| {
+                            for record in presets
+                                .characters
+                                .iter()
+                                .filter(|record| record.audience == PresetAudience::HumanTemplate)
+                            {
+                                action_button(
+                                    shelf,
+                                    assets,
+                                    record.character.name.clone(),
+                                    CreatorAction::DuplicatePackagedCharacter(record.key.clone()),
+                                    190.0,
+                                );
+                            }
+                        });
+                }
+            }
+            CreatorTab::Spells => {
+                library.spawn(heading(assets, "saved spells"));
+                action_button(
+                    library,
+                    assets,
+                    "New Blank Spell",
+                    CreatorAction::NewSpell,
+                    220.0,
+                );
+                library
+                    .spawn((
+                        ScrollArea,
+                        Node {
+                            width: Val::Percent(100.0),
+                            height: Val::Px(360.0),
+                            min_height: Val::Px(160.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(8.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        if store.file.spells.is_empty() {
+                            list.spawn(blurb(assets, "No saved spells yet."));
+                        }
+                        for saved in &store.file.spells {
+                            let summary = SpellBuildSummary::from_saved(saved, elements);
+                            creator_record_card(
+                                list,
+                                assets,
+                                &saved.name,
+                                if summary.issues.is_empty() {
+                                    "READY"
+                                } else {
+                                    "DRAFT"
+                                },
+                                &summary.sentence,
+                                CreatorAction::SelectSpell(saved.id),
+                                summary.issues.is_empty(),
+                            );
+                        }
+                    });
+                library.spawn(heading(assets, "templates · duplicate to edit"));
+                if let Some(presets) = presets {
+                    library
+                        .spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Row,
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: Val::Px(8.0),
+                            row_gap: Val::Px(8.0),
+                            ..default()
+                        })
+                        .with_children(|shelf| {
+                            for record in presets
+                                .spells
+                                .iter()
+                                .filter(|record| record.audience == PresetAudience::HumanTemplate)
+                            {
+                                action_button(
+                                    shelf,
+                                    assets,
+                                    record.spell.name.clone(),
+                                    CreatorAction::DuplicatePackagedSpell(record.key.clone()),
+                                    190.0,
+                                );
+                            }
+                        });
+                }
+            }
+        });
+
+    body.spawn(panel())
+        .insert(Node {
+            width: Val::Px(330.0),
+            min_height: Val::Px(0.0),
+            ..panel_node()
+        })
+        .with_children(|summary| {
+            summary.spawn(heading(assets, "testing loop"));
+            summary.spawn(blurb(
+                assets,
+                "Create a spell, save it, inscribe it in a character, then Test on Map to prefill Combat Lab.",
+            ));
+            summary.spawn(heading(assets, "status language"));
+            summary.spawn(fine(assets, "READY · spell can be inscribed and deployed"));
+            summary.spawn(fine(assets, "MAP READY · character can enter Combat Lab"));
+            summary.spawn(fine(assets, "DRAFT / BLOCKED · saved, editable, not deployable"));
+        });
+}
+
+fn creator_record_card(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    name: &str,
+    status: &str,
+    summary: &str,
+    action: CreatorAction,
+    ready: bool,
+) {
+    parent
+        .spawn((row_button(name.to_owned(), 520.0), action))
+        .insert(Node {
+            width: Val::Percent(100.0),
+            min_height: Val::Px(70.0),
+            padding: UiRect::all(Val::Px(12.0)),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexStart,
+            row_gap: Val::Px(4.0),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        })
+        .insert(BorderColor::all(if ready { ACCENT_EDGE } else { DANGER }))
+        .with_children(|card| {
+            card.spawn(label(assets, format!("{name} · {status}")));
+            card.spawn(blurb(assets, summary.to_owned()));
         });
 }
 
@@ -458,8 +761,8 @@ fn spawn_character_tab(
     store: &CreationStore,
     elements: Option<&ElementCatalog>,
     spell_book: Option<&SpellBook>,
-    lattice_file: Option<&LatticeFile>,
-    presets: Option<&CreationPresetCatalog>,
+    _lattice_file: Option<&LatticeFile>,
+    _presets: Option<&CreationPresetCatalog>,
 ) {
     let Some(character) = &session.character else {
         body.spawn(blurb(assets, "No character draft."));
@@ -474,69 +777,109 @@ fn spawn_character_tab(
 
     body.spawn(panel())
         .insert(Node {
-            width: Val::Px(270.0),
+            width: Val::Px(250.0),
             min_height: Val::Px(0.0),
+            overflow: Overflow::scroll_y(),
             ..panel_node()
         })
-        .with_children(|left| {
-            left.spawn(heading(assets, "characters"));
-            action_button(
-                left,
+        .with_children(|palette| {
+            palette.spawn(heading(assets, "content palette"));
+            palette.spawn(blurb(
                 assets,
-                "New Blank",
-                CreatorAction::NewCharacter,
-                220.0,
+                "Choose a tool, then click occupied hexes or outlined neighbor slots.",
+            ));
+            colored_tool_button(
+                palette,
+                assets,
+                "Inspect",
+                CreatorAction::InspectTool,
+                Color::srgba(0.24, 0.26, 0.31, 0.96),
+                session.active_tool.is_none() && !session.erase_tool,
             );
-            if let Some(presets) = presets {
-                for record in presets
-                    .characters
-                    .iter()
-                    .filter(|record| record.audience == PresetAudience::HumanTemplate)
-                {
-                    action_button(
-                        left,
+            colored_tool_button(
+                palette,
+                assets,
+                "Blank",
+                CreatorAction::ChooseTool(CreationCellKind::Blank),
+                Color::srgba(0.28, 0.29, 0.32, 0.96),
+                session.active_tool == Some(CreationCellKind::Blank),
+            );
+            if let Some(elements) = elements {
+                palette.spawn(heading(assets, "gems and fusions"));
+                for index in 0..elements.len() {
+                    let Some(id) = u16::try_from(index).ok().map(hex_core::ElementId) else {
+                        continue;
+                    };
+                    let Some(name) = elements.name(id) else {
+                        continue;
+                    };
+                    let kind = if elements.is_higher_order(id) {
+                        CreationCellKind::Fusion(name.to_owned())
+                    } else {
+                        CreationCellKind::Gem(name.to_owned())
+                    };
+                    colored_tool_button(
+                        palette,
                         assets,
-                        format!("Template: {}", record.character.name),
-                        CreatorAction::DuplicatePackagedCharacter(record.key.clone()),
-                        220.0,
+                        if elements.is_higher_order(id) {
+                            format!("Fusion · {name}")
+                        } else {
+                            format!("Gem · {name}")
+                        },
+                        CreatorAction::ChooseTool(kind.clone()),
+                        if elements.is_higher_order(id) {
+                            FUSION_COLOR
+                        } else {
+                            element_color(Some(id), elements)
+                        },
+                        session.active_tool.as_ref() == Some(&kind),
                     );
                 }
-            } else if let Some(file) = lattice_file {
-                for name in ["wolf", "raider", "hedge-mage"] {
-                    if file.archetypes.contains_key(name) {
-                        action_button(
-                            left,
+            }
+            palette.spawn(heading(assets, "ready spells"));
+            if let Some(spells) = spell_book {
+                for (_, name, _spell) in spells.iter().filter(|(_, _, spell)| {
+                    matches!(
+                        spell.targeting.shape,
+                        TargetShape::SelfCast | TargetShape::Single
+                    ) && hex_combat::delivers_anything(spell)
+                }) {
+                    let kind = CreationCellKind::Spell(SpellReference::Shipped(name.to_owned()));
+                    colored_tool_button(
+                        palette,
+                        assets,
+                        format!("Spell · {name}"),
+                        CreatorAction::ChooseTool(kind.clone()),
+                        Color::srgba(0.30, 0.33, 0.40, 0.96),
+                        session.active_tool.as_ref() == Some(&kind),
+                    );
+                }
+            }
+            if let Some(elements) = elements {
+                for spell in &store.file.spells {
+                    if creator_spell_issues(spell, elements).is_empty()
+                        && hex_combat::creator_spell_deployability(&spell.spell).is_ok()
+                    {
+                        let kind = CreationCellKind::Spell(SpellReference::Custom(spell.id));
+                        colored_tool_button(
+                            palette,
                             assets,
-                            format!("Template: {name}"),
-                            CreatorAction::DuplicateCharacterTemplate(name.to_owned()),
-                            220.0,
+                            format!("Custom · {}", spell.name),
+                            CreatorAction::ChooseTool(kind.clone()),
+                            Color::srgba(0.37, 0.31, 0.47, 0.96),
+                            session.active_tool.as_ref() == Some(&kind),
                         );
                     }
                 }
             }
-            left.spawn((
-                ScrollArea,
-                Node {
-                    width: Val::Percent(100.0),
-                    min_height: Val::Px(0.0),
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
-                    overflow: Overflow::scroll_y(),
-                    ..default()
-                },
-            ))
-            .with_children(|list| {
-                for saved in &store.file.characters {
-                    action_button(
-                        list,
-                        assets,
-                        saved.name.clone(),
-                        CreatorAction::SelectCharacter(saved.id),
-                        210.0,
-                    );
-                }
-            });
+            colored_tool_button(
+                palette,
+                assets,
+                "Erase",
+                CreatorAction::ChooseErase,
+                Color::srgba(0.46, 0.13, 0.11, 0.96),
+                session.erase_tool,
+            );
         });
 
     body.spawn(panel())
@@ -549,6 +892,48 @@ fn spawn_character_tab(
         .with_children(|center| {
             name_input(center, assets, &character.name, NameField::Character);
             center
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|toolbar| {
+                    toolbar.spawn(fine(
+                        assets,
+                        format!(
+                            "ACTIVE TOOL · {}",
+                            if session.erase_tool {
+                                "ERASE".to_owned()
+                            } else {
+                                session
+                                    .active_tool
+                                    .as_ref()
+                                    .map(cell_label)
+                                    .unwrap_or_else(|| "INSPECT".to_owned())
+                                    .replace('\n', " ")
+                                    .to_uppercase()
+                            }
+                        ),
+                    ));
+                    toolbar
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(5.0),
+                            ..default()
+                        })
+                        .with_children(|zoom| {
+                            action_button(zoom, assets, "Fit", CreatorAction::FitLattice, 58.0);
+                            action_button(zoom, assets, "−", CreatorAction::Zoom(-1), 44.0);
+                            zoom.spawn(label(
+                                assets,
+                                format!("{}%", lattice_scale_percent(session.zoom_step)),
+                            ));
+                            action_button(zoom, assets, "+", CreatorAction::Zoom(1), 44.0);
+                        });
+                });
+            center
                 .spawn((
                     Name::new("Lattice Canvas"),
                     ScrollArea,
@@ -559,6 +944,7 @@ fn spawn_character_tab(
                         overflow: Overflow::scroll(),
                         ..default()
                     },
+                    ScrollPosition(Vec2::new(200.0, 120.0)),
                     BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.22)),
                 ))
                 .with_children(|canvas| {
@@ -570,7 +956,15 @@ fn spawn_character_tab(
                             ..default()
                         })
                         .with_children(|surface| {
-                            spawn_lattice_cells(surface, assets, character, session.selected_cell);
+                            spawn_lattice_cells(
+                                surface,
+                                assets,
+                                character,
+                                session.selected_cell,
+                                session.zoom_step,
+                                elements,
+                                &store.file,
+                            );
                         });
                 });
             center
@@ -613,6 +1007,16 @@ fn spawn_character_tab(
                         CreatorAction::TestOnMap,
                         130.0,
                     );
+                    if !issues.is_empty() || session.character_dirty {
+                        actions.spawn(fine(
+                            assets,
+                            if session.character_dirty {
+                                "Test on Map blocked · save current changes"
+                            } else {
+                                "Test on Map blocked · resolve checks"
+                            },
+                        ));
+                    }
                 });
         });
 
@@ -626,77 +1030,39 @@ fn spawn_character_tab(
         .with_children(|right| {
             right.spawn(heading(assets, "cell inspector"));
             if let Some(coord) = session.selected_cell {
-                right.spawn(label(assets, format!("({}, {})", coord.q(), coord.r())));
-                action_button(
-                    right,
+                let content = character
+                    .cells
+                    .iter()
+                    .find(|cell| cell.coord() == coord)
+                    .map(|cell| cell_label(&cell.kind))
+                    .unwrap_or_else(|| "Neighbor add slot".to_owned());
+                right.spawn(label(
                     assets,
-                    "Blank",
-                    CreatorAction::SetCell(CreationCellKind::Blank),
-                    270.0,
-                );
-                if let Some(elements) = elements {
-                    for index in 0..elements.len() {
-                        let Some(id) = u16::try_from(index).ok().map(hex_core::ElementId) else {
-                            continue;
-                        };
-                        let Some(name) = elements.name(id) else {
-                            continue;
-                        };
-                        let kind = if elements.is_higher_order(id) {
-                            CreationCellKind::Fusion(name.to_owned())
+                    format!(
+                        "{} · ({}, {}){}",
+                        content.replace('\n', " "),
+                        coord.q(),
+                        coord.r(),
+                        if coord == LatticeCoord::ORIGIN {
+                            " · ORIGIN"
                         } else {
-                            CreationCellKind::Gem(name.to_owned())
-                        };
-                        action_button(
-                            right,
-                            assets,
-                            if elements.is_higher_order(id) {
-                                format!("Fusion: {name}")
-                            } else {
-                                format!("Gem: {name}")
-                            },
-                            CreatorAction::SetCell(kind),
-                            270.0,
-                        );
-                    }
-                }
-                if let Some(spells) = spell_book {
-                    for (_, name, _) in spells.iter() {
-                        action_button(
-                            right,
-                            assets,
-                            format!("Spell: {name}"),
-                            CreatorAction::SetCell(CreationCellKind::Spell(
-                                SpellReference::Shipped(name.to_owned()),
-                            )),
-                            270.0,
-                        );
-                    }
-                }
-                if let Some(elements) = elements {
-                    for spell in &store.file.spells {
-                        if creator_spell_issues(spell, elements).is_empty()
-                            && hex_combat::creator_spell_deployability(&spell.spell).is_ok()
-                        {
-                            action_button(
-                                right,
-                                assets,
-                                format!("Custom: {}", spell.name),
-                                CreatorAction::SetCell(CreationCellKind::Spell(
-                                    SpellReference::Custom(spell.id),
-                                )),
-                                270.0,
-                            );
+                            ""
                         }
-                    }
-                }
-                action_button(
-                    right,
+                    ),
+                ));
+                right.spawn(blurb(
                     assets,
-                    "Remove Cell",
-                    CreatorAction::RemoveCell,
-                    270.0,
-                );
+                    "Palette tools paint directly. Inspect leaves cells unchanged.",
+                ));
+                if coord != LatticeCoord::ORIGIN {
+                    action_button(
+                        right,
+                        assets,
+                        "Remove Selected Cell",
+                        CreatorAction::RemoveCell,
+                        250.0,
+                    );
+                }
             }
             right.spawn(heading(assets, "attunement / channel"));
             if let Some(elements) = elements {
@@ -749,11 +1115,24 @@ fn spawn_character_tab(
             if issues.is_empty() {
                 right.spawn(blurb(assets, "Saved, clean versions may enter Combat Lab."));
             } else {
-                for issue in issues {
+                for issue in &issues {
                     right
                         .spawn(fine(assets, format!("• {issue}")))
                         .insert(TextColor(DANGER));
                 }
+            }
+            let summary =
+                CharacterBuildSummary::from_saved(character, &store.file, elements, spell_book);
+            right.spawn(heading(assets, "build summary"));
+            right.spawn(label(assets, summary.compact_line()));
+            if !summary.attunement.is_empty() {
+                right.spawn(fine(
+                    assets,
+                    format!("Attunement/channel · {}", summary.attunement.join(" · ")),
+                ));
+            }
+            for spell in summary.spells {
+                right.spawn(fine(assets, format!("{} · {}", spell.name, spell.sentence)));
             }
         });
 }
@@ -763,6 +1142,9 @@ fn spawn_lattice_cells(
     assets: &UiAssets,
     character: &SavedCharacter,
     selected: Option<LatticeCoord>,
+    zoom_step: i8,
+    elements: Option<&ElementCatalog>,
+    library: &hex_assets::CreationLibraryFile,
 ) {
     let occupied: BTreeSet<LatticeCoord> =
         character.cells.iter().map(CreationCell::coord).collect();
@@ -775,55 +1157,87 @@ fn spawn_lattice_cells(
                 .filter(|neighbor| !occupied.contains(neighbor)),
         );
     }
+    let scale = lattice_scale(zoom_step);
     for cell in &character.cells {
         let coord = cell.coord();
-        let (left, top) = lattice_pixel(coord);
+        let (left, top) = lattice_pixel(coord, scale);
+        let selected_cell = selected == Some(coord);
+        let color = brighten(
+            cell_color(&cell.kind, elements),
+            if selected_cell { 0.24 } else { 0.0 },
+        );
         surface
             .spawn((
                 Name::new(format!("Creator Cell {},{}", coord.q(), coord.r())),
                 Button,
                 CreatorAction::SelectCell(coord),
+                ImageNode {
+                    image: assets.hex_cell.clone(),
+                    color,
+                    ..default()
+                },
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(left),
                     top: Val::Px(top),
-                    width: Val::Px(72.0),
-                    height: Val::Px(72.0),
+                    width: Val::Px(72.0 * scale),
+                    height: Val::Px(83.0 * scale),
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    border: UiRect::all(Val::Px(if selected == Some(coord) { 3.0 } else { 1.0 })),
+                    flex_direction: FlexDirection::Column,
                     ..default()
                 },
-                BorderColor::all(if selected == Some(coord) {
-                    ACCENT
-                } else {
-                    EDGE
-                }),
-                BackgroundColor(cell_color(&cell.kind)),
             ))
-            .with_child(fine(assets, cell_label(&cell.kind)));
+            .with_children(|hex| {
+                hex.spawn((
+                    Text::new(resolved_cell_label(&cell.kind, library)),
+                    TextFont {
+                        font: assets.body.clone().into(),
+                        ..TextFont::from_font_size((11.0 * scale).max(9.0))
+                    },
+                    TextColor(LABEL),
+                    Pickable::IGNORE,
+                ));
+                hex.spawn((
+                    Text::new(if coord == LatticeCoord::ORIGIN {
+                        "ORIGIN"
+                    } else if selected_cell {
+                        "SELECTED"
+                    } else {
+                        ""
+                    }),
+                    TextFont {
+                        font: assets.body.clone().into(),
+                        ..TextFont::from_font_size((8.0 * scale).max(7.0))
+                    },
+                    TextColor(if selected_cell { ACCENT } else { LABEL }),
+                    Pickable::IGNORE,
+                ));
+            });
     }
     if character.cells.len() < hex_assets::MAX_CREATION_CELLS {
         for coord in additions {
-            let (left, top) = lattice_pixel(coord);
+            let (left, top) = lattice_pixel(coord, scale);
             surface
                 .spawn((
                     Name::new(format!("Add Cell {},{}", coord.q(), coord.r())),
                     Button,
                     CreatorAction::AddCell(coord),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Px(left + 11.0),
-                        top: Val::Px(top + 11.0),
-                        width: Val::Px(50.0),
-                        height: Val::Px(50.0),
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
-                        border: UiRect::all(Val::Px(1.0)),
+                    ImageNode {
+                        image: assets.hex_cell.clone(),
+                        color: Color::srgba(0.93, 0.79, 0.46, 0.18),
                         ..default()
                     },
-                    BorderColor::all(EDGE),
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.03)),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(left + 8.0 * scale),
+                        top: Val::Px(top + 9.0 * scale),
+                        width: Val::Px(56.0 * scale),
+                        height: Val::Px(65.0 * scale),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
                 ))
                 .with_child(label(assets, "+"));
         }
@@ -834,10 +1248,10 @@ fn spawn_lattice_cells(
     clippy::cast_precision_loss,
     reason = "creator coordinates are capped to 64 cells"
 )]
-fn lattice_pixel(coord: LatticeCoord) -> (f32, f32) {
+fn lattice_pixel(coord: LatticeCoord, scale: f32) -> (f32, f32) {
     (
-        500.0 + coord.q() as f32 * 78.0 + coord.r() as f32 * 39.0,
-        330.0 + coord.r() as f32 * 68.0,
+        520.0 + (coord.q() as f32 * 76.0 + coord.r() as f32 * 38.0) * scale,
+        330.0 + coord.r() as f32 * 62.0 * scale,
     )
 }
 
@@ -851,13 +1265,84 @@ fn cell_label(kind: &CreationCellKind) -> String {
     }
 }
 
-fn cell_color(kind: &CreationCellKind) -> Color {
+fn resolved_cell_label(
+    kind: &CreationCellKind,
+    library: &hex_assets::CreationLibraryFile,
+) -> String {
     match kind {
-        CreationCellKind::Gem(_) => Color::srgba(0.16, 0.45, 0.52, 0.92),
-        CreationCellKind::Fusion(_) => Color::srgba(0.42, 0.30, 0.62, 0.92),
-        CreationCellKind::Spell(_) => Color::srgba(0.55, 0.34, 0.12, 0.94),
+        CreationCellKind::Spell(SpellReference::Custom(id)) => library
+            .spells
+            .iter()
+            .find(|spell| spell.id == *id)
+            .map_or_else(
+                || format!("Missing\n#{}", id.0),
+                |spell| short_name(&spell.name),
+            ),
+        _ => short_name(&cell_label(kind).replace('\n', " ")),
+    }
+}
+
+fn cell_color(kind: &CreationCellKind, elements: Option<&ElementCatalog>) -> Color {
+    match kind {
+        CreationCellKind::Gem(name) => elements
+            .map_or(Color::srgba(0.16, 0.45, 0.52, 0.96), |elements| {
+                element_color(elements.id(name), elements)
+            }),
+        CreationCellKind::Fusion(_) => FUSION_COLOR,
+        CreationCellKind::Spell(_) => Color::srgba(0.30, 0.33, 0.40, 0.96),
         CreationCellKind::Blank => Color::srgba(0.28, 0.29, 0.32, 0.9),
     }
+}
+
+fn lattice_scale(zoom_step: i8) -> f32 {
+    match zoom_step {
+        ..=-2 => 0.7,
+        -1 => 0.85,
+        0 => 1.0,
+        1 => 1.15,
+        2 => 1.3,
+        _ => 1.45,
+    }
+}
+
+fn lattice_scale_percent(zoom_step: i8) -> u16 {
+    match zoom_step {
+        ..=-2 => 70,
+        -1 => 85,
+        0 => 100,
+        1 => 115,
+        2 => 130,
+        _ => 145,
+    }
+}
+
+fn brighten(color: Color, lift: f32) -> Color {
+    let color = color.to_srgba();
+    Color::srgba(
+        color.red + (1.0 - color.red) * lift,
+        color.green + (1.0 - color.green) * lift,
+        color.blue + (1.0 - color.blue) * lift,
+        color.alpha,
+    )
+}
+
+fn colored_tool_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: impl Into<String>,
+    action: CreatorAction,
+    color: Color,
+    selected: bool,
+) {
+    let text = text.into();
+    parent
+        .spawn((row_button(text.clone(), 200.0), action))
+        .insert((
+            crate::menus::widgets::OwnColors,
+            BackgroundColor(brighten(color, if selected { 0.26 } else { 0.0 })),
+            BorderColor::all(if selected { ACCENT } else { EDGE }),
+        ))
+        .with_child(label(assets, text));
 }
 
 fn spawn_spell_tab(
@@ -867,8 +1352,8 @@ fn spawn_spell_tab(
     store: &CreationStore,
     elements: Option<&ElementCatalog>,
     spell_book: Option<&SpellBook>,
-    spell_file: Option<&SpellFile>,
-    presets: Option<&CreationPresetCatalog>,
+    _spell_file: Option<&SpellFile>,
+    _presets: Option<&CreationPresetCatalog>,
 ) {
     let Some(saved) = &session.spell else {
         body.spawn(blurb(assets, "No spell draft."));
@@ -881,62 +1366,178 @@ fn spawn_spell_tab(
 
     body.spawn(panel())
         .insert(Node {
-            width: Val::Px(280.0),
+            width: Val::Px(300.0),
             min_height: Val::Px(0.0),
+            overflow: Overflow::scroll_y(),
             ..panel_node()
         })
         .with_children(|left| {
-            left.spawn(heading(assets, "spells"));
-            action_button(left, assets, "New Blank", CreatorAction::NewSpell, 220.0);
-            if let Some(presets) = presets {
-                for record in presets
-                    .spells
-                    .iter()
-                    .filter(|record| record.audience == PresetAudience::HumanTemplate)
-                {
-                    action_button(
-                        left,
-                        assets,
-                        format!("Template: {}", record.spell.name),
-                        CreatorAction::DuplicatePackagedSpell(record.key.clone()),
-                        220.0,
-                    );
-                }
-            } else if let Some(file) = spell_file {
-                let mut names: Vec<_> = file.spells.keys().cloned().collect();
-                names.sort();
-                for name in names {
-                    action_button(
-                        left,
-                        assets,
-                        format!("Template: {name}"),
-                        CreatorAction::DuplicateSpellTemplate(name),
-                        220.0,
-                    );
-                }
+            left.spawn(heading(assets, "requirements · 1–6"));
+            for (index, requirement) in saved.spell.requirements.iter().enumerate() {
+                let color = elements.map_or(Color::srgba(0.16, 0.45, 0.52, 0.96), |elements| {
+                    element_color(elements.id(&requirement.element), elements)
+                });
+                left.spawn(crate::menus::widgets::panel())
+                    .insert((
+                        Node {
+                            width: Val::Percent(100.0),
+                            padding: UiRect::all(Val::Px(10.0)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(6.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BorderColor::all(color),
+                    ))
+                    .with_children(|token| {
+                        token.spawn(label(
+                            assets,
+                            format!("{} · {} mana", requirement.element, requirement.mana),
+                        ));
+                        token
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                column_gap: Val::Px(4.0),
+                                ..default()
+                            })
+                            .with_children(|row| {
+                                action_button(
+                                    row,
+                                    assets,
+                                    "Element",
+                                    CreatorAction::CycleRequirement(index),
+                                    84.0,
+                                );
+                                action_button(
+                                    row,
+                                    assets,
+                                    "−",
+                                    CreatorAction::AdjustRequirement(index, -1),
+                                    42.0,
+                                );
+                                action_button(
+                                    row,
+                                    assets,
+                                    "+",
+                                    CreatorAction::AdjustRequirement(index, 1),
+                                    42.0,
+                                );
+                                action_button(
+                                    row,
+                                    assets,
+                                    "Remove",
+                                    CreatorAction::RemoveRequirement(index),
+                                    78.0,
+                                );
+                            });
+                    });
             }
-            left.spawn((
-                ScrollArea,
-                Node {
-                    width: Val::Percent(100.0),
-                    min_height: Val::Px(0.0),
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
-                    overflow: Overflow::scroll_y(),
-                    ..default()
+            if saved.spell.requirements.len() < 6 {
+                action_button(
+                    left,
+                    assets,
+                    "+ Add Requirement",
+                    CreatorAction::AddRequirement,
+                    220.0,
+                );
+            }
+            left.spawn(heading(assets, "casting and targeting"));
+            left.spawn(label(
+                assets,
+                match saved.spell.casting {
+                    hex_assets::CastingAxis::Evocation => "Evocation".to_owned(),
+                    hex_assets::CastingAxis::Enchantment { defense } => {
+                        format!("Enchantment · defense {defense}")
+                    }
                 },
-            ))
-            .with_children(|list| {
-                for spell in &store.file.spells {
-                    let ready = elements
-                        .is_some_and(|elements| spell_map_issues(spell, elements).is_empty());
+            ));
+            left.spawn(label(
+                assets,
+                format!(
+                    "{} · range {}",
+                    if matches!(saved.spell.targeting.shape, TargetShape::SelfCast) {
+                        "Self"
+                    } else {
+                        "Single target"
+                    },
+                    saved.spell.targeting.range
+                ),
+            ));
+            left.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                column_gap: Val::Px(5.0),
+                row_gap: Val::Px(5.0),
+                ..default()
+            })
+            .with_children(|controls| {
+                let enchantment = matches!(
+                    saved.spell.casting,
+                    hex_assets::CastingAxis::Enchantment { .. }
+                );
+                segmented_button(
+                    controls,
+                    assets,
+                    "Evocation",
+                    CreatorAction::SetEnchantment(false),
+                    !enchantment,
+                    104.0,
+                );
+                segmented_button(
+                    controls,
+                    assets,
+                    "Enchantment",
+                    CreatorAction::SetEnchantment(true),
+                    enchantment,
+                    120.0,
+                );
+                let single = saved.spell.targeting.shape == TargetShape::Single;
+                segmented_button(
+                    controls,
+                    assets,
+                    "Self",
+                    CreatorAction::SetSingleTarget(false),
+                    !single,
+                    72.0,
+                );
+                segmented_button(
+                    controls,
+                    assets,
+                    "Single",
+                    CreatorAction::SetSingleTarget(true),
+                    single,
+                    82.0,
+                );
+                if single {
                     action_button(
-                        list,
+                        controls,
                         assets,
-                        format!("{} · {}", spell.name, if ready { "Ready" } else { "Draft" }),
-                        CreatorAction::SelectSpell(spell.id),
-                        220.0,
+                        "Range −",
+                        CreatorAction::AdjustRange(-1),
+                        84.0,
+                    );
+                    action_button(
+                        controls,
+                        assets,
+                        "Range +",
+                        CreatorAction::AdjustRange(1),
+                        84.0,
+                    );
+                }
+                if enchantment {
+                    action_button(
+                        controls,
+                        assets,
+                        "Defense −",
+                        CreatorAction::AdjustDefense(-1),
+                        100.0,
+                    );
+                    action_button(
+                        controls,
+                        assets,
+                        "Defense +",
+                        CreatorAction::AdjustDefense(1),
+                        100.0,
                     );
                 }
             });
@@ -952,137 +1553,74 @@ fn spawn_spell_tab(
         })
         .with_children(|form| {
             name_input(form, assets, &saved.name, NameField::Spell);
-            form.spawn(heading(assets, "requirements"));
-            for (index, requirement) in saved.spell.requirements.iter().enumerate() {
-                form.spawn(fine(
-                    assets,
-                    format!(
-                        "{}. {} × {}",
-                        index + 1,
-                        requirement.element,
-                        requirement.mana
-                    ),
-                ));
-                form.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(5.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    action_button(
-                        row,
-                        assets,
-                        "Element",
-                        CreatorAction::CycleRequirement(index),
-                        95.0,
-                    );
-                    action_button(
-                        row,
-                        assets,
-                        "Mana −",
-                        CreatorAction::AdjustRequirement(index, -1),
-                        82.0,
-                    );
-                    action_button(
-                        row,
-                        assets,
-                        "Mana +",
-                        CreatorAction::AdjustRequirement(index, 1),
-                        82.0,
-                    );
-                    action_button(
-                        row,
-                        assets,
-                        "Remove",
-                        CreatorAction::RemoveRequirement(index),
-                        82.0,
-                    );
-                });
-            }
-            if saved.spell.requirements.len() < 6 {
-                action_button(
-                    form,
-                    assets,
-                    "Add Requirement",
-                    CreatorAction::AddRequirement,
-                    180.0,
-                );
-            }
-            form.spawn(heading(assets, "casting and targeting"));
-            form.spawn(blurb(
-                assets,
-                format!(
-                    "{} · {} · range {}",
-                    match saved.spell.casting {
-                        hex_assets::CastingAxis::Evocation => "Evocation".to_owned(),
-                        hex_assets::CastingAxis::Enchantment { defense } =>
-                            format!("Enchantment (defense {defense})"),
-                    },
-                    match saved.spell.targeting.shape {
-                        TargetShape::SelfCast => "Self",
-                        _ => "Single",
-                    },
-                    saved.spell.targeting.range
-                ),
-            ));
-            form.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(5.0),
-                ..default()
-            })
-            .with_children(|row| {
-                action_button(row, assets, "Axis", CreatorAction::ToggleCasting, 85.0);
-                action_button(row, assets, "Target", CreatorAction::ToggleTarget, 85.0);
-                action_button(row, assets, "Range −", CreatorAction::AdjustRange(-1), 85.0);
-                action_button(row, assets, "Range +", CreatorAction::AdjustRange(1), 85.0);
-                action_button(
-                    row,
-                    assets,
-                    "Defense −",
-                    CreatorAction::AdjustDefense(-1),
-                    95.0,
-                );
-                action_button(
-                    row,
-                    assets,
-                    "Defense +",
-                    CreatorAction::AdjustDefense(1),
-                    95.0,
-                );
-            });
-            form.spawn(heading(assets, "effects"));
+            let summary = SpellBuildSummary::from_saved(saved, elements);
+            form.spawn(heading(assets, "ordered effects"));
+            form.spawn(label(assets, summary.sentence.clone()));
             for (index, effect) in saved.spell.effects.iter().enumerate() {
-                form.spawn(fine(assets, format!("{}. {effect:?}", index + 1)));
-                form.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(5.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    action_button(row, assets, "↑", CreatorAction::MoveEffect(index, -1), 48.0);
-                    action_button(row, assets, "↓", CreatorAction::MoveEffect(index, 1), 48.0);
-                    action_button(
-                        row,
-                        assets,
-                        "Value −",
-                        CreatorAction::AdjustEffect(index, -1),
-                        76.0,
-                    );
-                    action_button(
-                        row,
-                        assets,
-                        "Value +",
-                        CreatorAction::AdjustEffect(index, 1),
-                        76.0,
-                    );
-                    action_button(
-                        row,
-                        assets,
-                        "Remove",
-                        CreatorAction::RemoveEffect(index),
-                        90.0,
-                    );
-                });
+                let effect_text = crate::creation_presentation::effect_summary(effect);
+                form.spawn(crate::menus::widgets::panel())
+                    .insert((
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_height: Val::Px(96.0),
+                            padding: UiRect::all(Val::Px(12.0)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(7.0),
+                            border: UiRect::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BorderColor::all(effect_color(effect)),
+                    ))
+                    .with_children(|card| {
+                        card.spawn(label(
+                            assets,
+                            format!("{} · {}", index + 1, effect_text.to_uppercase()),
+                        ));
+                        card.spawn(blurb(assets, effect_explanation(effect)));
+                        card.spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(5.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            action_button(
+                                row,
+                                assets,
+                                "←",
+                                CreatorAction::MoveEffect(index, -1),
+                                44.0,
+                            );
+                            action_button(
+                                row,
+                                assets,
+                                "→",
+                                CreatorAction::MoveEffect(index, 1),
+                                44.0,
+                            );
+                            action_button(
+                                row,
+                                assets,
+                                "Value −",
+                                CreatorAction::AdjustEffect(index, -1),
+                                76.0,
+                            );
+                            action_button(
+                                row,
+                                assets,
+                                "Value +",
+                                CreatorAction::AdjustEffect(index, 1),
+                                76.0,
+                            );
+                            action_button(
+                                row,
+                                assets,
+                                "Remove",
+                                CreatorAction::RemoveEffect(index),
+                                86.0,
+                            );
+                        });
+                    });
             }
             form.spawn(Node {
                 flex_direction: FlexDirection::Row,
@@ -1137,10 +1675,19 @@ fn spawn_spell_tab(
             ..panel_node()
         })
         .with_children(|right| {
+            let summary = SpellBuildSummary::from_saved(saved, elements);
             right.spawn(heading(
                 assets,
                 if issues.is_empty() { "Ready" } else { "Draft" },
             ));
+            right.spawn(label(assets, summary.sentence));
+            if !summary.requirements.is_empty() {
+                right.spawn(fine(
+                    assets,
+                    format!("Requirements · {}", summary.requirements.join(" · ")),
+                ));
+            }
+            right.spawn(fine(assets, summary.casting));
             if issues.is_empty() {
                 right.spawn(blurb(
                     assets,
@@ -1164,6 +1711,59 @@ fn spawn_spell_tab(
                 right.spawn(blurb(assets, "Shipped spell catalog is loading."));
             }
         });
+}
+
+fn effect_color(effect: &Effect) -> Color {
+    match effect {
+        Effect::DisableHexes { .. } => Color::srgb(0.72, 0.25, 0.20),
+        Effect::Burn { .. } => Color::srgb(0.78, 0.38, 0.14),
+        Effect::RestoreHexes { .. } => Color::srgb(0.18, 0.55, 0.43),
+        Effect::Reveal { .. } => Color::srgb(0.76, 0.64, 0.22),
+        Effect::ModifyIncomingDisables { .. } => Color::srgb(0.32, 0.45, 0.64),
+        _ => EDGE,
+    }
+}
+
+fn segmented_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &'static str,
+    action: CreatorAction,
+    selected: bool,
+    width: f32,
+) {
+    parent
+        .spawn((row_button(text, width), action))
+        .insert(BorderColor::all(if selected { ACCENT } else { EDGE }))
+        .with_child(label(
+            assets,
+            if selected {
+                format!("✓ {text}")
+            } else {
+                text.to_owned()
+            },
+        ));
+}
+
+fn effect_explanation(effect: &Effect) -> String {
+    match effect {
+        Effect::DisableHexes { count, .. } => {
+            format!("The defender chooses {count} live lattice cell(s) to disable.")
+        }
+        Effect::Burn { turns } => {
+            format!("Disables one additional cell at the start of {turns} target turn(s).")
+        }
+        Effect::RestoreHexes { count } => {
+            format!("The caster chooses up to {count} disabled cell(s) to restore.")
+        }
+        Effect::Reveal { tier } => {
+            format!("Reveals the target lattice at tier {tier}.")
+        }
+        Effect::ModifyIncomingDisables { amount } => {
+            format!("Reduces incoming disable count by {amount}.")
+        }
+        _ => "This effect is not deployable from the Wave 6 Creator.".to_owned(),
+    }
 }
 
 fn sync_name_fields(
@@ -1205,7 +1805,7 @@ fn handle_actions(
     elements: Option<Res<ElementCatalog>>,
     spell_book: Option<Res<SpellBook>>,
     spell_file: Option<Res<SpellFile>>,
-    lattice_file: Option<Res<LatticeFile>>,
+    _lattice_file: Option<Res<LatticeFile>>,
     substances: Option<Res<SubstanceTable>>,
     presets: Option<Res<CreationPresetCatalog>>,
     mut commands: Commands,
@@ -1232,8 +1832,16 @@ fn handle_actions(
             CreatorAction::Back => {
                 if session.character_dirty || session.spell_dirty {
                     session.notice = "Save or discard the current edits before leaving.".to_owned();
+                } else if session.view != CreatorView::Hub {
+                    session.view = CreatorView::Hub;
+                    session.active_tool = None;
+                    session.erase_tool = false;
                 } else {
-                    next.set(Screen::Title);
+                    next.set(if session.return_to_combat_lab {
+                        Screen::CombatLab
+                    } else {
+                        Screen::Title
+                    });
                 }
             }
             CreatorAction::NewCharacter => {
@@ -1248,6 +1856,10 @@ fn handle_actions(
                     ));
                     session.character_dirty = true;
                     session.selected_cell = Some(LatticeCoord::ORIGIN);
+                    session.view = CreatorView::Character;
+                    session.tab = CreatorTab::Characters;
+                    session.active_tool = None;
+                    session.erase_tool = false;
                 }
             }
             CreatorAction::NewSpell => {
@@ -1260,6 +1872,8 @@ fn handle_actions(
                         unique_spell_name(&store.file, spell_book.as_deref(), "New Spell", None),
                     ));
                     session.spell_dirty = true;
+                    session.view = CreatorView::Spell;
+                    session.tab = CreatorTab::Spells;
                 }
             }
             CreatorAction::SelectCharacter(id) => {
@@ -1271,6 +1885,10 @@ fn handle_actions(
                     session.character = Some(saved.clone());
                     session.selected_cell = saved.cells.first().map(CreationCell::coord);
                     session.confirm_delete = false;
+                    session.view = CreatorView::Character;
+                    session.tab = CreatorTab::Characters;
+                    session.active_tool = None;
+                    session.erase_tool = false;
                 }
             }
             CreatorAction::SelectSpell(id) => {
@@ -1279,6 +1897,8 @@ fn handle_actions(
                 } else if let Some(saved) = store.file.spells.iter().find(|saved| saved.id == *id) {
                     session.spell = Some(saved.clone());
                     session.confirm_delete = false;
+                    session.view = CreatorView::Spell;
+                    session.tab = CreatorTab::Spells;
                 }
             }
             CreatorAction::DuplicateCharacter => {
@@ -1289,6 +1909,7 @@ fn handle_actions(
                     session.character = Some(copy);
                     session.character_dirty = true;
                     session.confirm_delete = false;
+                    session.view = CreatorView::Character;
                 }
             }
             CreatorAction::DuplicateSpell => {
@@ -1303,38 +1924,7 @@ fn handle_actions(
                     session.spell = Some(copy);
                     session.spell_dirty = true;
                     session.confirm_delete = false;
-                }
-            }
-            CreatorAction::DuplicateCharacterTemplate(name) => {
-                if let Some(file) = lattice_file.as_deref() {
-                    if let Some(raw) = file.archetypes.get(name) {
-                        let id = store.file.allocate_character_id();
-                        session.character = Some(character_from_template(
-                            id,
-                            unique_character_name(&store.file, &format!("{name} Copy"), None),
-                            raw,
-                        ));
-                        session.character_dirty = true;
-                        session.selected_cell = Some(LatticeCoord::ORIGIN);
-                    }
-                }
-            }
-            CreatorAction::DuplicateSpellTemplate(name) => {
-                if let Some(file) = spell_file.as_deref() {
-                    if let Some(spell) = file.spells.get(name) {
-                        let id = store.file.allocate_spell_id();
-                        session.spell = Some(SavedSpell {
-                            id,
-                            name: unique_spell_name(
-                                &store.file,
-                                spell_book.as_deref(),
-                                &format!("{name} Copy"),
-                                None,
-                            ),
-                            spell: spell.clone(),
-                        });
-                        session.spell_dirty = true;
-                    }
+                    session.view = CreatorView::Spell;
                 }
             }
             CreatorAction::DuplicatePackagedCharacter(key) => {
@@ -1349,6 +1939,7 @@ fn handle_actions(
                     session.character = Some(copy);
                     session.character_dirty = true;
                     session.selected_cell = Some(LatticeCoord::ORIGIN);
+                    session.view = CreatorView::Character;
                 }
             }
             CreatorAction::DuplicatePackagedSpell(key) => {
@@ -1366,6 +1957,7 @@ fn handle_actions(
                     );
                     session.spell = Some(copy);
                     session.spell_dirty = true;
+                    session.view = CreatorView::Spell;
                 }
             }
             CreatorAction::SaveCharacter => {
@@ -1425,6 +2017,7 @@ fn handle_actions(
                             session.character_dirty = false;
                             session.confirm_delete = false;
                             session.notice = "Character deleted.".to_owned();
+                            session.view = CreatorView::Hub;
                         }
                         Err(error) => session.notice = error,
                     }
@@ -1441,6 +2034,7 @@ fn handle_actions(
                             session.spell_dirty = false;
                             session.confirm_delete = false;
                             session.notice = "Spell deleted.".to_owned();
+                            session.view = CreatorView::Hub;
                         }
                         Err(error) => {
                             session.notice = format!("Spell cannot be deleted: {error}");
@@ -1449,14 +2043,47 @@ fn handle_actions(
                     }
                 }
             }
-            CreatorAction::SelectCell(coord) => session.selected_cell = Some(*coord),
+            CreatorAction::SelectCell(coord) => {
+                session.selected_cell = Some(*coord);
+                if session.erase_tool {
+                    if *coord == LatticeCoord::ORIGIN {
+                        session.notice = "The origin cell cannot be removed.".to_owned();
+                    } else {
+                        session.remember_character();
+                        let next_selected = if let Some(character) = &mut session.character {
+                            character.cells.retain(|cell| cell.coord() != *coord);
+                            character.cells.first().map(CreationCell::coord)
+                        } else {
+                            None
+                        };
+                        session.character_dirty = true;
+                        session.selected_cell = next_selected;
+                    }
+                } else if let Some(kind) = session.active_tool.clone() {
+                    session.remember_character();
+                    if let Some(character) = &mut session.character {
+                        if let Some(cell) = character
+                            .cells
+                            .iter_mut()
+                            .find(|cell| cell.coord() == *coord)
+                        {
+                            cell.kind = kind;
+                            session.character_dirty = true;
+                        }
+                    }
+                }
+            }
             CreatorAction::AddCell(coord) => {
                 session.remember_character();
+                let kind = session
+                    .active_tool
+                    .clone()
+                    .unwrap_or(CreationCellKind::Blank);
                 if let Some(character) = &mut session.character {
                     character.cells.push(CreationCell {
                         q: coord.q(),
                         r: coord.r(),
-                        kind: CreationCellKind::Blank,
+                        kind,
                     });
                     session.selected_cell = Some(*coord);
                     session.character_dirty = true;
@@ -1464,6 +2091,11 @@ fn handle_actions(
             }
             CreatorAction::RemoveCell => {
                 if let Some(coord) = session.selected_cell {
+                    if coord == LatticeCoord::ORIGIN {
+                        session.notice = "The origin cell cannot be removed.".to_owned();
+                        session.bump();
+                        continue;
+                    }
                     session.remember_character();
                     if let Some(character) = &mut session.character {
                         character.cells.retain(|cell| cell.coord() != coord);
@@ -1472,20 +2104,23 @@ fn handle_actions(
                     }
                 }
             }
-            CreatorAction::SetCell(kind) => {
-                if let Some(coord) = session.selected_cell {
-                    session.remember_character();
-                    if let Some(character) = &mut session.character {
-                        if let Some(cell) = character
-                            .cells
-                            .iter_mut()
-                            .find(|cell| cell.coord() == coord)
-                        {
-                            cell.kind = kind.clone();
-                            session.character_dirty = true;
-                        }
-                    }
-                }
+            CreatorAction::InspectTool => {
+                session.active_tool = None;
+                session.erase_tool = false;
+            }
+            CreatorAction::ChooseTool(kind) => {
+                session.active_tool = Some(kind.clone());
+                session.erase_tool = false;
+            }
+            CreatorAction::ChooseErase => {
+                session.active_tool = None;
+                session.erase_tool = true;
+            }
+            CreatorAction::Zoom(delta) => {
+                session.zoom_step = (session.zoom_step + *delta).clamp(-2, 3);
+            }
+            CreatorAction::FitLattice => {
+                session.zoom_step = 0;
             }
             CreatorAction::AdjustStat {
                 element,
@@ -1560,28 +2195,32 @@ fn handle_actions(
                     }
                 }
             }
-            CreatorAction::ToggleCasting => {
+            CreatorAction::SetEnchantment(enchantment) => {
                 session.remember_spell();
                 if let Some(saved) = &mut session.spell {
-                    saved.spell.casting = match saved.spell.casting {
-                        hex_assets::CastingAxis::Evocation => {
-                            hex_assets::CastingAxis::Enchantment { defense: 1 }
-                        }
-                        hex_assets::CastingAxis::Enchantment { .. } => {
-                            hex_assets::CastingAxis::Evocation
-                        }
+                    saved.spell.casting = if *enchantment {
+                        let defense = match saved.spell.casting {
+                            hex_assets::CastingAxis::Enchantment { defense } => defense.max(1),
+                            hex_assets::CastingAxis::Evocation => 1,
+                        };
+                        hex_assets::CastingAxis::Enchantment { defense }
+                    } else {
+                        hex_assets::CastingAxis::Evocation
                     };
                     session.spell_dirty = true;
                 }
             }
-            CreatorAction::ToggleTarget => {
+            CreatorAction::SetSingleTarget(single) => {
                 session.remember_spell();
                 if let Some(saved) = &mut session.spell {
-                    saved.spell.targeting.shape = match saved.spell.targeting.shape {
-                        TargetShape::SelfCast => TargetShape::Single,
-                        _ => TargetShape::SelfCast,
+                    saved.spell.targeting.shape = if *single {
+                        TargetShape::Single
+                    } else {
+                        TargetShape::SelfCast
                     };
-                    if matches!(saved.spell.targeting.shape, TargetShape::SelfCast) {
+                    if *single && saved.spell.targeting.range == 0 {
+                        saved.spell.targeting.range = 1;
+                    } else if !*single {
                         saved.spell.targeting.range = 0;
                     }
                     session.spell_dirty = true;
@@ -1929,35 +2568,6 @@ fn character_map_issues(
     issues.sort();
     issues.dedup();
     issues
-}
-
-fn character_from_template(
-    id: CustomCharacterId,
-    name: String,
-    raw: &hex_assets::UnvalidatedArchetype,
-) -> SavedCharacter {
-    SavedCharacter {
-        id,
-        name,
-        cells: raw
-            .cells
-            .iter()
-            .map(|cell| CreationCell {
-                q: cell.at.q,
-                r: cell.at.r,
-                kind: match &cell.kind {
-                    UnvalidatedCell::Gem(name) => CreationCellKind::Gem(name.clone()),
-                    UnvalidatedCell::Fusion(name) => CreationCellKind::Fusion(name.clone()),
-                    UnvalidatedCell::Spell(name) => {
-                        CreationCellKind::Spell(SpellReference::Shipped(name.clone()))
-                    }
-                    UnvalidatedCell::Blank => CreationCellKind::Blank,
-                },
-            })
-            .collect(),
-        attunement: raw.attunement.clone(),
-        channelling: raw.channelling.clone(),
-    }
 }
 
 fn element_names(elements: &ElementCatalog) -> Vec<String> {

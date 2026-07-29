@@ -2,21 +2,31 @@
 
 use std::collections::BTreeMap;
 
+use bevy::ecs::system::SystemParam;
+use bevy::picking::events::{Click, Pointer};
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
-    character_lattice_file, character_runtime_key, combined_spell_file, ContentIndex,
+    character_lattice_file, character_runtime_key, combined_spell_file, CombatLabDeploymentRegion,
+    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, ContentIndex,
     CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
-    EncounterFaction, EncounterPlacement, FormationCenter, LatticeFile, LatticeLibrary,
+    EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
     PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary, SpellBook,
     SpellFile, SpellReference, SubstanceTable,
 };
-use hex_core::{GameplaySetup, ResolvedMapSeed, Screen};
+use hex_core::{
+    GameplayPhase, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors,
+    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
+};
+use hex_units::{Body, Faction, Footing, Reach, StandsOn};
 
+use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
+use crate::menus::lattice_view::short_name;
 use crate::menus::widgets::{
-    blurb, display, fine, heading, label, panel, panel_node, row_button, UiAssets, DANGER,
+    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
+    DANGER, FUSION_COLOR,
 };
 use crate::scenarios::ScenarioToLoad;
 
@@ -41,17 +51,17 @@ enum SandboxMap {
 impl SandboxMap {
     const ALL: [Self; 3] = [Self::Flat, Self::Crossing, Self::Hills];
 
-    const fn label(self) -> &'static str {
+    const fn stable_id(self) -> &'static str {
         match self {
-            Self::Flat => "Flat Arena",
-            Self::Crossing => "The Crossing",
-            Self::Hills => "Procedural Hills",
+            Self::Flat => "flat-arena",
+            Self::Crossing => "the-crossing",
+            Self::Hills => "procedural-hills",
         }
     }
 
-    const fn scenario_name(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
-            Self::Flat => "Ability Lab",
+            Self::Flat => "Flat Arena",
             Self::Crossing => "The Crossing",
             Self::Hills => "Procedural Hills",
         }
@@ -70,9 +80,6 @@ struct CombatLabState {
     map: SandboxMap,
     players: Vec<RosterChoice>,
     hostiles: Vec<RosterChoice>,
-    deployment: bool,
-    player_placements: Vec<Option<u8>>,
-    hostile_placements: Vec<Option<u8>>,
     fixture_filter: String,
     creator_origin: bool,
     notice: String,
@@ -86,9 +93,6 @@ impl Default for CombatLabState {
             map: SandboxMap::Flat,
             players: vec![RosterChoice::Template("hedge-mage".to_owned())],
             hostiles: vec![RosterChoice::Template("raider".to_owned())],
-            deployment: false,
-            player_placements: Vec::new(),
-            hostile_placements: Vec::new(),
             fixture_filter: String::new(),
             creator_origin: false,
             notice: String::new(),
@@ -106,6 +110,12 @@ impl CombatLabState {
 /// Prefills the Sandbox when Test on Map originates in the Creator.
 #[derive(Resource, Debug, Clone, Copy)]
 pub(crate) struct CreatorTestRequest {
+    pub(crate) character: CustomCharacterId,
+}
+
+/// Opens a blocked Sandbox record in the Creator without discarding the transient setup.
+#[derive(Resource, Debug, Clone, Copy)]
+pub(crate) struct CreatorEditRequest {
     pub(crate) character: CustomCharacterId,
 }
 
@@ -141,6 +151,76 @@ pub(crate) struct CombatLabSession {
     pub(crate) return_to: Screen,
 }
 
+/// Frozen human deployment state carried over the already-loaded terrain.
+#[derive(Resource, Debug, Clone)]
+struct DeploymentSession {
+    map_definition: CombatLabMapDefinition,
+    players: Vec<RosterChoice>,
+    hostiles: Vec<RosterChoice>,
+    player_placements: Vec<Option<TilePos>>,
+    hostile_placements: Vec<Option<TilePos>>,
+    active_player: bool,
+    active_index: usize,
+    undo: Vec<(bool, usize, Option<TilePos>)>,
+    player_surfaces: Vec<TilePos>,
+    hostile_surfaces: Vec<TilePos>,
+    notice: String,
+}
+
+impl DeploymentSession {
+    fn new(
+        map_definition: CombatLabMapDefinition,
+        players: Vec<RosterChoice>,
+        hostiles: Vec<RosterChoice>,
+    ) -> Self {
+        let player_len = players.len();
+        let hostile_len = hostiles.len();
+        Self {
+            map_definition,
+            players,
+            hostiles,
+            player_placements: vec![None; player_len],
+            hostile_placements: vec![None; hostile_len],
+            active_player: true,
+            active_index: 0,
+            undo: Vec::new(),
+            player_surfaces: Vec::new(),
+            hostile_surfaces: Vec::new(),
+            notice: "Select a highlighted Player surface for unit 1.".to_owned(),
+        }
+    }
+
+    fn complete(&self) -> bool {
+        placements_complete_exact(&self.player_placements, self.players.len())
+            && placements_complete_exact(&self.hostile_placements, self.hostiles.len())
+    }
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+struct DeploymentSurface {
+    pos: TilePos,
+    player: bool,
+}
+
+#[derive(Component)]
+struct DeploymentWorldEntity;
+
+#[derive(Component)]
+struct DeploymentHidden;
+
+#[derive(Component)]
+struct DeploymentHud;
+
+#[derive(Component, Debug, Clone, Copy)]
+enum DeploymentAction {
+    Undo,
+    ClearPlayer,
+    ClearHostile,
+    AutoPlace,
+    Back,
+    StartCombat,
+}
+
 #[derive(Component, Debug, Clone)]
 enum LabAction {
     Tab(LabTab),
@@ -154,12 +234,8 @@ enum LabAction {
     RemoveHostile(usize),
     MovePlayer(usize, i8),
     MoveHostile(usize, i8),
+    EditCustom(CustomCharacterId),
     PrepareDeployment,
-    AutoPlace,
-    PlacePlayer(usize, u8),
-    PlaceHostile(usize, u8),
-    BackToSetup,
-    StartSandbox,
     StartFixture(String),
 }
 
@@ -176,6 +252,8 @@ struct FixtureDefinition {
     tags: &'static str,
     description: &'static str,
     scenario: &'static str,
+    map_seed: &'static str,
+    roster: &'static str,
 }
 
 const FIXTURES: [FixtureDefinition; 4] = [
@@ -185,6 +263,8 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "aiming reveal restore revival",
         description: "A flat 2v1 for aiming, friendly damage, reveal, restoration, and revival.",
         scenario: "Ability Lab",
+        map_seed: "Flat Arena · authored",
+        roster: "2 Player · 1 Hostile",
     },
     FixtureDefinition {
         id: "raider-mirror",
@@ -192,6 +272,8 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "identity defense enchantment",
         description: "Same archetype on both sides, with deterministic defensive enchantments.",
         scenario: "Raider Mirror",
+        map_seed: "Flat Arena · authored",
+        roster: "1 Player Raider · 1 Hostile Raider",
     },
     FixtureDefinition {
         id: "creator-spell-matrix",
@@ -199,6 +281,8 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "creator disable burn reveal restore defense",
         description: "Creator-format spell delivery against the flat deterministic roster.",
         scenario: "Ability Lab",
+        map_seed: "Flat Arena · authored",
+        roster: "Fixture Caster · Fixture Target",
     },
     FixtureDefinition {
         id: "creator-roster-matrix",
@@ -206,6 +290,8 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "creator roster selection ordering",
         description: "Mixed roster selection, stable unit ordering, and multi-unit combat.",
         scenario: "Ability Lab",
+        map_seed: "Flat Arena · authored",
+        roster: "2 Player · 2 Hostile creator records",
     },
 ];
 
@@ -270,8 +356,17 @@ pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLabState>()
         .add_systems(
             OnEnter(Screen::Gameplay),
-            apply_creator_display_names.in_set(GameplaySetup::Restore),
+            (
+                apply_creator_display_names.in_set(GameplaySetup::Restore),
+                enter_deployment.in_set(GameplaySetup::Finalize),
+            ),
         )
+        .add_systems(
+            Update,
+            handle_deployment_actions.run_if(in_state(Screen::Gameplay)),
+        )
+        .add_observer(on_deployment_surface_clicked)
+        .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
         .add_systems(
             OnEnter(Screen::CombatLab),
             (initialize_lab, spawn_lab).chain(),
@@ -302,12 +397,11 @@ fn initialize_lab(
         substances.as_deref(),
     );
     commands.remove_resource::<CombatLabSession>();
+    commands.remove_resource::<DeploymentSession>();
+    commands.insert_resource(GameplayPhase::Active);
     if let Some(request) = request {
         state.tab = LabTab::Sandbox;
         state.players = vec![RosterChoice::Custom(request.character)];
-        state.deployment = false;
-        state.player_placements.clear();
-        state.hostile_placements.clear();
         state.notice = "Creator character prefilled; choose the rest of the test.".to_owned();
         state.creator_origin = true;
         commands.remove_resource::<CreatorTestRequest>();
@@ -324,6 +418,8 @@ fn spawn_lab(
     store: Res<CreationStore>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
+    presets: Option<Res<CreationPresetCatalog>>,
+    maps: Option<Res<CombatLabMapCatalog>>,
 ) {
     spawn_lab_ui(
         &mut commands,
@@ -332,6 +428,8 @@ fn spawn_lab(
         &store,
         elements.as_deref(),
         spells.as_deref(),
+        presets.as_deref(),
+        maps.as_deref(),
     );
 }
 
@@ -343,6 +441,8 @@ fn rebuild_lab(
     store: Res<CreationStore>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
+    presets: Option<Res<CreationPresetCatalog>>,
+    maps: Option<Res<CombatLabMapCatalog>>,
     mut last_revision: Local<u64>,
 ) {
     if roots.is_empty() || *last_revision != state.revision {
@@ -356,6 +456,8 @@ fn rebuild_lab(
             &store,
             elements.as_deref(),
             spells.as_deref(),
+            presets.as_deref(),
+            maps.as_deref(),
         );
         *last_revision = state.revision;
     }
@@ -368,6 +470,8 @@ fn spawn_lab_ui(
     store: &CreationStore,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
+    presets: Option<&CreationPresetCatalog>,
+    maps: Option<&CombatLabMapCatalog>,
 ) {
     commands
         .spawn((screen_root(Screen::CombatLab, "Combat Lab Screen"), LabRoot))
@@ -405,11 +509,9 @@ fn spawn_lab_ui(
             }
             match state.tab {
                 LabTab::Sandbox => {
-                    if state.deployment {
-                        spawn_deployment(root, assets, state, store);
-                    } else {
-                        spawn_sandbox_setup(root, assets, state, store, elements, spells);
-                    }
+                    spawn_sandbox_setup(
+                        root, assets, state, store, elements, spells, presets, maps,
+                    );
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
             }
@@ -436,6 +538,8 @@ fn spawn_sandbox_setup(
     store: &CreationStore,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
+    presets: Option<&CreationPresetCatalog>,
+    maps: Option<&CombatLabMapCatalog>,
 ) {
     root.spawn(Node {
         width: Val::Percent(96.0),
@@ -453,12 +557,18 @@ fn spawn_sandbox_setup(
                 min_height: Val::Px(0.0),
                 ..panel_node()
             })
-            .with_children(|maps| {
-                maps.spawn(heading(assets, "map"));
+            .with_children(|map_panel| {
+                map_panel.spawn(heading(assets, "map"));
                 for map in SandboxMap::ALL {
-                    lab_button(maps, assets, map.label(), LabAction::SelectMap(map), 250.0);
+                    let label = maps
+                        .and_then(|catalog| catalog.get(map.stable_id()))
+                        .map_or_else(
+                            || map.label().to_owned(),
+                            |record| record.display_name.clone(),
+                        );
+                    lab_button(map_panel, assets, label, LabAction::SelectMap(map), 250.0);
                 }
-                maps.spawn(fine(
+                map_panel.spawn(fine(
                     assets,
                     "All maps use fixed seeds and authored deployment regions.",
                 ));
@@ -472,7 +582,10 @@ fn spawn_sandbox_setup(
                 ..panel_node()
             })
             .with_children(|rosters| {
-                rosters.spawn(heading(assets, format!("{} · rosters", state.map.label())));
+                let map_label = maps
+                    .and_then(|catalog| catalog.get(state.map.stable_id()))
+                    .map_or_else(|| state.map.label(), |record| record.display_name.as_str());
+                rosters.spawn(heading(assets, format!("{map_label} · rosters")));
                 rosters
                     .spawn(Node {
                         min_height: Val::Px(0.0),
@@ -491,6 +604,7 @@ fn spawn_sandbox_setup(
                             store,
                             elements,
                             spells,
+                            presets,
                         );
                         spawn_roster_column(
                             columns,
@@ -501,6 +615,7 @@ fn spawn_sandbox_setup(
                             store,
                             elements,
                             spells,
+                            presets,
                         );
                     });
                 let ready = !state.players.is_empty()
@@ -511,7 +626,7 @@ fn spawn_sandbox_setup(
                     lab_button(
                         rosters,
                         assets,
-                        "Prepare Deployment",
+                        "Load Map & Deploy",
                         LabAction::PrepareDeployment,
                         230.0,
                     );
@@ -537,6 +652,7 @@ fn spawn_roster_column(
     store: &CreationStore,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
+    presets: Option<&CreationPresetCatalog>,
 ) {
     parent
         .spawn(panel())
@@ -548,18 +664,20 @@ fn spawn_roster_column(
         })
         .with_children(|column| {
             column.spawn(heading(assets, title));
-            for (index, choice) in roster.iter().enumerate() {
-                column.spawn(fine(
-                    assets,
-                    format!("{}. {}", index + 1, choice_name(choice, store)),
-                ));
-                column
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(4.0),
+            column
+                .spawn((
+                    ScrollArea,
+                    Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(7.0),
+                        overflow: Overflow::scroll_y(),
                         ..default()
-                    })
-                    .with_children(|row| {
+                    },
+                ))
+                .with_children(|list| {
+                    for (index, choice) in roster.iter().enumerate() {
                         let (up, down, remove) = if player {
                             (
                                 LabAction::MovePlayer(index, -1),
@@ -573,173 +691,291 @@ fn spawn_roster_column(
                                 LabAction::RemoveHostile(index),
                             )
                         };
-                        lab_button(row, assets, "↑", up, 45.0);
-                        lab_button(row, assets, "↓", down, 45.0);
-                        lab_button(row, assets, "Remove", remove, 82.0);
-                    });
-            }
-            if roster.len() < MAX_ROSTER {
-                column.spawn(fine(assets, "Packaged templates"));
-                for template in ["wolf", "raider", "hedge-mage"] {
-                    lab_button(
-                        column,
-                        assets,
-                        format!("+ {template}"),
-                        if player {
-                            LabAction::AddPlayerTemplate(template.to_owned())
-                        } else {
-                            LabAction::AddHostileTemplate(template.to_owned())
-                        },
-                        210.0,
-                    );
-                }
-                column.spawn(fine(assets, "Saved Map-ready characters"));
-                for character in &store.file.characters {
-                    let ready = elements.zip(spells).is_some_and(|(elements, spells)| {
-                        character_is_map_ready(character, &store.file, elements, spells)
-                    });
-                    if ready {
-                        lab_button(
-                            column,
+                        spawn_build_card(
+                            list,
                             assets,
-                            format!("+ {}", character.name),
-                            if player {
-                                LabAction::AddPlayerCustom(character.id)
-                            } else {
-                                LabAction::AddHostileCustom(character.id)
-                            },
-                            210.0,
+                            choice,
+                            store,
+                            presets,
+                            elements,
+                            spells,
+                            Some((index + 1, up, down, remove)),
+                            None,
+                        );
+                    }
+                    if roster.len() < MAX_ROSTER {
+                        list.spawn(fine(assets, "ADD TEMPLATE"));
+                        for template in ["wolf", "raider", "hedge-mage"] {
+                            spawn_build_card(
+                                list,
+                                assets,
+                                &RosterChoice::Template(template.to_owned()),
+                                store,
+                                presets,
+                                elements,
+                                spells,
+                                None,
+                                Some(if player {
+                                    LabAction::AddPlayerTemplate(template.to_owned())
+                                } else {
+                                    LabAction::AddHostileTemplate(template.to_owned())
+                                }),
+                            );
+                        }
+                        list.spawn(fine(assets, "ADD SAVED CHARACTER"));
+                        for character in &store.file.characters {
+                            let ready = elements.zip(spells).is_some_and(|(elements, spells)| {
+                                character_is_map_ready(character, &store.file, elements, spells)
+                            });
+                            spawn_build_card(
+                                list,
+                                assets,
+                                &RosterChoice::Custom(character.id),
+                                store,
+                                presets,
+                                elements,
+                                spells,
+                                None,
+                                ready.then_some(if player {
+                                    LabAction::AddPlayerCustom(character.id)
+                                } else {
+                                    LabAction::AddHostileCustom(character.id)
+                                }),
+                            );
+                        }
+                    }
+                });
+        });
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared roster card renders a complete frozen build projection"
+)]
+fn spawn_build_card(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    choice: &RosterChoice,
+    store: &CreationStore,
+    presets: Option<&CreationPresetCatalog>,
+    elements: Option<&ElementCatalog>,
+    spells: Option<&SpellBook>,
+    roster_actions: Option<(usize, LabAction, LabAction, LabAction)>,
+    add_action: Option<LabAction>,
+) {
+    let Some((character, library, source)) = choice_record(choice, store, presets) else {
+        parent
+            .spawn(blurb(
+                assets,
+                format!("Missing record: {}", choice_name(choice, store)),
+            ))
+            .insert(TextColor(DANGER));
+        return;
+    };
+    let summary = CharacterBuildSummary::from_saved(&character, &library, elements, spells);
+    let ready = summary.ready()
+        && match choice {
+            RosterChoice::Template(_) => true,
+            RosterChoice::Custom(_) => {
+                character_is_map_ready_optional(&character, &library, elements, spells)
+            }
+        };
+    parent
+        .spawn(panel())
+        .insert((
+            Node {
+                width: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                row_gap: Val::Px(3.0),
+                ..panel_node()
+            },
+            BorderColor::all(if ready {
+                Color::srgba(0.93, 0.79, 0.46, 0.42)
+            } else {
+                Color::srgba(0.94, 0.36, 0.30, 0.65)
+            }),
+        ))
+        .with_children(|card| {
+            card.spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(9.0),
+                ..default()
+            })
+            .with_children(|top| {
+                spawn_mini_lattice(top, assets, &character, elements);
+                top.spawn(Node {
+                    min_width: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    ..default()
+                })
+                .with_children(|text| {
+                    text.spawn(heading(
+                        assets,
+                        roster_actions.as_ref().map_or_else(
+                            || summary.name.clone(),
+                            |(slot, _, _, _)| format!("{slot}. {}", summary.name),
+                        ),
+                    ));
+                    text.spawn(fine(
+                        assets,
+                        format!("{source} · {}", summary.compact_line()),
+                    ));
+                    if !summary.attunement.is_empty() {
+                        text.spawn(fine(
+                            assets,
+                            format!("Attunement / channel · {}", summary.attunement.join(", ")),
+                        ));
+                    }
+                    for spell in &summary.spells {
+                        text.spawn(fine(assets, format!("{} · {}", spell.name, spell.sentence)));
+                    }
+                });
+            });
+            if !ready {
+                let reason = if summary.issues.is_empty() {
+                    "Needs at least one supported, fresh-cast spell.".to_owned()
+                } else {
+                    summary.issues.join(" · ")
+                };
+                card.spawn(fine(assets, format!("BLOCKED · {reason}")))
+                    .insert(TextColor(DANGER));
+            }
+            card.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(4.0),
+                ..default()
+            })
+            .with_children(|actions| {
+                if let Some((_, up, down, remove)) = roster_actions {
+                    lab_button(actions, assets, "↑", up, 42.0);
+                    lab_button(actions, assets, "↓", down, 42.0);
+                    lab_button(actions, assets, "Remove", remove, 78.0);
+                } else if let Some(add) = add_action {
+                    lab_button(actions, assets, "Add to roster", add, 132.0);
+                } else if !ready {
+                    if let RosterChoice::Custom(id) = choice {
+                        lab_button(
+                            actions,
+                            assets,
+                            "Edit in Creator",
+                            LabAction::EditCustom(*id),
+                            142.0,
                         );
                     }
                 }
+            });
+        });
+}
+
+fn choice_record(
+    choice: &RosterChoice,
+    store: &CreationStore,
+    presets: Option<&CreationPresetCatalog>,
+) -> Option<(
+    SavedCharacter,
+    hex_assets::CreationLibraryFile,
+    &'static str,
+)> {
+    match choice {
+        RosterChoice::Custom(id) => store
+            .file
+            .characters
+            .iter()
+            .find(|character| character.id == *id)
+            .cloned()
+            .map(|character| (character, store.file.clone(), "Custom")),
+        RosterChoice::Template(name) => {
+            let presets = presets?;
+            let library = presets.library_for(PresetAudience::HumanTemplate);
+            presets
+                .characters
+                .iter()
+                .find(|record| {
+                    record.audience == PresetAudience::HumanTemplate
+                        && record.key == format!("template-{name}")
+                })
+                .map(|record| (record.character.clone(), library, "Template"))
+        }
+    }
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "creator coordinates are schema-bounded to 64 cells and miniature layout uses pixels"
+)]
+fn spawn_mini_lattice(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    character: &SavedCharacter,
+    elements: Option<&ElementCatalog>,
+) {
+    let cell_width = 20.0;
+    let cell_height = 23.0;
+    parent
+        .spawn(Node {
+            width: Val::Px(102.0),
+            height: Val::Px(76.0),
+            position_type: PositionType::Relative,
+            flex_shrink: 0.0,
+            ..default()
+        })
+        .with_children(|canvas| {
+            for cell in &character.cells {
+                let x = 40.0 + (cell.q as f32 + cell.r as f32 * 0.5) * cell_width * 0.88;
+                let y = 27.0 + cell.r as f32 * cell_height * 0.74;
+                let (color, text) = match &cell.kind {
+                    CreationCellKind::Gem(name) => (
+                        elements
+                            .map(|catalog| element_color(catalog.id(name), catalog))
+                            .unwrap_or(Color::srgb(0.16, 0.45, 0.52)),
+                        short_name(name),
+                    ),
+                    CreationCellKind::Fusion(name) => (FUSION_COLOR, short_name(name)),
+                    CreationCellKind::Spell(_) => {
+                        (Color::srgba(0.86, 0.80, 0.62, 0.94), "S".to_owned())
+                    }
+                    CreationCellKind::Blank => {
+                        (Color::srgba(0.36, 0.38, 0.42, 0.88), "·".to_owned())
+                    }
+                };
+                canvas
+                    .spawn((
+                        ImageNode::new(assets.hex_cell.clone()).with_color(color),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(x),
+                            top: Val::Px(y),
+                            width: Val::Px(cell_width),
+                            height: Val::Px(cell_height),
+                            align_items: AlignItems::Center,
+                            justify_content: JustifyContent::Center,
+                            ..default()
+                        },
+                    ))
+                    .with_child((
+                        Text::new(text),
+                        TextFont {
+                            font: assets.body.clone().into(),
+                            ..TextFont::from_font_size(7.0)
+                        },
+                        TextColor(Color::BLACK),
+                    ));
             }
         });
 }
 
-fn spawn_deployment(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-    store: &CreationStore,
-) {
-    root.spawn(panel())
-        .insert(Node {
-            width: Val::Percent(90.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|deployment| {
-        deployment.spawn(heading(
-            assets,
-            format!("Deployment · {}", state.map.label()),
-        ));
-        deployment.spawn(blurb(
-            assets,
-            "Deployment regions are deterministic. Auto-place fills valid, unique surfaces in roster order.",
-        ));
-        deployment.spawn(Node {
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(24.0),
-            ..default()
-        })
-        .with_children(|sides| {
-            for (title, roster, placements, player) in [
-                (
-                    "Player region",
-                    state.players.as_slice(),
-                    state.player_placements.as_slice(),
-                    true,
-                ),
-                (
-                    "Hostile region",
-                    state.hostiles.as_slice(),
-                    state.hostile_placements.as_slice(),
-                    false,
-                ),
-            ] {
-                sides
-                    .spawn(panel())
-                    .insert(Node {
-                        min_width: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        ..panel_node()
-                    })
-                    .with_children(|side| {
-                    side.spawn(heading(assets, title));
-                    for (index, choice) in roster.iter().enumerate() {
-                        let selected = placements.get(index).copied().flatten();
-                        side.spawn(fine(
-                            assets,
-                            format!(
-                                "{} · {}",
-                                choice_name(choice, store),
-                                selected.map_or_else(
-                                    || "choose a surface".to_owned(),
-                                    |slot| format!("surface {}", slot + 1)
-                                )
-                            ),
-                        ));
-                        side.spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            column_gap: Val::Px(3.0),
-                            flex_wrap: FlexWrap::Wrap,
-                            ..default()
-                        })
-                        .with_children(|slots| {
-                            for slot in 0_u8..6 {
-                                lab_button(
-                                    slots,
-                                    assets,
-                                    format!("{}", slot + 1),
-                                    if player {
-                                        LabAction::PlacePlayer(index, slot)
-                                    } else {
-                                        LabAction::PlaceHostile(index, slot)
-                                    },
-                                    42.0,
-                                );
-                            }
-                        });
-                    }
-                });
-            }
-        });
-        deployment.spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(8.0),
-            ..default()
-        })
-        .with_children(|actions| {
-            lab_button(
-                actions,
-                assets,
-                "Back to Setup",
-                LabAction::BackToSetup,
-                150.0,
-            );
-            lab_button(
-                actions,
-                assets,
-                "Auto-place",
-                LabAction::AutoPlace,
-                130.0,
-            );
-            if placements_complete(&state.player_placements, state.players.len())
-                && placements_complete(&state.hostile_placements, state.hostiles.len())
-            {
-                lab_button(
-                    actions,
-                    assets,
-                    "Start Combat",
-                    LabAction::StartSandbox,
-                    150.0,
-                );
-            }
-        });
-    });
+fn character_is_map_ready_optional(
+    character: &SavedCharacter,
+    library: &hex_assets::CreationLibraryFile,
+    elements: Option<&ElementCatalog>,
+    spells: Option<&SpellBook>,
+) -> bool {
+    elements.zip(spells).is_some_and(|(elements, spells)| {
+        character_is_map_ready(character, library, elements, spells)
+    })
 }
 
 fn spawn_fixture_selector(
@@ -797,8 +1033,13 @@ fn spawn_fixture_selector(
                     let filter = state.fixture_filter.to_lowercase();
                     for fixture in FIXTURES {
                         let searchable = format!(
-                            "{} {} {} {}",
-                            fixture.id, fixture.name, fixture.tags, fixture.description
+                            "{} {} {} {} {} {}",
+                            fixture.id,
+                            fixture.name,
+                            fixture.tags,
+                            fixture.description,
+                            fixture.map_seed,
+                            fixture.roster
                         )
                         .to_lowercase();
                         if !filter.is_empty() && !searchable.contains(&filter) {
@@ -814,6 +1055,10 @@ fn spawn_fixture_selector(
                                 card.spawn(fine(
                                     assets,
                                     format!("{} · {}", fixture.id, fixture.tags),
+                                ));
+                                card.spawn(fine(
+                                    assets,
+                                    format!("{} · {}", fixture.map_seed, fixture.roster),
                                 ));
                                 card.spawn(blurb(assets, fixture.description));
                                 lab_button(
@@ -856,6 +1101,7 @@ fn handle_lab_actions(
     elements: Option<Res<ElementCatalog>>,
     substances: Option<Res<SubstanceTable>>,
     presets: Option<Res<CreationPresetCatalog>>,
+    map_catalog: Option<Res<CombatLabMapCatalog>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -866,13 +1112,10 @@ fn handle_lab_actions(
         match action {
             LabAction::Tab(tab) => {
                 state.tab = *tab;
-                state.deployment = false;
             }
             LabAction::Back => next.set(Screen::Title),
             LabAction::SelectMap(map) => {
                 state.map = *map;
-                state.player_placements.clear();
-                state.hostile_placements.clear();
             }
             LabAction::AddPlayerTemplate(name) => {
                 if state.players.len() < MAX_ROSTER {
@@ -900,42 +1143,35 @@ fn handle_lab_actions(
             LabAction::MoveHostile(index, delta) => {
                 move_at(&mut state.hostiles, *index, *delta);
             }
+            LabAction::EditCustom(character) => {
+                commands.insert_resource(CreatorEditRequest {
+                    character: *character,
+                });
+                next.set(Screen::CharacterCreator);
+            }
             LabAction::PrepareDeployment => {
-                state.deployment = true;
-                state.player_placements = vec![None; state.players.len()];
-                state.hostile_placements = vec![None; state.hostiles.len()];
-            }
-            LabAction::AutoPlace => {
-                state.player_placements = (0..state.players.len())
-                    .map(|index| u8::try_from(index).ok())
-                    .collect();
-                state.hostile_placements = (0..state.hostiles.len())
-                    .map(|index| u8::try_from(index).ok())
-                    .collect();
-            }
-            LabAction::PlacePlayer(unit, slot) => {
-                assign_slot(&mut state.player_placements, *unit, *slot);
-            }
-            LabAction::PlaceHostile(unit, slot) => {
-                assign_slot(&mut state.hostile_placements, *unit, *slot);
-            }
-            LabAction::BackToSetup => {
-                state.deployment = false;
-                state.player_placements.clear();
-                state.hostile_placements.clear();
-            }
-            LabAction::StartSandbox => {
+                let Some(map_definition) = map_catalog
+                    .as_deref()
+                    .and_then(|catalog| catalog.get(state.map.stable_id()))
+                else {
+                    state.notice = format!(
+                        "Packaged map definition {:?} is unavailable.",
+                        state.map.stable_id()
+                    );
+                    state.bump();
+                    continue;
+                };
                 let Some(library) = scenarios.as_deref() else {
                     state.notice = "Scenario catalog is still loading.".to_owned();
                     state.bump();
                     continue;
                 };
-                let Some(scenario) = scenario_named(library, state.map.scenario_name()) else {
+                let Some(scenario) = scenario_named(library, &map_definition.scenario) else {
                     state.notice = "Selected sandbox map is not available.".to_owned();
                     state.bump();
                     continue;
                 };
-                let result = build_creator_overlay(
+                let overlay = match build_creator_overlay(
                     &state.players,
                     &state.hostiles,
                     &store.file,
@@ -943,8 +1179,7 @@ fn handle_lab_actions(
                     base_lattice_file.as_deref(),
                     elements.as_deref(),
                     substances.as_deref(),
-                );
-                let overlay = match result {
+                ) {
                     Ok(overlay) => overlay,
                     Err(error) => {
                         state.notice = error;
@@ -956,10 +1191,19 @@ fn handle_lab_actions(
                     state.map,
                     &state.players,
                     &state.hostiles,
-                    Some((&state.player_placements, &state.hostile_placements)),
+                    Some(map_definition),
                 );
-                let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
+                let resolved_seed = map_definition
+                    .fixed_seed
+                    .or(scenario.generation_seed)
+                    .map(ResolvedMapSeed);
                 commands.insert_resource(overlay);
+                commands.insert_resource(DeploymentSession::new(
+                    map_definition.clone(),
+                    state.players.clone(),
+                    state.hostiles.clone(),
+                ));
+                commands.insert_resource(GameplayPhase::Preparing);
                 commands.insert_resource(CombatLabSession {
                     kind: CombatLabSessionKind::Sandbox,
                     return_to: if state.creator_origin {
@@ -1155,57 +1399,60 @@ fn sandbox_encounter(
     map: SandboxMap,
     players: &[RosterChoice],
     hostiles: &[RosterChoice],
-    placements: Option<(&[Option<u8>], &[Option<u8>])>,
+    definition: Option<&CombatLabMapDefinition>,
 ) -> Encounter {
-    let (player_placement, hostile_placement) = match map {
-        SandboxMap::Flat => (
-            EncounterPlacement::Formation {
-                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
-                spread: 3,
-            },
-            EncounterPlacement::Formation {
-                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
-                spread: 3,
-            },
-        ),
-        SandboxMap::Crossing => (
-            EncounterPlacement::Formation {
-                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 8, z: -8 }),
-                spread: 3,
-            },
-            EncounterPlacement::Formation {
-                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: -8, z: 8 }),
-                spread: 3,
-            },
-        ),
-        SandboxMap::Hills => (
-            EncounterPlacement::Formation {
-                center: FormationCenter::Anchor("party_start".to_owned()),
-                spread: 3,
-            },
-            EncounterPlacement::Formation {
-                center: FormationCenter::Anchor("hostile_start".to_owned()),
-                spread: 3,
-            },
-        ),
-    };
+    let (player_placement, hostile_placement) = definition.map_or_else(
+        || match map {
+            SandboxMap::Flat => (
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
+                    spread: 3,
+                },
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
+                    spread: 3,
+                },
+            ),
+            SandboxMap::Crossing => (
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 8, z: -8 }),
+                    spread: 3,
+                },
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: -8, z: 8 }),
+                    spread: 3,
+                },
+            ),
+            SandboxMap::Hills => (
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Anchor("party_start".to_owned()),
+                    spread: 3,
+                },
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Anchor("hostile_start".to_owned()),
+                    spread: 3,
+                },
+            ),
+        },
+        |definition| {
+            (
+                deployment_region_placement(&definition.player_region),
+                deployment_region_placement(&definition.hostile_region),
+            )
+        },
+    );
     Encounter {
-        name: format!("Creator Sandbox · {}", map.label()),
+        name: format!(
+            "Creator Sandbox · {}",
+            definition.map_or_else(|| map.label(), |record| record.display_name.as_str())
+        ),
         rosters: vec![
             Roster {
                 faction: EncounterFaction::Player,
                 placement: player_placement,
                 units: players
                     .iter()
-                    .enumerate()
-                    .map(|(index, choice)| {
-                        roster_entry(
-                            choice,
-                            placements
-                                .and_then(|(player, _)| player.get(index).copied().flatten())
-                                .and_then(|slot| deployment_placement(map, true, slot)),
-                        )
-                    })
+                    .map(|choice| roster_entry(choice, None))
                     .collect(),
             },
             Roster {
@@ -1213,18 +1460,21 @@ fn sandbox_encounter(
                 placement: hostile_placement,
                 units: hostiles
                     .iter()
-                    .enumerate()
-                    .map(|(index, choice)| {
-                        roster_entry(
-                            choice,
-                            placements
-                                .and_then(|(_, hostile)| hostile.get(index).copied().flatten())
-                                .and_then(|slot| deployment_placement(map, false, slot)),
-                        )
-                    })
+                    .map(|choice| roster_entry(choice, None))
                     .collect(),
             },
         ],
+    }
+}
+
+fn deployment_region_placement(region: &CombatLabDeploymentRegion) -> EncounterPlacement {
+    let center = match &region.center {
+        CombatLabRegionCenter::Fixed(coord) => FormationCenter::Fixed(*coord),
+        CombatLabRegionCenter::Anchor(anchor) => FormationCenter::Anchor(anchor.clone()),
+    };
+    EncounterPlacement::Formation {
+        center,
+        spread: region.radius,
     }
 }
 
@@ -1238,56 +1488,6 @@ fn roster_entry(choice: &RosterChoice, placement: Option<EncounterPlacement>) ->
         ai_profile: None,
         ai_group: None,
     }
-}
-
-fn deployment_placement(map: SandboxMap, player: bool, slot: u8) -> Option<EncounterPlacement> {
-    let index = usize::from(slot);
-    let flat_player = [
-        (-2, 0, 2),
-        (-3, 1, 2),
-        (-2, 1, 1),
-        (-3, 0, 3),
-        (-1, 0, 1),
-        (-1, -1, 2),
-    ];
-    let flat_hostile = [
-        (2, 0, -2),
-        (3, -1, -2),
-        (2, -1, -1),
-        (3, 0, -3),
-        (1, 0, -1),
-        (1, 1, -2),
-    ];
-    let crossing_player = [
-        (0, 8, -8),
-        (1, 7, -8),
-        (-1, 8, -7),
-        (0, 7, -7),
-        (1, 8, -9),
-        (-1, 9, -8),
-    ];
-    let crossing_hostile = [
-        (0, -8, 8),
-        (-1, -7, 8),
-        (1, -8, 7),
-        (0, -7, 7),
-        (-1, -8, 9),
-        (1, -9, 8),
-    ];
-    let coordinates = match (map, player) {
-        (SandboxMap::Flat, true) => flat_player.get(index),
-        (SandboxMap::Flat, false) => flat_hostile.get(index),
-        (SandboxMap::Crossing, true) => crossing_player.get(index),
-        (SandboxMap::Crossing, false) => crossing_hostile.get(index),
-        // Generated terrain resolves exact surfaces only after its anchors exist.
-        // Slot order still deterministically assigns the formation candidates.
-        (SandboxMap::Hills, _) => return None,
-    }?;
-    Some(EncounterPlacement::Fixed(hex_assets::CubeCoord {
-        x: coordinates.0,
-        y: coordinates.1,
-        z: coordinates.2,
-    }))
 }
 
 fn choice_name(choice: &RosterChoice, store: &CreationStore) -> String {
@@ -1357,24 +1557,621 @@ fn move_at<T>(items: &mut [T], index: usize, delta: i8) {
     }
 }
 
-fn assign_slot(placements: &mut [Option<u8>], unit: usize, slot: u8) {
-    if unit >= placements.len() || usize::from(slot) >= MAX_ROSTER {
-        return;
-    }
-    for assigned in placements.iter_mut() {
-        if *assigned == Some(slot) {
-            *assigned = None;
-        }
-    }
-    if let Some(placement) = placements.get_mut(unit) {
-        *placement = Some(slot);
-    }
-}
-
-fn placements_complete(placements: &[Option<u8>], roster_len: usize) -> bool {
+fn placements_complete_exact(placements: &[Option<TilePos>], roster_len: usize) -> bool {
     placements.len() == roster_len
         && !placements.is_empty()
         && placements.iter().all(Option::is_some)
+}
+
+type DeploymentTileQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TilePos,
+        &'static HexSpan,
+        &'static SubstanceId,
+        &'static Headroom,
+    ),
+    With<HexTile>,
+>;
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "deployment projects live terrain, actors, HUD, and the frozen launch together"
+)]
+fn enter_deployment(
+    mut commands: Commands,
+    mut session: Option<ResMut<DeploymentSession>>,
+    mut phase: ResMut<GameplayPhase>,
+    tiles: DeploymentTileQuery,
+    table: Res<SubstanceTable>,
+    blockers: Option<Res<TraversalBlockers>>,
+    anchors: Option<Res<MapAnchors>>,
+    game_assets: Res<GameAssets>,
+    ui_assets: Res<UiAssets>,
+    store: Res<CreationStore>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut hidden: Query<
+        (Entity, &mut Visibility),
+        Or<(
+            With<Faction>,
+            With<crate::readouts::HudElement>,
+            With<hex_units::UnitRing>,
+        )>,
+    >,
+) {
+    let Some(session) = session.as_deref_mut() else {
+        *phase = GameplayPhase::Active;
+        return;
+    };
+    *phase = GameplayPhase::Deployment;
+    for (entity, mut visibility) in &mut hidden {
+        *visibility = Visibility::Hidden;
+        commands.entity(entity).insert(DeploymentHidden);
+    }
+
+    let footing = deployment_footing(&tiles, &table, blockers.as_deref());
+    let Some(player_center) = deployment_center(
+        &session.map_definition.player_region,
+        &footing,
+        anchors.as_deref(),
+    ) else {
+        session.notice = "Player deployment region could not resolve on this terrain.".to_owned();
+        spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
+        return;
+    };
+    let Some(hostile_center) = deployment_center(
+        &session.map_definition.hostile_region,
+        &footing,
+        anchors.as_deref(),
+    ) else {
+        session.notice = "Hostile deployment region could not resolve on this terrain.".to_owned();
+        spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
+        return;
+    };
+    session.player_surfaces = ordered_deployment_surfaces(
+        player_center,
+        &footing,
+        session.map_definition.player_region.radius,
+    );
+    session.hostile_surfaces = ordered_deployment_surfaces(
+        hostile_center,
+        &footing,
+        session.map_definition.hostile_region.radius,
+    );
+
+    let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
+    let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
+    for (player, positions, material) in [
+        (true, session.player_surfaces.as_slice(), &player_material),
+        (
+            false,
+            session.hostile_surfaces.as_slice(),
+            &hostile_material,
+        ),
+    ] {
+        for pos in positions {
+            let Some(standing) = footing.at(*pos) else {
+                continue;
+            };
+            commands.spawn((
+                Name::new(if player {
+                    "Player Deployment Surface"
+                } else {
+                    "Hostile Deployment Surface"
+                }),
+                DeploymentWorldEntity,
+                DeploymentSurface { pos: *pos, player },
+                Mesh3d(game_assets.hex_tile.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform {
+                    translation: pos.coord.to_world(standing.span.top + 0.035),
+                    scale: Vec3::new(0.88, 0.035, 0.88),
+                    ..default()
+                },
+            ));
+        }
+    }
+    spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
+}
+
+fn deployment_footing(
+    tiles: &DeploymentTileQuery,
+    table: &SubstanceTable,
+    blockers: Option<&TraversalBlockers>,
+) -> Footing {
+    Footing::from_tiles(
+        tiles.iter(),
+        table,
+        Body::new(TraversalProfile::WALKER),
+        blockers,
+    )
+}
+
+fn ordered_deployment_surfaces(
+    center: hex_units::Standing,
+    footing: &Footing,
+    radius: u32,
+) -> Vec<TilePos> {
+    let reach = Reach::from(center, footing, Some(radius));
+    let mut positions = reach
+        .surfaces()
+        .map(|standing| standing.pos)
+        .collect::<Vec<_>>();
+    positions.sort_by_key(|position| (reach.cost(*position).unwrap_or(u32::MAX), *position));
+    positions
+}
+
+fn deployment_center(
+    region: &CombatLabDeploymentRegion,
+    footing: &Footing,
+    anchors: Option<&MapAnchors>,
+) -> Option<hex_units::Standing> {
+    match &region.center {
+        CombatLabRegionCenter::Fixed(coord) => {
+            footing.ground(HexCoord::new_cubic(coord.x, coord.y, coord.z))
+        }
+        CombatLabRegionCenter::Anchor(anchor) => anchors
+            .and_then(|anchors| anchors.get(&MapAnchorId::new(anchor.clone())))
+            .and_then(|pos| footing.at(pos)),
+    }
+}
+
+fn deployment_material(color: Color) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        depth_bias: 18.0,
+        ..default()
+    }
+}
+
+fn spawn_deployment_hud(
+    commands: &mut Commands,
+    assets: &UiAssets,
+    session: &DeploymentSession,
+    store: &CreationStore,
+) {
+    commands
+        .spawn((
+            Name::new("Combat Lab Deployment HUD"),
+            DeploymentHud,
+            DeploymentWorldEntity,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(22.0),
+                right: Val::Px(22.0),
+                top: Val::Px(18.0),
+                min_height: Val::Px(126.0),
+                padding: UiRect::all(Val::Px(13.0)),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(18.0),
+                border_radius: BorderRadius::all(Val::Px(7.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.015, 0.022, 0.035, 0.94)),
+            BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.52)),
+        ))
+        .with_children(|hud| {
+            hud.spawn(Node {
+                width: Val::Px(300.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(3.0),
+                ..default()
+            })
+            .with_children(|summary| {
+                summary.spawn(heading(
+                    assets,
+                    format!("DEPLOY · {}", session.map_definition.display_name),
+                ));
+                summary.spawn(blurb(assets, session.notice.clone()));
+                summary.spawn(fine(
+                    assets,
+                    "Blue = Player region · Red = Hostile region · labels remain in this HUD",
+                ));
+            });
+            for (title, roster, placements) in [
+                (
+                    "PLAYER",
+                    session.players.as_slice(),
+                    session.player_placements.as_slice(),
+                ),
+                (
+                    "HOSTILE",
+                    session.hostiles.as_slice(),
+                    session.hostile_placements.as_slice(),
+                ),
+            ] {
+                hud.spawn(Node {
+                    width: Val::Px(245.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    ..default()
+                })
+                .with_children(|side| {
+                    side.spawn(fine(assets, title));
+                    for (index, choice) in roster.iter().enumerate() {
+                        let placement = placements.get(index).copied().flatten();
+                        side.spawn(fine(
+                            assets,
+                            format!(
+                                "{}. {} · {}",
+                                index + 1,
+                                choice_name(choice, store),
+                                placement.map_or_else(
+                                    || "choose surface".to_owned(),
+                                    |pos| format!(
+                                        "({}, {}, {}) · elevation {}",
+                                        pos.coord.x(),
+                                        pos.coord.y(),
+                                        pos.coord.z(),
+                                        pos.level
+                                    )
+                                )
+                            ),
+                        ));
+                    }
+                });
+            }
+            hud.spawn(Node {
+                width: Val::Px(170.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(5.0),
+                ..default()
+            })
+            .with_children(|actions| {
+                deployment_button(actions, assets, "Undo", DeploymentAction::Undo);
+                deployment_button(
+                    actions,
+                    assets,
+                    "Clear Player",
+                    DeploymentAction::ClearPlayer,
+                );
+                deployment_button(
+                    actions,
+                    assets,
+                    "Clear Hostile",
+                    DeploymentAction::ClearHostile,
+                );
+                deployment_button(
+                    actions,
+                    assets,
+                    "Deterministic Auto-place",
+                    DeploymentAction::AutoPlace,
+                );
+                deployment_button(actions, assets, "Back to Setup", DeploymentAction::Back);
+                if session.complete() {
+                    deployment_button(
+                        actions,
+                        assets,
+                        "Start Combat",
+                        DeploymentAction::StartCombat,
+                    );
+                }
+            });
+        });
+}
+
+fn deployment_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    text: &'static str,
+    action: DeploymentAction,
+) {
+    parent
+        .spawn((row_button(text, 166.0), action))
+        .with_child(label(assets, text));
+}
+
+fn on_deployment_surface_clicked(
+    click: On<Pointer<Click>>,
+    surfaces: Query<&DeploymentSurface>,
+    mut session: Option<ResMut<DeploymentSession>>,
+    hud: Query<Entity, With<DeploymentHud>>,
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    store: Res<CreationStore>,
+) {
+    if click.button != PointerButton::Primary {
+        return;
+    }
+    let Ok(surface) = surfaces.get(click.event_target()) else {
+        return;
+    };
+    let Some(session) = session.as_deref_mut() else {
+        return;
+    };
+    if surface.player != session.active_player {
+        session.notice = format!(
+            "Place the current {} unit inside its labeled region.",
+            if session.active_player {
+                "Player"
+            } else {
+                "Hostile"
+            }
+        );
+        rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
+        return;
+    }
+    let occupied = session
+        .player_placements
+        .iter()
+        .chain(&session.hostile_placements)
+        .any(|placement| *placement == Some(surface.pos));
+    if occupied {
+        session.notice = "That exact surface is already occupied.".to_owned();
+        rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
+        return;
+    }
+    let placements = if session.active_player {
+        &mut session.player_placements
+    } else {
+        &mut session.hostile_placements
+    };
+    let previous = placements.get(session.active_index).copied().flatten();
+    if let Some(placement) = placements.get_mut(session.active_index) {
+        *placement = Some(surface.pos);
+        session
+            .undo
+            .push((session.active_player, session.active_index, previous));
+    }
+    advance_deployment_cursor(session);
+    rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
+}
+
+fn advance_deployment_cursor(session: &mut DeploymentSession) {
+    if let Some(index) = session.player_placements.iter().position(Option::is_none) {
+        session.active_player = true;
+        session.active_index = index;
+        session.notice = format!(
+            "Select a highlighted Player surface for unit {}.",
+            index + 1
+        );
+    } else if let Some(index) = session.hostile_placements.iter().position(Option::is_none) {
+        session.active_player = false;
+        session.active_index = index;
+        session.notice = format!(
+            "Select a highlighted Hostile surface for unit {}.",
+            index + 1
+        );
+    } else {
+        session.notice = "Deployment complete. Start Combat or reposition with Undo.".to_owned();
+    }
+}
+
+fn rebuild_deployment_hud(
+    commands: &mut Commands,
+    roots: &Query<Entity, With<DeploymentHud>>,
+    assets: &UiAssets,
+    session: &DeploymentSession,
+    store: &CreationStore,
+) {
+    for root in roots {
+        commands.entity(root).despawn();
+    }
+    spawn_deployment_hud(commands, assets, session, store);
+}
+
+#[derive(SystemParam)]
+struct DeploymentRuntime<'w, 's> {
+    tiles: DeploymentTileQuery<'w, 's>,
+    table: Option<Res<'w, SubstanceTable>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    units: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Faction,
+            &'static mut StandsOn,
+            &'static mut Transform,
+        ),
+    >,
+    hidden_presentation: Query<'w, 's, (Entity, &'static mut Visibility), With<DeploymentHidden>>,
+    world_entities: Query<'w, 's, Entity, With<DeploymentWorldEntity>>,
+    hud: Query<'w, 's, Entity, With<DeploymentHud>>,
+    encounter: Option<ResMut<'w, Encounter>>,
+    active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
+    lab: Option<Res<'w, CombatLabSession>>,
+}
+
+fn handle_deployment_actions(
+    clicked: Query<(&Interaction, &DeploymentAction), Changed<Interaction>>,
+    mut session: Option<ResMut<DeploymentSession>>,
+    mut phase: ResMut<GameplayPhase>,
+    mut runtime: DeploymentRuntime,
+    assets: Res<UiAssets>,
+    store: Res<CreationStore>,
+    mut commands: Commands,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    let Some(session) = session.as_deref_mut() else {
+        return;
+    };
+    for (interaction, action) in &clicked {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match action {
+            DeploymentAction::Undo => {
+                if let Some((player, index, previous)) = session.undo.pop() {
+                    let placements = if player {
+                        &mut session.player_placements
+                    } else {
+                        &mut session.hostile_placements
+                    };
+                    if let Some(placement) = placements.get_mut(index) {
+                        *placement = previous;
+                    }
+                    session.active_player = player;
+                    session.active_index = index;
+                    session.notice = format!(
+                        "Reposition {} unit {}.",
+                        if player { "Player" } else { "Hostile" },
+                        index + 1
+                    );
+                }
+            }
+            DeploymentAction::ClearPlayer => {
+                session.player_placements.fill(None);
+                session.undo.clear();
+                session.active_player = true;
+                session.active_index = 0;
+                session.notice = "Player placements cleared.".to_owned();
+            }
+            DeploymentAction::ClearHostile => {
+                session.hostile_placements.fill(None);
+                session.undo.clear();
+                session.active_player = false;
+                session.active_index = 0;
+                session.notice = "Hostile placements cleared.".to_owned();
+            }
+            DeploymentAction::AutoPlace => {
+                let mut used = std::collections::BTreeSet::new();
+                for (placement, surface) in session
+                    .player_placements
+                    .iter_mut()
+                    .zip(&session.player_surfaces)
+                {
+                    *placement = Some(*surface);
+                    used.insert(*surface);
+                }
+                let hostile = session
+                    .hostile_surfaces
+                    .iter()
+                    .filter(|surface| !used.contains(surface))
+                    .copied()
+                    .take(session.hostile_placements.len())
+                    .collect::<Vec<_>>();
+                for (placement, surface) in session.hostile_placements.iter_mut().zip(hostile) {
+                    *placement = Some(surface);
+                }
+                session.undo.clear();
+                advance_deployment_cursor(session);
+            }
+            DeploymentAction::Back => {
+                *phase = GameplayPhase::Active;
+                next.set(
+                    runtime
+                        .lab
+                        .as_deref()
+                        .map_or(Screen::CombatLab, |session| session.return_to),
+                );
+                commands.remove_resource::<DeploymentSession>();
+                continue;
+            }
+            DeploymentAction::StartCombat => {
+                let Some(table) = runtime.table.as_deref() else {
+                    session.notice = "Terrain rules are still loading.".to_owned();
+                    continue;
+                };
+                if !session.complete() {
+                    session.notice = "Every roster entry needs one unique surface.".to_owned();
+                    continue;
+                }
+                let footing =
+                    deployment_footing(&runtime.tiles, table, runtime.blockers.as_deref());
+                let mut players = runtime
+                    .units
+                    .iter_mut()
+                    .filter(|(_, faction, _, _)| **faction == Faction::Player)
+                    .map(|(entity, _, _, _)| entity)
+                    .collect::<Vec<_>>();
+                let mut hostiles = runtime
+                    .units
+                    .iter_mut()
+                    .filter(|(_, faction, _, _)| **faction == Faction::Hostile)
+                    .map(|(entity, _, _, _)| entity)
+                    .collect::<Vec<_>>();
+                players.sort_by_key(|entity| entity.index());
+                hostiles.sort_by_key(|entity| entity.index());
+                for (entities, placements) in [
+                    (players.as_slice(), session.player_placements.as_slice()),
+                    (hostiles.as_slice(), session.hostile_placements.as_slice()),
+                ] {
+                    for (entity, placement) in entities.iter().zip(placements) {
+                        let Some(pos) = placement else { continue };
+                        let Some(standing) = footing.at(*pos) else {
+                            session.notice =
+                                format!("Selected surface {pos:?} is no longer valid footing.");
+                            continue;
+                        };
+                        if let Ok((_, _, mut on, mut transform)) = runtime.units.get_mut(*entity) {
+                            on.0 = standing;
+                            transform.translation = standing.world_position();
+                        }
+                    }
+                }
+                let exact = exact_deployed_encounter(session);
+                if let Some(encounter) = runtime.encounter.as_deref_mut() {
+                    *encounter = exact.clone();
+                }
+                if let Some(active) = runtime.active.as_deref_mut() {
+                    active.0.encounter_override = Some(exact);
+                }
+                for (entity, mut visibility) in &mut runtime.hidden_presentation {
+                    *visibility = Visibility::Inherited;
+                    commands.entity(entity).remove::<DeploymentHidden>();
+                }
+                for entity in &runtime.world_entities {
+                    commands.entity(entity).despawn();
+                }
+                commands.remove_resource::<DeploymentSession>();
+                *phase = GameplayPhase::Active;
+                continue;
+            }
+        }
+        rebuild_deployment_hud(&mut commands, &runtime.hud, &assets, session, &store);
+    }
+}
+
+fn exact_deployed_encounter(session: &DeploymentSession) -> Encounter {
+    Encounter {
+        name: format!("Creator Sandbox · {}", session.map_definition.display_name),
+        rosters: vec![
+            Roster {
+                faction: EncounterFaction::Player,
+                placement: EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 0,
+                },
+                units: session
+                    .players
+                    .iter()
+                    .zip(&session.player_placements)
+                    .map(|(choice, placement)| {
+                        roster_entry(choice, placement.map(EncounterPlacement::Surface))
+                    })
+                    .collect(),
+            },
+            Roster {
+                faction: EncounterFaction::Hostile,
+                placement: EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 0,
+                },
+                units: session
+                    .hostiles
+                    .iter()
+                    .zip(&session.hostile_placements)
+                    .map(|(choice, placement)| {
+                        roster_entry(choice, placement.map(EncounterPlacement::Surface))
+                    })
+                    .collect(),
+            },
+        ],
+    }
+}
+
+fn clear_deployment_world(
+    mut commands: Commands,
+    entities: Query<Entity, With<DeploymentWorldEntity>>,
+) {
+    for entity in &entities {
+        commands.entity(entity).despawn();
+    }
+    commands.remove_resource::<DeploymentSession>();
 }
 
 /// Reapplies a frozen combined namespace after normal hot-reload builders run.
@@ -1444,14 +2241,13 @@ mod tests {
     }
 
     #[test]
-    fn deployment_slots_are_unique_and_complete_only_when_every_unit_is_placed() {
-        let mut placements = vec![None, None];
-        assign_slot(&mut placements, 0, 2);
-        assign_slot(&mut placements, 1, 2);
-        assert_eq!(placements, vec![None, Some(2)]);
-        assert!(!placements_complete(&placements, 2));
-        assign_slot(&mut placements, 0, 1);
-        assert!(placements_complete(&placements, 2));
+    fn exact_deployment_is_complete_only_when_every_unit_has_a_surface() {
+        let first = TilePos::new(HexCoord::ORIGIN, 2);
+        let second = TilePos::new(HexCoord::new_cubic(1, -1, 0), 5);
+        let mut placements = vec![Some(first), None];
+        assert!(!placements_complete_exact(&placements, 2));
+        *placements.get_mut(1).expect("second placement") = Some(second);
+        assert!(placements_complete_exact(&placements, 2));
     }
 
     #[test]

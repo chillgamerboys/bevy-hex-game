@@ -18,6 +18,7 @@ use bevy::prelude::*;
 /// Data-authored algorithm dispatch for AI controllers.
 pub mod ai_profiles;
 pub mod art_palette;
+pub mod combat_lab;
 pub mod content_index;
 pub mod creation;
 pub mod elements;
@@ -43,6 +44,10 @@ pub use art_palette::{
     ArtContractError, ArtPalette, ObjectAssetId, PaletteSwatch, SrgbColor, SwatchId, SwatchMatch,
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
+};
+pub use combat_lab::{
+    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
+    COMBAT_LAB_MAP_SCHEMA_VERSION,
 };
 pub use content_index::{ContentError, ContentIndex, ContentTables};
 pub use creation::{
@@ -117,6 +122,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(combat_lab::plugin);
     app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
     app.add_plugins(creation::plugin);

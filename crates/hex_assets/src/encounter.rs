@@ -33,6 +33,7 @@
 //!   not gaps in it today.
 
 use bevy::prelude::*;
+use hex_core::TilePos;
 use serde::{de::Error as _, Deserialize, Deserializer};
 
 use crate::settings::CubeCoord;
@@ -116,6 +117,11 @@ impl EncounterFaction {
 #[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum EncounterPlacement {
+    /// One exact resolved terrain surface, including elevation.
+    ///
+    /// Runtime-authored sessions use this after the tester clicks the live map.
+    /// Packaged encounter files normally use [`Self::Fixed`] or [`Self::Anchor`].
+    Surface(TilePos),
     /// An exact coordinate on an authored map, whose landmarks never move.
     ///
     /// The three components must sum to zero — see [`CubeCoord`].
@@ -155,6 +161,7 @@ impl EncounterPlacement {
     #[must_use]
     pub fn is_generated(&self) -> bool {
         match self {
+            Self::Surface(_) => false,
             Self::Fixed(_) => false,
             Self::Anchor(_) => true,
             Self::Formation { center, .. } => matches!(center, FormationCenter::Anchor(_)),
@@ -167,13 +174,14 @@ impl EncounterPlacement {
     /// is rejected when the file parses.
     #[must_use]
     pub fn is_exact(&self) -> bool {
-        matches!(self, Self::Fixed(_) | Self::Anchor(_))
+        matches!(self, Self::Surface(_) | Self::Fixed(_) | Self::Anchor(_))
     }
 
     /// The anchor name this placement needs, if it needs one.
     #[must_use]
     pub fn anchor(&self) -> Option<&str> {
         match self {
+            Self::Surface(_) => None,
             Self::Fixed(_) => None,
             Self::Anchor(name) => Some(name.as_str()),
             Self::Formation { center, .. } => match center {
@@ -187,6 +195,11 @@ impl EncounterPlacement {
     #[must_use]
     pub fn fixed_coord(&self) -> Option<CubeCoord> {
         match self {
+            Self::Surface(pos) => Some(CubeCoord {
+                x: pos.coord.x(),
+                y: pos.coord.y(),
+                z: pos.coord.z(),
+            }),
             Self::Fixed(coord) => Some(*coord),
             Self::Anchor(_) => None,
             Self::Formation { center, .. } => match center {
@@ -581,6 +594,15 @@ mod tests {
         // Neither is exact: a formation is the form that holds more than one unit.
         assert!(!generated.is_exact());
         assert!(!authored.is_exact());
+    }
+
+    #[test]
+    fn runtime_surface_placement_preserves_exact_elevation() {
+        let pos = TilePos::new(hex_core::HexCoord::new_cubic(2, -1, -1), 7);
+        let placement = EncounterPlacement::Surface(pos);
+        assert!(placement.is_exact());
+        assert!(!placement.is_generated());
+        assert_eq!(placement, EncounterPlacement::Surface(pos));
     }
 
     /// A coordinate whose components do not sum to zero is not a hex. It used to warn

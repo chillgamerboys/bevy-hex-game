@@ -15,8 +15,9 @@ use bevy::prelude::*;
 use hex_assets::FormationCatalog;
 use hex_combat::{EncounterOutcome, EncounterResolution, Turn, TurnOrder};
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord, InputAction, InputBindings,
-    IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, UnitId,
+    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, HexCoord, InputAction,
+    InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
+    Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
@@ -42,25 +43,29 @@ pub(super) fn plugin(app: &mut App) {
         Update,
         handle_input
             .run_if(in_state(Screen::Gameplay))
+            .run_if(resource_equals(GameplayPhase::Active))
             .run_if(hex_combat::encounter_unresolved),
     );
     app.add_systems(
         Update,
         update_hud
             .after(GameplaySystems::UiContext)
-            .run_if(in_state(Screen::Gameplay)),
+            .run_if(in_state(Screen::Gameplay))
+            .run_if(resource_equals(GameplayPhase::Active)),
     );
     app.add_systems(
         Update,
         (handle_party_strip, update_party_strip)
             .chain()
-            .run_if(in_state(Screen::Gameplay)),
+            .run_if(in_state(Screen::Gameplay))
+            .run_if(resource_equals(GameplayPhase::Active)),
     );
     app.add_systems(
         Update,
         (sync_outcome_modal, handle_outcome_actions)
             .chain()
-            .run_if(in_state(Screen::Gameplay)),
+            .run_if(in_state(Screen::Gameplay))
+            .run_if(resource_equals(GameplayPhase::Active)),
     );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the

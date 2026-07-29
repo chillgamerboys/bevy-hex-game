@@ -1,0 +1,49 @@
+// Curated, deterministic maps for the transient Wave 6 Combat Lab Sandbox.
+// Regions are authored separately from encounters because testers place every unit.
+(
+    schema_version: 1,
+    maps: [
+        (
+            id: "flat-arena",
+            display_name: "Flat Arena",
+            scenario: "Ability Lab",
+            fixed_seed: None,
+            player_region: (
+                center: Fixed((x: -2, y: 0, z: 2)),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Fixed((x: 2, y: 0, z: -2)),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "the-crossing",
+            display_name: "The Crossing",
+            scenario: "The Crossing",
+            fixed_seed: None,
+            player_region: (
+                center: Fixed((x: 0, y: 8, z: -8)),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Fixed((x: 0, y: -8, z: 8)),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "procedural-hills",
+            display_name: "Procedural Hills",
+            scenario: "Procedural Hills",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+    ],
+)

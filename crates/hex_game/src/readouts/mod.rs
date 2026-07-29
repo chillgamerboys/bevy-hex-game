@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use hex_combat::CombatSystems;
-use hex_core::{AppSystems, GameplaySetup, GameplaySystems, Screen};
+use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
 
 mod badges;
 mod context;
@@ -90,7 +90,8 @@ pub(crate) fn plugin(app: &mut App) {
             (toggle_hud, apply_hud_visibility)
                 .chain()
                 .in_set(AppSystems::RecordInput)
-                .run_if(in_state(Screen::Gameplay)),
+                .run_if(in_state(Screen::Gameplay))
+                .run_if(resource_equals(GameplayPhase::Active)),
         );
 }
 
