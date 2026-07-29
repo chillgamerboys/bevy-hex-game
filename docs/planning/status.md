@@ -27,14 +27,14 @@ V3 now has its first two complete recipe lanes. Waterfall authors deterministic
 directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
 basin, outlet, and redundant land routes; an opaque animated renderer consumes the
 same exact flow facts. Forest plans rolling terrain and clearings, places its denser
-woodland, then bends a mostly two-wide road around those exact roots with short
-one-wide constraints and a three-cell prairie taper. Most prairie surfaces carry tall
-grass, while a few renderer-private tall exemplars vary the shared low-poly tree
-silhouette without claiming future multi-voxel occupancy. Tree roots are exact map
-blockers and tall grass is presentation-only. Map validation, movement previews,
-click routing, command validation, spawning, review relocation, and enemy pathfinding
-all consume the same exact blocker projection through a separate adapter now awaiting
-gameplay-owner review.
+woodland, then bends a mostly two-wide road around exact authored tree footprints with
+short one-wide constraints and a three-cell prairie taper. Small broadleaf, tall
+narrow, and seven-root old-growth trees vary the canopy and height profile; most
+prairie surfaces carry nonblocking authored grass tufts. Object ids, exact rotations,
+and rotated blocker footprints are fingerprinted before routing. Map validation,
+movement previews, click routing, command validation, spawning, review relocation,
+enemy pathfinding, terrain-edit protection, and the object renderer consume the same
+world-owned projection.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -140,9 +140,10 @@ revision across a bad hot reload. `hex_objects` renders static instances from ca
 mesh chunks using the game prism and exact palette-backed material modes. Production
 review exemplars cover six-, twelve-, and eighteen-level trees, a nonblocking grass
 tuft, and three nonblocking emissive crystal silhouettes. Terrain substances, liquids,
-construction metal, and unit presentation resolve exact palette swatches. Forest still
-presents its generated temporary vegetation directly; authored-object integration,
-cave-light placement, and procedural plant synthesis have not landed yet.
+construction metal, and unit presentation resolve exact palette swatches. Forest
+publishes its generated vegetation as shared `ObjectInstance`s while retaining exact
+rotated blockers and composable canopy cutaway. Cave-light placement and procedural
+plant synthesis have not landed yet.
 
 ## What is provisional
 

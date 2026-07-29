@@ -5,9 +5,10 @@ development tooling: it creates durable RON assets for the game, but it is not a
 screen and does not run through the gameplay setup lifecycle.
 
 The contracts, tracked catalogs, and standalone `hex_editor` authoring application
-are live. Static runtime object rendering is also live through `hex_objects`. Forest
-migration, procedural plant generation, reference-image import, and animated effect
-timelines remain separate later work.
+are live. Static runtime object rendering is also live through `hex_objects`, and
+Forest publishes exact authored tree and grass instances through that renderer.
+Procedural plant generation, reference-image import, and animated effect timelines
+remain separate later work.
 
 ## Launch
 
@@ -376,11 +377,10 @@ Cutout styles temporarily render as single-sample threshold masks while any Blen
 object is live. The renderer restores each camera's previous MSAA setting after the
 last Blend chunk leaves, which restores true alpha-to-coverage for Cutout styles.
 
-The Workshop and renderer still do not replace Forest's temporary vegetation,
-synthesize plants, import reference images, animate spell effects, or provide a
-runtime construction system. Forest integration comes next, followed by procedural
-plant synthesis. Those stages consume this contract; they do not widen it with
-renderer- or biome-specific fields.
+The Workshop and renderer do not synthesize plants, import reference images, animate
+spell effects, or provide a runtime construction system. Forest consumes this contract
+through renderer-neutral instances and keeps topology, blockers, route protection, and
+canopy policy world-owned; procedural plant synthesis remains later work.
 
 Common launch, save, recovery, and review failures are indexed in
 [troubleshooting.md](../development/troubleshooting.md#asset-workshop).

@@ -45,7 +45,7 @@ The palette has two adoption rules on purpose:
    generation may choose between swatches but may not invent per-instance tints.
 2. **Staged:** existing renderers retain their current colour sources until their own
    migration. Terrain substances, liquid bodies and foam, construction metal, unit
-   presentation, and temporary Forest vegetation now resolve palette swatches
+   presentation, and Forest's authored object instances now resolve palette swatches
    directly.
 
 This keeps the palette useful immediately without turning its introduction into a
@@ -112,9 +112,8 @@ The initial catalog records the currently rendered content vocabulary:
 |---|---|---|
 | Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
 | Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
-| Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, and nonblocking grass-tuft objects |
+| Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, and nonblocking grass-tuft objects rendered by Forest |
 | Emissive props | cyan crystal body and glow | `palette.ron`, referenced by the low, branched, and spire crystal objects |
-| Temporary vegetation | authored vegetation colours | Forest feature renderer until object-instance integration |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 
 Air is absent because it is never drawn. Sky, celestial light, atmosphere, fog,
