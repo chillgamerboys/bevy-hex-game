@@ -172,7 +172,6 @@ pub(crate) struct ValidatedWorldSelection<M> {
 #[derive(Debug)]
 struct ValidCandidate<M, S> {
     plan: GeneratedWorldPlan,
-    semantic_fingerprint: u64,
     metrics: M,
     candidate: u8,
     repairs: Vec<RepairRound>,
@@ -190,7 +189,8 @@ pub(crate) fn run_recipe<R>(
 where
     R: V3Recipe,
 {
-    let mut valid = Vec::new();
+    let mut best: Option<ValidCandidate<R::Metrics, R::Score>> = None;
+    let mut valid_candidates = 0_u8;
     let mut notes = Vec::new();
 
     for candidate in 0..CANDIDATE_COUNT {
@@ -215,17 +215,25 @@ where
         }
         match validation {
             WorldValidation::Valid(metrics) => {
-                let semantic_fingerprint =
-                    semantic_plan_fingerprint(&plan).map_err(V3GenerationError::Fingerprint)?;
                 let score = recipe.score(settings, &metrics, candidate);
-                valid.push(ValidCandidate {
+                let selected = ValidCandidate {
                     plan,
-                    semantic_fingerprint,
                     metrics,
                     candidate,
                     repairs,
                     score,
+                };
+                valid_candidates = valid_candidates.saturating_add(1);
+                let replaces_best = best.as_ref().is_none_or(|current| {
+                    selected
+                        .score
+                        .cmp(&current.score)
+                        .then_with(|| selected.candidate.cmp(&current.candidate))
+                        .is_lt()
                 });
+                if replaces_best {
+                    best = Some(selected);
+                }
             }
             WorldValidation::Invalid(issues) => {
                 notes.push(CandidateNote::ValidationRejected { candidate, issues });
@@ -233,16 +241,13 @@ where
         }
     }
 
-    let valid_candidates = u8::try_from(valid.len()).unwrap_or(u8::MAX);
-    if let Some(selected) = valid.into_iter().min_by(|left, right| {
-        left.score
-            .cmp(&right.score)
-            .then_with(|| left.candidate.cmp(&right.candidate))
-    }) {
+    if let Some(selected) = best {
+        let semantic_fingerprint =
+            semantic_plan_fingerprint(&selected.plan).map_err(V3GenerationError::Fingerprint)?;
         return Ok(ValidatedWorldSelection {
             validated: ValidatedWorldPlan {
                 plan: selected.plan,
-                semantic_fingerprint: selected.semantic_fingerprint,
+                semantic_fingerprint,
             },
             metrics: selected.metrics,
             selected_candidate: Some(selected.candidate),

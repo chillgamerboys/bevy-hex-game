@@ -425,8 +425,8 @@ mod tests {
     use hex_core::{
         AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
         InteriorRegions, IssuedCommand, MapAnchorId, MapAnchors, MapViewHint, Mode,
-        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegions,
-        TerrainReady, TilePos, UnitId,
+        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegion,
+        SpecialMovementRegions, TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_units::{either_in_reach, Body, Enemy, Faction, Footing, Player, Reach, StandsOn};
@@ -1642,6 +1642,7 @@ mod tests {
             "Sky Islands",
             "Mountains",
             "Caves",
+            "Waterfall",
         ] {
             let scenario = library()
                 .scenarios
@@ -1687,6 +1688,7 @@ mod tests {
             let recipe_anchors: &[&str] = match scenario_name {
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
+                "Waterfall" => &["fall_overlook", "basin_overlook"],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -1702,6 +1704,19 @@ mod tests {
                     "Sky Islands dropped its flight-gated upper layer"
                 ),
                 "Mountains" => {}
+                "Waterfall" => {
+                    assert_eq!(
+                        special_regions.len(),
+                        6,
+                        "Waterfall dropped a radius-12 mid-cliff shelf"
+                    );
+                    assert!(
+                        special_regions.iter().all(|(position, region)| {
+                            position.level == 21 && region == SpecialMovementRegion(0)
+                        }),
+                        "Waterfall changed its exact mid-cliff shelf contract"
+                    );
+                }
                 _ => assert!(
                     special_regions.is_empty(),
                     "{scenario_name} introduced an unexpected optional region"
@@ -1772,7 +1787,12 @@ mod tests {
                 &hex_core::SubstanceId,
                 &hex_core::Headroom,
             ), With<hex_core::HexTile>>();
-            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body)
+            Footing::from_tiles(
+                tiles.iter(world),
+                world.resource::<SubstanceTable>(),
+                body,
+                None,
+            )
         };
         let party = footing
             .at(party_position)

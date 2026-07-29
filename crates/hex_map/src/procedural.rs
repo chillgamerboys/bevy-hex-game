@@ -65,10 +65,48 @@ pub struct GenerationReport {
     pub map_fingerprint: u64,
     /// Tactical measurements of the selected result.
     pub metrics: TacticalMetrics,
+    /// Exact recipe-specific measurements for V3 worlds.
+    ///
+    /// V1/V2 retain their frozen tactical report and publish `None`.
+    pub recipe_metrics: Option<ProceduralRecipeMetrics>,
     /// Time spent evaluating all candidates, excluded from deterministic comparisons.
     pub elapsed_micros: u64,
     /// Validation notes. Empty for an ordinary valid candidate.
     pub notes: Vec<String>,
+}
+
+/// Exact metrics owned by the selected procedural V3 recipe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+pub enum ProceduralRecipeMetrics {
+    /// Directed river, fall, and dry-bypass measurements.
+    Waterfall(WaterfallMetrics),
+}
+
+/// Exact deterministic measurements of one selected V3 Waterfall plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WaterfallMetrics {
+    /// Exact water-topology nodes across all three lanes.
+    pub water_nodes: u32,
+    /// Nodes authored as calm/still water.
+    pub still_nodes: u32,
+    /// Nodes authored as a directional current.
+    pub current_nodes: u32,
+    /// Nodes authored as rapids.
+    pub rapid_nodes: u32,
+    /// Exact top nodes which descend as the contiguous fall.
+    pub fall_nodes: u32,
+    /// Vertical fall drop in voxel levels.
+    pub fall_height: Level,
+    /// Ordinary walker surfaces in the connected dry network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in that dry network.
+    pub reachable_elevation_levels: u32,
+    /// Shortest walker distance between the required actor anchors.
+    pub bypass_steps: u32,
+    /// Authored step count along the independently climbable alternate terrace.
+    pub alternate_bypass_steps: u32,
+    /// Ordinary cells raised above their authored plateau datum.
+    pub raised_terrain: u32,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.
@@ -548,6 +586,7 @@ fn build_with_candidate_selection_details(
         semantic_plan_fingerprint: None,
         map_fingerprint: map_fingerprint(&map, &special_regions),
         metrics,
+        recipe_metrics: None,
         elapsed_micros,
         notes,
     };

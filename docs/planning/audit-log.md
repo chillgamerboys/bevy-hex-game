@@ -7,6 +7,40 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 17 — feat: adapt movement to generated blockers (2026-07-28)
+
+- **PR**: #102 — `feat/traversal-blocker-adapter`
+- **Outcome**: green — 1 post-Wave-3 integration blocker fixed
+- **Lenses triggered**: 2, 4, 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 2, 4, fresh-eyes | `crates/hex_combat/src/commands/mod.rs`:121 | SHIP-BLOCKER | fixed during `dev` reconciliation — traversal blockers now enter PR #100's shared verb context, so its split movement and strike appliers validate against the same exact obstacle projection as routing, previews, spawning, AI, and review focus |
+| 7 | `crates/hex_combat/tests/funnel.rs`:229 | NON-BLOCKER | retained through command-module migration — an authoritative funnel regression proves a replayed path cannot ground through a generated feature root |
+| 8 | `crates/hex_combat/src/ai.rs`:137 | NON-BLOCKER | fixed during merge-conflict resolution — blocker-aware AI footing and Wave 3's pending-decision/lattice behavior are both preserved |
+
+**Notes**: the obsolete monolithic command applier was not resurrected during
+reconciliation. The targeted `hex_units`, `hex_combat`, and `hex_game` suites pass
+against the promoted Wave 3 tree, including exact-root click, route, command, spawn,
+melee, AI, and review-focus consumers.
+
+## Wave 16 — feat: add procedural V3 Waterfall biome (2026-07-28)
+
+- **PR**: #89 — `feat/v3-waterfall`
+- **Outcome**: green — 2 post-Wave-3 integration blockers fixed
+- **Lenses triggered**: 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 8, fresh-eyes | `assets/config/scenarios.ron`:105 | SHIP-BLOCKER | fixed during `dev` reconciliation — Waterfall now supplies PR #100's required `Map` category and shared anchored encounter instead of the removed inline `units` field |
+| 7 | `crates/hex_game/src/screens/title.rs`:842 | SHIP-BLOCKER | fixed during `dev` reconciliation — the shipped-lane assertion now includes Waterfall as the ninth Map scenario |
+| 8 | `crates/hex_game/src/walk.rs`:204 | NON-BLOCKER | fixed during merge-conflict resolution — the walk key parser retains both Waterfall's character-camera key and Wave 3's casting/HUD keys |
+
+**Notes**: all eight code lenses found no remaining blocker. The exact-surface
+traversal, route-redundancy, terrain-reprojection, lifecycle, and Waterfall renderer
+suites pass against the promoted Wave 3 tree. The dedicated scripted Waterfall walk
+remains the rendered integration gate.
+
 ## Wave 15 — fix(assets): abandon reverted reload candidates (2026-07-28)
 
 - **PR**: #105 — `fix/promotion-hot-reload-latch`

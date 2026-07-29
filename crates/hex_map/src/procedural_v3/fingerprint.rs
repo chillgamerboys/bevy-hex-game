@@ -56,6 +56,7 @@ impl FingerprintEncoder {
     }
 
     /// Writes a boolean as exactly zero or one.
+    #[cfg(test)]
     pub(crate) fn bool(&mut self, value: bool) {
         self.u8(u8::from(value));
     }
@@ -86,6 +87,7 @@ impl FingerprintEncoder {
     }
 
     /// Writes a little-endian signed 64-bit integer.
+    #[cfg(test)]
     pub(crate) fn i64(&mut self, value: i64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
     }
@@ -106,6 +108,7 @@ impl FingerprintEncoder {
     }
 
     /// Writes a byte slice preceded by its little-endian `u64` length.
+    #[cfg(test)]
     pub(crate) fn bytes(&mut self, value: &[u8]) -> Result<(), String> {
         self.length(value.len(), "byte slice")?;
         self.bytes.extend_from_slice(value);
@@ -171,11 +174,13 @@ impl FingerprintEncoder {
 /// perturb generation identity.
 pub(crate) fn settings_fingerprint(
     grid_radius: u32,
+    level_height: f32,
     settings: &ProceduralV3Settings,
 ) -> Result<u64, String> {
     let mut encoder = FingerprintEncoder::new();
     encoder.u32(3);
     encoder.u32(grid_radius);
+    encoder.finite_f32(level_height)?;
     match &settings.layout {
         V3LayoutSettings::Single(patch) => {
             encoder.tag(0);
@@ -1021,9 +1026,14 @@ mod tests {
         }
 
         assert_eq!(
-            settings_fingerprint(12, &forward).expect("the settings encode"),
-            settings_fingerprint(12, &reversed).expect("the settings encode")
+            settings_fingerprint(12, 0.4, &forward).expect("the settings encode"),
+            settings_fingerprint(12, 0.4, &reversed).expect("the settings encode")
         );
+        assert_ne!(
+            settings_fingerprint(12, 0.4, &forward).expect("the settings encode"),
+            settings_fingerprint(12, 0.5, &forward).expect("the settings encode")
+        );
+        assert!(settings_fingerprint(12, f32::NAN, &forward).is_err());
 
         let V3LayoutSettings::Single(reversed_patch) = &mut reversed.layout else {
             unreachable!("the fixture is Single");
@@ -1034,8 +1044,8 @@ mod tests {
             .expect("the fixture has overlays")
             .kind = V3OverlaySettings::Lighting;
         assert_ne!(
-            settings_fingerprint(12, &forward).expect("the settings encode"),
-            settings_fingerprint(12, &reversed).expect("the settings encode")
+            settings_fingerprint(12, 0.4, &forward).expect("the settings encode"),
+            settings_fingerprint(12, 0.4, &reversed).expect("the settings encode")
         );
     }
 
@@ -1059,8 +1069,8 @@ mod tests {
         std::mem::swap(&mut ring.mountains, &mut ring.waterfall);
 
         assert_ne!(
-            settings_fingerprint(33, &original).expect("the settings encode"),
-            settings_fingerprint(33, &swapped).expect("the settings encode")
+            settings_fingerprint(33, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(33, 0.4, &swapped).expect("the settings encode")
         );
     }
 
