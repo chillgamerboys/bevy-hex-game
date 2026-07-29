@@ -23,8 +23,8 @@ use hex_assets::{
 };
 use hex_combat::{CombatEvent, FactionKnowledge, Initiative, PersistentEffects, TurnOrder};
 use hex_core::{
-    CommandQueue, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan, IssuedCommand,
-    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
+    CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan,
+    IssuedCommand, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Faction, Standing, StandsOn, UnitRegistry};
@@ -263,6 +263,7 @@ fn spawn(
         .spawn((
             faction,
             id,
+            ControlOwner::default(),
             StandsOn(Standing {
                 pos: TilePos::new(coord, GROUND),
                 span: HexSpan::new(0.0, 1.0),
