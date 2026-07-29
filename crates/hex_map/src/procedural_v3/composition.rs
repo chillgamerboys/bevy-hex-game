@@ -6,14 +6,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{InteriorRegionId, MapViewHint, SpecialMovementRegion, TilePos};
+use hex_core::{HexCoord, InteriorRegionId, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeId, ResolvedEdgeReference, ResolvedLayoutPlan,
     ResolvedLiquidPort, ResolvedPatch,
 };
-use super::liquid::{LiquidBodyId, LiquidPlan};
-use super::volume::{SurfaceAccess, VolumeElement, VolumePlan};
+use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
+use super::volume::{FillMaterialRole, SurfaceAccess, VolumeElement, VolumePlan};
 use super::world::GeneratedWorldPlan;
 use super::world::{
     FeatureId, FeaturePlan, InteriorPlan, LightId, PlannedGameplayLight, StructureId,
@@ -328,7 +328,10 @@ pub(crate) enum WorldCompositionError {
         patch: PatchId,
         issues: Vec<PatchValidationIssue>,
     },
-    DirectedLiquidSeamUnsupported(ResolvedEdgeId),
+    LiquidSeam {
+        edge: ResolvedEdgeId,
+        issue: LiquidSeamIssue,
+    },
     NamespaceOverflow {
         patch: PatchId,
         kind: NamespaceKind,
@@ -347,6 +350,42 @@ pub(crate) enum WorldCompositionError {
     FinalValidation(Vec<WorldValidationIssue>),
 }
 
+/// Exact reason a declared directed liquid seam could not be stitched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LiquidSeamIssue {
+    MissingEndpoint {
+        patch: PatchId,
+        coord: hex_core::HexCoord,
+    },
+    AmbiguousEndpoint {
+        patch: PatchId,
+        coord: hex_core::HexCoord,
+        positions: Vec<TilePos>,
+    },
+    MaterialMismatch {
+        source: FillMaterialRole,
+        sink: FillMaterialRole,
+    },
+    SourceAlreadyFlows {
+        position: TilePos,
+        downstream: TilePos,
+    },
+    SourceIsNotStill {
+        position: TilePos,
+        state: LiquidFlowState,
+    },
+    Uphill {
+        source: TilePos,
+        sink: TilePos,
+    },
+    ExcessiveDrop {
+        source: TilePos,
+        sink: TilePos,
+    },
+    MissingMergedBody(LiquidBodyId),
+    MissingMergedNode(TilePos),
+}
+
 /// Merges complete patch fragments into one strict whole-world semantic plan.
 pub(crate) fn compose_world(
     layout: ResolvedLayoutPlan,
@@ -358,12 +397,6 @@ pub(crate) fn compose_world(
             error.issues().iter().map(ToString::to_string).collect(),
         ));
     }
-    if let Some(edge) = layout.shared_edges.iter().find_map(|(id, edge)| {
-        matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some(*id)
-    }) {
-        return Err(WorldCompositionError::DirectedLiquidSeamUnsupported(edge));
-    }
-
     let mut by_patch = BTreeMap::new();
     for fragment in fragments {
         let patch = fragment.patch_id;
@@ -449,6 +482,7 @@ pub(crate) fn compose_world(
         )?;
         merge_map(&mut anchors, fragment.anchors, CollisionKind::Anchor)?;
     }
+    stitch_directed_liquid_seams(&layout, &mut liquids)?;
 
     for (alias, target) in settings.canonical_anchors {
         if !super::world::valid_stable_name(&alias) {
@@ -484,6 +518,248 @@ pub(crate) fn compose_world(
     } else {
         Err(WorldCompositionError::FinalValidation(issues))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiquidEndpoint {
+    body: LiquidBodyId,
+    position: TilePos,
+    node: LiquidNode,
+    material: FillMaterialRole,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LiquidSeamLink {
+    edge: ResolvedEdgeId,
+    source: LiquidEndpoint,
+    sink: LiquidEndpoint,
+}
+
+fn stitch_directed_liquid_seams(
+    layout: &ResolvedLayoutPlan,
+    liquids: &mut LiquidPlan,
+) -> Result<(), WorldCompositionError> {
+    let mut links = Vec::new();
+    for (edge_id, edge) in &layout.shared_edges {
+        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+            continue;
+        };
+        let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
+        let source_is_second = *source == edge.second.0 && *sink == edge.first.0;
+        if !source_is_first && !source_is_second {
+            continue;
+        }
+
+        for (first_coord, second_coord) in &port.lanes {
+            let (source_coord, sink_coord) = if source_is_first {
+                (*first_coord, *second_coord)
+            } else {
+                (*second_coord, *first_coord)
+            };
+            let source_endpoint = unique_liquid_endpoint(
+                *edge_id,
+                *source,
+                source_coord,
+                edge.elevation.min,
+                edge.elevation.max,
+                liquids,
+            )?;
+            let sink_endpoint = unique_liquid_endpoint(
+                *edge_id,
+                *sink,
+                sink_coord,
+                edge.elevation.min,
+                edge.elevation.max,
+                liquids,
+            )?;
+            validate_liquid_link(*edge_id, source_endpoint, sink_endpoint)?;
+            links.push(LiquidSeamLink {
+                edge: *edge_id,
+                source: source_endpoint,
+                sink: sink_endpoint,
+            });
+        }
+    }
+    let Some(first_link) = links.first() else {
+        return Ok(());
+    };
+    let first_edge = first_link.edge;
+
+    let mut parents: BTreeMap<_, _> = liquids
+        .bodies
+        .keys()
+        .copied()
+        .map(|body| (body, body))
+        .collect();
+    for link in &links {
+        union_liquid_bodies(&mut parents, link.source.body, link.sink.body);
+    }
+    let roots: BTreeMap<_, _> = parents
+        .keys()
+        .copied()
+        .map(|body| (body, liquid_body_root(&parents, body)))
+        .collect();
+
+    let mut merged = BTreeMap::<LiquidBodyId, LiquidBodyPlan>::new();
+    for (body_id, body) in std::mem::take(&mut liquids.bodies) {
+        let Some(root) = roots.get(&body_id).copied() else {
+            return Err(WorldCompositionError::LiquidSeam {
+                edge: first_edge,
+                issue: LiquidSeamIssue::MissingMergedBody(body_id),
+            });
+        };
+        if let Some(destination) = merged.get_mut(&root) {
+            debug_assert_eq!(
+                destination.material, body.material,
+                "directly linked liquid materials were validated before union"
+            );
+            for (position, node) in body.nodes {
+                let replaced = destination.nodes.insert(position, node);
+                debug_assert!(
+                    replaced.is_none(),
+                    "validated disjoint patch masks cannot contribute duplicate liquid nodes"
+                );
+            }
+        } else {
+            merged.insert(root, body);
+        }
+    }
+    liquids.bodies = merged;
+
+    for link in links {
+        let Some(body_id) = roots.get(&link.source.body).copied() else {
+            return Err(WorldCompositionError::LiquidSeam {
+                edge: link.edge,
+                issue: LiquidSeamIssue::MissingMergedBody(link.source.body),
+            });
+        };
+        let Some(body) = liquids.bodies.get_mut(&body_id) else {
+            return Err(WorldCompositionError::LiquidSeam {
+                edge: link.edge,
+                issue: LiquidSeamIssue::MissingMergedBody(body_id),
+            });
+        };
+        let Some(source) = body.nodes.get_mut(&link.source.position) else {
+            return Err(WorldCompositionError::LiquidSeam {
+                edge: link.edge,
+                issue: LiquidSeamIssue::MissingMergedNode(link.source.position),
+            });
+        };
+        source.state = LiquidFlowState::Current;
+        source.downstream = Some(link.sink.position);
+    }
+    Ok(())
+}
+
+fn unique_liquid_endpoint(
+    edge: ResolvedEdgeId,
+    patch: PatchId,
+    coord: HexCoord,
+    min_level: i32,
+    max_level: i32,
+    liquids: &LiquidPlan,
+) -> Result<LiquidEndpoint, WorldCompositionError> {
+    let mut candidates = Vec::new();
+    for (body_id, body) in &liquids.bodies {
+        candidates.extend(body.nodes.iter().filter_map(|(position, node)| {
+            (position.coord == coord && min_level <= position.level && position.level <= max_level)
+                .then_some(LiquidEndpoint {
+                    body: *body_id,
+                    position: *position,
+                    node: *node,
+                    material: body.material,
+                })
+        }));
+    }
+    match candidates.as_slice() {
+        [endpoint] => Ok(*endpoint),
+        [] => Err(WorldCompositionError::LiquidSeam {
+            edge,
+            issue: LiquidSeamIssue::MissingEndpoint { patch, coord },
+        }),
+        _ => Err(WorldCompositionError::LiquidSeam {
+            edge,
+            issue: LiquidSeamIssue::AmbiguousEndpoint {
+                patch,
+                coord,
+                positions: candidates
+                    .into_iter()
+                    .map(|endpoint| endpoint.position)
+                    .collect(),
+            },
+        }),
+    }
+}
+
+fn validate_liquid_link(
+    edge: ResolvedEdgeId,
+    source: LiquidEndpoint,
+    sink: LiquidEndpoint,
+) -> Result<(), WorldCompositionError> {
+    let fail = |issue| WorldCompositionError::LiquidSeam { edge, issue };
+    if source.material != sink.material {
+        return Err(fail(LiquidSeamIssue::MaterialMismatch {
+            source: source.material,
+            sink: sink.material,
+        }));
+    }
+    if let Some(downstream) = source.node.downstream {
+        return Err(fail(LiquidSeamIssue::SourceAlreadyFlows {
+            position: source.position,
+            downstream,
+        }));
+    }
+    if source.node.state != LiquidFlowState::Still {
+        return Err(fail(LiquidSeamIssue::SourceIsNotStill {
+            position: source.position,
+            state: source.node.state,
+        }));
+    }
+    if sink.position.level > source.position.level {
+        return Err(fail(LiquidSeamIssue::Uphill {
+            source: source.position,
+            sink: sink.position,
+        }));
+    }
+    if source.position.level.saturating_sub(sink.position.level) > 1 {
+        return Err(fail(LiquidSeamIssue::ExcessiveDrop {
+            source: source.position,
+            sink: sink.position,
+        }));
+    }
+    Ok(())
+}
+
+fn union_liquid_bodies(
+    parents: &mut BTreeMap<LiquidBodyId, LiquidBodyId>,
+    first: LiquidBodyId,
+    second: LiquidBodyId,
+) {
+    let first = liquid_body_root(parents, first);
+    let second = liquid_body_root(parents, second);
+    if first == second {
+        return;
+    }
+    let (root, child) = if first < second {
+        (first, second)
+    } else {
+        (second, first)
+    };
+    parents.insert(child, root);
+}
+
+fn liquid_body_root(
+    parents: &BTreeMap<LiquidBodyId, LiquidBodyId>,
+    body: LiquidBodyId,
+) -> LiquidBodyId {
+    let mut current = body;
+    while let Some(parent) = parents.get(&current).copied() {
+        if parent == current {
+            break;
+        }
+        current = parent;
+    }
+    current
 }
 
 fn merge_feature_memberships(
@@ -850,21 +1126,111 @@ mod tests {
     }
 
     #[test]
-    fn directed_liquid_seams_fail_explicitly_until_stitching_exists() {
+    fn directed_liquid_seams_merge_bodies_and_realize_every_lane() {
         let layout = directed_ring7_layout();
-        let edge_id = *layout
+        let (edge_id, edge) = layout
             .shared_edges
             .iter()
             .find_map(|(id, edge)| {
-                matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some(id)
+                matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some((*id, edge))
             })
             .expect("the fixture has one directed seam");
-        let fragments = complete_fragments(&layout);
-        assert_eq!(
-            compose_world(layout, fragments, composition_settings())
-                .expect_err("directed seam stitching is deliberately deferred"),
-            WorldCompositionError::DirectedLiquidSeamUnsupported(edge_id)
-        );
+        let world = compose_world(
+            layout.clone(),
+            directed_fragments(&layout),
+            composition_settings(),
+        )
+        .expect("exact directed endpoints should compose");
+        let ResolvedLiquidPort::Directed { source, port, .. } = &edge.liquid else {
+            panic!("the selected seam should be directed");
+        };
+        let source_is_first = *source == edge.first.0;
+
+        for (first, second) in &port.lanes {
+            let (source_coord, sink_coord) = if source_is_first {
+                (*first, *second)
+            } else {
+                (*second, *first)
+            };
+            let crossing = world
+                .liquids
+                .bodies
+                .values()
+                .find_map(|body| {
+                    body.nodes.iter().find_map(|(position, node)| {
+                        (position.coord == source_coord
+                            && node
+                                .downstream
+                                .is_some_and(|target| target.coord == sink_coord))
+                        .then_some((*position, *node, body))
+                    })
+                })
+                .expect("every declared lane should have one directed successor");
+            assert_eq!(crossing.1.state, LiquidFlowState::Current);
+            assert!(crossing
+                .2
+                .nodes
+                .contains_key(&crossing.1.downstream.expect("crossing has a target")));
+        }
+        assert_eq!(world.validate(), Vec::new(), "edge {edge_id:?}");
+    }
+
+    #[test]
+    fn directed_liquid_seams_reject_missing_and_mismatched_endpoints() {
+        let layout = directed_ring7_layout();
+        let (edge_id, edge) = layout
+            .shared_edges
+            .iter()
+            .find_map(|(id, edge)| {
+                matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some((*id, edge))
+            })
+            .expect("the fixture has one directed seam");
+        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+            panic!("the selected seam should be directed");
+        };
+        let first_lane = *port.lanes.first().expect("the directed port has lanes");
+        let source_coord = if *source == edge.first.0 {
+            first_lane.0
+        } else {
+            first_lane.1
+        };
+        assert!(matches!(
+            compose_world(
+                layout.clone(),
+                complete_fragments(&layout),
+                composition_settings()
+            ),
+            Err(WorldCompositionError::LiquidSeam {
+                edge,
+                issue: LiquidSeamIssue::MissingEndpoint { patch, coord },
+            }) if edge == edge_id && patch == *source && coord == source_coord
+        ));
+
+        let mut fragments = directed_fragments(&layout);
+        let sink_fragment = fragments
+            .iter_mut()
+            .find(|fragment| fragment.patch_id == *sink)
+            .expect("the sink fragment exists");
+        for body in sink_fragment.liquids.bodies.values_mut() {
+            body.material = FillMaterialRole::Lava;
+        }
+        for column in sink_fragment.volume.columns.values_mut() {
+            for element in &mut column.elements {
+                if let VolumeElement::Fill(fill) = element {
+                    fill.material = FillMaterialRole::Lava;
+                }
+            }
+        }
+        assert!(matches!(
+            compose_world(layout, fragments, composition_settings()),
+            Err(WorldCompositionError::LiquidSeam {
+                edge,
+                issue: LiquidSeamIssue::MaterialMismatch {
+                    source: FillMaterialRole::Water,
+                    sink: FillMaterialRole::Lava,
+                },
+            }) if edge == edge_id
+        ));
     }
 
     #[test]
@@ -924,6 +1290,80 @@ mod tests {
             .copied()
             .map(|patch| complete_patch(layout, patch))
             .collect()
+    }
+
+    fn directed_fragments(layout: &ResolvedLayoutPlan) -> Vec<GeneratedPatchPlan> {
+        let mut fragments = complete_fragments(layout);
+        for edge in layout.shared_edges.values() {
+            let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+                continue;
+            };
+            let source_is_first = *source == edge.first.0;
+            let source_coords =
+                port.lanes
+                    .iter()
+                    .map(|lane| if source_is_first { lane.0 } else { lane.1 });
+            let sink_coords = port
+                .lanes
+                .iter()
+                .map(|lane| if source_is_first { lane.1 } else { lane.0 });
+            replace_fragment_liquid(
+                fragments
+                    .iter_mut()
+                    .find(|fragment| fragment.patch_id == *source)
+                    .expect("the source fragment exists"),
+                source_coords,
+                edge.elevation.preferred,
+            );
+            replace_fragment_liquid(
+                fragments
+                    .iter_mut()
+                    .find(|fragment| fragment.patch_id == *sink)
+                    .expect("the sink fragment exists"),
+                sink_coords,
+                edge.elevation.preferred,
+            );
+        }
+        fragments
+    }
+
+    fn replace_fragment_liquid(
+        fragment: &mut GeneratedPatchPlan,
+        coords: impl IntoIterator<Item = HexCoord>,
+        level: i32,
+    ) {
+        for column in fragment.volume.columns.values_mut() {
+            column
+                .elements
+                .retain(|element| !matches!(element, VolumeElement::Fill(_)));
+        }
+        fragment.liquids = LiquidPlan::default();
+        for (index, coord) in coords.into_iter().enumerate() {
+            fragment
+                .volume
+                .columns
+                .get_mut(&coord)
+                .expect("the endpoint column belongs to the patch")
+                .elements
+                .push(VolumeElement::Fill(NonSolidFill {
+                    levels: LevelInterval::new(level, level + 1),
+                    material: FillMaterialRole::Water,
+                }));
+            let top = TilePos::new(coord, level);
+            fragment.liquids.bodies.insert(
+                LiquidBodyId(u32::try_from(index).expect("the test port is small")),
+                LiquidBodyPlan {
+                    material: FillMaterialRole::Water,
+                    nodes: BTreeMap::from([(
+                        top,
+                        LiquidNode {
+                            state: LiquidFlowState::Still,
+                            downstream: None,
+                        },
+                    )]),
+                },
+            );
+        }
     }
 
     fn complete_patch(layout: &ResolvedLayoutPlan, patch_id: PatchId) -> GeneratedPatchPlan {

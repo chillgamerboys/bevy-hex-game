@@ -260,6 +260,14 @@ contracts, validates patch-local invariants, and finally validates the exact com
 `TilePos` graph. Materials and decorative boundaries are classified only after the
 geometry and semantics are accepted.
 
+Directed liquid ports are realized during checked composition, not by a later blend
+pass. Every declared lane must resolve to exactly one terminal source node and one
+sink node in the shared elevation band. The endpoints must use the same material, the
+source may not already flow, and the crossing may be level or descend by one level.
+Composition deterministically unifies the two liquid bodies and installs the exact
+cross-patch downstream edge. Missing, ambiguous, uphill, mismatched, duplicate, or
+undeclared crossings reject the complete world candidate.
+
 No post-generation blend pass may erase anchors, water direction, traversal blockers,
 interior/domain metadata, or protected approaches.
 
