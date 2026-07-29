@@ -157,8 +157,9 @@ do not leak hidden geometry.
 
 ## Combat contact
 
-This is the binding contract for the pending combat adapter; current combat does not
-consume perception.
+This is the binding contract for the pending engagement/targeting/AI adapters; current
+combat does not yet use perception for contact rules. The separate adapter that gates
+hostile lattice knowledge from world observation is already live.
 
 Observation gates the existing reach trigger; it does not replace it. Combat begins
 when either faction currently observes a hostile **and** that hostile pair satisfies
@@ -217,7 +218,9 @@ final state from the same composition.
 The `hex_perception` crate owns illumination, sight, faction knowledge, and
 their authoritative queries. It may read units and shared map projections.
 `hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`;
-`hex_combat` may use the richer perception API for engagement and target validation.
+`hex_combat` already consumes the richer current-observation API through a
+gameplay-owned adapter that gates hostile lattice knowledge. Engagement, target
+validation, and AI adapters remain pending and must use the same authority.
 
 The live ECS adapter caches each ordered stage. Terrain, substance, interior, or
 blocker changes rebuild the exact `SurfaceSnapshots`; ambient or local-light changes
@@ -269,7 +272,8 @@ disagreement between gameplay knowledge and picking.
 - automatically advancing time and gameplay effects beyond exterior illumination
 - carried, destructible, extinguishable, faction-private, and spell-created lights
 - stealth, concealment, hearing, and hidden-unit detection
-- divination implementation and persistent lattice knowledge
+- spatial divination that reveals unknown terrain; lattice divination and its
+  persistent knowledge are live in `hex_combat`
 - cross-domain sight through entrances and other portals
 - saved-game persistence for remembered terrain
 

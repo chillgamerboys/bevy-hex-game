@@ -95,10 +95,11 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
-covers both scenario families and the pause overlay. The capture goes through an
-offscreen render target (the window surface is not readable on macOS/Metal), with
-every UI root pointed at the redirected camera.
+run. `walks/menus.ron` covers the title, Settings, and lattice-demo loop;
+`walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
+Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
+through an offscreen render target (the window surface is not readable on
+macOS/Metal), with every UI root pointed at the redirected camera.
 
 ## Workspace
 
@@ -106,8 +107,9 @@ every UI root pointed at the redirected camera.
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
@@ -115,8 +117,8 @@ hex_core → hex_anim ───────────────────�
 **`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
 spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
 `App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
-design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
-`hex_assets` and the combat wiring consume it as the content and spawning land.
+design's open questions. `hex_assets` resolves authored content into it, `hex_units`
+carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
@@ -175,12 +177,13 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors → Perception → View → Finalize`)
-  orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a
-  shared set — `.chain()` cannot express it, and a local chain that looks correct
-  will race. The set boundary also supplies a sync point: `Commands`-spawned entities
-  are not queryable until the queue is applied, so `Actors` sees the tiles `Terrain`
-  made, `Perception` sees the actors, `View` sees the completed projection, and
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Restore → Perception → View
+  → Finalize`) orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary
+  *must* use a shared set — `.chain()` cannot express it, and a local chain that
+  looks correct will race. The set boundary also supplies a sync point:
+  `Commands`-spawned entities are not queryable until the queue is applied, so
+  `Actors` sees the tiles `Terrain` made, `Restore` sees the scenario roster,
+  `Perception` sees restored actors, `View` sees the completed projection, and
   `Finalize` sees the required actors.
 - **`PerceptionSystems`** (`PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial

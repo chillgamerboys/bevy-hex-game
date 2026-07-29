@@ -65,10 +65,11 @@ existed. Print the walk for the operator:
 ```
 Manual walk (PR checkbox: "A human ran the game and looked at it"):
   cargo dev
-  splash → title → click a scenario → gameplay
+  splash → title → New Game → Party Trial
   orbit (right-drag), WASD pan, zoom
-  click a tile — piece walks there; range tint + route preview draw
-  ESC pause/resume, BACKSPACE to title, re-enter a scenario (rebuild)
+  select and move the party; range tint + route preview draw
+  ESC pause, F5 save, BACKSPACE to title, Continue
+  Settings change → restart → verify; launch affected fixtures separately
 ```
 
 Report this phase as `automated walk: <verdict>; human walk: operator

@@ -38,7 +38,7 @@ const PRESSED: Color = Color::srgba(1.0, 0.94, 0.75, 0.28);
 pub const LABEL: Color = Color::srgb(0.94, 0.94, 0.95);
 
 /// Secondary text — the line under a heading.
-pub const MUTED: Color = Color::srgba(0.88, 0.89, 0.92, 0.62);
+pub const MUTED: Color = Color::srgba(0.88, 0.89, 0.92, 0.84);
 
 /// The one warm accent: headings and the edge of anything primary.
 pub const ACCENT: Color = Color::srgb(0.93, 0.79, 0.46);
@@ -53,7 +53,7 @@ pub const DANGER: Color = Color::srgb(0.94, 0.36, 0.30);
 pub const EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.13);
 
 /// Panel fill — the gameplay HUD's proven dark surface, generalised.
-pub const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.045, 0.72);
+pub const PANEL_BG: Color = Color::srgba(0.02, 0.03, 0.045, 0.94);
 
 /// The tint of a basic gem, and the anchor of the element palette.
 ///
@@ -105,10 +105,10 @@ pub const TITLE_SIZE: f32 = 19.0;
 pub const LABEL_SIZE: f32 = 16.0;
 
 /// Font size for supporting text.
-pub const BLURB_SIZE: f32 = 13.0;
+pub const BLURB_SIZE: f32 = 14.0;
 
 /// The smallest legible line — seeds, costs, log entries.
-pub const FINE_SIZE: f32 = 11.0;
+pub const FINE_SIZE: f32 = 12.0;
 
 /// The vendored fonts and shared UI art, loaded once at startup.
 ///
