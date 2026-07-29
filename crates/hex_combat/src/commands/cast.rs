@@ -21,9 +21,11 @@
 use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
-use hex_core::{Busy, LatticeCoord, PendingDecision, TilePos, UnitId};
+use hex_core::{Busy, KnowledgeExpiry, LatticeCoord, PendingDecision, TilePos, UnitId};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
+
+use crate::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
 
 use super::{ActorQuery, Verb};
 
@@ -45,61 +47,99 @@ pub(super) fn apply(
     spell_name: &str,
     target: TilePos,
     facing: Option<hex_core::Sextant>,
-) -> Result<(), &'static str> {
+) -> Result<(), CommandRefusal> {
     if !ctx.in_combat {
-        return Err("casting is combat-only until out-of-combat magic is designed");
+        return Err(CommandRefusal::CombatOnly);
     }
     if ctx.turn_order.current() != Some(unit) {
-        return Err("not this unit's turn");
+        return Err(CommandRefusal::NotCurrentTurn {
+            current: ctx.turn_order.current(),
+        });
     }
     // One decision at a time. A second cast landing while a defender still owes an
     // answer would resolve its damage against a lattice that is about to change.
     if ctx.pending.is_open() {
-        return Err("a decision is still open — resolution is parked");
+        let decider = match *ctx.pending {
+            PendingDecision::ChooseDisables { decider, .. } => decider,
+            PendingDecision::None => unit,
+        };
+        return Err(CommandRefusal::DecisionPending { decider });
     }
 
     let Some(book) = ctx.spells else {
-        return Err("no spell book loaded");
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SpellBook,
+        });
     };
     let Some(tables) = ctx.tables.as_ref() else {
-        return Err("no content tables to resolve requirements against");
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::ContentTables,
+        });
     };
     let Some(spell) = book.id(spell_name) else {
-        return Err("no such spell");
+        return Err(CommandRefusal::UnknownSpell {
+            spell: spell_name.to_owned(),
+        });
     };
     let Some(spec) = book.spell(spell) else {
-        return Err("spell has no definition");
+        return Err(CommandRefusal::MissingSpellDefinition {
+            spell: spell_name.to_owned(),
+        });
     };
+    if spec
+        .effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Reveal { .. }))
+        && ctx.combat.is_none()
+    {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::CombatSettings,
+        });
+    }
     // Rung 0: does casting this *do* anything yet. Checked before the action, the range
     // and above all the payment, because a spell whose every effect is still waiting on
     // another lane would otherwise spend the caster's mana and its whole turn and produce
     // nothing but `warn!` lines — invisible in a release build, where the console is
     // hidden. See `delivers_anything`.
     if !delivers_anything(spec) {
-        return Err(UNDELIVERABLE);
+        return Err(CommandRefusal::UndeliverableSpell {
+            spell: spell_name.to_owned(),
+        });
     }
 
-    let (standing, busy) = {
-        let Ok((standing, _, turn, busy, _, _)) = actors.get(entity) else {
-            return Err("unit no longer exists");
+    let (standing, busy, caster_faction) = {
+        let Ok((standing, _, turn, busy, _, faction)) = actors.get(entity) else {
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::EntityRecord,
+            });
         };
         // Rung 1 is "action available", and casting is an action. Without this a unit
         // casts every frame its turn lasts: a cast starts no animation, so the `Busy`
         // it sets is gone by the next frame, and `advance_turn` waits for the movement
         // budget as well — so the whole lattice could be spent in one turn.
         let Some(turn) = turn else {
-            return Err("no turn to take the action from");
+            return Err(CommandRefusal::NoTurn);
         };
         if turn.acted {
-            return Err("unit already took its action");
+            return Err(CommandRefusal::ActionAlreadySpent);
         }
         let Some(standing) = standing.copied() else {
-            return Err("unit has no standing to cast from");
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::Standing,
+            });
         };
-        (standing.0, busy)
+        let Some(faction) = faction.copied() else {
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::Faction,
+            });
+        };
+        (standing.0, busy, faction)
     };
     if busy || ctx.committed.contains(&entity) {
-        return Err("unit is still finishing its last action");
+        return Err(CommandRefusal::Busy);
     }
 
     // --- rung 3: targeting -------------------------------------------------
@@ -107,7 +147,9 @@ pub(super) fn apply(
     // Directed shapes need a facing, and a directed cast without one is a malformed
     // command rather than a cast that reaches nothing.
     if volumes::needs_facing(&spec.targeting.shape) && facing.is_none() {
-        return Err("this spell points somewhere and the cast named no facing");
+        return Err(CommandRefusal::MissingFacing {
+            spell: spell_name.to_owned(),
+        });
     }
     // `SelfCast` is the one shape whose range is not a question.
     if !matches!(spec.targeting.shape, TargetShape::SelfCast) {
@@ -120,41 +162,65 @@ pub(super) fn apply(
             u32::from(spec.targeting.range),
             levels,
         ) {
-            return Err("target is out of range");
+            return Err(CommandRefusal::TargetOutOfRange {
+                spell: spell_name.to_owned(),
+                target,
+            });
         }
     }
     // Resolved but not yet consumed: rungs 4 and 5 are what read a volume, and both
     // are terrain magic's. Resolving it here anyway is the cheap half of the check —
     // a shape that cannot resolve is a cast that should not have been legal.
     if volumes::resolve(&spec.targeting.shape, standing.pos, target, facing).is_none() {
-        return Err("the spell's shape did not resolve");
+        return Err(CommandRefusal::ShapeUnresolved {
+            spell: spell_name.to_owned(),
+            target,
+        });
     }
 
     // Observation. Returns true because no fog exists yet — every current target
     // genuinely *is* observed — and it is written as a function rather than omitted so
     // that the day `hex_perception` lands, this is the one line that changes.
     if !anchor_is_observed(target) {
-        return Err("the cast's anchor is not observed");
+        return Err(CommandRefusal::TargetUnobserved {
+            spell: spell_name.to_owned(),
+            target,
+        });
     }
 
     // --- rung 2: the lattice -----------------------------------------------
 
     let cell = {
         let Ok((caster_spec, caster_state)) = lattices.get(entity) else {
-            return Err("caster has no lattice to cast from");
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::Lattice,
+            });
         };
-        spell_cell(caster_spec, caster_state, spell)
-            .ok_or("this unit's lattice does not inscribe that spell")?
+        spell_cell(caster_spec, caster_state, spell).ok_or_else(|| {
+            CommandRefusal::SpellNotInscribed {
+                spell: spell_name.to_owned(),
+            }
+        })?
     };
 
     let plan = {
         let Ok((caster_spec, caster_state)) = lattices.get(entity) else {
-            return Err("caster has no lattice to cast from");
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::Lattice,
+            });
         };
-        castable(caster_spec, caster_state, cell, tables).map_err(|blocked| match blocked {
-            CastBlocked::NotASpell => "that lattice cell holds no spell",
-            CastBlocked::SpellDisabled => "that spell's hex is disabled",
-            CastBlocked::Unsatisfiable => "the lattice cannot pay for that spell",
+        castable(caster_spec, caster_state, cell, tables).map_err(|blocked| {
+            let reason = match blocked {
+                CastBlocked::NotASpell => CastBlockReason::NotASpell,
+                CastBlocked::SpellDisabled => CastBlockReason::SpellDisabled,
+                CastBlocked::Unsatisfiable => CastBlockReason::Unsatisfiable,
+            };
+            CommandRefusal::CastBlocked {
+                spell: spell_name.to_owned(),
+                reason,
+            }
         })?
     };
 
@@ -163,12 +229,22 @@ pub(super) fn apply(
     // silently eat the cast along with the player's turn.
     {
         let Ok((_, mut caster_state)) = lattices.get_mut(entity) else {
-            return Err("caster has no lattice to cast from");
+            return Err(CommandRefusal::MissingUnitData {
+                unit,
+                data: UnitData::Lattice,
+            });
         };
         if !apply_cast(&mut caster_state, &plan, tables) {
-            return Err("the cast plan went stale before it could be applied");
+            return Err(CommandRefusal::CastPlanStale {
+                spell: spell_name.to_owned(),
+            });
         }
     }
+    ctx.events.push(CombatEvent::Cast {
+        caster: unit,
+        spell: spell_name.to_owned(),
+        target,
+    });
 
     // --- effects -----------------------------------------------------------
 
@@ -196,8 +272,37 @@ pub(super) fn apply(
                     u16::from(*count),
                 );
             }
-            Effect::Reveal { .. } => {
-                refusals.push("Reveal waits on divination writing into the knowledge store");
+            Effect::Reveal { tier } => {
+                let Some(subject) = target_unit else {
+                    // An empty observed anchor is still a legal cast. It reveals no
+                    // lattice because there is no subject there.
+                    continue;
+                };
+                let Ok((target_spec, target_state)) = lattices.get(subject.1) else {
+                    refusals.push("the target has no lattice to reveal");
+                    continue;
+                };
+                let rounds = ctx.combat.map_or(0, |settings| {
+                    settings
+                        .divination_rounds_per_tier
+                        .saturating_mul(u32::from(*tier))
+                });
+                let Some(cells) = ctx.knowledge.reveal(
+                    caster_faction,
+                    subject.0,
+                    target_spec,
+                    target_state,
+                    KnowledgeExpiry::Rounds(rounds),
+                ) else {
+                    refusals.push("the target has no published base visibility");
+                    continue;
+                };
+                ctx.events.push(CombatEvent::Revealed {
+                    viewer: caster_faction,
+                    subject: subject.0,
+                    cells,
+                    rounds,
+                });
             }
             Effect::Illuminate { .. } => refusals.push("Illuminate waits on the perception lane"),
             Effect::SetTerrain { .. } | Effect::ClearTerrain | Effect::SpawnWall { .. } => {
@@ -227,6 +332,11 @@ pub(super) fn apply(
                     continue;
                 }
                 crate::effects::apply_burn(ctx.effects, round, unit, defender.0, *turns);
+                ctx.events.push(CombatEvent::BurnApplied {
+                    source: unit,
+                    target: defender.0,
+                    turns: *turns,
+                });
                 info!(
                     "cast: {unit:?} sets {:?} alight for {turns} of its turns",
                     defender.0
@@ -331,6 +441,14 @@ pub(super) fn open_disable_decision(
         return;
     };
     let count = hex_lattice::resolve_incoming(state, raw);
+    let prevented = raw.saturating_sub(count);
+    if prevented > 0 {
+        ctx.events.push(CombatEvent::DamagePrevented {
+            source,
+            target: defender_id,
+            amount: prevented,
+        });
+    }
     if count == 0 {
         info!("cast: {defender_id:?} absorbed the whole hit");
         return;
@@ -340,6 +458,11 @@ pub(super) fn open_disable_decision(
         count,
         source,
     };
+    ctx.events.push(CombatEvent::DecisionOpened {
+        decider: defender_id,
+        source,
+        count,
+    });
 }
 
 /// The refusal a spell gets when nothing it does is built yet.
@@ -352,8 +475,8 @@ pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
 /// Whether the applier delivers **any** of a spell's effects today.
 ///
 /// The gate the interface and the applier share, and the reason it exists is a specific
-/// failure: several shipped spells — Renewal, Earthen Wall, Stone Shaper, Scrying Eye,
-/// Daylight — are legal casts whose every effect is still waiting on a lane that has not
+/// failure: several shipped spells — Renewal, Earthen Wall, Stone Shaper, Daylight —
+/// are legal casts whose every effect is still waiting on a lane that has not
 /// landed. Offering one is worse than hiding it. The cast is legal, so it is charged: the
 /// mana goes, the turn goes, and the only trace is a log line the player cannot see.
 ///
@@ -376,8 +499,8 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         Effect::DisableHexes { targeted, .. } => !targeted,
         Effect::Burn { .. } => true,
         // Everything below is refused by name in the match above; see the reasons there.
-        Effect::Reveal { .. }
-        | Effect::Illuminate { .. }
+        Effect::Reveal { .. } => true,
+        Effect::Illuminate { .. }
         | Effect::SetTerrain { .. }
         | Effect::ClearTerrain
         | Effect::SpawnWall { .. }

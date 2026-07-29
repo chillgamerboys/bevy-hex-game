@@ -53,6 +53,7 @@ use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
 
 use crate::turns::TurnOrder;
+use crate::CombatEvent;
 
 /// A tick's worth of damage waiting for the decision seam to be free.
 ///
@@ -281,6 +282,7 @@ fn tick_turn_effects(
     // survives. A `&mut` here would keep this system serialized against every other
     // lattice writer for a borrow it never uses.
     lattices: Query<&LatticeState>,
+    mut events: MessageWriter<CombatEvent>,
 ) {
     let mut started: Vec<UnitId> = turns.iter().copied().collect();
     if started.is_empty() {
@@ -310,6 +312,11 @@ fn tick_turn_effects(
                 target: current,
                 count: due,
                 source,
+            });
+            events.write(CombatEvent::BurnTicked {
+                source,
+                target: current,
+                count: due,
             });
         }
     }
@@ -348,6 +355,7 @@ fn open_due_decision(
     lattices: Query<&LatticeState>,
     mut effects: ResMut<PersistentEffects>,
     mut pending: ResMut<PendingDecision>,
+    mut events: MessageWriter<CombatEvent>,
 ) {
     if pending.is_open() {
         return;
@@ -370,6 +378,11 @@ fn open_due_decision(
         count: hit.count,
         source: hit.source,
     };
+    events.write(CombatEvent::DecisionOpened {
+        decider: hit.target,
+        source: hit.source,
+        count: hit.count,
+    });
     info!(
         "burn: {:?} takes {} hex(es) from {:?}, ignoring armour",
         hit.source, hit.count, hit.target

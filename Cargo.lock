@@ -3222,6 +3222,8 @@ dependencies = [
  "hex_core",
  "hex_lattice",
  "hex_units",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

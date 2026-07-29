@@ -17,7 +17,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
-use hex_combat::{Initiative, TurnOrder};
+use hex_combat::{CombatData, CombatEvent, CommandRefusal, Initiative, TurnOrder};
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
     IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
@@ -148,6 +148,13 @@ fn push_as(app: &mut App, seat: PlayerSeat, command: GameCommand) {
     app.world_mut()
         .resource_mut::<CommandQueue>()
         .push(IssuedCommand { seat, command });
+}
+
+fn take_events(app: &mut App) -> Vec<CombatEvent> {
+    app.world_mut()
+        .resource_mut::<Messages<CombatEvent>>()
+        .drain()
+        .collect()
 }
 
 /// Runs frames until the queue is drained and nothing is mid-presentation.
@@ -284,7 +291,8 @@ fn an_end_turn_from_the_wrong_unit_is_dropped() {
         "precondition: the player acts first"
     );
 
-    push(&mut app, GameCommand::EndTurn { unit: UnitId(2) });
+    let refused = GameCommand::EndTurn { unit: UnitId(2) };
+    push(&mut app, refused.clone());
     app.update();
     app.update();
 
@@ -296,6 +304,15 @@ fn an_end_turn_from_the_wrong_unit_is_dropped() {
     assert!(
         app.world().get::<Turn>(player).is_some(),
         "the player should still hold the turn marker"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: refused,
+            refusal: CommandRefusal::NotCurrentTurn {
+                current: Some(UnitId(1)),
+            },
+        }]
     );
 }
 
@@ -316,13 +333,11 @@ fn an_unwalkable_path_is_dropped() {
     assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
 
     // Origin to three hexes out in one "step".
-    push(
-        &mut app,
-        GameCommand::MoveAlong {
-            unit: UnitId(1),
-            path: path(&[HexCoord::ORIGIN, HexCoord::new_cubic(3, -3, 0)]),
-        },
-    );
+    let refused = GameCommand::MoveAlong {
+        unit: UnitId(1),
+        path: path(&[HexCoord::ORIGIN, HexCoord::new_cubic(3, -3, 0)]),
+    };
+    push(&mut app, refused.clone());
     app.update();
     app.update();
 
@@ -335,6 +350,13 @@ fn an_unwalkable_path_is_dropped() {
         budget_of(&app, player),
         Some(4),
         "a refused path must not be billed"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: refused,
+            refusal: CommandRefusal::InvalidPath,
+        }]
     );
 }
 
@@ -354,20 +376,18 @@ fn an_over_budget_path_is_dropped() {
     assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
 
     // Five adjacent steps against a budget of four.
-    push(
-        &mut app,
-        GameCommand::MoveAlong {
-            unit: UnitId(1),
-            path: path(&[
-                HexCoord::ORIGIN,
-                HexCoord::new_cubic(0, 1, -1),
-                HexCoord::new_cubic(0, 2, -2),
-                HexCoord::new_cubic(0, 3, -3),
-                HexCoord::new_cubic(0, 4, -4),
-                HexCoord::new_cubic(0, 5, -5),
-            ]),
-        },
-    );
+    let refused = GameCommand::MoveAlong {
+        unit: UnitId(1),
+        path: path(&[
+            HexCoord::ORIGIN,
+            HexCoord::new_cubic(0, 1, -1),
+            HexCoord::new_cubic(0, 2, -2),
+            HexCoord::new_cubic(0, 3, -3),
+            HexCoord::new_cubic(0, 4, -4),
+            HexCoord::new_cubic(0, 5, -5),
+        ]),
+    };
+    push(&mut app, refused.clone());
     app.update();
     app.update();
 
@@ -380,6 +400,16 @@ fn an_over_budget_path_is_dropped() {
         budget_of(&app, player),
         Some(4),
         "a refused path must not be billed"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: refused,
+            refusal: CommandRefusal::MovementBudgetExceeded {
+                cost: 5,
+                remaining: 4,
+            },
+        }]
     );
 }
 
@@ -398,16 +428,14 @@ fn an_unbuilt_verb_is_dropped_and_changes_nothing() {
     enter_gameplay(&mut app);
     assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
 
-    push(
-        &mut app,
-        GameCommand::Cast {
-            unit: UnitId(1),
-            spell: "Ember".to_owned(),
-            target: TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL),
-            facing: None,
-            mana: None,
-        },
-    );
+    let refused = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Ember".to_owned(),
+        target: TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL),
+        facing: None,
+        mana: None,
+    };
+    push(&mut app, refused.clone());
     app.update();
     app.update();
 
@@ -424,6 +452,15 @@ fn an_unbuilt_verb_is_dropped_and_changes_nothing() {
         app.world().resource::<TurnOrder>().current(),
         Some(UnitId(1)),
         "an unbuilt verb must not consume the turn"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: refused,
+            refusal: CommandRefusal::MissingCombatData {
+                data: CombatData::SpellBook,
+            },
+        }]
     );
 }
 

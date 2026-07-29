@@ -181,9 +181,9 @@ pub enum Effect {
         /// The flat reduction.
         amount: u16,
     },
-    /// Reveal part of the target's hidden lattice; how much scales with `tier`.
+    /// Reveal the target's complete live lattice for a tier-scaled duration.
     Reveal {
-        /// The divination tier — how much of the lattice becomes visible.
+        /// The divination tier, multiplied by the configured rounds per tier.
         tier: u8,
     },
     /// Light an area, lifting fog around the caster.

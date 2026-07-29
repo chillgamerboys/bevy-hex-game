@@ -22,6 +22,8 @@ use bevy::prelude::*;
 use hex_core::{LatticeCoord, PendingDecision, UnitId};
 use hex_lattice::apply_disables;
 
+use crate::{CombatEvent, CommandRefusal, UnitData};
+
 use super::{cast::LatticeQuery, Verb};
 
 /// Applies the defender's answer, or returns the reason it was refused.
@@ -31,22 +33,25 @@ pub(super) fn apply(
     unit: UnitId,
     entity: Entity,
     cells: &[LatticeCoord],
-) -> Result<(), &'static str> {
+) -> Result<(), CommandRefusal> {
     let PendingDecision::ChooseDisables {
         decider,
         count,
         source,
     } = *ctx.pending
     else {
-        return Err("nothing is waiting on a disable choice");
+        return Err(CommandRefusal::NoPendingDecision);
     };
     // The answer must be the one that was asked for. A replayed or forged log must not
     // be able to disable a bystander's hexes by naming somebody else's unit.
     if decider != unit {
-        return Err("that answer is not from the unit the decision is waiting on");
+        return Err(CommandRefusal::WrongDecisionUnit { expected: decider });
     }
     let Ok((spec, mut state)) = lattices.get_mut(entity) else {
-        return Err("the deciding unit has no lattice");
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::Lattice,
+        });
     };
 
     // The count is what the hit *asked* for; a lattice with less left than that gives
@@ -59,7 +64,10 @@ pub(super) fn apply(
         .count();
     let owed = usize::from(count).min(live);
     if cells.len() != owed {
-        return Err("the answer names the wrong number of hexes");
+        return Err(CommandRefusal::WrongDisableCount {
+            expected: u32::try_from(owed).unwrap_or(u32::MAX),
+            actual: u32::try_from(cells.len()).unwrap_or(u32::MAX),
+        });
     }
     // Every cell has to be one of this lattice's own, and distinct. Without the first
     // check an answer could name coordinates that are not in the drawing at all, which
@@ -68,16 +76,16 @@ pub(super) fn apply(
     let mut seen: Vec<LatticeCoord> = Vec::with_capacity(cells.len());
     for &cell in cells {
         if spec.get(cell).is_none() {
-            return Err("the answer names a cell that is not in this lattice");
+            return Err(CommandRefusal::CellOutsideLattice { cell });
         }
         if seen.contains(&cell) {
-            return Err("the answer names the same cell twice");
+            return Err(CommandRefusal::DuplicateCell { cell });
         }
         // And it has to still be standing. `apply_disables` treats an already-dead cell
         // as a no-op, so naming two corpses would satisfy the count and absorb the hit
         // for free — the same hole the membership check above closes, one step along.
         if state.is_disabled(cell) {
-            return Err("the answer names a cell that is already disabled");
+            return Err(CommandRefusal::CellAlreadyDisabled { cell });
         }
         seen.push(cell);
     }
@@ -85,7 +93,22 @@ pub(super) fn apply(
     let broken = apply_disables(&mut state, cells);
     *ctx.pending = PendingDecision::None;
 
+    ctx.events.push(CombatEvent::HexesDisabled {
+        source,
+        target: unit,
+        cells: cells.to_vec(),
+    });
     for record in &broken {
+        let spell = ctx
+            .spells
+            .and_then(|spells| spells.name(record.spell))
+            .map(str::to_owned);
+        ctx.events.push(CombatEvent::EnchantmentBroken {
+            unit,
+            spell,
+            burned_mana: record.burned_mana,
+            trigger: record.trigger,
+        });
         info!(
             "damage: {unit:?} loses an enchantment — {} mana burned with it",
             record.burned_mana

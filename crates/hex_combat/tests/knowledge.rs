@@ -157,12 +157,12 @@ fn base_visibility_reaches_a_faction_that_owns_no_lattice() {
         .expect("the player should know a hostile lattice exists");
 
     assert_eq!(view.base().faction, Faction::Hostile);
-    assert_eq!(view.base().capacity, 3, "a lattice's shape is public");
+    assert_eq!(view.known_capacity(), None, "capacity requires divination");
     assert!(
         view.is_opaque(),
         "seeing a unit must reveal nothing about its lattice contents"
     );
-    assert_eq!(view.unknown_count(), 3);
+    assert_eq!(view.unknown_count(), None);
 }
 
 /// Seeing a unit establishes where it is and nothing else. This is the whole
@@ -192,6 +192,64 @@ fn observation_alone_reveals_no_cell_contents() {
         "no amount of looking should reveal a gem"
     );
     assert!(view.cell(LatticeCoord::ORIGIN).is_none());
+}
+
+#[test]
+fn divined_cells_refresh_from_live_truth_without_resetting_expiry() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, true);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+    let enemy_id = unit_id(&app, enemy);
+
+    let accepted = app.world_mut().resource_mut::<FactionKnowledge>().learn(
+        Faction::Player,
+        enemy_id,
+        LatticeCoord::ORIGIN,
+        KnownCell {
+            kind: CellKind::Blank,
+            mana: Some(99),
+            disabled: false,
+            source: KnowledgeSource::Divination,
+            expiry: KnowledgeExpiry::Rounds(1),
+        },
+    );
+    assert!(accepted, "precondition: base visibility exists");
+    {
+        let mut entity = app.world_mut().entity_mut(enemy);
+        let mut state = entity
+            .get_mut::<LatticeState>()
+            .expect("the enemy has live lattice state");
+        hex_lattice::apply_disables(&mut state, &[LatticeCoord::ORIGIN]);
+    }
+    app.update();
+
+    let refreshed = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, enemy_id)
+        .and_then(|known| known.cell(LatticeCoord::ORIGIN))
+        .expect("the divined cell remains known");
+    assert_eq!(
+        refreshed.kind,
+        CellKind::Gem {
+            element: ElementId(0),
+        }
+    );
+    assert_eq!(refreshed.mana, Some(5), "mana is current live truth");
+    assert!(refreshed.disabled, "disabled state is current live truth");
+    assert_eq!(
+        refreshed.expiry,
+        KnowledgeExpiry::Rounds(1),
+        "refreshing values must not extend or spend the reveal"
+    );
 }
 
 /// The ordering that must not be left to luck: decay reads `RoundElapsed`, which
@@ -259,11 +317,8 @@ fn a_one_time_reveal_lapses_at_the_round_rollover() {
         .view(Faction::Player, enemy_id)
         .expect("a view");
     assert!(view.is_opaque(), "the one-time reveal should have lapsed");
-    assert_eq!(
-        view.base().capacity,
-        3,
-        "base visibility must outlive the reveal that decayed"
-    );
+    assert_eq!(view.base().faction, Faction::Hostile);
+    assert_eq!(view.known_capacity(), None);
 }
 
 /// The dev toggle has to surface the truth through the same accessor the game
@@ -299,6 +354,8 @@ fn reveal_all_shows_the_truth_through_the_accessor() {
         .view(Faction::Player, enemy_id)
         .expect("a view");
     assert_eq!(view.revealed_count(), 3, "every cell should be exposed");
+    assert_eq!(view.known_capacity(), Some(3));
+    assert_eq!(view.unknown_count(), Some(0));
     let gem = view.cell(LatticeCoord::ORIGIN).expect("the origin gem");
     assert_eq!(
         gem.mana,

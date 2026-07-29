@@ -15,7 +15,7 @@ use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_combat::{FactionKnowledge, Initiative, KnownCell, TurnOrder};
+use hex_combat::{CombatEvent, CommandRefusal, FactionKnowledge, Initiative, KnownCell, TurnOrder};
 use hex_core::{
     CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, KnowledgeExpiry,
     KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
@@ -85,6 +85,13 @@ fn spawn(app: &mut App, id: UnitId, faction: Faction, coord: HexCoord) -> Entity
     entity
 }
 
+fn take_events(app: &mut App) -> Vec<CombatEvent> {
+    app.world_mut()
+        .resource_mut::<Messages<CombatEvent>>()
+        .drain()
+        .collect()
+}
+
 /// The defender's answer arrives as a command, and applying it disables exactly the
 /// hexes it names.
 ///
@@ -133,6 +140,14 @@ fn a_disable_decision_is_answered_through_the_command_log() {
         !app.world().resource::<PendingDecision>().is_open(),
         "answering should close the decision"
     );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::HexesDisabled {
+            source: UnitId(0),
+            target: UnitId(1),
+            cells: vec![LatticeCoord::ORIGIN],
+        }]
+    );
 }
 
 /// An answer that does not match the open decision is refused rather than applied.
@@ -152,23 +167,40 @@ fn a_mismatched_answer_is_refused() {
 
     let bad_answers = [
         // The wrong number of hexes.
-        vec![LatticeCoord::ORIGIN],
+        (
+            vec![LatticeCoord::ORIGIN],
+            CommandRefusal::WrongDisableCount {
+                expected: 2,
+                actual: 1,
+            },
+        ),
         // The same hex twice, which would satisfy the count while costing one.
-        vec![LatticeCoord::ORIGIN, LatticeCoord::ORIGIN],
+        (
+            vec![LatticeCoord::ORIGIN, LatticeCoord::ORIGIN],
+            CommandRefusal::DuplicateCell {
+                cell: LatticeCoord::ORIGIN,
+            },
+        ),
         // A cell that is not in this lattice at all.
-        vec![LatticeCoord::ORIGIN, LatticeCoord::new(9, 9)],
+        (
+            vec![LatticeCoord::ORIGIN, LatticeCoord::new(9, 9)],
+            CommandRefusal::CellOutsideLattice {
+                cell: LatticeCoord::new(9, 9),
+            },
+        ),
     ];
 
-    for cells in bad_answers {
+    for (cells, refusal) in bad_answers {
         *app.world_mut().resource_mut::<PendingDecision>() = open.clone();
+        let command = GameCommand::ChooseDisables {
+            unit: UnitId(1),
+            cells: cells.clone(),
+        };
         app.world_mut()
             .resource_mut::<CommandQueue>()
             .push(IssuedCommand {
                 seat: PlayerSeat::default(),
-                command: GameCommand::ChooseDisables {
-                    unit: UnitId(1),
-                    cells: cells.clone(),
-                },
+                command: command.clone(),
             });
         app.update();
 
@@ -184,6 +216,10 @@ fn a_mismatched_answer_is_refused() {
         assert!(
             app.world().resource::<PendingDecision>().is_open(),
             "a refused answer should leave the decision open: {cells:?}"
+        );
+        assert_eq!(
+            take_events(&mut app),
+            vec![CombatEvent::CommandRefused { command, refusal }]
         );
     }
 }
@@ -271,6 +307,18 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .and_then(|known| known.cell(LatticeCoord::ORIGIN))
             .is_some(),
         "knowledge of a revivable downed unit must survive until actual despawn"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::HexesDisabled {
+                source: UnitId(0),
+                target: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
+            },
+            CombatEvent::Downed { unit: UnitId(1) },
+        ],
+        "exact disables precede the downing they caused"
     );
 }
 

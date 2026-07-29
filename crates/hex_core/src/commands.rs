@@ -71,8 +71,7 @@ pub enum GameCommand {
         /// Whose turn ends.
         unit: UnitId,
     },
-    /// Cast a spell. **Not built** — waits on lattices being wired into units
-    /// (HEX-12).
+    /// Cast a spell through the lattice and combat appliers.
     ///
     /// The payload is settled ahead of the implementation on purpose: the
     /// command log is the replay log, so every field is a permanent save
@@ -104,13 +103,12 @@ pub enum GameCommand {
     },
     /// Answer an open [`PendingDecision`]: which of a unit's hexes a hit takes down.
     ///
-    /// **Not built** — waits on the damage model. The payload is settled ahead of it
-    /// for the same reason [`Self::Cast`]'s was: this is the one command whose *absence*
-    /// would break replay. Damage does not choose its own hexes — the defender does —
-    /// so if the choice were made inside the applier and never written down, replaying
-    /// the log would re-derive it and could pick differently. Recording the exact cells
-    /// is what keeps a fight reproducible, and it is the same seam a second player
-    /// answers through in co-op.
+    /// The payload is recorded because this is the one command whose *absence* would
+    /// break replay. Damage does not choose its own hexes — the defender does — so if
+    /// the choice were made inside the applier and never written down, replaying the log
+    /// would re-derive it and could pick differently. Recording the exact cells is what
+    /// keeps a fight reproducible, and it is the same seam a second player answers
+    /// through in co-op.
     ChooseDisables {
         /// Whose lattice — **the unit taking the damage**, not the one dealing it.
         unit: UnitId,
@@ -237,9 +235,8 @@ pub struct Busy;
 
 /// The sim is waiting on a decision from a seat before resolution continues.
 ///
-/// **Nothing sets this yet** — the damage model does. It is defined here so the
-/// vocabulary is stable, and it is an **enum behind a resource** rather than the marker
-/// component it started as, for two reasons.
+/// The damage model sets this while resolution waits. It is an **enum behind a
+/// resource** rather than the marker component it started as, for two reasons.
 ///
 /// A decision has a payload — who chooses, how many hexes, and who is hitting them —
 /// and a marker cannot carry one. And there is at most one open decision at a time by

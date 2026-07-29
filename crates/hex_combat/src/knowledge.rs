@@ -33,17 +33,10 @@
 //! something about a hostile lattice goes through it — the AI included — and
 //! reading a hostile [`LatticeState`](hex_lattice::LatticeState) directly is a bug.
 //!
-//! # What is not wired yet
-//!
-//! No unit carries a lattice: `LatticeSpec` and `LatticeState` are components
-//! today, but nothing attaches them, and `lattices.ron` does not exist. Wiring
-//! them onto units is HEX-12's first deliverable. Until it lands the publishing
-//! systems below match no entities and the store stays empty — which is why the
-//! tests spawn the components directly rather than proving the store works by
-//! watching the running game, where it currently has nothing to describe.
-//!
-//! `Reveal` (the shipped "Scrying Eye") reaches this store through the cast path,
-//! which HEX-12 also lands. This half is the store and the accessor.
+//! Units receive lattices from `lattices.ron` during gameplay setup. `Reveal`
+//! (the shipped "Scrying Eye") writes complete, expiring views here through the
+//! cast applier; the systems below keep those already-earned facts current without
+//! extending their lifetime.
 
 use std::collections::BTreeMap;
 
@@ -75,18 +68,14 @@ impl From<Faction> for FactionKey {
     }
 }
 
-/// The facts about a lattice its owner cannot hide.
+/// The facts about a unit that ordinary visibility establishes.
 ///
-/// **A lattice's shape is public; its contents are not.** How many cells a
-/// character has is apparent from looking at them, so it is available without any
-/// reveal at all — which is what makes the v1 readout "unknown lattice, N hexes"
-/// honest rather than a placeholder.
+/// Existence and faction are public once a subject is observed. Lattice capacity,
+/// formation, cell contents, mana, and disabled state all require divination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaseVisibility {
     /// The side the subject fights for.
     pub faction: Faction,
-    /// How many cells the subject's lattice has.
-    pub capacity: usize,
 }
 
 /// One known cell, with where the knowledge came from and when it lapses.
@@ -99,12 +88,12 @@ pub struct BaseVisibility {
 pub struct KnownCell {
     /// What the inscription puts in the cell.
     pub kind: CellKind,
-    /// Mana held when the fact was learned.
+    /// Mana currently held while this fact remains divined.
     ///
     /// [`None`] when the reveal exposed the cell's existence but not its charge,
     /// which is a different thing from an empty gem and must not read as one.
     pub mana: Option<u16>,
-    /// Whether the cell was disabled when the fact was learned.
+    /// Whether the cell is currently disabled while this fact remains divined.
     pub disabled: bool,
     /// Which channel wrote this fact.
     pub source: KnowledgeSource,
@@ -119,7 +108,15 @@ pub struct KnownCell {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatticeKnowledge {
     base: BaseVisibility,
+    capacity: Option<KnownCapacity>,
     cells: BTreeMap<LatticeCoord, KnownCell>,
+}
+
+/// A learned capacity and the clock that governs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct KnownCapacity {
+    value: usize,
+    expiry: KnowledgeExpiry,
 }
 
 impl LatticeKnowledge {
@@ -128,6 +125,7 @@ impl LatticeKnowledge {
     pub fn new(base: BaseVisibility) -> Self {
         Self {
             base,
+            capacity: None,
             cells: BTreeMap::new(),
         }
     }
@@ -136,6 +134,12 @@ impl LatticeKnowledge {
     #[must_use]
     pub fn base(&self) -> BaseVisibility {
         self.base
+    }
+
+    /// The divined lattice capacity, or [`None`] while capacity remains hidden.
+    #[must_use]
+    pub fn known_capacity(&self) -> Option<usize> {
+        self.capacity.map(|known| known.value)
     }
 
     /// What is known about one cell, or [`None`] if it has not been revealed.
@@ -155,14 +159,15 @@ impl LatticeKnowledge {
         self.cells.len()
     }
 
-    /// How many cells remain unknown.
+    /// How many cells remain unknown, when capacity itself has been learned.
     ///
     /// Saturating rather than wrapping: base visibility and the revealed set are
     /// written by different systems, and a capacity that has not caught up with a
     /// reveal must read as zero unknown rather than as four billion.
     #[must_use]
-    pub fn unknown_count(&self) -> usize {
-        self.base.capacity.saturating_sub(self.cells.len())
+    pub fn unknown_count(&self) -> Option<usize> {
+        self.known_capacity()
+            .map(|capacity| capacity.saturating_sub(self.cells.len()))
     }
 
     /// Whether nothing at all has been revealed about this lattice.
@@ -180,6 +185,11 @@ impl LatticeKnowledge {
         self.cells.insert(coord, cell)
     }
 
+    /// Records the lattice capacity with the same expiry vocabulary as known cells.
+    fn learn_capacity(&mut self, value: usize, expiry: KnowledgeExpiry) {
+        self.capacity = Some(KnownCapacity { value, expiry });
+    }
+
     /// Drops what was known about one cell.
     pub fn forget(&mut self, coord: LatticeCoord) -> Option<KnownCell> {
         self.cells.remove(&coord)
@@ -190,6 +200,12 @@ impl LatticeKnowledge {
     /// Base visibility is untouched — it never decays, because it was never
     /// hidden.
     fn decay(&mut self) {
+        self.capacity = self.capacity.and_then(|mut known| {
+            known.expiry.tick().map(|remaining| {
+                known.expiry = remaining;
+                known
+            })
+        });
         self.cells.retain(|_, cell| match cell.expiry.tick() {
             Some(remaining) => {
                 cell.expiry = remaining;
@@ -241,9 +257,8 @@ impl FactionKnowledge {
 
     /// Publishes the facts a subject cannot hide from a viewer.
     ///
-    /// Idempotent: re-publishing updates base visibility and leaves revealed
-    /// cells alone, so a capacity that changes mid-fight does not erase what
-    /// divination has already exposed.
+    /// Idempotent: re-publishing updates faction and leaves every divined fact
+    /// alone.
     pub fn observe_base(&mut self, viewer: Faction, subject: UnitId, base: BaseVisibility) {
         self.by_view
             .entry((viewer.into(), subject))
@@ -274,6 +289,38 @@ impl FactionKnowledge {
         }
     }
 
+    /// Reveals a subject's complete live lattice for one expiry window.
+    ///
+    /// Returns the exact coordinates revealed, or [`None`] when base visibility was
+    /// never published. Refusing to invent that base entry preserves the distinction
+    /// between "unknown subject" and "known subject with an opaque lattice".
+    pub(crate) fn reveal(
+        &mut self,
+        viewer: Faction,
+        subject: UnitId,
+        spec: &LatticeSpec,
+        state: &LatticeState,
+        expiry: KnowledgeExpiry,
+    ) -> Option<Vec<LatticeCoord>> {
+        let known = self.by_view.get_mut(&(viewer.into(), subject))?;
+        known.learn_capacity(spec.capacity(), expiry);
+        let mut revealed = Vec::with_capacity(spec.capacity());
+        for (coord, kind) in spec.cells() {
+            known.learn(
+                coord,
+                KnownCell {
+                    kind,
+                    mana: Some(state.mana(coord)),
+                    disabled: state.is_disabled(coord),
+                    source: KnowledgeSource::Divination,
+                    expiry,
+                },
+            );
+            revealed.push(coord);
+        }
+        Some(revealed)
+    }
+
     /// Drops what a viewer knew about one cell.
     pub fn forget(&mut self, viewer: Faction, subject: UnitId, coord: LatticeCoord) {
         if let Some(known) = self.by_view.get_mut(&(viewer.into(), subject)) {
@@ -283,9 +330,8 @@ impl FactionKnowledge {
 
     /// Drops everything every faction knew about one subject.
     ///
-    /// For a unit leaving the fight: knowledge of a lattice that is no longer
-    /// present would otherwise outlive it and be published to a later unit that
-    /// reused the id.
+    /// For actual despawn or session teardown, never for downing: a downed entity
+    /// remains revivable and keeps its stable id and lattice.
     pub fn forget_subject(&mut self, subject: UnitId) {
         self.by_view.retain(|&(_, known), _| known != subject);
         self.truth.remove(&subject);
@@ -334,12 +380,21 @@ pub(crate) fn plugin(app: &mut App) {
         .init_resource::<RevealAll>()
         .add_systems(
             Update,
-            (publish_base_visibility, mirror_truth)
+            publish_base_visibility
+                .in_set(AppSystems::Update)
+                .in_set(PausableSystems)
+                // A Reveal applied this frame needs the existence entry first.
+                .before(crate::CombatSystems::Apply)
+                .run_if(in_state(Screen::Gameplay)),
+        )
+        .add_systems(
+            Update,
+            (refresh_known_truth, mirror_truth)
                 .chain()
                 .in_set(AppSystems::Update)
                 .in_set(PausableSystems)
-                // Publishing must precede the rollover, or a lattice that
-                // appeared this round would be decayed before it was ever known.
+                // Payment, damage and Reveal all write facts this projection reads.
+                .after(crate::CombatSystems::Apply)
                 .before(crate::CombatSystems::Advance)
                 .run_if(in_state(Screen::Gameplay)),
         )
@@ -364,11 +419,11 @@ fn reset(mut knowledge: ResMut<FactionKnowledge>, mut reveal: ResMut<RevealAll>)
     *reveal = RevealAll(false);
 }
 
-/// Publishes what nobody can hide: every faction learns every lattice's size.
+/// Publishes what ordinary visibility establishes: existence and faction.
 ///
 /// Base visibility is published to every faction present rather than only to
-/// hostile ones. A side knowing its own capacity is trivially true, and the
-/// uniform rule means a future neutral or allied-fog case needs no new writer.
+/// hostile ones. The uniform rule means a future neutral or allied-fog case needs
+/// no new writer.
 ///
 /// The viewer set is every faction with a unit in the world, **not** every
 /// faction that owns a lattice. Those differ: a side whose units carry no lattice
@@ -391,17 +446,48 @@ fn publish_base_visibility(
             present.push(*faction);
         }
     }
-    let mut rows: Vec<(UnitId, Faction, usize)> = subjects
+    let mut rows: Vec<(UnitId, Faction)> = subjects
         .iter()
-        .map(|(unit, faction, spec)| (*unit, *faction, spec.capacity()))
+        .map(|(unit, faction, _)| (*unit, *faction))
         .collect();
     present.sort_by_key(|faction| FactionKey::from(*faction));
-    rows.sort_by_key(|&(unit, _, _)| unit);
+    rows.sort_by_key(|&(unit, _)| unit);
 
-    for (unit, faction, capacity) in rows {
-        let base = BaseVisibility { faction, capacity };
+    for (unit, faction) in rows {
+        let base = BaseVisibility { faction };
         for viewer in &present {
             knowledge.observe_base(*viewer, unit, base);
+        }
+    }
+}
+
+/// Refreshes facts already earned by divination from current battle truth.
+///
+/// Only value fields change. Source and expiry remain untouched, so spending mana or
+/// taking damage appears immediately without a frame of stale authority and without
+/// silently extending the reveal.
+fn refresh_known_truth(
+    mut knowledge: ResMut<FactionKnowledge>,
+    subjects: Query<(&UnitId, &LatticeSpec, &LatticeState)>,
+) {
+    for (subject, spec, state) in &subjects {
+        for ((_, known_subject), known) in &mut knowledge.by_view {
+            if known_subject != subject {
+                continue;
+            }
+            if let Some(capacity) = &mut known.capacity {
+                capacity.value = spec.capacity();
+            }
+            for (coord, kind) in spec.cells() {
+                if let Some(cell) = known.cells.get_mut(&coord) {
+                    if cell.source != KnowledgeSource::Divination {
+                        continue;
+                    }
+                    cell.kind = kind;
+                    cell.mana = Some(state.mana(coord));
+                    cell.disabled = state.is_disabled(coord);
+                }
+            }
         }
     }
 }
@@ -427,10 +513,8 @@ fn mirror_truth(
 
     let mut truth = BTreeMap::new();
     for (unit, faction, spec, state) in &subjects {
-        let mut known = LatticeKnowledge::new(BaseVisibility {
-            faction: *faction,
-            capacity: spec.capacity(),
-        });
+        let mut known = LatticeKnowledge::new(BaseVisibility { faction: *faction });
+        known.learn_capacity(spec.capacity(), KnowledgeExpiry::Sustained);
         for (coord, kind) in spec.cells() {
             known.learn(
                 coord,
@@ -479,7 +563,6 @@ mod tests {
     fn base() -> BaseVisibility {
         BaseVisibility {
             faction: Faction::Hostile,
-            capacity: 4,
         }
     }
 
@@ -501,9 +584,7 @@ mod tests {
         assert!(knowledge.view(Faction::Player, UnitId(1)).is_none());
     }
 
-    /// Knowing a lattice exists and knowing nothing about its contents are
-    /// different answers, and collapsing them would make "unknown lattice, N
-    /// hexes" unrenderable.
+    /// Knowing a lattice exists reveals neither its capacity nor its contents.
     #[test]
     fn base_visibility_is_available_without_any_reveal() {
         let mut knowledge = FactionKnowledge::default();
@@ -511,8 +592,9 @@ mod tests {
 
         let view = knowledge.view(Faction::Player, UnitId(1)).expect("a view");
         assert!(view.is_opaque(), "nothing has been revealed");
-        assert_eq!(view.base().capacity, 4);
-        assert_eq!(view.unknown_count(), 4);
+        assert_eq!(view.base().faction, Faction::Hostile);
+        assert_eq!(view.known_capacity(), None);
+        assert_eq!(view.unknown_count(), None);
         assert_eq!(view.revealed_count(), 0);
     }
 
@@ -562,11 +644,8 @@ mod tests {
         knowledge.decay();
         let view = knowledge.view(Faction::Player, UnitId(1)).expect("a view");
         assert!(view.is_opaque(), "the reveal has lapsed");
-        assert_eq!(
-            view.base().capacity,
-            4,
-            "base visibility must survive the decay that took the reveal"
-        );
+        assert_eq!(view.base().faction, Faction::Hostile);
+        assert_eq!(view.known_capacity(), None);
     }
 
     /// The design's one-time reveal, spelled `Rounds(0)`: known for the rest of
@@ -682,19 +761,18 @@ mod tests {
             Faction::Player,
             UnitId(1),
             BaseVisibility {
-                faction: Faction::Hostile,
-                capacity: 9,
+                faction: Faction::Player,
             },
         );
 
         let view = knowledge.view(Faction::Player, UnitId(1)).expect("a view");
-        assert_eq!(view.base().capacity, 9);
+        assert_eq!(view.base().faction, Faction::Player);
         assert_eq!(
             view.revealed_count(),
             1,
             "a reveal must survive a republish"
         );
-        assert_eq!(view.unknown_count(), 8);
+        assert_eq!(view.known_capacity(), None);
     }
 
     #[test]
@@ -721,13 +799,13 @@ mod tests {
     fn unknown_count_cannot_underflow() {
         let mut view = LatticeKnowledge::new(BaseVisibility {
             faction: Faction::Hostile,
-            capacity: 0,
         });
+        view.learn_capacity(0, KnowledgeExpiry::Sustained);
         view.learn(
             LatticeCoord::ORIGIN,
             cell(KnowledgeExpiry::Sustained, KnowledgeSource::Divination),
         );
-        assert_eq!(view.unknown_count(), 0);
+        assert_eq!(view.unknown_count(), Some(0));
     }
 
     /// A later reveal replaces an earlier one rather than merging with it: the

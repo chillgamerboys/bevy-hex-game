@@ -6,6 +6,8 @@ use hex_anim::Transformation;
 use hex_core::{Busy, TilePos, UnitId};
 use hex_units::{Footing, HexPathingLine, MovingTo, Standing};
 
+use crate::{CombatData, CommandRefusal, UnitData};
+
 use super::{ActorQuery, TileQuery, Verb};
 
 /// Applies a move, or returns the reason it was refused.
@@ -17,40 +19,59 @@ pub(super) fn apply(
     unit: UnitId,
     entity: Entity,
     path: &[TilePos],
-) -> Result<(), &'static str> {
+) -> Result<(), CommandRefusal> {
     // `in_combat` is the mode at application. A click emitted in the last
     // exploring frame can therefore apply as the first combat move, billed
     // like any other — accepted: it is validated against the same rules as a
     // move ordered a frame later, and the one-frame window cannot be closed
     // without stamping commands with the mode they were issued under.
     if ctx.in_combat && ctx.turn_order.current() != Some(unit) {
-        return Err("not this unit's turn");
+        return Err(CommandRefusal::NotCurrentTurn {
+            current: ctx.turn_order.current(),
+        });
     }
     let Ok((standing, body, turn, busy, _, _)) = actors.get_mut(entity) else {
-        return Err("unit no longer exists");
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::EntityRecord,
+        });
     };
-    let (Some(standing), Some(body)) = (standing, body) else {
-        return Err("unit has no standing or body to walk with");
+    let Some(standing) = standing else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::Standing,
+        });
+    };
+    let Some(body) = body else {
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::Body,
+        });
     };
     if busy || ctx.committed.contains(&entity) {
-        return Err("unit is still finishing its last action");
+        return Err(CommandRefusal::Busy);
     }
     let Some(table) = ctx.table else {
-        return Err("no substance table to ground the path against");
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SubstanceTable,
+        });
     };
     let footing = Footing::from_tiles(tiles.iter(), table, *body);
     let Some(steps) = ground_path(path, standing.0, &footing) else {
-        return Err("path is not walkable from where the unit stands");
+        return Err(CommandRefusal::InvalidPath);
     };
 
     // A route of N surfaces costs N-1 steps.
     let cost = u32::try_from(steps.len().saturating_sub(1)).unwrap_or(u32::MAX);
     if ctx.in_combat {
         let Some(mut turn) = turn else {
-            return Err("no turn to spend movement from");
+            return Err(CommandRefusal::NoTurn);
         };
         if cost > turn.movement_left {
-            return Err("path costs more movement than remains");
+            return Err(CommandRefusal::MovementBudgetExceeded {
+                cost,
+                remaining: turn.movement_left,
+            });
         }
         turn.movement_left -= cost;
     }

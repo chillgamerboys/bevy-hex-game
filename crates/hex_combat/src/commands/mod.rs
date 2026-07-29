@@ -32,6 +32,7 @@
 //! commands too. Validation is what differs by [`Mode`] — free movement in
 //! real time, turn ownership and budgets in combat.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use hex_anim::Transformation;
@@ -45,6 +46,7 @@ use hex_core::{
 };
 use hex_units::{Body, Faction, MovingTo, StandsOn, UnitRegistry};
 
+use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
 
 pub(crate) mod cast;
@@ -112,6 +114,10 @@ struct Verb<'a> {
     /// wave 3's additions, and casting a burn is a verb needing a fact the handlers
     /// lacked. One field here rather than a ninth argument on `cast::apply`.
     effects: &'a mut crate::effects::PersistentEffects,
+    /// Knowledge written by divination effects after a cast resolves.
+    knowledge: &'a mut crate::knowledge::FactionKnowledge,
+    /// Structured outcomes accumulated in command order for presentation consumers.
+    events: &'a mut Vec<CombatEvent>,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
     /// Units this drain already committed presentation for. `Busy` lands via
@@ -119,6 +125,15 @@ struct Verb<'a> {
     /// drain this set is the truth.
     committed: &'a mut Vec<Entity>,
     in_combat: bool,
+}
+
+/// Mutable resolution stores grouped to stay inside Bevy's system-parameter arity.
+#[derive(SystemParam)]
+struct ResolutionStores<'w> {
+    pending: ResMut<'w, PendingDecision>,
+    effects: ResMut<'w, crate::effects::PersistentEffects>,
+    knowledge: ResMut<'w, crate::knowledge::FactionKnowledge>,
+    events: MessageWriter<'w, CombatEvent>,
 }
 
 pub(crate) fn plugin(app: &mut App) {
@@ -219,20 +234,20 @@ fn apply_commands(
     spells: Option<Res<SpellBook>>,
     content: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
-    mut pending: ResMut<PendingDecision>,
-    mut effects: ResMut<crate::effects::PersistentEffects>,
+    mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
     tiles: TileQuery,
     mut actors: ActorQuery,
     mut lattices: cast::LatticeQuery,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
+    let mut emitted: Vec<CombatEvent> = Vec::new();
     let in_combat = *mode.get() == Mode::Combat;
 
     while let Some(issued) = queue.pop() {
         let unit = issued.command.unit();
         let Some(entity) = registry.entity_of(unit) else {
-            drop_command(&issued, "no such unit");
+            drop_command(&mut emitted, &issued, CommandRefusal::UnknownUnit);
             continue;
         };
 
@@ -245,7 +260,14 @@ fn apply_commands(
             .and_then(|(_, _, _, _, owner, _)| owner.copied())
             .unwrap_or_default();
         if owner.0 != issued.seat {
-            drop_command(&issued, "issued by a seat that does not own the unit");
+            drop_command(
+                &mut emitted,
+                &issued,
+                CommandRefusal::WrongSeat {
+                    issued_by: issued.seat,
+                    owned_by: owner.0,
+                },
+            );
             continue;
         }
 
@@ -259,8 +281,10 @@ fn apply_commands(
                 .as_deref()
                 .zip(elements.as_deref())
                 .map(|(index, elements)| index.tables(elements)),
-            pending: &mut pending,
-            effects: &mut effects,
+            pending: &mut stores.pending,
+            effects: &mut stores.effects,
+            knowledge: &mut stores.knowledge,
+            events: &mut emitted,
             combat: combat.as_deref(),
             committed: &mut committed,
             in_combat,
@@ -303,21 +327,24 @@ fn apply_commands(
                 target,
                 facing,
             ),
-            GameCommand::Channel { .. } => {
-                Err("channelling waits on the initiative question being settled")
-            }
+            GameCommand::Channel { .. } => Err(CommandRefusal::ChannelUnavailable),
             GameCommand::ChooseDisables { ref cells, .. } => {
                 choose_disables::apply(&mut verb, &mut lattices, unit, entity, cells)
             }
         };
 
-        if let Err(reason) = outcome {
-            drop_command(&issued, reason);
+        if let Err(refusal) = outcome {
+            drop_command(&mut emitted, &issued, refusal);
         }
     }
+    stores.events.write_batch(emitted);
 }
 
 /// Says exactly what was refused and why, once per drop.
-fn drop_command(issued: &IssuedCommand, reason: &str) {
-    warn!("command dropped ({reason}): {issued:?}");
+fn drop_command(events: &mut Vec<CombatEvent>, issued: &IssuedCommand, refusal: CommandRefusal) {
+    warn!("command dropped ({refusal:?}): {issued:?}");
+    events.push(CombatEvent::CommandRefused {
+        command: issued.command.clone(),
+        refusal,
+    });
 }

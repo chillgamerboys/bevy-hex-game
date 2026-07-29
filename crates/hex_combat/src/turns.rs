@@ -48,9 +48,9 @@ use hex_units::{
 /// Where a unit sits in the turn order. Higher acts first.
 ///
 /// A component so the rule is swappable without touching anything that reads it. The
-/// design proposes deriving this from lattice size — which would also give a large
+/// design proposes deriving this from lattice size — which could also give a large
 /// lattice several slots in the order, solving boss action economy with the same
-/// mechanic — but lattices do not exist yet, so this is a number on a unit.
+/// mechanic — but that policy remains unsettled, so this is a number on a unit.
 ///
 /// **No randomness.** The design is explicit that uncertainty should come from hidden
 /// information rather than dice, and a turn order that a player cannot predict makes
@@ -492,6 +492,7 @@ fn check_for_downed(
     registry: Res<UnitRegistry>,
     settings: Option<Res<CombatSettings>>,
     units: Query<(Entity, &UnitId, &LatticeSpec, &LatticeState), Without<Downed>>,
+    mut events: MessageWriter<crate::CombatEvent>,
 ) {
     for (entity, &unit, spec, state) in &units {
         // A lattice with no cells at all is not a downed unit — it is a unit with no
@@ -502,6 +503,7 @@ fn check_for_downed(
         let held_the_turn = turn_order.current() == Some(unit);
         commands.entity(entity).insert(Downed).remove::<Turn>();
         turn_order.remove(unit);
+        events.write(crate::CombatEvent::Downed { unit });
         info!("{unit:?} is down — every hex disabled");
 
         // **Hand the turn on, or the fight stalls forever.** `advance_turn` only acts

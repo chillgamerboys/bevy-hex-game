@@ -1282,7 +1282,7 @@ mod tests {
         }
         // The control, and the reason this is not just a ban on everything: the spells
         // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle", "Metal Shield"] {
+        for name in ["Ember", "Kindle", "Metal Shield", "Scrying Eye"] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");
             assert!(

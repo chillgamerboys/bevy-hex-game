@@ -4,6 +4,8 @@ use bevy::prelude::*;
 
 use hex_core::UnitId;
 
+use crate::{CommandRefusal, UnitData};
+
 use super::{ActorQuery, Verb};
 
 /// Ends a turn, or returns the reason it was refused.
@@ -12,18 +14,23 @@ pub(super) fn apply(
     actors: &mut ActorQuery,
     unit: UnitId,
     entity: Entity,
-) -> Result<(), &'static str> {
+) -> Result<(), CommandRefusal> {
     if !ctx.in_combat {
-        return Err("no turns to end outside combat");
+        return Err(CommandRefusal::CombatOnly);
     }
     if ctx.turn_order.current() != Some(unit) {
-        return Err("not this unit's turn");
+        return Err(CommandRefusal::NotCurrentTurn {
+            current: ctx.turn_order.current(),
+        });
     }
     let Ok((_, _, turn, _, _, _)) = actors.get_mut(entity) else {
-        return Err("unit no longer exists");
+        return Err(CommandRefusal::MissingUnitData {
+            unit,
+            data: UnitData::EntityRecord,
+        });
     };
     let Some(mut turn) = turn else {
-        return Err("current unit carries no turn to end");
+        return Err(CommandRefusal::NoTurn);
     };
     // Yield everything. Deliberately legal while the unit is still moving:
     // ending a turn is a declaration, not presentation, and `advance_turn`

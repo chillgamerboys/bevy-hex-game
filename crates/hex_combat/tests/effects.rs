@@ -21,7 +21,7 @@ use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
     ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec,
 };
-use hex_combat::{Initiative, PersistentEffects, TurnOrder};
+use hex_combat::{CombatEvent, FactionKnowledge, Initiative, PersistentEffects, TurnOrder};
 use hex_core::{
     CommandQueue, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan, IssuedCommand,
     LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
@@ -74,6 +74,23 @@ fn spells(burn_turns: u16) -> SpellBook {
         },
     );
     by_name.insert(
+        "Ember".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: single.clone(),
+            effects: vec![Effect::DisableHexes {
+                count: 1,
+                targeted: false,
+            }],
+        },
+    );
+    by_name.insert(
         "Ward".to_owned(),
         Spell {
             requirements: vec![GemRequirement {
@@ -85,6 +102,24 @@ fn spells(burn_turns: u16) -> SpellBook {
             co_castable: false,
             targeting: single,
             effects: Vec::new(),
+        },
+    );
+    by_name.insert(
+        "Scry".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 3,
+                shape: TargetShape::Single,
+                needs_los: false,
+            },
+            effects: vec![Effect::Reveal { tier: 1 }],
         },
     );
     SpellBook::from_file(&SpellFile { spells: by_name })
@@ -145,6 +180,13 @@ struct Seam {
     answered_by_command: bool,
 }
 
+#[derive(Resource, Default)]
+struct CapturedEvents(Vec<CombatEvent>);
+
+fn capture_events(mut events: MessageReader<CombatEvent>, mut captured: ResMut<CapturedEvents>) {
+    captured.0.extend(events.read().cloned());
+}
+
 /// Samples the seam between deciding and applying.
 fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam: ResMut<Seam>) {
     if !pending.is_open() {
@@ -183,11 +225,16 @@ fn test_app(burn_turns: u16) -> App {
     app.insert_resource(index);
 
     app.init_resource::<Seam>();
+    app.init_resource::<CapturedEvents>();
     app.add_systems(
         Update,
         watch_seam
             .after(hex_combat::CombatSystems::Act)
             .before(hex_combat::CombatSystems::Apply),
+    );
+    app.add_systems(
+        Update,
+        capture_events.after(hex_combat::CombatSystems::Advance),
     );
 
     while app.plugins_state() != PluginsState::Cleaned {
@@ -278,6 +325,74 @@ fn two_casters(app: &mut App) -> Fight {
     }
 }
 
+fn two_scriers(app: &mut App) -> Fight {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::new_cubic(1, -1, 0);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Scry", "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    Fight {
+        caster,
+        defender,
+        defender_pos: TilePos::new(defender_coord, GROUND),
+    }
+}
+
+fn two_ember_casters(app: &mut App) -> Fight {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::new_cubic(1, -1, 0);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Ember", "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    Fight {
+        caster,
+        defender,
+        defender_pos: TilePos::new(defender_coord, GROUND),
+    }
+}
+
 fn push(app: &mut App, command: GameCommand) {
     app.world_mut()
         .resource_mut::<CommandQueue>()
@@ -287,6 +402,10 @@ fn push(app: &mut App, command: GameCommand) {
         });
 }
 
+fn take_events(app: &mut App) -> Vec<CombatEvent> {
+    std::mem::take(&mut app.world_mut().resource_mut::<CapturedEvents>().0)
+}
+
 /// Casts "Kindle" at `target` and yields the rest of the caster's turn.
 fn kindle(app: &mut App, caster: UnitId, target: TilePos) {
     push(
@@ -294,6 +413,36 @@ fn kindle(app: &mut App, caster: UnitId, target: TilePos) {
         GameCommand::Cast {
             unit: caster,
             spell: "Kindle".to_owned(),
+            target,
+            facing: None,
+            mana: None,
+        },
+    );
+    push(app, GameCommand::EndTurn { unit: caster });
+    app.update();
+}
+
+fn scry(app: &mut App, caster: UnitId, target: TilePos) {
+    push(
+        app,
+        GameCommand::Cast {
+            unit: caster,
+            spell: "Scry".to_owned(),
+            target,
+            facing: None,
+            mana: None,
+        },
+    );
+    push(app, GameCommand::EndTurn { unit: caster });
+    app.update();
+}
+
+fn cast_named(app: &mut App, caster: UnitId, spell: &str, target: TilePos) {
+    push(
+        app,
+        GameCommand::Cast {
+            unit: caster,
+            spell: spell.to_owned(),
             target,
             facing: None,
             mana: None,
@@ -404,6 +553,180 @@ fn casting_a_burn_starts_a_countdown_rather_than_landing_damage() {
     assert_eq!(effect.target, UnitId(2));
     assert_eq!(effect.payload, EffectPayload::Burn);
     assert_eq!(effect.end, EffectEnd::AfterTurns(2));
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::Cast {
+                caster: UnitId(1),
+                spell: "Kindle".to_owned(),
+                target: fight.defender_pos,
+            },
+            CombatEvent::BurnApplied {
+                source: UnitId(1),
+                target: UnitId(2),
+                turns: 2,
+            },
+        ],
+        "a successful cast is announced before the effect it booked"
+    );
+}
+
+#[test]
+fn reveal_exposes_a_complete_live_lattice_for_the_configured_rollovers() {
+    let mut app = test_app(2);
+    let fight = two_scriers(&mut app);
+
+    scry(&mut app, UnitId(1), fight.defender_pos);
+
+    let revealed: Vec<LatticeCoord> = app
+        .world()
+        .entity(fight.defender)
+        .get::<LatticeSpec>()
+        .expect("the defender has a lattice")
+        .cells()
+        .map(|(coord, _)| coord)
+        .collect();
+    let view = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, UnitId(2))
+        .expect("base visibility was published");
+    assert_eq!(view.known_capacity(), Some(revealed.len()));
+    assert_eq!(view.revealed_count(), revealed.len());
+    assert_eq!(view.unknown_count(), Some(0));
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::Cast {
+                caster: UnitId(1),
+                spell: "Scry".to_owned(),
+                target: fight.defender_pos,
+            },
+            CombatEvent::Revealed {
+                viewer: Faction::Player,
+                subject: UnitId(2),
+                cells: revealed,
+                rounds: 1,
+            },
+        ]
+    );
+
+    // The cast landed during round zero. Its target ends that partial round, leaving
+    // the reveal alive throughout round one.
+    push(&mut app, GameCommand::EndTurn { unit: UnitId(2) });
+    app.update();
+    assert_eq!(app.world().resource::<TurnOrder>().round, 1);
+    assert_eq!(
+        app.world()
+            .resource::<FactionKnowledge>()
+            .view(Faction::Player, UnitId(2))
+            .and_then(|known| known.known_capacity()),
+        Some(5),
+        "one configured rollover leaves the next full round visible"
+    );
+
+    push(&mut app, GameCommand::EndTurn { unit: UnitId(1) });
+    app.update();
+    push(&mut app, GameCommand::EndTurn { unit: UnitId(2) });
+    app.update();
+    assert_eq!(app.world().resource::<TurnOrder>().round, 2);
+    let expired = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, UnitId(2))
+        .expect("existence and faction remain known");
+    assert!(expired.is_opaque());
+    assert_eq!(expired.known_capacity(), None);
+    assert_eq!(expired.unknown_count(), None);
+}
+
+#[test]
+fn a_defence_reports_the_exact_damage_it_prevented() {
+    let mut app = test_app(2);
+    let fight = two_ember_casters(&mut app);
+
+    {
+        let catalog = app.world().resource::<ElementCatalog>().clone();
+        let index = app.world().resource::<ContentIndex>().clone();
+        let tables = index.tables(&catalog);
+        let mut entity = app.world_mut().entity_mut(fight.defender);
+        let spec = entity.get::<LatticeSpec>().expect("a spec").clone();
+        let mut state = entity.get_mut::<LatticeState>().expect("a state");
+        let plan = castable(&spec, &state, LatticeCoord::ORIGIN, &tables)
+            .expect("the defender can afford its ward");
+        assert!(apply_cast(&mut state, &plan, &tables));
+    }
+
+    cast_named(&mut app, UnitId(1), "Ember", fight.defender_pos);
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the fully absorbed hit opens no decision"
+    );
+    assert_eq!(disabled_count(&app, fight.defender), 0);
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::Cast {
+                caster: UnitId(1),
+                spell: "Ember".to_owned(),
+                target: fight.defender_pos,
+            },
+            CombatEvent::DamagePrevented {
+                source: UnitId(1),
+                target: UnitId(2),
+                amount: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn exact_disables_announce_the_stable_name_of_a_broken_enchantment() {
+    let mut app = test_app(2);
+    let fight = two_casters(&mut app);
+    {
+        let catalog = app.world().resource::<ElementCatalog>().clone();
+        let index = app.world().resource::<ContentIndex>().clone();
+        let tables = index.tables(&catalog);
+        let mut entity = app.world_mut().entity_mut(fight.defender);
+        let spec = entity.get::<LatticeSpec>().expect("a spec").clone();
+        let mut state = entity.get_mut::<LatticeState>().expect("a state");
+        let plan = castable(&spec, &state, LatticeCoord::ORIGIN, &tables)
+            .expect("the defender can afford its ward");
+        assert!(apply_cast(&mut state, &plan, &tables));
+    }
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(2),
+        count: 1,
+        source: UnitId(1),
+    };
+    push(
+        &mut app,
+        GameCommand::ChooseDisables {
+            unit: UnitId(2),
+            cells: vec![LatticeCoord::new(1, 0)],
+        },
+    );
+    app.update();
+
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::HexesDisabled {
+                source: UnitId(1),
+                target: UnitId(2),
+                cells: vec![LatticeCoord::new(1, 0)],
+            },
+            CombatEvent::EnchantmentBroken {
+                unit: UnitId(2),
+                spell: Some("Ward".to_owned()),
+                burned_mana: 1,
+                trigger: LatticeCoord::new(1, 0),
+            },
+        ],
+        "the outcome stream uses the content name, never the session-local SpellId"
+    );
 }
 
 /// The burn comes due at the start of the target's own turn, and takes a hex.
@@ -453,6 +776,7 @@ fn a_due_burn_routes_through_the_defender_chooses_seam() {
     let mut app = test_app(2);
     let fight = two_casters(&mut app);
     kindle(&mut app, UnitId(1), fight.defender_pos);
+    take_events(&mut app);
     run_until_acting(&mut app, UnitId(2));
     app.update();
 
@@ -475,6 +799,27 @@ fn a_due_burn_routes_through_the_defender_chooses_seam() {
         "the answer should close the decision"
     );
     assert_eq!(disabled_count(&app, fight.defender), 1);
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::BurnTicked {
+                source: UnitId(1),
+                target: UnitId(2),
+                count: 1,
+            },
+            CombatEvent::DecisionOpened {
+                decider: UnitId(2),
+                source: UnitId(1),
+                count: 1,
+            },
+            CombatEvent::HexesDisabled {
+                source: UnitId(1),
+                target: UnitId(2),
+                cells: vec![LatticeCoord::new(-3, 0)],
+            },
+        ],
+        "tick, opened decision, and exact answer must stay in causal order"
+    );
 }
 
 /// A due burn waits for the seam rather than being lost to it.
@@ -566,9 +911,9 @@ fn a_burn_ignores_the_armour_that_would_absorb_a_spell() {
 
 /// A burn ticks once per turn, however many frames that turn lasts.
 ///
-/// The tick is driven by a `(round, unit)` cursor rather than by a one-frame signal
-/// precisely so this holds. A tick keyed on "the acting unit has a burn" would fire
-/// every frame and empty a lattice in about a second.
+/// The tick is driven by the edge where a `Turn` component is newly granted. A tick
+/// keyed on "the acting unit has a burn" would fire every frame and empty a lattice
+/// in about a second.
 #[test]
 fn a_burn_ticks_once_per_turn_however_long_the_turn_lasts() {
     let mut app = test_app(4);

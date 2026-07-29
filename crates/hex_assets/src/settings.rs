@@ -1124,6 +1124,12 @@ pub struct CombatSettings {
     /// the cheapest spell in the roster. It is a knob because it is a balance number
     /// nobody has played with yet, not because it is settled.
     pub strike_disables: u16,
+    /// Further round rollovers a tier of divination survives.
+    ///
+    /// A tier-one Reveal written midway through a round is visible for the remainder
+    /// of that partial round and one complete following round, then expires at the
+    /// next rollover when this value is `1`.
+    pub divination_rounds_per_tier: u32,
     /// How turn order is decided. Only [`InitiativePolicy::FlatComponent`] is built.
     pub initiative_policy: InitiativePolicy,
     /// What a turn affords. Only [`ActionEconomy::MoveAndAction`] is built.
@@ -1213,6 +1219,13 @@ impl CombatSettings {
                     .to_owned(),
             );
         }
+        if self.divination_rounds_per_tier == 0 {
+            return Err(
+                "combat.ron: divination_rounds_per_tier must be at least 1 — zero \
+                 would make Reveal lapse at the first rollover"
+                    .to_owned(),
+            );
+        }
         match self.initiative_policy {
             InitiativePolicy::FlatComponent => {}
             other => {
@@ -1266,6 +1279,7 @@ impl Default for CombatSettings {
             default_initiative: 10,
             levels_per_bonus_range: 5,
             strike_disables: 1,
+            divination_rounds_per_tier: 1,
             initiative_policy: InitiativePolicy::FlatComponent,
             action_economy: ActionEconomy::MoveAndAction,
             channelling_trickle: ChannellingTrickle::BurstOnly,
@@ -1283,6 +1297,7 @@ struct UnvalidatedCombatSettings {
     default_initiative: u32,
     levels_per_bonus_range: u32,
     strike_disables: u16,
+    divination_rounds_per_tier: u32,
     initiative_policy: InitiativePolicy,
     action_economy: ActionEconomy,
     channelling_trickle: ChannellingTrickle,
@@ -1302,6 +1317,7 @@ impl<'de> Deserialize<'de> for CombatSettings {
             default_initiative: raw.default_initiative,
             levels_per_bonus_range: raw.levels_per_bonus_range,
             strike_disables: raw.strike_disables,
+            divination_rounds_per_tier: raw.divination_rounds_per_tier,
             initiative_policy: raw.initiative_policy,
             action_economy: raw.action_economy,
             channelling_trickle: raw.channelling_trickle,
@@ -2167,6 +2183,11 @@ mod tests {
                 "levels_per_bonus_range: 0",
                 "levels_per_bonus_range",
             ),
+            (
+                "divination_rounds_per_tier: 1",
+                "divination_rounds_per_tier: 0",
+                "divination_rounds_per_tier",
+            ),
         ];
         for (from, to, named) in cases {
             let invalid = shipped.replace(from, to);
@@ -2178,6 +2199,19 @@ mod tests {
                 "the rejection should name {named}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn divination_duration_is_required() {
+        let shipped = include_str!("../../../assets/config/combat.ron");
+        let missing = shipped.replace("    divination_rounds_per_tier: 1,\n", "");
+        let error = ron::from_str::<CombatSettings>(&missing)
+            .expect_err("a missing divination duration must not default silently")
+            .to_string();
+        assert!(
+            error.contains("divination_rounds_per_tier"),
+            "the missing-field error should name the required knob: {error}"
+        );
     }
 
     #[test]
