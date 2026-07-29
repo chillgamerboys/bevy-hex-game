@@ -20,7 +20,8 @@ use super::volume::{
     VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeaturePlan, GeneratedWorldPlan, InteriorPlan, LightId, PlannedGameplayLight, PlannedInterior,
+    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeaturePlan, GeneratedWorldPlan,
+    InteriorPlan, LightId, PlannedGameplayLight, PlannedInterior, PlannedLightPresentation,
     StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 use super::V3GenerationError;
@@ -75,6 +76,8 @@ struct CaveStreams<'a> {
     surface: SeedStream<'a>,
     materials: SeedStream<'a>,
     lights: SeedStream<'a>,
+    light_kinds: SeedStream<'a>,
+    light_rotations: SeedStream<'a>,
 }
 
 #[derive(Debug, Clone)]
@@ -101,6 +104,12 @@ struct CaveTopology {
     critical_coords: BTreeSet<HexCoord>,
     optional_coords: BTreeSet<HexCoord>,
     deepest_critical: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct CrystalLightSite {
+    origin: TilePos,
+    kind: CaveCrystalSiteKind,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -173,6 +182,8 @@ impl V3Recipe for CavesRecipe {
             surface: streams.stage("caves.surface"),
             materials: streams.stage("caves.materials"),
             lights: streams.stage("caves.lights"),
+            light_kinds: streams.stage("caves.lights.visual.kind"),
+            light_rotations: streams.stage("caves.lights.visual.rotation"),
         };
         construct_plan(
             self.layout.clone(),
@@ -396,7 +407,7 @@ fn construct_plan(
             surface_by_coord.insert(*coord, position);
         }
     }
-    let volume = VolumePlan {
+    let mut volume = VolumePlan {
         mask: mask.clone(),
         columns,
         surfaces,
@@ -433,11 +444,21 @@ fn construct_plan(
 
     let critical_targets = exact_interior_positions(&volume, &topology.critical_coords);
     let optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
+    let protected_positions = anchors.values().copied().collect();
     let lights = plan_lights(
         &volume,
         &critical_targets,
         &optional_targets,
-        streams.map(|streams| streams.lights),
+        &protected_positions,
+        streams,
+    )?;
+    carve_crystal_alcoves(
+        &mut volume,
+        &mut interior_floors,
+        &mut entrances,
+        &mut roof_voxels,
+        interior,
+        &lights,
     )?;
     let biome_regions = volume
         .surfaces
@@ -1072,21 +1093,24 @@ fn plan_lights(
     volume: &VolumePlan,
     critical: &BTreeSet<TilePos>,
     optional: &BTreeSet<TilePos>,
-    stream: Option<SeedStream<'_>>,
+    protected: &BTreeSet<TilePos>,
+    streams: Option<CaveStreams<'_>>,
 ) -> Result<BTreeMap<LightId, PlannedGameplayLight>, Vec<WorldValidationIssue>> {
-    let mut candidates: Vec<_> = critical.iter().copied().collect();
-    candidates.sort_by_key(|position| {
+    let mut candidates = crystal_light_candidates(volume, critical, protected);
+    candidates.sort_by_key(|site| {
         (
-            stream.map_or_else(
-                || fallback_light_priority(*position),
-                |stream| {
-                    stream.sample_coord(
-                        position.coord,
-                        u64::try_from(position.level).unwrap_or(u64::MAX),
+            streams.map_or_else(
+                || fallback_light_priority(site.origin),
+                |streams| {
+                    streams.lights.sample_coord(
+                        site.origin.coord,
+                        u64::try_from(site.origin.level)
+                            .unwrap_or(u64::MAX)
+                            .wrapping_add(u64::from(crystal_site_kind_tag(site.kind)) << 56),
                     )
                 },
             ),
-            *position,
+            *site,
         )
     });
     let mut uncovered = critical.clone();
@@ -1096,15 +1120,17 @@ fn plan_lights(
             .iter()
             .copied()
             .enumerate()
-            .filter_map(|(index, origin)| {
-                if !volume.surfaces.contains_key(&origin) {
+            .filter_map(|(index, site)| {
+                if lights.values().any(|light: &PlannedGameplayLight| {
+                    light.origin.coord.distance(site.origin.coord) <= 2
+                }) {
                     return None;
                 }
-                let radius = 4_u32.saturating_add(stream.map_or_else(
+                let radius = 4_u32.saturating_add(streams.map_or_else(
                     || u32::try_from(index % 4).unwrap_or_default(),
-                    |stream| {
+                    |streams| {
                         u32::try_from(
-                            stream.sample(
+                            streams.lights.sample(
                                 10_000_u64.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)),
                             ) % 4,
                         )
@@ -1113,35 +1139,66 @@ fn plan_lights(
                 ));
                 let coverage = uncovered
                     .iter()
-                    .filter(|target| illuminated(origin, radius, **target))
+                    .filter(|target| illuminated(site.origin, radius, **target))
                     .count();
                 let optional_cost = optional
                     .iter()
-                    .filter(|target| illuminated(origin, radius, **target))
+                    .filter(|target| illuminated(site.origin, radius, **target))
                     .count();
-                (coverage > 0).then_some((
-                    std::cmp::Reverse(coverage),
-                    optional_cost,
-                    origin,
-                    radius,
-                ))
+                (coverage > 0).then_some((std::cmp::Reverse(coverage), optional_cost, site, radius))
             })
             .min();
-        let Some((_, _, origin, radius)) = selected else {
+        let Some((_, _, site, radius)) = selected else {
             return Err(vec![recipe_issue(
                 "Caves cannot cover its required route with local lights",
             )]);
         };
         let id = LightId(u32::try_from(lights.len()).unwrap_or(u32::MAX));
+        let supported = supported_crystal_kinds(volume, site, protected);
+        let salt = u64::from(id.0)
+            .wrapping_shl(32)
+            .wrapping_add(u64::from(
+                u32::try_from(site.origin.level).unwrap_or(u32::MAX),
+            ))
+            .wrapping_add(u64::from(crystal_site_kind_tag(site.kind)) << 56);
+        let kind_sample = streams.map_or_else(
+            || fallback_crystal_sample(site.origin, id, 0),
+            |streams| streams.light_kinds.sample_coord(site.origin.coord, salt),
+        );
+        let kind_index = usize::try_from(
+            kind_sample % u64::try_from(supported.len()).unwrap_or(u64::MAX).max(1),
+        )
+        .unwrap_or_default();
+        let kind = supported.get(kind_index).copied().ok_or_else(|| {
+            vec![recipe_issue(
+                "Caves selected a light site without a supported crystal kind",
+            )]
+        })?;
+        let rotation_sample = streams.map_or_else(
+            || fallback_crystal_sample(site.origin, id, 1),
+            |streams| {
+                streams
+                    .light_rotations
+                    .sample_coord(site.origin.coord, salt)
+            },
+        );
+        let rotation = u8::try_from(rotation_sample % 6).unwrap_or_default();
         lights.insert(
             id,
             PlannedGameplayLight {
-                origin,
+                origin: site.origin,
                 level: IlluminationLevel::Bright,
                 radius,
+                presentation: Some(PlannedLightPresentation::CaveCrystal(
+                    CaveCrystalPresentation {
+                        kind,
+                        site: site.kind,
+                        rotation,
+                    },
+                )),
             },
         );
-        uncovered.retain(|target| !illuminated(origin, radius, *target));
+        uncovered.retain(|target| !illuminated(site.origin, radius, *target));
         if lights.len() > 64 {
             return Err(vec![recipe_issue(
                 "Caves light planner exceeded its bounded source count",
@@ -1158,6 +1215,290 @@ fn plan_lights(
         )]);
     }
     Ok(lights)
+}
+
+fn crystal_light_candidates(
+    volume: &VolumePlan,
+    critical: &BTreeSet<TilePos>,
+    protected: &BTreeSet<TilePos>,
+) -> Vec<CrystalLightSite> {
+    let mut candidates = BTreeSet::new();
+    let highest_critical_level = critical.iter().map(|position| position.level).max();
+    for target in critical {
+        for coord in target.coord.within_radius(2) {
+            let origin = TilePos::new(coord, target.level);
+            let is_open_entrance = volume
+                .surfaces
+                .iter()
+                .any(|(position, metadata)| *position == origin && metadata.interior.is_some())
+                && volume.surfaces.iter().all(|(position, metadata)| {
+                    position.coord != coord || metadata.interior.is_some()
+                });
+            if is_open_entrance {
+                continue;
+            }
+            let existing_interior: Vec<_> = volume
+                .surfaces
+                .iter()
+                .filter(|(position, metadata)| {
+                    position.coord.distance(coord) <= 1 && metadata.interior.is_some()
+                })
+                .map(|(position, _metadata)| *position)
+                .collect();
+            if existing_interior
+                .iter()
+                .any(|position| position.level != origin.level)
+            {
+                continue;
+            }
+            let connects_to_interior = volume.surfaces.iter().any(|(position, metadata)| {
+                position.coord.distance(coord) <= 2
+                    && position.level == origin.level
+                    && metadata.interior.is_some()
+            });
+            let site = CrystalLightSite {
+                origin,
+                kind: CaveCrystalSiteKind::InteriorAlcove,
+            };
+            if connects_to_interior && !supported_crystal_kinds(volume, site, protected).is_empty()
+            {
+                candidates.insert(site);
+            }
+
+            // The entrance spends every row on a one-level descent. Reserve a
+            // connected side landing near its top instead of flattening that ramp.
+            if highest_critical_level.is_none_or(|highest| target.level < highest.saturating_sub(2))
+            {
+                continue;
+            }
+            let entrance_site = CrystalLightSite {
+                origin,
+                kind: CaveCrystalSiteKind::EntranceLanding,
+            };
+            if connects_to_interior
+                && !supported_crystal_kinds(volume, entrance_site, protected).is_empty()
+            {
+                candidates.insert(entrance_site);
+            }
+        }
+    }
+    candidates.into_iter().collect()
+}
+
+fn supported_crystal_kinds(
+    volume: &VolumePlan,
+    site: CrystalLightSite,
+    protected: &BTreeSet<TilePos>,
+) -> Vec<CaveCrystalKind> {
+    [
+        CaveCrystalKind::LowCluster,
+        CaveCrystalKind::Branched,
+        CaveCrystalKind::Spire,
+    ]
+    .into_iter()
+    .filter(|kind| crystal_site_supports(volume, site, crystal_alcove_height(*kind), protected))
+    .collect()
+}
+
+const fn crystal_alcove_height(kind: CaveCrystalKind) -> i32 {
+    let height = kind.height();
+    if height < CORRIDOR_CLEARANCE {
+        CORRIDOR_CLEARANCE
+    } else {
+        height
+    }
+}
+
+fn volume_occupied(volume: &VolumePlan, position: TilePos) -> bool {
+    volume.columns.get(&position.coord).is_none_or(|column| {
+        column.elements.iter().any(|element| {
+            let levels = match element {
+                VolumeElement::Solid(mass) => mass.levels,
+                VolumeElement::Fill(fill) => fill.levels,
+            };
+            levels.bottom <= position.level && position.level < levels.top
+        })
+    })
+}
+
+fn crystal_site_supports(
+    volume: &VolumePlan,
+    site: CrystalLightSite,
+    height: i32,
+    protected: &BTreeSet<TilePos>,
+) -> bool {
+    if !(2..=4).contains(&height)
+        || protected
+            .iter()
+            .any(|position| position.coord.distance(site.origin.coord) <= 1)
+    {
+        return false;
+    }
+    let clear_top = site.origin.level.saturating_add(1).saturating_add(height);
+    site.origin.coord.within_radius(1).into_iter().all(|coord| {
+        let Some(column) = volume.columns.get(&coord) else {
+            return false;
+        };
+        if column
+            .elements
+            .iter()
+            .any(|element| matches!(element, VolumeElement::Fill(_)))
+        {
+            return false;
+        }
+        if site.kind == CaveCrystalSiteKind::EntranceLanding {
+            return true;
+        }
+
+        let outer_surface = volume
+            .surfaces
+            .iter()
+            .filter(|(position, metadata)| position.coord == coord && metadata.interior.is_none())
+            .map(|(position, _metadata)| position.level)
+            .max();
+        let Some(outer_surface) = outer_surface else {
+            return false;
+        };
+        let retained_roof: Vec<_> = column
+            .elements
+            .iter()
+            .filter_map(|element| {
+                let VolumeElement::Solid(mass) = element else {
+                    return None;
+                };
+                let bottom = mass.levels.bottom.max(clear_top);
+                (bottom < mass.levels.top).then_some(LevelInterval::new(bottom, mass.levels.top))
+            })
+            .collect();
+        let roof_contains_surface = retained_roof
+            .iter()
+            .any(|levels| levels.bottom <= outer_surface && outer_surface < levels.top);
+        let roof_bottom = retained_roof
+            .iter()
+            .map(|levels| levels.bottom)
+            .min()
+            .unwrap_or(i32::MAX);
+        roof_contains_surface
+            && outer_surface.saturating_sub(roof_bottom).saturating_add(1) >= MIN_ROOF_THICKNESS
+    })
+}
+
+fn carve_crystal_alcoves(
+    volume: &mut VolumePlan,
+    interior_floors: &mut BTreeSet<TilePos>,
+    entrances: &mut BTreeSet<TilePos>,
+    roof_voxels: &mut BTreeSet<TilePos>,
+    interior: InteriorRegionId,
+    lights: &BTreeMap<LightId, PlannedGameplayLight>,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    for (id, light) in lights {
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = light.presentation else {
+            return Err(vec![recipe_issue(format!(
+                "Caves light {id:?} has no crystal presentation"
+            ))]);
+        };
+        if crystal.rotation >= 6 {
+            return Err(vec![recipe_issue(format!(
+                "Caves light {id:?} has invalid crystal rotation {}",
+                crystal.rotation
+            ))]);
+        }
+
+        let opens_to_sky = crystal.site == CaveCrystalSiteKind::EntranceLanding;
+        for coord in light.origin.coord.within_radius(1) {
+            let Some(column) = volume.columns.get(&coord).cloned() else {
+                return Err(vec![recipe_issue(format!(
+                    "Caves light {id:?} crystal alcove escaped the patch at {coord:?}"
+                ))]);
+            };
+            let was_entrance = entrances.iter().any(|position| position.coord == coord);
+            let carved = carve_crystal_alcove_column(
+                &column,
+                light.origin.level,
+                crystal_alcove_height(crystal.kind),
+                interior,
+                opens_to_sky,
+            )?;
+            volume.columns.insert(coord, carved);
+
+            volume.surfaces.retain(|position, metadata| {
+                position.coord != coord || (!opens_to_sky && metadata.interior != Some(interior))
+            });
+            interior_floors.retain(|position| position.coord != coord);
+            entrances.retain(|position| position.coord != coord);
+            roof_voxels.retain(|position| position.coord != coord);
+
+            let floor = TilePos::new(coord, light.origin.level);
+            volume
+                .surfaces
+                .insert(floor, ordinary_surface(Some(interior)));
+            interior_floors.insert(floor);
+            if was_entrance || opens_to_sky {
+                entrances.insert(floor);
+            }
+            let Some(carved) = volume.columns.get(&coord) else {
+                return Err(vec![recipe_issue(
+                    "Caves lost a crystal alcove column while rebuilding it",
+                )]);
+            };
+            for element in &carved.elements {
+                let VolumeElement::Solid(mass) = element else {
+                    continue;
+                };
+                if mass.cutaway_for == Some(interior) {
+                    roof_voxels.extend(
+                        (mass.levels.bottom..mass.levels.top)
+                            .map(|level| TilePos::new(coord, level)),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn carve_crystal_alcove_column(
+    column: &VolumeColumn,
+    floor: i32,
+    height: i32,
+    interior: InteriorRegionId,
+    opens_to_sky: bool,
+) -> Result<VolumeColumn, Vec<WorldValidationIssue>> {
+    let clear_top = floor.saturating_add(1).saturating_add(height);
+    let mut elements = vec![
+        solid(0, 1, SolidMaterialRole::Bedrock, None),
+        solid(1, floor, SolidMaterialRole::Stone, None),
+        solid(
+            floor,
+            floor.saturating_add(1),
+            SolidMaterialRole::Gravel,
+            None,
+        ),
+    ];
+    for element in &column.elements {
+        match element {
+            VolumeElement::Solid(mass) => {
+                if opens_to_sky {
+                    continue;
+                }
+                let bottom = mass.levels.bottom.max(clear_top);
+                if bottom < mass.levels.top {
+                    elements.push(solid(
+                        bottom,
+                        mass.levels.top,
+                        mass.material,
+                        Some(interior),
+                    ));
+                }
+            }
+            VolumeElement::Fill(_) => {
+                return Err(vec![recipe_issue(
+                    "Caves cannot carve a crystal alcove through a non-solid fill",
+                )]);
+            }
+        }
+    }
+    Ok(VolumeColumn { elements })
 }
 
 fn validate_caves(
@@ -1305,6 +1646,17 @@ fn validate_caves(
         ));
     }
 
+    let light_origins: Vec<_> = plan.lights.values().map(|light| light.origin).collect();
+    if light_origins.iter().enumerate().any(|(index, origin)| {
+        light_origins
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|other| origin.coord.distance(other.coord) <= 2)
+    }) {
+        issues.push(recipe_issue(
+            "Caves crystal alcoves overlap instead of remaining distinct landmarks",
+        ));
+    }
     for (id, light) in &plan.lights {
         if light.level != IlluminationLevel::Bright || !(4..=7).contains(&light.radius) {
             issues.push(recipe_issue(format!(
@@ -1320,6 +1672,120 @@ fn validate_caves(
         {
             issues.push(recipe_issue(format!(
                 "Caves light {id:?} is not rooted inside the cave domain"
+            )));
+        }
+        if plan
+            .anchors
+            .values()
+            .any(|anchor| anchor.coord.distance(light.origin.coord) <= 1)
+        {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} crystal footprint overlaps a protected actor anchor"
+            )));
+        }
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = light.presentation else {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} has no cave-crystal presentation"
+            )));
+            continue;
+        };
+        if crystal.rotation >= 6 {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} crystal rotation {} is outside 0..6",
+                crystal.rotation
+            )));
+        }
+        let alcove_height = crystal_alcove_height(crystal.kind);
+        let mut invalid_floor = false;
+        let mut invalid_site_geometry = false;
+        let mut occupied_visual = false;
+        for coord in light.origin.coord.within_radius(1) {
+            let floor = TilePos::new(coord, light.origin.level);
+            if plan
+                .volume
+                .surfaces
+                .get(&floor)
+                .and_then(|metadata| metadata.interior)
+                != Some(*region)
+                || !interior.floors.contains(&floor)
+                || plan
+                    .volume
+                    .surface_headroom(floor)
+                    .is_none_or(|headroom| headroom.0 < alcove_height)
+            {
+                invalid_floor = true;
+            }
+            occupied_visual |= (1..=alcove_height).any(|offset| {
+                volume_occupied(
+                    &plan.volume,
+                    TilePos::new(coord, light.origin.level.saturating_add(offset)),
+                )
+            });
+            match crystal.site {
+                CaveCrystalSiteKind::EntranceLanding => {
+                    invalid_site_geometry |= !interior.entrances.contains(&floor)
+                        || plan.volume.surfaces.iter().any(|(position, metadata)| {
+                            position.coord == coord && metadata.interior.is_none()
+                        })
+                        || interior
+                            .roof_voxels
+                            .iter()
+                            .any(|position| position.coord == coord);
+                }
+                CaveCrystalSiteKind::InteriorAlcove => {
+                    let outer_surface = plan
+                        .volume
+                        .surfaces
+                        .iter()
+                        .filter(|(position, metadata)| {
+                            position.coord == coord && metadata.interior.is_none()
+                        })
+                        .map(|(position, _metadata)| position.level)
+                        .max();
+                    let roof_bottom = plan
+                        .volume
+                        .columns
+                        .get(&coord)
+                        .into_iter()
+                        .flat_map(|column| &column.elements)
+                        .filter_map(|element| match element {
+                            VolumeElement::Solid(mass) if mass.cutaway_for == Some(*region) => {
+                                Some(mass.levels.bottom)
+                            }
+                            VolumeElement::Solid(_) | VolumeElement::Fill(_) => None,
+                        })
+                        .min();
+                    invalid_site_geometry |=
+                        outer_surface
+                            .zip(roof_bottom)
+                            .is_none_or(|(outer, bottom)| {
+                                bottom
+                                    < light
+                                        .origin
+                                        .level
+                                        .saturating_add(1)
+                                        .saturating_add(alcove_height)
+                                    || outer.saturating_sub(bottom).saturating_add(1)
+                                        < MIN_ROOF_THICKNESS
+                                    || !interior.roof_voxels.contains(&TilePos::new(coord, bottom))
+                            });
+                }
+            }
+        }
+        if invalid_floor {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} does not own a flat radius-one crystal alcove with {alcove_height} clear levels"
+            )));
+        }
+        if occupied_visual {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} crystal visual envelope intersects semantic occupancy"
+            )));
+        }
+        if invalid_site_geometry {
+            issues.push(recipe_issue(format!(
+                "Caves light {id:?} does not satisfy its exact {:?} floor and roof contract",
+                crystal.site
             )));
         }
     }
@@ -1657,6 +2123,26 @@ fn fallback_light_priority(position: TilePos) -> u64 {
     xxhash_rust::xxh3::xxh3_64(&bytes)
 }
 
+const fn crystal_site_kind_tag(kind: CaveCrystalSiteKind) -> u8 {
+    match kind {
+        CaveCrystalSiteKind::InteriorAlcove => 0,
+        CaveCrystalSiteKind::EntranceLanding => 1,
+    }
+}
+
+fn fallback_crystal_sample(position: TilePos, id: LightId, domain: u8) -> u64 {
+    let [x, y, z] = position.coord.to_cubic_array();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"caves.crystal");
+    bytes.push(domain);
+    bytes.extend_from_slice(&id.0.to_le_bytes());
+    bytes.extend_from_slice(&x.to_le_bytes());
+    bytes.extend_from_slice(&y.to_le_bytes());
+    bytes.extend_from_slice(&z.to_le_bytes());
+    bytes.extend_from_slice(&position.level.to_le_bytes());
+    xxhash_rust::xxh3::xxh3_64(&bytes)
+}
+
 fn scale_template(value: i32, scale: i32) -> i32 {
     value.saturating_mul(scale) / 12
 }
@@ -1890,15 +2376,210 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_crystal_floor_roof_and_visual_volume_corruption() {
+        let selected = generate(12, 0.4, &settings(), 33).expect("Caves should generate");
+        let caves_settings = match &settings().layout {
+            V3LayoutSettings::Single(patch) => match &patch.recipe {
+                V3RecipeSettings::Caves(caves) => caves.clone(),
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        let region = *selected
+            .validated
+            .plan
+            .interiors
+            .by_id
+            .keys()
+            .next()
+            .expect("Caves should publish one interior");
+        let interior_origin = selected
+            .validated
+            .plan
+            .lights
+            .values()
+            .find_map(|light| match light.presentation {
+                Some(PlannedLightPresentation::CaveCrystal(crystal))
+                    if crystal.site == CaveCrystalSiteKind::InteriorAlcove =>
+                {
+                    Some(light.origin)
+                }
+                Some(PlannedLightPresentation::CaveCrystal(_)) | None => None,
+            })
+            .expect("reviewed Caves should contain an interior crystal alcove");
+        let entrance_origin = selected
+            .validated
+            .plan
+            .lights
+            .values()
+            .find_map(|light| match light.presentation {
+                Some(PlannedLightPresentation::CaveCrystal(crystal))
+                    if crystal.site == CaveCrystalSiteKind::EntranceLanding =>
+                {
+                    Some(light.origin)
+                }
+                Some(PlannedLightPresentation::CaveCrystal(_)) | None => None,
+            })
+            .expect("reviewed Caves should contain an entrance crystal landing");
+
+        let mut missing_floor = selected.validated.plan.clone();
+        let removed_floor = TilePos::new(
+            interior_origin
+                .coord
+                .within_radius(1)
+                .into_iter()
+                .find(|coord| *coord != interior_origin.coord)
+                .expect("a radius-one alcove has neighboring cells"),
+            interior_origin.level,
+        );
+        missing_floor
+            .interiors
+            .by_id
+            .get_mut(&region)
+            .expect("Caves should retain its interior")
+            .floors
+            .remove(&removed_floor);
+        let WorldValidation::Invalid(floor_issues) =
+            validate_caves(&missing_floor, &caves_settings)
+        else {
+            panic!("a crystal alcove with missing interior membership must fail");
+        };
+        assert!(floor_issues
+            .iter()
+            .any(|issue| issue.detail.contains("flat radius-one crystal alcove")));
+
+        let mut missing_roof = selected.validated.plan.clone();
+        let roof = missing_roof
+            .interiors
+            .by_id
+            .get(&region)
+            .and_then(|interior| {
+                interior
+                    .roof_voxels
+                    .iter()
+                    .copied()
+                    .find(|position| position.coord == interior_origin.coord)
+            })
+            .expect("an interior alcove should retain a roof");
+        missing_roof
+            .interiors
+            .by_id
+            .get_mut(&region)
+            .expect("Caves should retain its interior")
+            .roof_voxels
+            .remove(&roof);
+        let WorldValidation::Invalid(roof_issues) = validate_caves(&missing_roof, &caves_settings)
+        else {
+            panic!("a crystal alcove with missing roof membership must fail");
+        };
+        assert!(roof_issues
+            .iter()
+            .any(|issue| issue.detail.contains("floor and roof contract")));
+
+        let mut occupied_visual = selected.validated.plan;
+        occupied_visual
+            .volume
+            .columns
+            .get_mut(&entrance_origin.coord)
+            .expect("an entrance landing should retain its column")
+            .elements
+            .push(solid(
+                entrance_origin.level.saturating_add(1),
+                entrance_origin.level.saturating_add(2),
+                SolidMaterialRole::Stone,
+                None,
+            ));
+        let WorldValidation::Invalid(volume_issues) =
+            validate_caves(&occupied_visual, &caves_settings)
+        else {
+            panic!("a crystal intersecting semantic occupancy must fail");
+        };
+        assert!(volume_issues
+            .iter()
+            .any(|issue| issue.detail.contains("visual envelope")));
+    }
+
+    #[test]
     fn fixed_seed_corpus_remains_valid_without_fallbacks() {
-        for seed in [0, 1, 17, 41, 42, 808, 2_026, 736_283_041] {
+        for seed in [0, 1, 17, 33, 41, 42, 178, 445, 808, 2_026, 736_283_041] {
             let selected =
                 generate(12, 0.4, &settings(), seed).expect("fixed Caves seed should generate");
-            assert!(!selected.used_fallback, "seed {seed} used fallback");
+            assert!(
+                !selected.used_fallback,
+                "seed {seed} used fallback: {:?}",
+                selected.notes
+            );
             assert!(selected.metrics.minimum_clearance >= CORRIDOR_CLEARANCE);
             assert!(selected.metrics.maximum_clearance >= CHAMBER_CLEARANCE);
             assert!(selected.metrics.optional_dark_floors > 0);
         }
+    }
+
+    #[test]
+    fn reviewed_crystal_layouts_match_the_v3_goldens() {
+        let expected: [(u64, Option<u8>, u64, u64); 4] = [
+            (
+                33,
+                Some(1),
+                18_085_428_821_256_931_804,
+                16_715_970_756_191_823_297,
+            ),
+            (
+                178,
+                Some(4),
+                15_578_452_451_260_576_352,
+                15_852_936_182_682_831_065,
+            ),
+            (
+                445,
+                Some(5),
+                13_372_267_763_965_264_527,
+                1_525_721_581_912_758_674,
+            ),
+            (
+                736_283_041,
+                Some(2),
+                11_318_601_618_626_144_040,
+                16_767_723_275_272_645_400,
+            ),
+        ];
+        let mut crystal_kinds = BTreeSet::new();
+        let mut site_kinds = BTreeSet::new();
+        for (seed, candidate, semantic_fingerprint, map_fingerprint) in expected {
+            let selected =
+                generate(12, 0.4, &settings(), seed).expect("reviewed Caves seed should generate");
+            let build = super::super::build(12, 0.4, &settings(), seed, &palette(), &is_solid)
+                .expect("reviewed Caves seed should materialize");
+            assert_eq!(selected.selected_candidate, candidate);
+            assert_eq!(
+                selected.validated.semantic_fingerprint,
+                semantic_fingerprint
+            );
+            assert_eq!(build.report.map_fingerprint, map_fingerprint);
+            for light in selected.validated.plan.lights.values() {
+                let Some(PlannedLightPresentation::CaveCrystal(crystal)) = light.presentation
+                else {
+                    panic!("reviewed light must reserve a crystal presentation");
+                };
+                crystal_kinds.insert(crystal.kind);
+                site_kinds.insert(crystal.site);
+            }
+        }
+        assert_eq!(
+            crystal_kinds,
+            BTreeSet::from([
+                CaveCrystalKind::LowCluster,
+                CaveCrystalKind::Branched,
+                CaveCrystalKind::Spire,
+            ])
+        );
+        assert_eq!(
+            site_kinds,
+            BTreeSet::from([
+                CaveCrystalSiteKind::InteriorAlcove,
+                CaveCrystalSiteKind::EntranceLanding,
+            ])
+        );
     }
 
     #[test]
