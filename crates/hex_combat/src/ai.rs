@@ -27,10 +27,14 @@ use bevy::prelude::*;
 
 use hex_assets::SubstanceTable;
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand, Mode,
-    PausableSystems, SubstanceId, TilePos, Turn, UnitId,
+    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand,
+    LatticeCoord, Mode, PausableSystems, PendingDecision, SubstanceId, TilePos, Turn, UnitId,
 };
-use hex_units::{route, Body, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
+use hex_units::{
+    route, Body, Downed, Enemy, Faction, Footing, Player, Standing, StandsOn, UnitRegistry,
+};
+
+use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 
 use crate::turns::TurnOrder;
 
@@ -50,7 +54,7 @@ type TileQuery<'w, 's> = Query<
 pub(crate) fn plugin(app: &mut App) {
     app.add_systems(
         Update,
-        take_enemy_turn
+        (take_enemy_turn, answer_disable_decision)
             .in_set(crate::CombatSystems::Act)
             .in_set(PausableSystems)
             .run_if(in_state(Mode::Combat)),
@@ -66,6 +70,7 @@ pub(crate) fn plugin(app: &mut App) {
 fn take_enemy_turn(
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
+    pending: Res<PendingDecision>,
     mut queue: ResMut<CommandQueue>,
     acting: Query<
         (
@@ -78,13 +83,26 @@ fn take_enemy_turn(
         ),
         (With<Enemy>, Without<Busy>),
     >,
-    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
+    others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn), Without<Downed>>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
 ) {
     let Some(table) = table else {
         return;
     };
+    // Nothing is decided while resolution is parked — the same rule the applier
+    // enforces for a cast and a strike, moved one step earlier so the AI does not
+    // emit commands that will be refused.
+    //
+    // **This is what keeps a burning enemy's turn deterministic.** Persistent effects
+    // tick before `Act` and park the defender's choice there, so on a burning unit's
+    // turn a decision is open exactly when this system and the one answering it both
+    // run — and they are unordered against each other. Without this gate the strike
+    // this pushes would land or be dropped depending on which of the two the executor
+    // happened to run first, which is randomness in resolution by another name.
+    if pending.is_open() {
+        return;
+    }
     let Some(current) = turn_order
         .current()
         .and_then(|unit| registry.entity_of(unit))
@@ -95,9 +113,6 @@ fn take_enemy_turn(
         // Not an enemy's turn, or it is still mid-presentation.
         return;
     };
-    if turn.acted {
-        return;
-    }
     let Some(my_id) = unit.copied() else {
         // `begin_combat` deals ids before any turn is taken, so this is a
         // wiring bug — and it must be loud, or the fight stalls silently on a
@@ -106,6 +121,19 @@ fn take_enemy_turn(
         return;
     };
     let seat = owner.copied().unwrap_or_default().0;
+    // A strike may have opened a defender decision on the previous frame. Once
+    // that answer and the attack presentation are both finished, the action-spent
+    // turn still needs an explicit end command; prequeueing it beside the strike
+    // would make the modal gate reject it before the defender could answer.
+    if turn.acted {
+        if !queue.holds_command_for(my_id) {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
+        }
+        return;
+    }
 
     let footing = Footing::from_tiles(tiles.iter(), &table, *body);
     let plan = best_foe(&others, *faction, standing.0, &footing, turn.movement_left);
@@ -119,6 +147,9 @@ fn take_enemy_turn(
                     target,
                 },
             });
+            // Do not prequeue EndTurn. Applying this strike can open a defender
+            // decision, making every later command in the same drain correctly
+            // illegal. The `turn.acted` branch above ends the turn after resolution.
         }
         Some(FoeAction::Move(approach)) => {
             queue.push(IssuedCommand {
@@ -128,16 +159,23 @@ fn take_enemy_turn(
                     path: approach.steps.iter().map(|step| step.pos).collect(),
                 },
             });
+            // Movement opens no mid-resolution decision, and EndTurn is deliberately
+            // legal while its presentation is still running.
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
         }
         // Nothing to fight, no way to reach it, or a target no spawn path
         // identified. Ending the turn regardless keeps the order moving
         // rather than stalling on a unit with nothing it can do.
-        Some(FoeAction::Wait) | None => {}
+        Some(FoeAction::Wait) | None => {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
+        }
     }
-    queue.push(IssuedCommand {
-        seat,
-        command: GameCommand::EndTurn { unit: my_id },
-    });
 }
 
 /// What the enemy can do about one foe this turn.
@@ -195,7 +233,7 @@ impl FoePlan {
 /// ranked so the unreachable one cannot consume the turn merely by looking nearer on
 /// the map.
 fn best_foe(
-    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn)>,
+    others: &Query<(Entity, Option<&UnitId>, &Faction, &StandsOn), Without<Downed>>,
     faction: Faction,
     from: Standing,
     footing: &Footing,
@@ -257,4 +295,84 @@ fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) ->
         steps: steps.to_vec(),
         route_cost: adjacent_index,
     })
+}
+
+/// Answers an open [`PendingDecision::ChooseDisables`] on the defender's behalf.
+///
+/// Defender-chooses is a protocol fact, not a UI feature: the decision exists and
+/// something answers it. This policy answers for non-player defenders; a player uses
+/// the command-modal lattice UI through the same command seam.
+///
+/// The policy itself is deliberately the dumbest defensible one: **give up the cheapest
+/// hexes first**, where cheapest means blank cells, then gems holding the least mana,
+/// then everything else, ties broken on coordinate. That is roughly what a player would
+/// do early in a fight and exactly what makes late damage hurt, which is the shape the
+/// design predicts and wants to feel before tuning it.
+///
+/// It answers by pushing a command rather than mutating, because the answer belongs in
+/// the replay log — see [`crate::commands::choose_disables`].
+fn answer_disable_decision(
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    mut queue: ResMut<CommandQueue>,
+    lattices: Query<(&LatticeSpec, &LatticeState, Has<Player>, &ControlOwner)>,
+) {
+    let PendingDecision::ChooseDisables { decider, count, .. } = *pending else {
+        return;
+    };
+    // The answer is already on its way. Without this the policy would push a second
+    // identical command every frame until the applier drained the first.
+    if queue.holds_answer_for(decider) {
+        return;
+    }
+    let Some(entity) = registry.entity_of(decider) else {
+        return;
+    };
+    let Ok((spec, state, is_player, owner)) = lattices.get(entity) else {
+        return;
+    };
+    // A player-controlled defender is command-modal UI, not an AI policy choice.
+    // `ControlOwner` supplies the seat for either side; the marker identifies which
+    // side has a human input path.
+    if is_player {
+        return;
+    }
+
+    let mut candidates: Vec<(u8, u16, LatticeCoord)> = spec
+        .cells()
+        .filter(|&(coord, _)| !state.is_disabled(coord))
+        .map(|(coord, kind)| {
+            // Rank, then mana, then coordinate — a total order, so the same hit on the
+            // same lattice always takes the same hexes on every machine.
+            let rank = match kind {
+                CellKind::Blank => 0,
+                CellKind::Gem { .. } => 1,
+                CellKind::Fusion { .. } => 2,
+                CellKind::Spell { .. } => 3,
+            };
+            (rank, state.mana(coord), coord)
+        })
+        .collect();
+    candidates.sort_unstable();
+
+    let cells: Vec<LatticeCoord> = candidates
+        .into_iter()
+        .take(usize::from(count))
+        .map(|(_, _, coord)| coord)
+        .collect();
+
+    // A lattice with fewer live hexes than the hit demands cannot answer as asked, and
+    // the applier would refuse a short answer. Take everything that is left: the unit
+    // is going down either way, and the alternative is a decision nobody can satisfy
+    // parking resolution forever.
+    if cells.len() < usize::from(count) {
+        info!("damage: {decider:?} has fewer hexes left than the hit — all of them go");
+    }
+    queue.push(IssuedCommand {
+        seat: owner.0,
+        command: GameCommand::ChooseDisables {
+            unit: decider,
+            cells,
+        },
+    });
 }

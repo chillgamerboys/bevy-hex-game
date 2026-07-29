@@ -8,7 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_units → hex_perception → hex_combat  (planned)
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
@@ -26,13 +26,13 @@ will, and no amount of documentation prevents it. A compiler error does.
 |---|---|---|---|
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
-| `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
+| `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
-| `hex_units` | Units, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim` | gameplay |
+| `hex_units` | Units and their lattices, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
+| `hex_combat` | The loop: modes, turn order, the placeholder AI, faction knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -71,13 +71,21 @@ settles none of [the design's open questions](design/game.md#open-questions) —
 initiative, action economy, fight length, the functional-death threshold — it exposes
 primitives and leaves the policy to the crates above it.
 
-Its designed seat is `hex_core → hex_lattice → hex_assets`: `hex_assets` implements
-the engine's content lookup traits over `elements.ron`/`spells.ron`, and gameplay
-reads the engine through it. Today it depends only on `hex_core`, and nothing in the
-workspace depends on it yet — the `hex_assets` edge lands with the elements/spells
-content, and the combat wiring (spawning units with lattices, casting through the
-command funnel, the defender-chooses decision flow) lands after that. Like the map,
-it is one person's, and its contract is the types it exposes.
+It still depends only on `hex_core`, and three crates now declare an edge to it — drawn
+ahead of the code so the damage-loop PRs stop contending over the same manifests. Each
+edge is for a different half of the job. **`hex_assets`** will implement the engine's
+content lookup traits over `elements.ron`/`spells.ron` and turn authored lattices into a
+`LatticeSpec`, so the engine reads content without knowing what a file is. **`hex_units`**
+will carry the result: a unit's spec, state and stats go on at spawn, keyed by its
+archetype. **`hex_combat`** drives it — casting through the command funnel, damage
+through `apply_disables`, and the defender-chooses decision the engine deliberately
+refuses to own; today it reads the lattice types only in `knowledge.rs`.
+
+Drawing an edge early costs something worth naming: the compiler stops being the review
+signal for that boundary, since anything in those crates can now reach the engine. The
+trade is deliberate and temporary — the alternative was three PRs each editing the same
+two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
+the types it exposes.
 
 ### Ownership cuts both ways
 
