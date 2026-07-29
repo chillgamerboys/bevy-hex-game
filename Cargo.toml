@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+default-members = ["crates/hex_game"]
 
 # Dependency versions live here so the crates can't drift apart. Each crate
 # opts in with `foo = { workspace = true }` and states its own features.
@@ -21,7 +22,15 @@ bevy_math = "0.19"
 bevy_platform = "0.19"
 bevy_reflect = "0.19"
 bevy-inspector-egui = "0.37"
+bevy_egui = { version = "0.40.1", default-features = false, features = [
+    "bevy_ui",
+    "default_fonts",
+    "picking",
+    "render",
+] }
+atomicwrites = "0.4.4"
 rand = "0.8.5"
+ron = "0.12.2"
 xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 serde = { version = "1.0.229", features = ["derive"] }
 

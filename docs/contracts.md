@@ -65,9 +65,9 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Owner | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `palette.ron` + `SwatchId` / `SrgbColor` — canonical authored-content colour vocabulary | shared visual contract | future editor and runtime adapters | reserved | [design/visual-language.md](design/visual-language.md) |
-| `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | future editor and runtime adapters | reserved | [systems/asset-workshop.md](systems/asset-workshop.md) |
-| `ObjectBlueprint` — validated local hex-voxel plants, effects, and props | shared visual contract | future editor and runtime adapters | reserved | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `palette.ron` + `SwatchId` / `SrgbColor` — canonical authored-content colour vocabulary | shared visual contract | `hex_editor`; future runtime adapters | live (authoring only) | [design/visual-language.md](design/visual-language.md) |
+| `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`; future runtime adapters | live (authoring only) | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `ObjectBlueprint` — validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`; future runtime adapters | live (authoring only) | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `substances.ron` — substance names, colour, solidity, diggability | world | both | live | [development/config.md](development/config.md) |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |

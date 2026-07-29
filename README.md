@@ -8,6 +8,7 @@ A hex-based magic game built with [Bevy](https://bevy.org/) 0.19.
 
 ```sh
 cargo dev            # with the world inspector and live asset reload
+cargo editor         # standalone palette, voxel-style, and object authoring
 cargo run --release  # as it ships
 ```
 
@@ -16,6 +17,15 @@ the [appendix](#appendix-linux-and-wsl2). The repo pins its toolchain in
 `rust-toolchain.toml`, so rustup fetches the right compiler on first build — you
 don't need to match it by hand. A cold build takes 10–20 minutes; incremental
 builds after that are seconds.
+
+`cargo editor` launches the standalone
+[Asset Workshop](docs/systems/asset-workshop.md). It discovers the repository by
+walking upward from the current directory. When launching it from elsewhere, pass
+the repository explicitly:
+
+```sh
+cargo editor -- --project-root /path/to/bevy-hex-game
+```
 
 Two things worth knowing:
 
@@ -61,10 +71,12 @@ crates/
   hex_assets/     # asset handles, RON settings and their loader
   hex_map/        # the map: voxels, terrain, tile spawning, map settings
   hex_world/      # sky and camera
-  hex_units/   # player, picking, movement, animation
+  hex_units/      # player, picking, movement, animation
   hex_dev/        # world inspector (dev feature only)
   hex_game/       # the binary: app setup, screens, menus
+  hex_editor/     # standalone Asset Workshop
 assets/
+  art/            # canonical palette, voxel styles, and object blueprints
   config/         # designer-editable settings -- see docs/development/config.md
   meshes/         # hex.glb, pieces.glb
   shaders/        # sky.wgsl -- the procedural sky
@@ -81,6 +93,7 @@ Start with the row that describes you.
 | Work on the map, and I'm new here | [docs/development/onboarding.md](docs/development/onboarding.md) |
 | Work on the map, and I'm an AI agent | [crates/hex_map/CLAUDE.md](crates/hex_map/CLAUDE.md) |
 | Understand how the map works | [docs/systems/map.md](docs/systems/map.md) |
+| Author colours, voxel styles, or objects | [docs/systems/asset-workshop.md](docs/systems/asset-workshop.md) |
 | Understand why the project is shaped this way | [docs/architecture.md](docs/architecture.md) |
 | Contribute code anywhere | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

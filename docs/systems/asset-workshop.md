@@ -4,18 +4,39 @@ The contract for the standalone voxel-style and object-authoring tool. The Works
 development tooling: it creates durable RON assets for the game, but it is not a game
 screen and does not run through the gameplay setup lifecycle.
 
-The first delivery establishes contracts and tracked catalogs only. The planned
-`hex_editor` application, runtime object rendering, Forest migration, procedural plant
-generation, reference-image import, and animated effect timelines do not become live
-merely because this document or the seed files exist.
+The contracts, tracked catalogs, and standalone `hex_editor` authoring application
+are live. Runtime object rendering, Forest migration, procedural plant generation,
+reference-image import, and animated effect timelines remain separate later work.
+
+## Launch
+
+From anywhere inside the repository, run:
+
+```sh
+cargo editor
+```
+
+The editor walks upward from the current directory until it finds both
+`assets/art/palette.ron` and `assets/art/voxel_styles.ron`. To author a different
+checkout, or when the current directory is outside one, provide its repository root
+explicitly:
+
+```sh
+cargo editor -- --project-root /path/to/bevy-hex-game
+```
+
+Both `--project-root PATH` and `--project-root=PATH` are accepted. A relative path is
+resolved from the current directory. The editor opens an unsaved calibration scene;
+tracked files change only after an explicit Save, Save As, or Duplicate action.
 
 ## Boundary
 
-`hex_editor` is an isolated Bevy application that may depend on `hex_core` and
+`hex_editor` is an isolated Bevy application that depends on `hex_core` and
 `hex_assets`. It does not depend on `hex_game`, `hex_map`, `hex_world`, `hex_units`, or
-`hex_combat`. The editor owns interactive UI, filesystem scanning and writing,
-recovery drafts, captures, and editor-only entities. Reusable schemas, validation,
-stable ids, deterministic serialization, and fingerprints live in `hex_assets`.
+`hex_combat`. The editor owns interactive UI, filesystem scanning and writing, and
+editor-only entities; it will also own recovery drafts and review captures when those
+milestones land. Reusable schemas, validation, stable ids, deterministic
+serialization, and fingerprints live in `hex_assets`.
 
 The editor uses the game's hex-prism geometry and coordinate vocabulary without
 importing terrain storage. An object placement is object-local axial `(q, r)` plus a
@@ -41,6 +62,13 @@ The palette policy and visual rationale are in
 use lowercase ASCII segments separated by `/`; each segment begins with a letter and
 then contains letters, digits, or hyphens. Segments cannot be empty. IDs are immutable
 after first save. Display names are editable and never resolve references.
+
+An `ObjectAssetId` has an additional persistence contract: it is exactly
+`<category>/<filename>`, where the singular category is `plant`, `effect`, or `prop`
+and `filename` is one id segment. The category must match the blueprint's typed
+category, and nested object paths are rejected. For example, `plant/oak` is stored at
+`assets/art/objects/plant/oak.ron`; neither `plants/oak` nor
+`plant/temperate/oak` is valid.
 
 Catalog maps and placement lists serialize in canonical sorted order. Palette, style,
 and object semantics receive independent deterministic fingerprints, unaffected by RON
@@ -126,21 +154,24 @@ deterministic and independent of gameplay time-of-day.
 
 ## Saving and recovery
 
-Tracked assets change only through explicit Save, Save As, or Duplicate. Before a
-write, the tool validates the complete palette-style-object reference graph and shows
-the global impact of shared changes. Invalid data leaves the last valid file intact.
+Tracked assets change only through explicit persistence actions: Save, Save As,
+Duplicate, or a confirmed Delete. Before a write, the tool validates the complete
+palette-style-object reference graph and shows the global impact of shared changes.
+Invalid data leaves the last valid file intact.
 
 Saving writes a sibling temporary file, verifies it, then atomically replaces the
-destination. The editor records the on-disk fingerprint from load; if it changes
-externally, overwrite is blocked until the author reloads or chooses a new id.
-Referenced palette entries and styles cannot be deleted until their references are
-removed or migrated.
+destination. Referenced palette entries and styles cannot be deleted until their
+references are removed or migrated.
 
-Unsaved recovery is separate from source assets. The editor periodically writes a
-draft under `.context/asset-workshop/recovery/`, which is gitignored and never loaded
-by the game. Recovery never counts as an explicit save.
+On-disk change conflict detection is active: writes compare the loaded catalog and
+object source bytes with disk and block if another process changed them. Automatic
+recovery drafts are reserved for the review and polish milestone and will remain
+separate from source assets under `.context/asset-workshop/recovery/`.
 
 ## Review output
+
+The one-click deterministic review export is also reserved for the review and polish
+milestone and is not in the current editor build. Its output contract is:
 
 One Review action writes deterministic artifacts beneath
 `.context/asset-workshop/reviews/<asset-id>/<fingerprint>/`:
