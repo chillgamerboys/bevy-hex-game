@@ -599,7 +599,8 @@ fn apply_ui_action(
             prop_connectivity,
         } => {
             ensure_document_can_change(runtime)?;
-            validate_object_id_category(&id, category)?;
+            id.validate_for_category(category)
+                .map_err(|error| error.to_string())?;
             let style = {
                 let draft = runtime
                     .draft
@@ -1000,7 +1001,8 @@ fn save_current_object_as(
             .draft
             .as_ref()
             .ok_or_else(|| runtime.load_error_message())?;
-        validate_object_id_category(&id, draft.editor().object().category)?;
+        id.validate_for_category(draft.editor().object().category)
+            .map_err(|error| error.to_string())?;
         (draft.editor().clone(), draft.styles().clone())
     };
     editor
@@ -1607,26 +1609,6 @@ fn apply_calibration_style(editor: &mut EditorModel, style: &VoxelStyleId) -> Re
     Ok(())
 }
 
-fn validate_object_id_category(id: &ObjectAssetId, category: ObjectCategory) -> Result<(), String> {
-    let prefix = match category {
-        ObjectCategory::Plant => "plant/",
-        ObjectCategory::Effect => "effect/",
-        ObjectCategory::Prop => "prop/",
-    };
-    let Some(filename) = id.as_str().strip_prefix(prefix) else {
-        return Err(format!(
-            "{category:?} object ids must begin with '{prefix}'"
-        ));
-    };
-    if filename.is_empty() || filename.contains('/') {
-        return Err(format!(
-            "object id '{}' must contain exactly one filename after '{prefix}'",
-            id.as_str()
-        ));
-    }
-    Ok(())
-}
-
 fn edit_selected(
     runtime: &mut WorkshopRuntime,
     label: &str,
@@ -2162,12 +2144,9 @@ fn poll_external_changes(
     };
     match project.external_changes() {
         Ok(changes) if changes != runtime.external_changes => {
-            let shared_catalog_changed = changes.iter().any(|change| {
-                matches!(
-                    change.path.to_str(),
-                    Some("palette.ron" | "voxel_styles.ron")
-                )
-            });
+            let shared_catalog_changed = changes
+                .iter()
+                .any(|change| is_recovery_catalog_path(&change.path));
             runtime.external_changes = changes;
             if runtime.recovery_conflict
                 && runtime.recovery_catalogs_reconciled
@@ -2193,6 +2172,10 @@ fn poll_external_changes(
         Ok(_) => {}
         Err(error) => runtime.set_status(WorkshopStatusKind::Error, error.to_string()),
     }
+}
+
+fn is_recovery_catalog_path(path: &Path) -> bool {
+    matches!(path.to_str(), Some("palette.ron" | "voxel_styles.ron"))
 }
 
 fn synchronize_views(
@@ -2527,8 +2510,9 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
-        LocalAxialCoord, ObjectBlueprint, ObjectBounds, ObjectPart, ObjectPlacement, PaletteSwatch,
-        PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
+        LocalAxialCoord, ObjectBlueprint, ObjectBounds, ObjectCatalogFile, ObjectPart,
+        ObjectPlacement, PaletteSwatch, PlantPart, SrgbColor, VoxelStyle, VoxelSurfaceMode,
+        OBJECT_BLUEPRINT_SCHEMA_VERSION,
     };
     use serde::Serialize;
 
@@ -2552,6 +2536,11 @@ mod tests {
             fs::create_dir_all(&art_root).expect("test art directory should be created");
             write_ron(&art_root.join("palette.ron"), palette);
             write_ron(&art_root.join("voxel_styles.ron"), styles);
+            write_ron(
+                &art_root.join("object_catalog.ron"),
+                &ObjectCatalogFile::new(Vec::new())
+                    .expect("empty fixture object catalog should be valid"),
+            );
             Self { root }
         }
     }
@@ -2794,11 +2783,27 @@ mod tests {
     #[test]
     fn object_ids_match_their_singular_category_directory() {
         let plant = ObjectAssetId::new("plant/oak").expect("fixture id should be valid");
-        assert!(validate_object_id_category(&plant, ObjectCategory::Plant).is_ok());
-        assert!(validate_object_id_category(&plant, ObjectCategory::Effect).is_err());
+        assert!(plant.validate_for_category(ObjectCategory::Plant).is_ok());
+        assert!(plant.validate_for_category(ObjectCategory::Effect).is_err());
         let nested =
             ObjectAssetId::new("plant/trees/oak").expect("path-like fixture id should be valid");
-        assert!(validate_object_id_category(&nested, ObjectCategory::Plant).is_err());
+        assert!(nested.validate_for_category(ObjectCategory::Plant).is_err());
+    }
+
+    #[test]
+    fn external_change_only_reopens_recovery_catalog_reconciliation_for_authored_catalogs() {
+        for path in ["palette.ron", "voxel_styles.ron"] {
+            assert!(
+                is_recovery_catalog_path(Path::new(path)),
+                "{path} must force shared-catalog recovery reconciliation"
+            );
+        }
+        for path in ["object_catalog.ron", "objects/plant/small-broadleaf.ron"] {
+            assert!(
+                !is_recovery_catalog_path(Path::new(path)),
+                "{path} is refreshed and merged by object Save As"
+            );
+        }
     }
 
     #[test]

@@ -24,6 +24,7 @@ pub mod encounter;
 pub mod lattices;
 pub mod loader;
 pub mod object_blueprint;
+pub mod object_catalog;
 /// Validated gameplay sight settings.
 pub mod perception;
 /// The scenarios offered on the title screen.
@@ -54,6 +55,10 @@ pub use object_blueprint::{
     ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectBlueprint,
     ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart, PropPart,
     MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
+};
+pub use object_catalog::{
+    HexObjectRotation, ObjectCatalogError, ObjectCatalogFile, ObjectInstance, ObjectInstanceError,
+    ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus, OBJECT_CATALOG_SCHEMA_VERSION,
 };
 pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
 pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
@@ -121,6 +126,7 @@ pub fn plugin(app: &mut App) {
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
         .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS)
         .load_settings::<ArtPalette>("art/palette.ron", CONFIG_EXTENSIONS);
+    app.add_plugins(object_catalog::plugin);
 }
 
 /// Handles to everything the game loads from disk.

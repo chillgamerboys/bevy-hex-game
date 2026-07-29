@@ -57,8 +57,8 @@ The complete authoring workflow and controls are in
 
 **The editor cannot find a project.** Run `cargo editor` from inside a checkout, or
 pass its root explicitly with `cargo editor -- --project-root /path/to/repository`.
-The root must contain both `assets/art/palette.ron` and
-`assets/art/voxel_styles.ron`.
+The root must contain `assets/art/palette.ron`, `assets/art/voxel_styles.ron`, and
+`assets/art/object_catalog.ron`.
 
 **Save is disabled for an object.** Calibration and newly created objects need Save As
 before ordinary Save has a tracked destination. A saved object must also satisfy its
@@ -68,7 +68,9 @@ object inspector reports the current intrinsic validation error.
 **Every tracked write is blocked.** The toolbar distinguishes an external-file change
 from a recovery conflict. Reload accepts the current disk files as the new baseline
 and discards local drafts. Save As can preserve an object under a new id, but it does
-not silently resolve dirty shared palette or style catalogs.
+not silently resolve dirty shared palette or style catalogs. External object and
+manifest additions are reloaded and merged when Save As can prove their graph is
+coherent.
 
 **A recovery prompt will not go away.** The Workshop deliberately leaves an invalid
 or unknown-version recovery file untouched and pauses autosave. Discard it explicitly

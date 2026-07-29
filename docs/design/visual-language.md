@@ -33,7 +33,7 @@ The catalogs are machine-written documents. Workshop saves replace their complet
 serialized contents, so comments inside the RON files are not durable; visual policy
 and migration notes belong in this document. A `legacy` tag means the live renderer
 still owns that colour literal and is removed when the renderer resolves the swatch
-directly. The initially empty style catalog does not promote runtime substances or
+directly. Cataloged object styles do not implicitly promote runtime substances or
 temporary-feature materials into reviewed Workshop styles.
 
 ## Strict for new work, staged for old work
@@ -112,7 +112,8 @@ The initial catalog records the currently rendered content vocabulary:
 |---|---|---|
 | Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
 | Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
-| Temporary vegetation | trunk, three foliage values, two grass-blade values | Forest feature renderer |
+| Authored plants | trunk and three foliage values | `palette.ron`, referenced by the production plant styles and `plant/small-broadleaf` |
+| Temporary vegetation | two grass-blade values | Forest feature renderer |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 
 Air is absent because it is never drawn. Sky, celestial light, atmosphere, fog,
