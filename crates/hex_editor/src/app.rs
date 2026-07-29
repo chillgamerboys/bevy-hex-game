@@ -698,30 +698,26 @@ fn save_current_object_as(
     id: ObjectAssetId,
     display_name: String,
 ) -> Result<Option<String>, String> {
-    {
-        let draft = runtime.draft_mut()?;
-        draft
-            .edit_object("Rename object", |editor| {
-                editor.set_display_name(display_name)
-            })
-            .map_err(|error| error.to_string())?;
-    }
-    let blueprint = {
+    let (mut editor, styles) = {
         let draft = runtime
             .draft
             .as_ref()
             .ok_or_else(|| runtime.load_error_message())?;
         validate_object_id_category(&id, draft.editor().object().category)?;
-        draft
-            .editor()
-            .blueprint_for_save(draft.styles())
-            .map_err(|error| error.to_string())?
+        (draft.editor().clone(), draft.styles().clone())
     };
+    editor
+        .set_display_name(display_name)
+        .map_err(|error| error.to_string())?;
+    let blueprint = editor
+        .blueprint_for_save(&styles)
+        .map_err(|error| error.to_string())?;
     runtime
         .project_mut()?
         .save_object_as(blueprint, id.clone())
         .map_err(|error| error.to_string())?;
-    runtime.draft_mut()?.mark_object_saved_as(id.clone());
+    editor.mark_saved_as(id.clone());
+    runtime.draft_mut()?.open_object(editor);
     runtime.document = OpenDocument::Saved(id.clone());
     Ok(Some(format!("Saved as {}", id.as_str())))
 }
@@ -1332,6 +1328,49 @@ mod tests {
         let nested =
             ObjectAssetId::new("plant/trees/oak").expect("path-like fixture id should be valid");
         assert!(validate_object_id_category(&nested, ObjectCategory::Plant).is_err());
+    }
+
+    #[test]
+    fn rejected_save_as_does_not_mutate_the_live_draft() {
+        let editor = EditorModel::blank(
+            ObjectCategory::Plant,
+            ConnectivityPolicy::Grounded,
+            VoxelStyleId::new("plant/base").expect("fixture style id should be valid"),
+        )
+        .expect("fixture editor should be valid");
+        let draft = WorkshopDraft::new(fixture_palette(), fixture_styles(), editor);
+        let document = OpenDocument::Unsaved(
+            ObjectAssetId::new("plant/untitled").expect("fixture id should be valid"),
+        );
+        let mut runtime = WorkshopRuntime {
+            project: None,
+            draft: Some(draft),
+            document: document.clone(),
+            preview: PreviewSubject::ActiveStyle,
+            overlays: OverlaySettings::default(),
+            status: None,
+            load_failure: None,
+            needs_sync: false,
+        };
+        let before = runtime
+            .draft
+            .as_ref()
+            .expect("fixture draft should exist")
+            .editor()
+            .clone();
+
+        let result = save_current_object_as(
+            &mut runtime,
+            ObjectAssetId::new("effect/wrong-category").expect("fixture id should be valid"),
+            "Rejected rename".to_owned(),
+        );
+
+        assert!(result.is_err());
+        assert_eq!(runtime.document, document);
+        let draft = runtime.draft.as_ref().expect("fixture draft should remain");
+        assert_eq!(draft.editor(), &before);
+        assert_eq!(draft.undo_label(), None);
+        assert_eq!(draft.redo_label(), None);
     }
 
     #[test]

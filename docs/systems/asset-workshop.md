@@ -154,20 +154,19 @@ deterministic and independent of gameplay time-of-day.
 
 ## Saving and recovery
 
-Tracked assets change only through explicit Save, Save As, or Duplicate. Before a
-write, the tool validates the complete palette-style-object reference graph and shows
-the global impact of shared changes. Invalid data leaves the last valid file intact.
+Tracked assets change only through explicit persistence actions: Save, Save As,
+Duplicate, or a confirmed Delete. Before a write, the tool validates the complete
+palette-style-object reference graph and shows the global impact of shared changes.
+Invalid data leaves the last valid file intact.
 
 Saving writes a sibling temporary file, verifies it, then atomically replaces the
 destination. Referenced palette entries and styles cannot be deleted until their
 references are removed or migrated.
 
-Automatic recovery drafts and on-disk change conflict detection are reserved for the
-review and polish milestone; they are not in the current editor build. That milestone
-will keep recovery separate from source assets under
-`.context/asset-workshop/recovery/` and will block an overwrite when the loaded file
-has changed externally. Until then, do not edit the same art catalogs from concurrent
-Workshop sessions.
+On-disk change conflict detection is active: writes compare the loaded catalog and
+object source bytes with disk and block if another process changed them. Automatic
+recovery drafts are reserved for the review and polish milestone and will remain
+separate from source assets under `.context/asset-workshop/recovery/`.
 
 ## Review output
 
