@@ -7,6 +7,39 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 15 — fix(assets): abandon reverted reload candidates (2026-07-28)
+
+- **PR**: #105 — `fix/promotion-hot-reload-latch`
+- **Outcome**: green — 3 ship-blocker variants and 4 non-blockers fixed
+- **Lenses triggered**: 2, 4, 7, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, fresh-eyes | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed in-branch — an internal restoration marker distinguishes builder writes from authored reloads; reversion attribution rebases only changed rejected halves before candidate selection, so repeated failures, opposite-half no-op reloads, and same-frame reversion-plus-edit events preserve the exact authored pair |
+| 7 | `crates/hex_assets/src/substances.rs`:1147 | NON-BLOCKER | fixed in-branch — both sequential and same-frame revert-then-edit directions, opposite-half no-op reloads, and the repeated-rejection/idle-frame/repair sequence are covered at Bevy resource-change altitude |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed in-branch — all four remaining crate-local `ron` declarations now inherit the workspace dependency |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed in-branch — all test-count skills describe the current eleven-crate workspace consistently |
+
+**Notes**: all eight code lenses, all four documentation lenses, and the fresh-eyes
+pass found no remaining blocker. Exact verification counted 881 passing tests.
+
+## Wave 14 — promote: dev → main (2026-07-28)
+
+- **PR**: #104 — `dev`
+- **Outcome**: green — 1 promotion blocker fixed in PR #105
+- **Lenses triggered**: 2, 4, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed by PR #105 — reverting one rejected cross-file reload half now abandons the stale candidate before a later edit to the other source |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed by PR #105 — all `ron` consumers inherit the workspace source of truth |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed by PR #105 — stale nine-crate and fixed-suite-count claims were removed from the test skills |
+| 7 | `crates/hex_map/src/procedural_v3/mod.rs`:36 | NON-BLOCKER | deferred to draft #89 — V3 publication, rebuild scheduling, and fall-curtain pixels remain unreachable until the first runnable V3 recipe lands; Wave 9 already owns that coverage boundary |
+
+**Notes**: the human promotion gate covered both `cargo dev` gameplay and the
+standalone `cargo editor`. The updated `dev` head is re-audited after PR #105
+lands, before PR #104 may merge.
+
 ## Wave 13 — test(walk): cover Volcanic Hills lava (2026-07-28)
 
 - **PR**: #103 — `fix/volcanic-visual-walk`
