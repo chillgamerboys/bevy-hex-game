@@ -678,7 +678,8 @@ fn a_self_cast_ignores_the_anchor() {
 }
 
 /// Resolving the same cast twice gives the identical vector, byte for byte. These
-/// volumes feed a replay log, so "the same shape in a different order" is a defect.
+/// volumes may feed a future replay log, so "the same shape in a different order" is
+/// a defect.
 #[test]
 fn resolving_is_deterministic() {
     let caster = at(-1, 4, -3, 6);

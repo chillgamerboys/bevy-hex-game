@@ -73,12 +73,12 @@ run the game from this `dev` and walked it:
 
 ```
 cargo dev
-splash → title → click a scenario → gameplay
+splash → title → New Game → Party Trial
 orbit (right-drag), WASD pan, zoom
-click a tile — the piece walks there; range tint + route preview draw
-click the tile you're standing on
-ESC pause and resume
-BACKSPACE to the title, then click a scenario to rebuild the world
+select and move the party; range tint + route preview draw
+ESC pause, F5 save, BACKSPACE to title, Continue
+open Settings, persist one change, restart, verify it survived
+launch any affected Map or focused Demo separately
 ```
 
 Also worth a look, because these fail silently: the sky is not black

@@ -5,8 +5,9 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PendingDecision, PlayerSeat,
-    Sextant, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PartyPath, PendingDecision,
+    PlayerSeat, Sextant, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn,
+    UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -70,7 +71,7 @@ fn wire_formats_are_pinned() {
     let json = serde_json::to_string(&owner).expect("serialize");
     assert_eq!(json, "0", "ControlOwner must serialize as its bare seat");
 
-    // A replay log line: the funnel's whole input, as a save would store it.
+    // A future replay-log line: the funnel's whole input, as a save would store it.
     let issued = IssuedCommand {
         seat: PlayerSeat(0),
         command: GameCommand::MoveAlong {
@@ -123,6 +124,11 @@ fn pending_decisions_round_trip() {
         decider: UnitId(2),
         count: 3,
         source: UnitId(1),
+    });
+    assert_round_trips!(PendingDecision::ChooseRestores {
+        decider: UnitId(1),
+        target: UnitId(2),
+        count: 2,
     });
     // The degenerate count, because `is_open()` gates resolution and a zero-hex
     // decision is still a decision somebody has to answer.
@@ -194,6 +200,13 @@ fn issued_commands_round_trip() {
                 TilePos::new(HexCoord::from_axial(1, 0), 1),
             ],
         },
+        GameCommand::MoveParty {
+            anchor: unit,
+            paths: vec![PartyPath {
+                member: unit,
+                path: vec![TilePos::new(HexCoord::ORIGIN, 1)],
+            }],
+        },
         GameCommand::Strike {
             unit,
             target: UnitId(9),
@@ -226,6 +239,12 @@ fn issued_commands_round_trip() {
             unit,
             cells: Vec::new(),
         },
+        GameCommand::ChooseRestores {
+            unit,
+            target: UnitId(9),
+            cells: vec![LatticeCoord::ORIGIN],
+        },
+        GameCommand::Rest { unit },
     ];
     for command in commands {
         assert_round_trips!(IssuedCommand {

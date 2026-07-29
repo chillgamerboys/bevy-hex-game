@@ -10,8 +10,9 @@ use std::collections::BTreeMap;
 
 use hex_core::{ElementId, LatticeCoord, SpellId};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, resolve_incoming, restore, CastBlocked, Casting,
-    CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement, SpellTable,
+    apply_cast, apply_disables, castable, channel, resolve_incoming, rest, restore, CastBlocked,
+    Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement,
+    SpellTable,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -367,6 +368,37 @@ fn restoring_counts_only_the_hexes_that_were_down() {
     assert_eq!(restore(&mut state, &[one, two]), 1);
     // Idempotent, exactly as applying a cell list is.
     assert_eq!(restore(&mut state, &[one, two, three]), 0);
+}
+
+#[test]
+fn rest_restores_and_refills_without_recreating_a_broken_enchantment() {
+    let spell = LatticeCoord::ORIGIN;
+    let [funding, spare, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SHIELD })
+        .with(funding, gem(FIRE))
+        .with(spare, gem(FIRE));
+    let stats = basic_stats();
+    let mut state = LatticeState::new(&spec, &stats);
+    let plan = castable(&spec, &state, spell, &Content).expect("shield is affordable");
+    apply_cast(&mut state, &plan, &Content);
+    let locked = [funding, spare]
+        .into_iter()
+        .find(|coord| state.is_locked(*coord))
+        .expect("the shield locks a funding gem");
+    apply_disables(&mut state, &[locked]);
+    assert_eq!(state.enchantment_count(), 0, "damage broke the shield");
+
+    let (restored, refilled) = rest(&spec, &stats, &mut state);
+    assert_eq!(restored, vec![locked]);
+    assert!(refilled > 0);
+    assert_eq!(
+        state.enchantment_count(),
+        0,
+        "rest must not recreate broken enchantments"
+    );
+    assert!(!state.is_locked(locked));
+    assert_eq!(state.mana(locked), stats.capacity(FIRE));
 }
 
 // --- property 4: serde round-trips are identity ---------------------------
