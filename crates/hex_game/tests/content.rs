@@ -6,13 +6,15 @@
 //! It rebuilds the tables the same way the game does — parse each file, assign ids
 //! from sorted names, resolve across files — but headless, with no `App`.
 
+use std::collections::BTreeSet;
+
 use hex_ai::AiProfileId;
 use hex_assets::{
     AiProfileCatalog, ArtPalette, ContentIndex, Effect, ElementCatalog, ElementFile, Encounter,
     FormationCatalog, LatticeFile, LatticeLibrary, SpellBook, SpellFile, SubstanceFile,
     SubstanceTable,
 };
-use hex_core::LatticeCoord;
+use hex_core::{LatticeCoord, Sextant};
 use hex_lattice::{castable, CellKind, LatticeState};
 use ron::error::SpannedError;
 
@@ -74,6 +76,44 @@ fn shipped_ai_and_formation_content_is_valid_and_cross_referenced() {
             profiles.get(&AiProfileId(profile.clone())).is_some(),
             "archetype {name:?} references unknown AI profile {profile:?}"
         );
+    }
+}
+
+#[test]
+fn every_shipped_formation_is_congruent_through_six_rotations() {
+    let formations = parse_formations().expect("formations.ron parses and validates");
+    for preset in &formations.presets {
+        let original: BTreeSet<_> = preset.slots.iter().map(|slot| slot.offset).collect();
+        let mut original_distances: Vec<_> = original
+            .iter()
+            .map(|offset| offset.distance(hex_core::HexCoord::ORIGIN))
+            .collect();
+        original_distances.sort_unstable();
+        for facing in Sextant::ALL {
+            let rotated: BTreeSet<_> = original
+                .iter()
+                .copied()
+                .map(|offset| hex_units::rotated(offset, facing))
+                .collect();
+            let mut distances: Vec<_> = rotated
+                .iter()
+                .map(|offset| offset.distance(hex_core::HexCoord::ORIGIN))
+                .collect();
+            distances.sort_unstable();
+            assert_eq!(
+                distances, original_distances,
+                "{:?} changed shape at {facing:?}",
+                preset.name
+            );
+        }
+        for offset in original {
+            let turned = (0..6).fold(offset, |offset, _| hex_units::rotated(offset, Sextant::B));
+            assert_eq!(
+                turned, offset,
+                "{:?} did not close a full turn",
+                preset.name
+            );
+        }
     }
 }
 

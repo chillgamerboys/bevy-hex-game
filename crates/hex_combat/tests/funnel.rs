@@ -18,15 +18,18 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_assets::{
-    ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
-    SwatchId,
+    ArtPalette, FormationCatalog, PaletteSwatch, PlayerSettings, SrgbColor, Substance,
+    SubstanceFile, SubstanceTable, SwatchId,
 };
-use hex_combat::{CombatData, CombatEvent, CommandRefusal, Initiative, TurnOrder};
+use hex_combat::{
+    CombatData, CombatEvent, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
+};
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
-    IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
+    Busy, CommandQueue, ControlOwner, FormationPreset, FormationSlot, GameCommand, Headroom,
+    HexCoord, HexSpan, HexTile, IssuedCommand, Mode, PartyFormation, PartyPath, PlayerSeat, Screen,
+    SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
 };
-use hex_units::{route, Body, Downed, Faction, Footing, Standing, StandsOn, UnitRegistry};
+use hex_units::{route, Body, Downed, Faction, Footing, Party, Standing, StandsOn, UnitRegistry};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -199,6 +202,58 @@ fn budget_of(app: &App, entity: Entity) -> Option<u32> {
         .map(|turn| turn.movement_left)
 }
 
+fn pair_formation(app: &mut App) {
+    let preset = FormationPreset {
+        name: "Pair".to_owned(),
+        slots: vec![
+            FormationSlot {
+                offset: HexCoord::ORIGIN,
+                anchor: true,
+            },
+            FormationSlot {
+                offset: HexCoord::from_axial(-1, 0),
+                anchor: false,
+            },
+        ],
+    };
+    app.insert_resource(FormationCatalog {
+        presets: vec![preset.clone()],
+    });
+    app.world_mut().resource_mut::<Party>().members = vec![UnitId(1), UnitId(2)];
+    app.world_mut()
+        .resource_mut::<PartyFormation>()
+        .select_preset(&preset, &[UnitId(1), UnitId(2)]);
+}
+
+fn pair_party_app() -> (App, Entity, Entity) {
+    let mut app = test_app();
+    let anchor = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let rear = spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::from_axial(-1, 0),
+        10,
+        2,
+    );
+    pair_formation(&mut app);
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Exploring);
+    (app, anchor, rear)
+}
+
+fn party_command(anchor: UnitId, paths: Vec<(UnitId, &[HexCoord])>) -> GameCommand {
+    GameCommand::MoveParty {
+        anchor,
+        paths: paths
+            .into_iter()
+            .map(|(member, coords)| PartyPath {
+                member,
+                path: path(coords),
+            })
+            .collect(),
+    }
+}
+
 /// Out of combat there is no turn and no budget: a valid move command simply
 /// starts the walk. The funnel is the write path in both tempos.
 #[test]
@@ -223,6 +278,246 @@ fn an_exploring_move_flows_through_the_funnel() {
         Some(TilePos::new(destination, GROUND_LEVEL)),
         "the commanded walk should land"
     );
+}
+
+#[test]
+fn an_atomic_party_move_commits_every_member() {
+    let (mut app, anchor, rear) = pair_party_app();
+    let destination = HexCoord::from_axial(1, 0);
+    let command = party_command(
+        UnitId(1),
+        vec![
+            (UnitId(1), &[HexCoord::ORIGIN, destination]),
+            (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+        ],
+    );
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::PartyMoved {
+            anchor: UnitId(1),
+            paths: match command {
+                GameCommand::MoveParty { paths, .. } => paths,
+                _ => unreachable!("the fixture is a party command"),
+            },
+        }]
+    );
+    settle(&mut app);
+    assert_eq!(
+        standing_of(&mut app, anchor),
+        Some(TilePos::new(destination, GROUND_LEVEL))
+    );
+    assert_eq!(
+        standing_of(&mut app, rear),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL))
+    );
+}
+
+#[test]
+fn every_party_validation_failure_is_atomic() {
+    let cases = [
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(2),
+                vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+                    (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::WrongAnchor,
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(0, 1)]),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::DuplicateMember { member: UnitId(1) },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![(UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)])],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::MissingMember { member: UnitId(2) },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+                    (UnitId(2), &[HexCoord::ORIGIN, HexCoord::from_axial(0, 1)]),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::InvalidStart { member: UnitId(2) },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+                    (
+                        UnitId(2),
+                        &[HexCoord::from_axial(-1, 0), HexCoord::from_axial(2, 0)],
+                    ),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::InvalidMemberPath { member: UnitId(2) },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+                    (
+                        UnitId(2),
+                        &[
+                            HexCoord::from_axial(-1, 0),
+                            HexCoord::ORIGIN,
+                            HexCoord::from_axial(1, 0),
+                        ],
+                    ),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::DuplicateDestination {
+                    destination: TilePos::new(HexCoord::from_axial(1, 0), GROUND_LEVEL),
+                },
+            },
+        ),
+    ];
+
+    for (seat, command, expected) in cases {
+        let (mut app, anchor, rear) = pair_party_app();
+        let before = (standing_of(&mut app, anchor), standing_of(&mut app, rear));
+        push_as(&mut app, seat, command.clone());
+        app.update();
+        assert_eq!(
+            take_events(&mut app),
+            vec![CombatEvent::CommandRefused {
+                command,
+                refusal: expected,
+            }]
+        );
+        assert_eq!(
+            (standing_of(&mut app, anchor), standing_of(&mut app, rear)),
+            before,
+            "no member may move when any validation fails"
+        );
+        let mut moving = app
+            .world_mut()
+            .query_filtered::<Entity, Or<(With<Busy>, With<hex_units::MovingTo>)>>();
+        assert_eq!(moving.iter(app.world()).count(), 0);
+    }
+}
+
+#[test]
+fn a_wrongly_owned_party_member_rejects_the_whole_move() {
+    let (mut app, anchor, rear) = pair_party_app();
+    app.world_mut()
+        .entity_mut(rear)
+        .insert(ControlOwner(PlayerSeat(1)));
+    let command = party_command(
+        UnitId(1),
+        vec![
+            (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
+            (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+        ],
+    );
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::WrongSeat {
+                issued_by: PlayerSeat(0),
+                owned_by: PlayerSeat(1),
+            },
+        }]
+    );
+    assert_eq!(
+        standing_of(&mut app, anchor),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL))
+    );
+    assert_eq!(
+        standing_of(&mut app, rear),
+        Some(TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL))
+    );
+}
+
+#[test]
+fn combat_interrupts_every_party_member_on_a_whole_surface() {
+    let (mut app, anchor, rear) = pair_party_app();
+    push(
+        &mut app,
+        party_command(
+            UnitId(1),
+            vec![
+                (
+                    UnitId(1),
+                    &[
+                        HexCoord::ORIGIN,
+                        HexCoord::from_axial(1, 0),
+                        HexCoord::from_axial(2, 0),
+                    ],
+                ),
+                (
+                    UnitId(2),
+                    &[
+                        HexCoord::from_axial(-1, 0),
+                        HexCoord::ORIGIN,
+                        HexCoord::from_axial(1, 0),
+                    ],
+                ),
+            ],
+        ),
+    );
+    app.update();
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    for entity in [anchor, rear] {
+        assert!(
+            app.world().get::<hex_units::MovingTo>(entity).is_none(),
+            "combat should remove every in-flight party route"
+        );
+        assert!(
+            app.world()
+                .get::<hex_anim::Transformation>(entity)
+                .is_none(),
+            "combat should remove every in-flight party animation"
+        );
+        let standing = standing_of(&mut app, entity).expect("the member remains grounded");
+        let mut tiles = app.world_mut().query_filtered::<&TilePos, With<HexTile>>();
+        assert!(
+            tiles
+                .iter(app.world())
+                .any(|position| *position == standing),
+            "the interrupted member must land on an exact live surface"
+        );
+    }
 }
 
 /// The same command sequence from the same spawn state lands the same world.

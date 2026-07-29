@@ -308,6 +308,12 @@ to put the piece. `HexPathingLine` and `MovingTo` share cumulative, world-space 
 durations, so climbs take their actual 3D travel time while every waypoint still maps
 back to its surface.
 
+Exploration Group movement applies that same contract to every player member. One
+exact-path `MoveParty` is validated in full before any member receives presentation,
+and interruption reconciles every in-flight member before initiative is built.
+Rotation, bottleneck compression, reformation, and Solo behavior are specified in
+[party.md](party.md).
+
 ## The high ground
 
 Elevation is an **advantage, not a separation**. A unit gains one hex of range for

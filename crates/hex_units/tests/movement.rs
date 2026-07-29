@@ -30,12 +30,12 @@ use hex_assets::{
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan,
-    HexTile, MapAnchorId, MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos,
-    TraversalProfile, Turn, MAX_HEADROOM,
+    HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode, Pause, Screen,
+    SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_units::{
     Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
-    Party, PathOverlay, Player, RangeOverlay, StandsOn, UnitRegistry, UnitRing,
+    Party, PathOverlay, Player, RangeOverlay, Selected, StandsOn, UnitRegistry, UnitRing,
 };
 
 /// World height of the fake ground these tests stand things on.
@@ -627,6 +627,64 @@ fn clicking_a_tile_moves_the_player() {
     assert!(
         app.world().get::<MovingTo>(player).is_none(),
         "an arrived piece should no longer be carrying a route"
+    );
+}
+
+#[test]
+fn solo_mode_emits_for_only_the_selected_party_member() {
+    let mut app = test_app();
+    app.insert_resource(Encounter {
+        name: "Test Party".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 2,
+                },
+                &["hedge-mage", "raider"],
+            ),
+            roster(EncounterFaction::Hostile, fixed(ENEMY_START), &["wolf"]),
+        ],
+    });
+    enter_gameplay(&mut app);
+    app.world_mut().resource_mut::<PartyFormation>().mode = PartyMovementMode::Solo;
+    let selected = app
+        .world()
+        .resource::<Party>()
+        .members
+        .first()
+        .copied()
+        .expect("the party should have a first member");
+    let selected_entity = app
+        .world()
+        .resource::<UnitRegistry>()
+        .entity_of(selected)
+        .expect("the first party member should be registered");
+    app.world_mut().entity_mut(selected_entity).insert(Selected);
+    let destination = HexCoord::new_cubic(2, -2, 0);
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &HexCoord, &Headroom), With<HexTile>>();
+    let target = tiles
+        .iter(app.world())
+        .find(|(_, coord, headroom)| **coord == destination && headroom.0 > 0)
+        .map(|(entity, _, _)| entity)
+        .expect("the fake terrain covers this coordinate");
+    let window = app.world_mut().spawn(Window::default()).id();
+
+    click(&mut app, target, window);
+
+    let queued = app
+        .world_mut()
+        .resource_mut::<CommandQueue>()
+        .pop()
+        .expect("Solo click should emit one command");
+    assert_eq!(queued.command.unit(), selected);
+    assert!(matches!(queued.command, GameCommand::MoveAlong { .. }));
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "Solo mode must not emit a second member's movement"
     );
 }
 
