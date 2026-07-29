@@ -3243,6 +3243,7 @@ name = "hex_combat"
 version = "0.3.0"
 dependencies = [
  "bevy",
+ "hex_ai",
  "hex_anim",
  "hex_assets",
  "hex_core",
@@ -3250,6 +3251,7 @@ dependencies = [
  "hex_units",
  "serde",
  "serde_json",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3339,6 +3341,7 @@ name = "hex_units"
 version = "0.3.0"
 dependencies = [
  "bevy",
+ "hex_ai",
  "hex_anim",
  "hex_assets",
  "hex_core",

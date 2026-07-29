@@ -323,10 +323,12 @@ fn a_turn_does_not_pass_while_a_unit_is_still_moving() {
     );
 }
 
-/// Once the animation is done, the turn comes back. An enemy that never finishes
-/// stalls the fight with no way for the player to recover.
+/// Once movement presentation finishes, an enemy reconsiders its still-unused action.
+///
+/// The AI host deliberately does not prequeue EndTurn beside movement: doing so would
+/// throw away the same move-then-act economy the player receives.
 #[test]
-fn an_enemy_turn_ends_once_its_animation_finishes() {
+fn an_enemy_reconsiders_after_its_move_finishes() {
     let mut app = test_app();
     let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
     let enemy = spawn_unit(
@@ -347,8 +349,22 @@ fn an_enemy_turn_ends_once_its_animation_finishes() {
 
     assert_eq!(
         app.world().resource::<TurnOrder>().current(),
+        Some(unit_id(&app, enemy)),
+        "the enemy should retain the turn while its follow-up strike presents"
+    );
+    assert!(
+        app.world().get::<Transformation>(enemy).is_some(),
+        "finishing the move should have produced an adjacent follow-up strike"
+    );
+
+    app.world_mut().entity_mut(enemy).remove::<Transformation>();
+    app.update();
+    app.update();
+
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
         Some(unit_id(&app, player)),
-        "the turn should have come back to the player"
+        "the turn should return after the follow-up action finishes"
     );
     assert!(
         app.world().get::<Turn>(player).is_some(),

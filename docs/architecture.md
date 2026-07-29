@@ -8,7 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_units → hex_perception → hex_combat  (planned)
-hex_core → hex_ai → hex_assets   (AI contracts and profile content; combat host next)
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
@@ -32,9 +32,9 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
-| `hex_units` | Units and their lattices, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
+| `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI, faction knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice` | gameplay |
+| `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, faction knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |

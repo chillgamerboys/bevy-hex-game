@@ -15,6 +15,20 @@ Observations contain stable `UnitId` and `TilePos` values, never `Entity`. Allie
 information is complete. Hostile identity and position require observation, and
 hostile lattice facts come only from the existing faction-knowledge projection.
 Traversal input is likewise an authorized projection rather than hidden world truth.
+It contains directed surface-to-surface edges, so algorithms can compare complete
+terrain routes without learning any map fact outside the authorized projection.
+
+The shipped `baseline-v1` policy is intentionally small and deterministic. It prefers
+Renewal for the lowest-id downed ally, Scrying Eye for the lowest-id opaque hostile,
+the strongest single-target direct-damage cast, a missing self-enchantment, the
+lowest-id adjacent strike, and movement along the shortest complete route to an
+observed hostile, in that order. It re-enters the host after movement presentation
+instead of pre-queuing End Turn, preserving move-then-act turns.
+
+AI-owned disable decisions sacrifice Blank, Gem (least held mana), Fusion, then Spell
+cells. Restoration uses the reverse utility order: Spell, Fusion, Gem, then Blank.
+Coordinates break every remaining tie. Exact choices are still commands in the replay
+stream; replay runs with AI dispatch disabled and consumes those recorded commands.
 
 ## Future planning model
 

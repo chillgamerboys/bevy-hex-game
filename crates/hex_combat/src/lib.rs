@@ -43,6 +43,7 @@ pub mod outcomes;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
+pub use ai::{AiAlgorithmRegistry, AiDecisionTraces};
 pub use commands::{delivers_anything, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;

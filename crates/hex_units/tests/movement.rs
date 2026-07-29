@@ -1309,7 +1309,7 @@ fn unit_material_color<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> Optio
     let handle = {
         let mut pieces = app
             .world_mut()
-            .query::<(&ChildOf, &MeshMaterial3d<StandardMaterial>)>();
+            .query_filtered::<(&ChildOf, &MeshMaterial3d<StandardMaterial>), Without<UnitRing>>();
         pieces
             .iter(app.world())
             .find(|(parent, _)| parent.parent() == unit)
