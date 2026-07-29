@@ -17,8 +17,9 @@ use hex_assets::{
 use hex_core::{HexCoord, TilePos};
 use hex_objects::ObjectRenderChunk;
 
-const OBJECT_ID: &str = "plant/small-broadleaf";
+const DEFAULT_OBJECT_ID: &str = "plant/small-broadleaf";
 const LEVEL_HEIGHT: f32 = 0.4;
+const OBJECT_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_OBJECT";
 const RIG_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_RIG";
 const CAPTURE_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_CAPTURE";
 const FIXTURES_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_MATERIAL_FIXTURES";
@@ -55,7 +56,11 @@ struct GallerySpawned;
 #[derive(Resource)]
 struct GalleryOptions {
     material_fixtures: bool,
+    object_id: String,
 }
+
+#[derive(Component)]
+struct GalleryCamera;
 
 #[derive(Resource)]
 struct GalleryCapture {
@@ -67,10 +72,13 @@ struct GalleryCapture {
 
 fn main() -> AppExit {
     let rig = GalleryRig::from_environment();
+    let object_id =
+        std::env::var(OBJECT_ENVIRONMENT).unwrap_or_else(|_| DEFAULT_OBJECT_ID.to_owned());
     App::new()
         .insert_resource(rig)
         .insert_resource(GalleryOptions {
             material_fixtures: std::env::var_os(FIXTURES_ENVIRONMENT).is_some(),
+            object_id,
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -129,7 +137,7 @@ fn setup_gallery(
         Name::new("Object Gallery Key Light"),
     ));
     commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(24.0, 24.0))),
+        Mesh3d(meshes.add(Plane3d::default().mesh().size(48.0, 48.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.19, 0.21, 0.20),
             perceptual_roughness: 0.96,
@@ -139,7 +147,8 @@ fn setup_gallery(
     ));
     commands.spawn((
         Camera3d::default(),
-        gallery_camera_transform(),
+        gallery_camera_transform(4, 0, 5),
+        GalleryCamera,
         Name::new("Object Gallery Camera"),
     ));
 
@@ -157,7 +166,8 @@ fn setup_gallery(
                 ..default()
             },
             RenderTarget::Image(target.clone().into()),
-            gallery_camera_transform(),
+            gallery_camera_transform(4, 0, 5),
+            GalleryCamera,
             Name::new("Object Gallery Capture Camera"),
         ));
         commands.insert_resource(GalleryCapture {
@@ -169,8 +179,12 @@ fn setup_gallery(
     }
 }
 
-fn gallery_camera_transform() -> Transform {
-    Transform::from_xyz(0.0, 10.5, 17.0).looking_at(Vec3::new(0.0, 1.1, 0.0), Vec3::Y)
+fn gallery_camera_transform(ring_radius: u8, object_radius: u8, object_height: u8) -> Transform {
+    let object_height = f32::from(object_height) * LEVEL_HEIGHT;
+    let focus = Vec3::new(0.0, object_height * 0.5, 0.0);
+    let horizontal_extent = f32::from(ring_radius) + f32::from(object_radius);
+    let distance = (horizontal_extent * 2.5 + object_height * 1.4).max(22.0);
+    Transform::from_xyz(0.0, focus.y + distance * 0.55, distance).looking_at(focus, Vec3::Y)
 }
 
 fn install_material_fixture(
@@ -206,6 +220,7 @@ fn spawn_rotations(
     catalog: Option<Res<RuntimeArtCatalog>>,
     spawned: Option<Res<GallerySpawned>>,
     options: Res<GalleryOptions>,
+    mut cameras: Query<&mut Transform, With<GalleryCamera>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if spawned.is_some() {
@@ -214,24 +229,32 @@ fn spawn_rotations(
     let Some(catalog) = catalog else {
         return;
     };
-    let Ok(object_id) = ObjectAssetId::new(OBJECT_ID) else {
-        error!("gallery object id '{OBJECT_ID}' violates the stable-id contract");
+    let Ok(object_id) = ObjectAssetId::new(options.object_id.clone()) else {
+        error!(
+            "gallery object id '{}' violates the stable-id contract",
+            options.object_id
+        );
         exit.write(AppExit::error());
         return;
     };
-    if catalog.object(&object_id).is_none() {
-        error!("runtime art catalog does not contain gallery object '{OBJECT_ID}'");
+    let Some(blueprint) = catalog.object(&object_id) else {
+        error!(
+            "runtime art catalog does not contain gallery object '{}'",
+            object_id.as_str()
+        );
         exit.write(AppExit::error());
         return;
-    }
+    };
 
+    let ring_radius = 4_u8.saturating_add(blueprint.bounds.radius.saturating_mul(2));
+    let axial_radius = i32::from(ring_radius);
     let coordinates = [
-        HexCoord::from_axial(0, -4),
-        HexCoord::from_axial(4, -4),
-        HexCoord::from_axial(4, 0),
-        HexCoord::from_axial(0, 4),
-        HexCoord::from_axial(-4, 4),
-        HexCoord::from_axial(-4, 0),
+        HexCoord::from_axial(0, -axial_radius),
+        HexCoord::from_axial(axial_radius, -axial_radius),
+        HexCoord::from_axial(axial_radius, 0),
+        HexCoord::from_axial(0, axial_radius),
+        HexCoord::from_axial(-axial_radius, axial_radius),
+        HexCoord::from_axial(-axial_radius, 0),
     ];
     for (steps, coord) in (0_u8..6).zip(coordinates) {
         let Ok(rotation) = HexObjectRotation::new(steps) else {
@@ -251,8 +274,16 @@ fn spawn_rotations(
         };
         commands.spawn((
             instance,
-            Name::new(format!("Small Broadleaf / rotation {steps}")),
+            Name::new(format!("{} / rotation {steps}", blueprint.display_name)),
         ));
+    }
+    let camera_transform = gallery_camera_transform(
+        ring_radius,
+        blueprint.bounds.radius,
+        blueprint.bounds.height,
+    );
+    for mut transform in &mut cameras {
+        *transform = camera_transform;
     }
     if options.material_fixtures {
         let Ok(fixture_id) = ObjectAssetId::new(MATERIAL_FIXTURE_ID) else {
