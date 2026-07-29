@@ -61,6 +61,7 @@ const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 const LOG_LINES: usize = 6;
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
     app.add_systems(
         Update,
@@ -650,8 +651,14 @@ fn spawn_control_panel(
         });
 }
 
-fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Screen>>) {
-    if keys.just_pressed(KeyCode::Backspace) || keys.just_pressed(KeyCode::Escape) {
+fn handle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ReturnTitle)
+        || bindings.just_pressed(&keys, hex_core::InputAction::Cancel)
+    {
         next.set(Screen::Title);
     }
 }

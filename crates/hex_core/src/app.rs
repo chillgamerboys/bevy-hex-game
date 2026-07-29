@@ -24,6 +24,8 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Persistent pre-alpha display and volume preferences.
+    Settings,
     /// Interactive sandbox for the lattice ruleset, reached from the title menu.
     ///
     /// Exists as an isolated manual-verification surface for magic rules — casting,
@@ -134,6 +136,11 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
+    /// Apply a validated exploration resume after default actors spawn.
+    ///
+    /// This phase is intentionally before perception: restored positions must be the
+    /// positions observed on the first gameplay frame.
+    Restore,
     /// Derive illumination and initial faction knowledge from terrain and actors.
     ///
     /// This phase lets later presentation depend on published knowledge without

@@ -170,8 +170,12 @@ fn reset(
     *expanded = LogExpanded::default();
 }
 
-fn toggle_history(keys: Res<ButtonInput<KeyCode>>, mut expanded: ResMut<LogExpanded>) {
-    if keys.just_pressed(KeyCode::KeyL) {
+fn toggle_history(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut expanded: ResMut<LogExpanded>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleLog) {
         expanded.0 = !expanded.0;
     }
 }

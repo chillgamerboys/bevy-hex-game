@@ -16,6 +16,7 @@ pub mod effects;
 pub mod elements;
 pub mod formation;
 pub mod hex;
+pub mod input;
 pub mod lattice_ids;
 pub mod perception;
 pub mod presentation;
@@ -40,6 +41,7 @@ pub use formation::{
     MAX_FORMATION_SLOTS, MIN_FORMATION_SLOTS,
 };
 pub use hex::{HexCoord, HexGrid, HexSpan, HexTile, Sextant};
+pub use input::{InputAction, InputBindings};
 pub use lattice_ids::{EnchantId, LatticeCoord};
 pub use perception::{
     ExteriorIllumination, GameplayLight, IlluminationLevel, KnowledgeExpiry, KnowledgeSource,

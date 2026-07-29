@@ -22,6 +22,7 @@ hex_dev = { path = "crates/hex_dev" }
 bevy = "0.19"
 bevy_app = "0.19"
 bevy_ecs = "0.19"
+bevy_input = "0.19"
 bevy_log = "0.19"
 bevy_math = "0.19"
 bevy_platform = "0.19"
@@ -155,6 +156,9 @@ debug-assertions = false
 # so that trade is the right way round.
 codegen-units = 1
 lto = "thin"
+# Retain enough source locations for a future crash-reporting backend. Wave 5 does
+# not upload them anywhere; the release artifact keeps platform symbol companions.
+debug = "line-tables-only"
 
 # Fast to compile, since CI only needs to know the code builds and passes.
 [profile.ci]
