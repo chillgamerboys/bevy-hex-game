@@ -1353,6 +1353,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "supported-radius Fort corpus is a release stress test"]
     fn fixed_corpus_builds_valid_forts_at_supported_radii() {
         for radius in [12, 20, 40] {
             for seed in [0, 1, 808, 4_294_967_311] {

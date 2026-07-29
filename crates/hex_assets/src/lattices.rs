@@ -158,6 +158,8 @@ pub struct Archetype {
     pub spec: LatticeSpec,
     /// Attunement and channelling, per element.
     pub stats: LatticeStats,
+    /// Default AI profile for hostile units of this archetype.
+    pub ai_profile: Option<String>,
 }
 
 /// Every archetype the game can spawn, resolved and ready to attach.
@@ -332,6 +334,7 @@ fn resolve_archetype(
         Ok(Archetype {
             spec: LatticeSpec::new(cells),
             stats: LatticeStats::new(capacity, channelling),
+            ai_profile: raw.ai_profile.clone(),
         })
     } else {
         Err(errors)
@@ -453,6 +456,9 @@ pub struct UnvalidatedArchetype {
     /// Channelling per element name: how much a channel action restores.
     #[serde(default)]
     pub channelling: BTreeMap<String, u16>,
+    /// Default AI profile for hostile units of this archetype.
+    #[serde(default)]
+    pub ai_profile: Option<String>,
 }
 
 /// One cell and where it sits.

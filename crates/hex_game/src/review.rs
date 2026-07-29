@@ -540,7 +540,9 @@ fn capture_timeout_diagnostic(
         CapturePhase::Readback
     } else {
         match screen {
-            Screen::Splash | Screen::Title | Screen::LatticeDemo => CapturePhase::AwaitingScenario,
+            Screen::Splash | Screen::Title | Screen::Settings | Screen::LatticeDemo => {
+                CapturePhase::AwaitingScenario
+            }
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,
@@ -1295,6 +1297,7 @@ mod tests {
     fn automated_launch_requires_one_exact_scenario_name() {
         let only = scenario(Some(7));
         let library = ScenarioLibrary {
+            default_game: only.name.clone(),
             scenarios: vec![only.clone()],
         };
         assert_eq!(
@@ -1306,6 +1309,7 @@ mod tests {
         assert!(uniquely_named_scenario(&library, "Missing").is_err());
 
         let duplicated = ScenarioLibrary {
+            default_game: only.name.clone(),
             scenarios: vec![only.clone(), only],
         };
         assert!(uniquely_named_scenario(&duplicated, "Test").is_err());

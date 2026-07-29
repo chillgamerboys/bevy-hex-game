@@ -22,6 +22,8 @@
 
 use bevy::prelude::*;
 
+/// Planning exact, rotating, compressed whole-party routes.
+pub mod formation;
 /// Which surfaces a piece may step between.
 pub mod movement;
 /// Hex-specific movement along a route of surfaces.
@@ -35,6 +37,9 @@ pub mod units;
 /// Turning a spell's shape into the exact voxels it reaches.
 pub mod volumes;
 
+pub use formation::{
+    plan_formation_move, rotated, FormationMember, FormationPlan, FormationPlanError,
+};
 pub use movement::{route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing};
 pub use pathing::HexPathingLine;
 pub use selection::{

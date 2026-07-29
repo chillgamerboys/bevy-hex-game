@@ -8,6 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -27,14 +28,15 @@ will, and no amount of documentation prevents it. A compiler error does.
 |---|---|---|---|
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
-| `hex_units` | Units and their lattices, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
+| `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI, faction lattice knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
+| `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -73,21 +75,27 @@ settles none of [the design's open questions](design/game.md#open-questions) —
 initiative, action economy, fight length, the functional-death threshold — it exposes
 primitives and leaves the policy to the crates above it.
 
-It still depends only on `hex_core`, and three crates now declare an edge to it — drawn
-ahead of the code so the damage-loop PRs stop contending over the same manifests. Each
-edge is for a different half of the job. **`hex_assets`** will implement the engine's
-content lookup traits over `elements.ron`/`spells.ron` and turn authored lattices into a
-`LatticeSpec`, so the engine reads content without knowing what a file is. **`hex_units`**
-will carry the result: a unit's spec, state and stats go on at spawn, keyed by its
-archetype. **`hex_combat`** drives it — casting through the command funnel, damage
-through `apply_disables`, and the defender-chooses decision the engine deliberately
-refuses to own; today it reads the lattice types only in `knowledge.rs`.
+It still depends only on `hex_core`, and three crates consume it for distinct reasons.
+**`hex_assets`** implements the engine's content lookup traits over
+`elements.ron`/`spells.ron` and turns authored lattices into a `LatticeSpec`, so the
+engine reads content without knowing what a file is. **`hex_units`** carries the
+result: a unit's spec, state, and stats are attached at spawn, keyed by its archetype.
+**`hex_combat`** drives it — casting through the command funnel, damage through
+`apply_disables`, defender-owned disable choices, persistent effects, and the
+knowledge seam the engine deliberately refuses to own.
 
-Drawing an edge early costs something worth naming: the compiler stops being the review
+Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
-trade is deliberate and temporary — the alternative was three PRs each editing the same
-two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
-the types it exposes.
+trade is deliberate — the compiler cannot distinguish an intended consumer from an
+accidental import once the edge exists. Like the map, the engine is one person's, and
+its contract is the types it exposes.
+
+Party state follows the same split. `hex_core` owns the serializable formation
+vocabulary and session resource, `hex_assets` loads and validates named presets,
+`hex_units` owns roster identity and selection/focus projection, and `hex_game` renders
+and edits those facts. The UI never invents an entity ordering: keys and strip slots
+follow the `Party` resource's stable `UnitId` order. See
+[systems/party.md](systems/party.md).
 
 ### Ownership cuts both ways
 
@@ -257,10 +265,11 @@ sets make the ordering that crosses crate boundaries explicit:
   state transitions and self-contained UI/presentation systems may run outside them.
 - **`PausableSystems`** — gates gameplay work such as movement animation behind
   `Pause(false)`.
-- **`GameplaySetup`** — `Resources → Terrain → Actors → Perception → View →
-  Finalize`, for `OnEnter(Screen::Gameplay)`. `Perception` derives initial knowledge
-  only after terrain and actors are queryable; `View` applies generated framing and
-  presentation only after that projection exists.
+- **`GameplaySetup`** — `Resources → Terrain → Actors → Restore → Perception →
+  View → Finalize`, for `OnEnter(Screen::Gameplay)`. `Restore` applies a validated
+  pre-alpha resume after the scenario terrain and roster exist; `Perception` then
+  derives initial knowledge from the restored actors, and `View` applies generated
+  framing and presentation only after that projection exists.
 - **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
@@ -280,9 +289,10 @@ them, and **entities spawned via `Commands` are not queryable until the queue is
 applied**. Ordering alone would not have fixed it — a set boundary also supplies a
 sync point, which is what makes the tiles *visible* rather than merely earlier.
 
-The names carry that: `Terrain` is the map, `Actors` are the things standing on it.
-The old `Resources → Entities` gave nowhere to say "entities that depend on other
-entities", which is why the mistake was easy to make.
+The names carry that: `Terrain` is the map, `Actors` are the things standing on it,
+and `Restore` may replace those actors' session state before any observer derives
+knowledge from them. The old `Resources → Entities` gave nowhere to say "entities
+that depend on other entities", which is why the mistake was easy to make.
 
 **Ordering that spans a crate boundary has to go through a shared set in
 `hex_core`.**
@@ -300,10 +310,14 @@ forgets to update.
 ## States
 
 ```
-Splash ──► Title ──► Loading ──► Gameplay
-              ▲                     │
-              └──── BACKSPACE ──────┘
-                                      └── Pause (sub-state of Gameplay)
+Splash ──► Title ◄──────────────► Settings
+              │
+              │ New Game / valid Continue / development fixture
+              ▼
+           Loading ──► Gameplay
+                          │
+                          ├── BACKSPACE ──► Title
+                          └── Pause (sub-state of Gameplay)
 ```
 
 `Pause` is a **sub-state** of `Gameplay`, so "paused on the title screen" is
@@ -314,6 +328,12 @@ unrepresentable rather than merely unlikely.
 settings file has parsed, the derived `SubstanceTable` exists, and every asset handle
 has reached a terminal state. Gameplay systems can therefore take resources such as
 `Res<MapSettings>` rather than `Option<Res<…>>`.
+
+New Game and Continue deliberately share that path. New Game resolves the hidden
+Party Trial default and neither reads nor overwrites the resume slot. Continue first
+validates the one pre-alpha resume file, stages it as `PendingResume`, and then lets
+`GameplaySetup::Restore` consume it. An absent, corrupt, or incompatible file stays
+on the title screen with a visible reason instead of constructing a partial session.
 
 An asset failure is terminal too. The asset server already reports it, and treating
 failure as "still loading" would turn a visible missing-asset problem into a permanent
@@ -330,7 +350,7 @@ the chance to reject it.
 
 **An observer that touches state-scoped resources must take them as `Option`.**
 
-## Settings
+## Authored settings and local preferences
 
 Tunable values live in `assets/config/*.ron` and are editable without Rust. See
 [development/config.md](development/config.md).
@@ -339,6 +359,16 @@ On initial load, settings resources are **absent** until their file parses rathe
 than falling back to a default. A default that silently diverges from what someone
 wrote is worse than a stall. After a valid resource exists, a failed hot reload keeps
 that last valid value active while the asset server reports the error.
+
+The Settings screen writes a separate, atomic local-preferences file outside
+`assets/`. A valid local preference overrides the authored display default; a missing
+file leaves the authored value in force, and corrupt preferences are rejected visibly
+before falling back. Local preferences are user state, not hot-reloaded project
+content.
+
+`InputBindings` centralizes the current fixed action-to-key map without promising
+rebinding UI. `AudioBusVolumes` and the audio facade similarly reserve music, SFX, and
+UI seams without requiring Wave 5 to ship audio content.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing
@@ -353,8 +383,10 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
+| Every frame | `camera.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
+| Until a local preference is saved | `display.ron` | Immediate; afterward the user's persisted presentation choice wins |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
+| On coherent art-graph reload | `palette.ron`, `voxel_styles.ron`, `object_catalog.ron`, `objects/*.ron` | Existing authored object instances rebuild; a bad graph retains the last valid revision |
 | At spawn | `world.ron`, `substances.ron`, `palette.ron` substance/unit swatches, `player.ron` scale | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
@@ -368,12 +400,12 @@ Returning to the title and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
 change would be a real improvement for anyone tuning it, and is a fair follow-up.
 
-### `present_mode` does nothing on macOS
+### Frame presentation appears unchanged on macOS
 
-Measured, not assumed. Editing `display.ron` reloads the file and re-applies the
-setting — confirmed by instrumenting the system that writes it — but the frame rate
-stays pinned to the display refresh either way. macOS composites every windowed app
-and vsyncs it.
+Measured, not assumed. Editing the active value through Settings, or editing
+`display.ron` before a local preference exists, re-applies the setting — confirmed by
+instrumenting the system that writes it — but the frame rate stays pinned to the
+display refresh either way. macOS composites every windowed app and vsyncs it.
 
 This also explains frame rates varying between 60 and 120 across runs with no code
 change: ProMotion adapts on its own, and none of it was ours to control. The
@@ -390,11 +422,11 @@ asks for is looking at the window.
 
 Two complementary layers across the workspace.
 
-**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
-which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
-the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
-id assignment, and the movement rules — including that a two-level body is refused a
-one-voxel crawlspace a one-level body walks into.
+**Unit tests** live beside behavior throughout the workspace and do not need a GPU:
+coordinate round-tripping, the cube invariant, lattice properties, content validation,
+object meshing, perception, voxel columns and run-merging, substance id assignment,
+and movement rules — including that a two-level body is refused a one-voxel crawlspace
+a one-level body walks into.
 
 **ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
 world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and
