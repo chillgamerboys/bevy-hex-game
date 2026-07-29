@@ -234,13 +234,13 @@ pub(crate) fn construct_plan(
         .map_err(|error| vec![recipe_issue(error.to_string())])?;
     let mask = patch.mask().clone();
     let excluded = patch.protected_approaches();
-    let ground_levels: BTreeMap<_, _> = plan
-        .volume
-        .surfaces
-        .keys()
-        .filter(|surface| surface.coord.distance(surface.coord) == 0)
-        .map(|surface| (surface.coord, surface.level))
-        .collect();
+    let mut ground_levels = BTreeMap::<HexCoord, Level>::new();
+    for surface in plan.volume.surfaces.keys() {
+        ground_levels
+            .entry(surface.coord)
+            .and_modify(|level| *level = (*level).max(surface.level))
+            .or_insert(surface.level);
+    }
     let highest_ground = ground_levels.values().copied().max().unwrap_or_default();
     let upper_bottom = highest_ground
         .saturating_add(1)
@@ -550,7 +550,7 @@ fn validate_sky(
     settings: &V3SkyIslandsSettings,
 ) -> WorldValidation<SkyMetrics> {
     let mut issues = plan.validate();
-    let mut ground = Vec::new();
+    let mut ground = BTreeMap::<HexCoord, TilePos>::new();
     let mut primary = BTreeSet::new();
     let mut satellites = BTreeSet::new();
     let mut bridge_surfaces = 0_u32;
@@ -558,7 +558,16 @@ fn validate_sky(
     let satellite_region = SpecialMovementRegion(1);
     for (position, metadata) in &plan.volume.surfaces {
         match metadata.access {
-            SurfaceAccess::Ordinary => ground.push(*position),
+            SurfaceAccess::Ordinary | SurfaceAccess::NonStandable => {
+                ground
+                    .entry(position.coord)
+                    .and_modify(|surface| {
+                        if position.level > surface.level {
+                            *surface = *position;
+                        }
+                    })
+                    .or_insert(*position);
+            }
             SurfaceAccess::SpecialMovement(region) if region == primary_region => {
                 primary.insert(*position);
                 if upper_surface_material(plan, *position) == Some(SolidMaterialRole::Metal) {
@@ -568,7 +577,7 @@ fn validate_sky(
             SurfaceAccess::SpecialMovement(region) if region == satellite_region => {
                 satellites.insert(*position);
             }
-            SurfaceAccess::SpecialMovement(_) | SurfaceAccess::NonStandable => {}
+            SurfaceAccess::SpecialMovement(_) => {}
         }
     }
     let upper_count = primary.len().saturating_add(satellites.len());
@@ -591,10 +600,8 @@ fn validate_sky(
         .chain(&satellites)
         .filter_map(|upper| {
             ground
-                .iter()
-                .filter(|ground| ground.coord == upper.coord)
-                .map(|ground| upper.level.saturating_sub(ground.level).saturating_sub(5))
-                .min()
+                .get(&upper.coord)
+                .and_then(|ground| clear_levels_below_surface(plan, *upper, *ground))
         })
         .min()
         .unwrap_or_default();
@@ -621,6 +628,27 @@ fn validate_sky(
         bridge_surfaces,
         vertical_clearance: minimum_clearance,
     })
+}
+
+fn clear_levels_below_surface(
+    plan: &GeneratedWorldPlan,
+    upper: TilePos,
+    ground: TilePos,
+) -> Option<Level> {
+    let mass_bottom = plan
+        .volume
+        .columns
+        .get(&upper.coord)?
+        .elements
+        .iter()
+        .find_map(|element| {
+            let VolumeElement::Solid(mass) = element else {
+                return None;
+            };
+            (mass.levels.bottom <= upper.level && upper.level < mass.levels.top)
+                .then_some(mass.levels.bottom)
+        })?;
+    Some(mass_bottom.saturating_sub(ground.level).saturating_sub(1))
 }
 
 fn upper_surface_material(

@@ -2760,23 +2760,23 @@ mod tests {
         for (ron, expected_version) in [
             (
                 include_str!("../../../assets/config/worlds/procedural-hills.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-caves.ron"),

@@ -197,33 +197,46 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-**Use current procedural terrain.** Generator version 2 uses one geometry recipe plus
-a separate material environment. Hills is the first shipped V2 recipe:
+**Use current procedural terrain.** Generator version 3 places each typed recipe
+inside a patch. A `Single` layout owns the complete map footprint:
 
 ```ron
 terrain: Procedural((
-    generator_version: 2,
-    environment: TemperateGrassland,
-    recipe: Hills((
-        valley_level: 15,
-        max_relief: 8,
-        hills_per_bank: 3,
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Hills((
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        )),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
     )),
 )),
 ```
 
-V2 Hills preserves the approved V1 maps for equivalent Hills settings and seeds while
-publishing them through the V2 volume pipeline. It derives its three-wide hazard,
-two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`; those
-invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
-this recipe in the shipped scenario library.
+Native V3 Hills derives its edge-to-edge three-wide hazard, direct two-wide metal
+bridge, separated two-wide alternate crossing, bed, fill bounds, and bridge level
+from `valley_level`; those invariants are intentionally not editable. Temperate,
+Frozen, and Volcanic Hills use this recipe in the shipped scenario library. V2 keeps
+its frozen external shape and implementation only as a development reference while
+the V3 review corpus is approved.
 
-`LayeredSkyIslands` finalizes the same Hills ground before sampling any independent
+`SkyIslands` finalizes the same Hills ground before sampling any independent
 `sky.*` stream, then adds three primary islands, one or two satellites, and a two-wide
 upper bridge network:
 
 ```ron
-recipe: LayeredSkyIslands((
+recipe: SkyIslands((
     ground: (
         valley_level: 15,
         max_relief: 8,

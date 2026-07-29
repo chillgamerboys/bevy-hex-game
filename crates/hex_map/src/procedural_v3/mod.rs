@@ -309,6 +309,9 @@ fn hills_recipe_metrics(metrics: &hills::HillsMetrics) -> HillsReportMetrics {
         relief: metrics.relief,
         critical_route_steps: metrics.critical_route_steps,
         hill_centres: metrics.hill_centres,
+        barrier_cells: metrics.barrier_cells,
+        bridge_surfaces: metrics.bridge_surfaces,
+        alternate_crossing_surfaces: metrics.alternate_crossing_surfaces,
     }
 }
 

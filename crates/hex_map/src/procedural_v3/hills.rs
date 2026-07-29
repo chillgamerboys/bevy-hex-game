@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::patch::PatchRecipeContext;
 use super::seed::SeedStream;
 use super::selection::{
@@ -17,12 +18,12 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::volume::{
-    LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
-    VolumeElement, VolumePlan,
+    FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
+    SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeaturePlan, GeneratedWorldPlan, InteriorPlan, StructurePlan, WorldIssueCode,
-    WorldValidationIssue,
+    FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedStructure, ProtectedFeatureRoute,
+    StructureId, StructureKind, StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 use super::V3GenerationError;
 use crate::settings::{
@@ -33,6 +34,13 @@ use crate::settings::{
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
+const BRIDGE_ANCHOR: &str = "bridge";
+const BRIDGE_ROUTE: &str = "bridge_crossing";
+const FORD_ROUTE: &str = "alternate_crossing";
+const RIVER_HALF_WIDTH: i32 = 1;
+const CROSSING_HALF_LENGTH: i32 = 2;
+const APPROACH_HALF_LENGTH: i32 = 3;
+const RIVER_DEPTH: Level = 3;
 
 /// Deterministic measurements for one admitted Hills plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +50,9 @@ pub(crate) struct HillsMetrics {
     pub(crate) relief: Level,
     pub(crate) critical_route_steps: u32,
     pub(crate) hill_centres: u32,
+    pub(crate) barrier_cells: u32,
+    pub(crate) bridge_surfaces: u32,
+    pub(crate) alternate_crossing_surfaces: u32,
 }
 
 #[derive(Debug)]
@@ -221,12 +232,15 @@ pub(crate) fn construct_plan(
         u8::try_from(orientation.sample(0) % 6).unwrap_or_default()
     });
     let centre_stream = streams.map(|(_, centres)| centres);
+    let crossings = crossing_geometry(patch.mask(), orientation, layout.grid_radius)?;
+    let mut excluded = patch.protected_approaches();
+    excluded.extend(crossings.protected.iter().copied());
     let centres = select_hill_centres(
         patch.mask(),
         settings.hills_per_bank,
         orientation,
         centre_stream,
-        &patch.protected_approaches(),
+        &excluded,
     )?;
     let mut surface_by_coord = BTreeMap::new();
     for coord in patch.mask() {
@@ -242,19 +256,71 @@ pub(crate) fn construct_plan(
             .unwrap_or_default();
         surface_by_coord.insert(*coord, settings.valley_level.saturating_add(rise));
     }
+    for coord in &crossings.protected {
+        if let Some(level) = surface_by_coord.get_mut(coord) {
+            *level = settings.valley_level;
+        }
+    }
+    fit_protected_routes(
+        &crossings.protected,
+        settings.valley_level,
+        &mut surface_by_coord,
+    );
     fit_shared_approaches(&patch, &mut surface_by_coord);
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
+    let mut ordinary_by_coord = BTreeMap::new();
     for (coord, level) in &surface_by_coord {
-        columns.insert(*coord, land_column(*level, environment));
-        surfaces.insert(
-            TilePos::new(*coord, *level),
-            SurfaceMetadata {
-                access: SurfaceAccess::Ordinary,
-                interior: None,
-            },
-        );
+        let bridge = crossings.bridge_deck.contains(coord);
+        let ford = crossings.ford_deck.contains(coord);
+        if crossings.river.contains(coord) {
+            let (column, bed, crossing) =
+                river_column(*coord, settings.valley_level, environment, bridge, ford);
+            columns.insert(*coord, column);
+            surfaces.insert(
+                bed,
+                SurfaceMetadata {
+                    access: SurfaceAccess::NonStandable,
+                    interior: None,
+                },
+            );
+            if let Some(crossing) = crossing {
+                surfaces.insert(
+                    crossing,
+                    SurfaceMetadata {
+                        access: SurfaceAccess::Ordinary,
+                        interior: None,
+                    },
+                );
+                ordinary_by_coord.insert(*coord, crossing);
+            }
+        } else {
+            let mut column = land_column(*level, environment);
+            if ford {
+                set_land_surface_material(&mut column, causeway_material(environment));
+            }
+            let surface = if bridge {
+                let deck = TilePos::new(*coord, settings.valley_level.saturating_add(1));
+                column.elements.push(VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(deck.level, deck.level.saturating_add(1)),
+                    material: SolidMaterialRole::Metal,
+                    cutaway_for: None,
+                }));
+                deck
+            } else {
+                TilePos::new(*coord, *level)
+            };
+            columns.insert(*coord, column);
+            surfaces.insert(
+                surface,
+                SurfaceMetadata {
+                    access: SurfaceAccess::Ordinary,
+                    interior: None,
+                },
+            );
+            ordinary_by_coord.insert(*coord, surface);
+        }
     }
     let volume = VolumePlan {
         mask: patch.mask().clone(),
@@ -262,26 +328,21 @@ pub(crate) fn construct_plan(
         surfaces,
     };
     let (party_coord, hostile_coord) = opposing_landings(patch.mask(), orientation)?;
-    let conflict_coord = patch
-        .mask()
-        .iter()
+    let conflict_coord = crossings
+        .bridge_centerline
+        .get(crossings.bridge_centerline.len() / 2)
         .copied()
-        .min_by_key(|coord| {
-            (
-                coord
-                    .distance(party_coord)
-                    .abs_diff(coord.distance(hostile_coord)),
-                coord.distance(HexCoord::ORIGIN),
-                *coord,
-            )
-        })
-        .ok_or_else(|| vec![recipe_issue("Hills patch has no conflict landing")])?;
-    let exact = |coord| {
-        surface_by_coord
-            .get(&coord)
-            .copied()
-            .map(|level| TilePos::new(coord, level))
-    };
+        .ok_or_else(|| vec![recipe_issue("Hills bridge has no conflict landing")])?;
+    let alternate_coord = crossings
+        .ford_centerline
+        .get(crossings.ford_centerline.len() / 2)
+        .copied()
+        .ok_or_else(|| {
+            vec![recipe_issue(
+                "Hills alternate crossing has no review landing",
+            )]
+        })?;
+    let exact = |coord| ordinary_by_coord.get(&coord).copied();
     let anchors = BTreeMap::from([
         (
             PARTY_START.to_owned(),
@@ -298,7 +359,45 @@ pub(crate) fn construct_plan(
             exact(conflict_coord)
                 .ok_or_else(|| vec![recipe_issue("Hills conflict landing is missing")])?,
         ),
+        (
+            BRIDGE_ANCHOR.to_owned(),
+            exact(conflict_coord)
+                .ok_or_else(|| vec![recipe_issue("Hills bridge landing is missing")])?,
+        ),
+        (
+            FORD_ROUTE.to_owned(),
+            exact(alternate_coord)
+                .ok_or_else(|| vec![recipe_issue("Hills alternate landing is missing")])?,
+        ),
     ]);
+    let bridge_route = route_membership(
+        &crossings.bridge_centerline,
+        &crossings.bridge_route,
+        &ordinary_by_coord,
+    )?;
+    let ford_route = route_membership(
+        &crossings.ford_centerline,
+        &crossings.ford_route,
+        &ordinary_by_coord,
+    )?;
+    let features = FeaturePlan {
+        by_id: BTreeMap::new(),
+        protected_routes: BTreeMap::from([
+            (BRIDGE_ROUTE.to_owned(), bridge_route),
+            (FORD_ROUTE.to_owned(), ford_route),
+        ]),
+        clearings: BTreeMap::new(),
+    };
+    let liquid_material = if environment == V3EnvironmentSettings::Volcanic {
+        FillMaterialRole::Lava
+    } else {
+        FillMaterialRole::Water
+    };
+    let river_nodes = river_nodes(
+        &crossings.river,
+        orientation,
+        settings.valley_level.saturating_sub(1),
+    )?;
     let biome_regions = volume
         .surfaces
         .keys()
@@ -315,9 +414,29 @@ pub(crate) fn construct_plan(
     Ok(GeneratedWorldPlan {
         layout,
         volume,
-        liquids: Default::default(),
-        features: FeaturePlan::default(),
-        structures: StructurePlan::default(),
+        liquids: LiquidPlan {
+            bodies: BTreeMap::from([(
+                LiquidBodyId(patch_id.0),
+                LiquidBodyPlan {
+                    material: liquid_material,
+                    nodes: river_nodes,
+                },
+            )]),
+        },
+        features,
+        structures: StructurePlan {
+            by_id: BTreeMap::from([(
+                StructureId(patch_id.0),
+                PlannedStructure {
+                    kind: StructureKind::Bridge,
+                    voxels: crossings
+                        .bridge_deck
+                        .iter()
+                        .map(|coord| TilePos::new(*coord, settings.valley_level.saturating_add(1)))
+                        .collect(),
+                },
+            )]),
+        },
         blockers: BTreeSet::new(),
         lights: BTreeMap::new(),
         biome_regions,
@@ -325,6 +444,225 @@ pub(crate) fn construct_plan(
         anchors,
         view_hint,
     })
+}
+
+#[derive(Debug)]
+struct CrossingGeometry {
+    river: BTreeSet<HexCoord>,
+    bridge_deck: BTreeSet<HexCoord>,
+    ford_deck: BTreeSet<HexCoord>,
+    bridge_centerline: Vec<HexCoord>,
+    bridge_route: BTreeSet<HexCoord>,
+    ford_centerline: Vec<HexCoord>,
+    ford_route: BTreeSet<HexCoord>,
+    protected: BTreeSet<HexCoord>,
+}
+
+fn crossing_geometry(
+    mask: &BTreeSet<HexCoord>,
+    orientation: u8,
+    grid_radius: u32,
+) -> Result<CrossingGeometry, Vec<WorldValidationIssue>> {
+    let radius = i32::try_from(grid_radius)
+        .map_err(|error| vec![recipe_issue(format!("Hills radius exceeds i32: {error}"))])?;
+    let ford_y = radius / 2;
+    let river: BTreeSet<_> = mask
+        .iter()
+        .copied()
+        .filter(|coord| unrotate(*coord, orientation).x().abs() <= RIVER_HALF_WIDTH)
+        .collect();
+    let route = |first_y: i32| {
+        [first_y, first_y.saturating_add(1)]
+            .into_iter()
+            .flat_map(|y| {
+                (-APPROACH_HALF_LENGTH..=APPROACH_HALF_LENGTH)
+                    .map(move |x| rotate(HexCoord::from_axial(x, y), orientation))
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let deck = |first_y: i32| {
+        [first_y, first_y.saturating_add(1)]
+            .into_iter()
+            .flat_map(|y| {
+                (-CROSSING_HALF_LENGTH..=CROSSING_HALF_LENGTH)
+                    .map(move |x| rotate(HexCoord::from_axial(x, y), orientation))
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let centerline = |y: i32| {
+        (-APPROACH_HALF_LENGTH..=APPROACH_HALF_LENGTH)
+            .map(|x| rotate(HexCoord::from_axial(x, y), orientation))
+            .collect::<Vec<_>>()
+    };
+    let bridge_route = route(0);
+    let bridge_deck = deck(0);
+    let ford_route = route(ford_y);
+    let ford_deck = deck(ford_y);
+    let protected: BTreeSet<_> = bridge_route.union(&ford_route).copied().collect();
+    for (name, coordinates) in [
+        ("river", &river),
+        ("bridge route", &bridge_route),
+        ("bridge deck", &bridge_deck),
+        ("ford route", &ford_route),
+        ("ford deck", &ford_deck),
+    ] {
+        if coordinates.is_empty() || !coordinates.is_subset(mask) {
+            return Err(vec![recipe_issue(format!(
+                "Hills patch cannot fit its complete {name}"
+            ))]);
+        }
+    }
+    Ok(CrossingGeometry {
+        river,
+        bridge_deck,
+        ford_deck,
+        bridge_centerline: centerline(0),
+        bridge_route,
+        ford_centerline: centerline(ford_y),
+        ford_route,
+        protected,
+    })
+}
+
+fn river_column(
+    coord: HexCoord,
+    valley: Level,
+    environment: V3EnvironmentSettings,
+    bridge: bool,
+    ford: bool,
+) -> (VolumeColumn, TilePos, Option<TilePos>) {
+    let bed_level = valley.saturating_sub(RIVER_DEPTH);
+    let core = if environment == V3EnvironmentSettings::Volcanic {
+        SolidMaterialRole::Basalt
+    } else {
+        SolidMaterialRole::Stone
+    };
+    let fill = if environment == V3EnvironmentSettings::Volcanic {
+        FillMaterialRole::Lava
+    } else {
+        FillMaterialRole::Water
+    };
+    let mut elements = vec![
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(0, 1),
+            material: SolidMaterialRole::Bedrock,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(1, bed_level),
+            material: core,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(bed_level, bed_level.saturating_add(1)),
+            material: SolidMaterialRole::Gravel,
+            cutaway_for: None,
+        }),
+        VolumeElement::Fill(NonSolidFill {
+            levels: LevelInterval::new(valley.saturating_sub(2), valley),
+            material: fill,
+        }),
+    ];
+    let crossing = if ford {
+        let surface = TilePos::new(coord, valley);
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(surface.level, surface.level.saturating_add(1)),
+            material: causeway_material(environment),
+            cutaway_for: None,
+        }));
+        Some(surface)
+    } else if bridge {
+        let surface = TilePos::new(coord, valley.saturating_add(1));
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(surface.level, surface.level.saturating_add(1)),
+            material: SolidMaterialRole::Metal,
+            cutaway_for: None,
+        }));
+        Some(surface)
+    } else {
+        None
+    };
+    (
+        VolumeColumn { elements },
+        TilePos::new(coord, bed_level),
+        crossing,
+    )
+}
+
+fn causeway_material(environment: V3EnvironmentSettings) -> SolidMaterialRole {
+    if environment == V3EnvironmentSettings::Volcanic {
+        SolidMaterialRole::Basalt
+    } else {
+        SolidMaterialRole::Gravel
+    }
+}
+
+fn set_land_surface_material(column: &mut VolumeColumn, material: SolidMaterialRole) {
+    if let Some(VolumeElement::Solid(surface)) = column.elements.last_mut() {
+        surface.material = material;
+    }
+}
+
+fn route_membership(
+    centerline: &[HexCoord],
+    route: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+) -> Result<ProtectedFeatureRoute, Vec<WorldValidationIssue>> {
+    let exact = |coord: HexCoord| {
+        surfaces.get(&coord).copied().ok_or_else(|| {
+            vec![recipe_issue(format!(
+                "Hills crossing route has no ordinary surface at {coord:?}"
+            ))]
+        })
+    };
+    Ok(ProtectedFeatureRoute {
+        centerline: centerline
+            .iter()
+            .copied()
+            .map(exact)
+            .collect::<Result<_, _>>()?,
+        surfaces: route.iter().copied().map(exact).collect::<Result<_, _>>()?,
+    })
+}
+
+fn river_nodes(
+    river: &BTreeSet<HexCoord>,
+    orientation: u8,
+    top_level: Level,
+) -> Result<BTreeMap<TilePos, LiquidNode>, Vec<WorldValidationIssue>> {
+    let mut nodes = BTreeMap::new();
+    for coord in river {
+        let local = unrotate(*coord, orientation);
+        let forward = rotate(
+            HexCoord::from_axial(local.x(), local.y().saturating_add(1)),
+            orientation,
+        );
+        let downstream_coord = if river.contains(&forward) {
+            Some(forward)
+        } else if local.x() != 0 {
+            let merge = rotate(HexCoord::from_axial(0, local.y()), orientation);
+            if !river.contains(&merge) || coord.distance(merge) != 1 {
+                return Err(vec![recipe_issue(format!(
+                    "Hills river lane cannot merge at boundary cell {coord:?}"
+                ))]);
+            }
+            Some(merge)
+        } else {
+            None
+        };
+        nodes.insert(
+            TilePos::new(*coord, top_level),
+            LiquidNode {
+                state: if downstream_coord.is_some() {
+                    LiquidFlowState::Current
+                } else {
+                    LiquidFlowState::Still
+                },
+                downstream: downstream_coord.map(|next| TilePos::new(next, top_level)),
+            },
+        );
+    }
+    Ok(nodes)
 }
 
 fn select_hill_centres(
@@ -339,7 +677,7 @@ fn select_hill_centres(
         let mut candidates: Vec<_> = mask
             .iter()
             .copied()
-            .filter(|coord| axis_value(*coord, orientation).signum() == bank)
+            .filter(|coord| unrotate(*coord, orientation).x().signum() == bank)
             .filter(|coord| !excluded.contains(coord))
             .collect();
         candidates.sort_by_key(|coord| {
@@ -358,7 +696,7 @@ fn select_hill_centres(
                 selected.push(coord);
                 if selected
                     .iter()
-                    .filter(|centre| axis_value(**centre, orientation).signum() == bank)
+                    .filter(|centre| unrotate(**centre, orientation).x().signum() == bank)
                     .count()
                     == usize::from(per_bank)
                 {
@@ -375,6 +713,22 @@ fn select_hill_centres(
         ))]);
     }
     Ok(selected)
+}
+
+fn fit_protected_routes(
+    protected: &BTreeSet<HexCoord>,
+    preferred: Level,
+    levels: &mut BTreeMap<HexCoord, Level>,
+) {
+    for (coord, level) in levels {
+        let distance = protected
+            .iter()
+            .map(|protected| protected.distance(*coord))
+            .min()
+            .unwrap_or(u32::MAX);
+        let distance = i32::try_from(distance).unwrap_or(i32::MAX);
+        *level = (*level).min(preferred.saturating_add(distance));
+    }
 }
 
 fn fit_shared_approaches(patch: &PatchRecipeContext<'_>, levels: &mut BTreeMap<HexCoord, Level>) {
@@ -404,11 +758,11 @@ fn opposing_landings(
     let party = mask
         .iter()
         .copied()
-        .min_by_key(|coord| (axis_value(*coord, orientation), *coord));
+        .min_by_key(|coord| (unrotate(*coord, orientation).x(), *coord));
     let hostile = mask
         .iter()
         .copied()
-        .max_by_key(|coord| (axis_value(*coord, orientation), *coord));
+        .max_by_key(|coord| (unrotate(*coord, orientation).x(), *coord));
     match (party, hostile) {
         (Some(party), Some(hostile)) if party != hostile => Ok((party, hostile)),
         _ => Err(vec![recipe_issue(
@@ -417,17 +771,16 @@ fn opposing_landings(
     }
 }
 
-fn axis_value(coord: HexCoord, turns: u8) -> i32 {
-    let [x, y, z] = rotate(coord, turns).to_cubic_array();
-    x.saturating_sub(z).saturating_add(y / 2)
-}
-
 fn rotate(coord: HexCoord, turns: u8) -> HexCoord {
     let [mut x, mut y, mut z] = coord.to_cubic_array();
     for _ in 0..turns % 6 {
         (x, y, z) = (-z, -x, -y);
     }
     HexCoord::new_cubic(x, y, z)
+}
+
+fn unrotate(coord: HexCoord, turns: u8) -> HexCoord {
+    rotate(coord, (6_u8.saturating_sub(turns % 6)) % 6)
 }
 
 fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColumn {
@@ -507,6 +860,108 @@ fn validate_hills(
             settings.max_relief
         )));
     }
+    let Some(bridge) = plan.features.protected_routes.get(BRIDGE_ROUTE) else {
+        issues.push(recipe_issue("Hills is missing its direct bridge route"));
+        return WorldValidation::Invalid(issues);
+    };
+    let Some(alternate) = plan.features.protected_routes.get(FORD_ROUTE) else {
+        issues.push(recipe_issue(
+            "Hills is missing its alternate crossing route",
+        ));
+        return WorldValidation::Invalid(issues);
+    };
+    validate_crossing_route("bridge", bridge, &ordinary, &mut issues);
+    validate_crossing_route("alternate crossing", alternate, &ordinary, &mut issues);
+    if !bridge.surfaces.is_disjoint(&alternate.surfaces) {
+        issues.push(recipe_issue(
+            "Hills direct and alternate crossing footprints overlap",
+        ));
+    }
+
+    let fill_coords: BTreeSet<_> = plan
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect();
+    let matching_orientation = (0..6).find(|orientation| {
+        crossing_geometry(
+            &plan.layout.footprint,
+            *orientation,
+            plan.layout.grid_radius,
+        )
+        .is_ok_and(|geometry| geometry.river == fill_coords)
+    });
+    if matching_orientation.is_none() {
+        issues.push(recipe_issue(
+            "Hills liquid does not form the exact three-wide edge-to-edge barrier",
+        ));
+    }
+    validate_barrier_surfaces(plan, &fill_coords, bridge, alternate, &mut issues);
+
+    let bridge_barrier: BTreeSet<_> = bridge
+        .surfaces
+        .iter()
+        .copied()
+        .filter(|surface| fill_coords.contains(&surface.coord))
+        .collect();
+    let alternate_barrier: BTreeSet<_> = alternate
+        .surfaces
+        .iter()
+        .copied()
+        .filter(|surface| fill_coords.contains(&surface.coord))
+        .collect();
+    if bridge_barrier.is_empty() || alternate_barrier.is_empty() {
+        issues.push(recipe_issue(
+            "Hills crossing footprints do not span the liquid barrier",
+        ));
+    } else {
+        if !ordinary
+            .reachable_avoiding(party, &alternate_barrier)
+            .contains(&hostile)
+        {
+            issues.push(recipe_issue(
+                "Hills direct bridge is not an independent bank-to-bank route",
+            ));
+        }
+        if !ordinary
+            .reachable_avoiding(party, &bridge_barrier)
+            .contains(&hostile)
+        {
+            issues.push(recipe_issue(
+                "Hills alternate crossing is not an independent bank-to-bank route",
+            ));
+        }
+        let both_crossings: BTreeSet<_> =
+            bridge_barrier.union(&alternate_barrier).copied().collect();
+        if ordinary
+            .reachable_avoiding(party, &both_crossings)
+            .contains(&hostile)
+        {
+            issues.push(recipe_issue(
+                "Hills banks remain connected after both declared crossings are removed",
+            ));
+        }
+    }
+
+    let bridge_structures: Vec<_> = plan
+        .structures
+        .by_id
+        .values()
+        .filter(|structure| structure.kind == StructureKind::Bridge)
+        .collect();
+    let bridge_is_valid = matches!(
+        bridge_structures.as_slice(),
+        [structure]
+            if structure.voxels.iter().all(|position| {
+                solid_material_at(&plan.volume, *position) == Some(SolidMaterialRole::Metal)
+            })
+    );
+    if !bridge_is_valid {
+        issues.push(recipe_issue(
+            "Hills must contain exactly one all-metal bridge structure",
+        ));
+    }
     validate_shared_approaches(plan, &ordinary, &mut issues);
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
@@ -517,6 +972,89 @@ fn validate_hills(
         relief,
         critical_route_steps,
         hill_centres: u32::from(settings.hills_per_bank).saturating_mul(2),
+        barrier_cells: count_u32(fill_coords.len()),
+        bridge_surfaces: count_u32(bridge.surfaces.len()),
+        alternate_crossing_surfaces: count_u32(alternate.surfaces.len()),
+    })
+}
+
+fn validate_crossing_route(
+    name: &str,
+    route: &ProtectedFeatureRoute,
+    ordinary: &OrdinaryGraph,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if route.surfaces.len() < route.centerline.len().saturating_mul(2) {
+        issues.push(recipe_issue(format!(
+            "Hills {name} is not two ordinary surfaces wide"
+        )));
+    }
+    for pair in route.centerline.windows(2) {
+        if !matches!(pair, [from, to] if ordinary.admits(*from, *to)) {
+            issues.push(recipe_issue(format!(
+                "Hills {name} centerline contains an illegal walker transition"
+            )));
+        }
+    }
+    for center in &route.centerline {
+        if !route
+            .surfaces
+            .iter()
+            .any(|surface| surface.coord != center.coord && ordinary.admits(*center, *surface))
+        {
+            issues.push(recipe_issue(format!(
+                "Hills {name} has no walkable second lane at {center:?}"
+            )));
+        }
+    }
+}
+
+fn validate_barrier_surfaces(
+    plan: &GeneratedWorldPlan,
+    fill_coords: &BTreeSet<HexCoord>,
+    bridge: &ProtectedFeatureRoute,
+    alternate: &ProtectedFeatureRoute,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let declared_crossing_coords: BTreeSet<_> = bridge
+        .surfaces
+        .union(&alternate.surfaces)
+        .map(|surface| surface.coord)
+        .collect();
+    for coord in fill_coords {
+        let ordinary_surfaces: Vec<_> = plan
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(surface, metadata)| {
+                (surface.coord == *coord && metadata.access == SurfaceAccess::Ordinary)
+                    .then_some(*surface)
+            })
+            .collect();
+        if declared_crossing_coords.contains(coord) {
+            if ordinary_surfaces.len() != 1 {
+                issues.push(recipe_issue(format!(
+                    "Hills declared crossing cell {coord:?} has {} ordinary surfaces",
+                    ordinary_surfaces.len()
+                )));
+            }
+        } else if !ordinary_surfaces.is_empty() {
+            issues.push(recipe_issue(format!(
+                "Hills liquid barrier is accidentally standable at {coord:?}"
+            )));
+        }
+    }
+}
+
+fn solid_material_at(volume: &VolumePlan, position: TilePos) -> Option<SolidMaterialRole> {
+    volume.columns.get(&position.coord).and_then(|column| {
+        column.elements.iter().find_map(|element| {
+            let VolumeElement::Solid(mass) = element else {
+                return None;
+            };
+            (mass.levels.bottom <= position.level && position.level < mass.levels.top)
+                .then_some(mass.material)
+        })
     })
 }
 
@@ -652,10 +1190,80 @@ mod tests {
             first.validated.semantic_fingerprint,
             second.validated.semantic_fingerprint
         );
-        assert_eq!(first.metrics.ordinary_surfaces, 469);
+        assert_eq!(first.metrics.ordinary_surfaces, 408);
         assert_eq!(first.metrics.hill_centres, 6);
+        assert_eq!(first.metrics.barrier_cells, 73);
+        assert_eq!(first.metrics.bridge_surfaces, 14);
+        assert_eq!(first.metrics.alternate_crossing_surfaces, 14);
         assert!(first.metrics.relief <= 8);
         assert!(first.metrics.reachable_elevation_levels >= 2);
+
+        let plan = &first.validated.plan;
+        assert_eq!(plan.volume.columns.len(), 469);
+        assert!(plan.volume.mask.iter().all(|coord| {
+            solid_material_at(&plan.volume, TilePos::new(*coord, 0))
+                == Some(SolidMaterialRole::Bedrock)
+        }));
+        assert!(plan
+            .liquids
+            .bodies
+            .values()
+            .all(|body| body.material == FillMaterialRole::Water));
+        assert_eq!(
+            plan.structures
+                .by_id
+                .values()
+                .filter(|structure| structure.kind == StructureKind::Bridge)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn frozen_retains_water_and_volcanic_uses_lava_and_basalt() {
+        let mut frozen = settings();
+        let V3LayoutSettings::Single(frozen_patch) = &mut frozen.layout else {
+            unreachable!("test uses Single")
+        };
+        frozen_patch.environment = V3EnvironmentSettings::Frozen;
+        let frozen = generate(12, 0.4, &frozen, 91).expect("valid Frozen Hills");
+        assert!(frozen
+            .validated
+            .plan
+            .liquids
+            .bodies
+            .values()
+            .all(|body| body.material == FillMaterialRole::Water));
+
+        let mut volcanic = settings();
+        let V3LayoutSettings::Single(volcanic_patch) = &mut volcanic.layout else {
+            unreachable!("test uses Single")
+        };
+        volcanic_patch.environment = V3EnvironmentSettings::Volcanic;
+        let volcanic = generate(12, 0.4, &volcanic, 91).expect("valid Volcanic Hills");
+        let plan = &volcanic.validated.plan;
+        assert!(plan
+            .liquids
+            .bodies
+            .values()
+            .all(|body| body.material == FillMaterialRole::Lava));
+        let ford = plan
+            .features
+            .protected_routes
+            .get(FORD_ROUTE)
+            .expect("alternate crossing");
+        let liquid_coords: BTreeSet<_> = plan
+            .volume
+            .fill_runs_by_top()
+            .keys()
+            .map(|position| position.coord)
+            .collect();
+        assert!(ford
+            .centerline
+            .iter()
+            .filter(|surface| liquid_coords.contains(&surface.coord))
+            .all(|surface| solid_material_at(&plan.volume, *surface)
+                == Some(SolidMaterialRole::Basalt)));
     }
 
     #[test]

@@ -1320,15 +1320,27 @@ fn insert_stale_generated_resources(app: &mut App) {
 }
 
 #[test]
-fn unavailable_v3_recipe_fails_closed_and_clears_stale_generated_state() {
+fn invalid_v3_recipe_contract_fails_closed_and_clears_stale_generated_state() {
     let mut app = v3_hills_app();
+    {
+        let mut settings = app.world_mut().resource_mut::<MapSettings>();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &mut settings.terrain else {
+            panic!("test uses V3 procedural settings");
+        };
+        let V3LayoutSettings::Single(patch) = &mut v3.layout else {
+            panic!("test uses a Single layout");
+        };
+        patch.environment = V3EnvironmentSettings::Rocky;
+    }
     insert_stale_generated_resources(&mut app);
 
     enter_gameplay(&mut app);
 
     let failure = app.world().resource::<GameplaySetupFailure>();
     assert!(
-        failure.reason.contains("V3 recipe Hills is not available"),
+        failure
+            .reason
+            .contains("Hills does not support the Rocky environment"),
         "unexpected setup failure: {}",
         failure.reason
     );

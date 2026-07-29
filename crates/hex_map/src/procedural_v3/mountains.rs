@@ -36,6 +36,7 @@ const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
 const HIGH_PASS: &str = "high_pass";
 const LOWER_BYPASS: &str = "lower_bypass";
+const LOW_BYPASS_ANCHOR: &str = "low_bypass";
 
 /// Deterministic measurements for one admitted Mountains plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,12 +330,24 @@ pub(crate) fn construct_plan(
         .get(high_centerline.len() / 2)
         .copied()
         .ok_or_else(|| vec![recipe_issue("Mountains high pass has no midpoint")])?;
+    let bypass_coord = bypass_centerline
+        .get(bypass_centerline.len() / 2)
+        .copied()
+        .ok_or_else(|| vec![recipe_issue("Mountains lower bypass has no midpoint")])?;
     let anchors = BTreeMap::from([
         (PARTY_START.to_owned(), party),
         (HOSTILE_START.to_owned(), hostile),
         (
             CONFLICT_CENTER.to_owned(),
             exact_position(&surface_by_coord, conflict_coord)?,
+        ),
+        (
+            HIGH_PASS.to_owned(),
+            exact_position(&surface_by_coord, conflict_coord)?,
+        ),
+        (
+            LOW_BYPASS_ANCHOR.to_owned(),
+            exact_position(&surface_by_coord, bypass_coord)?,
         ),
     ]);
     let features = FeaturePlan {

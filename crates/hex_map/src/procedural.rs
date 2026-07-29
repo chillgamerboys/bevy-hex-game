@@ -103,6 +103,12 @@ pub struct HillsMetrics {
     pub critical_route_steps: u32,
     /// Deterministic hill centres contributing to the terrain.
     pub hill_centres: u32,
+    /// Horizontal cells occupied by the edge-to-edge hazard barrier.
+    pub barrier_cells: u32,
+    /// Exact ordinary surfaces reserved for the direct bridge.
+    pub bridge_surfaces: u32,
+    /// Exact ordinary surfaces reserved for the separated alternate crossing.
+    pub alternate_crossing_surfaces: u32,
 }
 
 /// Exact deterministic measurements of one selected V3 Sky Islands plan.
