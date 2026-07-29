@@ -2,7 +2,7 @@
 //
 // An enemy's lattice is its entire stat block — there is no separate authoring system.
 // A wolf is four hexes with a bite. A raider is eight with a metal shield. A hedge-mage
-// is twelve with a fusion chain. Difficulty is the size and complexity of the drawing,
+// is thirteen with a fusion chain. Difficulty is the size and complexity of the drawing,
 // and every enemy runs on the player's rules.
 //
 // An archetype named here is what `Archetype("raider")` in an encounter roster looks up.
@@ -67,7 +67,7 @@
             channelling: {"Metal": 2, "Earth": 1},
         ),
 
-        // Twelve hexes, and the roster's only fusion chain. The Lightning cell is not a
+        // Thirteen hexes, and the roster's only fusion chain. The Lightning cell is not a
         // gem — it holds nothing itself. It combines the Light and Fire gems beside it
         // into an element neither of them is, which the bolt then draws on. That makes
         // the two feeder gems worth more than their own hexes: taking either one down
@@ -82,6 +82,7 @@
                 (at: (q: -1, r: 1), kind: Gem("Fire")),
                 (at: (q: 0, r: 1), kind: Gem("Fire")),
                 (at: (q: -1, r: -1), kind: Gem("Light")),
+                (at: (q: -2, r: -1), kind: Spell("Scrying Eye")),
                 (at: (q: 1, r: 1), kind: Spell("Ember")),
                 (at: (q: -1, r: 2), kind: Gem("Water")),
                 (at: (q: 0, r: 2), kind: Gem("Water")),

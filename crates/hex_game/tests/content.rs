@@ -7,9 +7,10 @@
 //! from sorted names, resolve across files — but headless, with no `App`.
 
 use hex_assets::{
-    ContentIndex, ElementCatalog, ElementFile, Encounter, LatticeFile, LatticeLibrary, SpellBook,
-    SpellFile, SubstanceFile, SubstanceTable,
+    ContentIndex, Effect, ElementCatalog, ElementFile, Encounter, LatticeFile, LatticeLibrary,
+    SpellBook, SpellFile, SubstanceFile, SubstanceTable,
 };
+use hex_core::LatticeCoord;
 use hex_lattice::{castable, CellKind, LatticeState};
 use ron::error::SpannedError;
 
@@ -179,12 +180,27 @@ fn the_shipped_archetypes_match_the_design() {
     assert_eq!(raider.spec.capacity(), 8, "eight hexes");
 
     let mage = library.get("hedge-mage").expect("a hedge-mage is shipped");
-    assert_eq!(mage.spec.capacity(), 12, "twelve hexes");
+    assert_eq!(mage.spec.capacity(), 13, "thirteen hexes");
     assert!(
         mage.spec
             .cells()
             .any(|(_, kind)| matches!(kind, CellKind::Fusion { .. })),
         "the hedge-mage is the roster's only fusion chain"
+    );
+    let scrying_eye = spells.id("Scrying Eye").expect("Scrying Eye is shipped");
+    assert_eq!(
+        mage.spec.get(LatticeCoord::new(-2, -1)),
+        Some(CellKind::Spell { spell: scrying_eye }),
+        "the hedge-mage can expose the divination system in ordinary play"
+    );
+
+    let ember = spells
+        .id("Ember")
+        .and_then(|id| spells.spell(id))
+        .expect("Ember is shipped");
+    assert!(
+        ember.effects.contains(&Effect::Burn { turns: 2 }),
+        "Ember exposes persistent damage for two real turns"
     );
 }
 

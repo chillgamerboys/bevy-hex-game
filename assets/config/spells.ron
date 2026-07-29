@@ -19,7 +19,10 @@
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, needs_los: true),
-            effects: [DisableHexes(count: 1, targeted: false)],
+            effects: [
+                DisableHexes(count: 1, targeted: false),
+                Burn(turns: 2),
+            ],
         ),
 
         // Tier-6 evocation: a full ring of Fire gems, disables three and knocks back.
