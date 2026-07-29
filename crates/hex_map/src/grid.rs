@@ -288,7 +288,7 @@ fn spawn_grid(
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
-        &presentation_assets.features,
+        &mut presentation_assets.features,
         interiors.as_deref(),
         presentation.as_deref(),
     ) {
@@ -308,12 +308,14 @@ fn build_grid(
     table: &SubstanceTable,
     settings: &MapSettings,
     liquid_phase_seconds: f32,
-    feature_assets: &FeaturePresentationAssets,
+    feature_assets: &mut FeaturePresentationAssets,
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
 ) -> Result<(), MapPresentationError> {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
+    feature_render::prepare_materials(feature_assets, materials, table, presentation)
+        .map_err(MapPresentationError::Feature)?;
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -405,7 +407,7 @@ struct MapPresentationAssets<'w> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
-    features: Res<'w, FeaturePresentationAssets>,
+    features: ResMut<'w, FeaturePresentationAssets>,
 }
 
 impl fmt::Display for MapPresentationError {
@@ -631,7 +633,7 @@ fn apply_terrain_edits(
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
-        &presentation_assets.features,
+        &mut presentation_assets.features,
         interiors.as_deref(),
         presentation.as_deref(),
     );

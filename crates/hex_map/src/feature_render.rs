@@ -16,6 +16,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{Face, PrimitiveTopology},
 };
+use hex_assets::{to_color, Rgb, SubstanceTable};
 use hex_core::config::HEX_CIRCUMRADIUS;
 #[cfg(test)]
 use hex_core::TilePos;
@@ -38,23 +39,39 @@ const GRASS_HEIGHT_LEVELS: f32 = 1.875;
 const VISUAL_ROTATION_STEPS: u32 = 24;
 const VISUAL_SCALE_STEPS: u32 = 9;
 
-const TRUNK_COLOR: Color = Color::srgb(0.28, 0.15, 0.07);
-const CANOPY_COLORS: [Color; 3] = [
-    Color::srgb(0.12, 0.34, 0.12),
-    Color::srgb(0.18, 0.42, 0.14),
-    Color::srgb(0.25, 0.48, 0.16),
+const TRUNK_SWATCH: &str = "plant/trunk";
+const CANOPY_SWATCHES: [&str; 3] = [
+    "plant/foliage-dark",
+    "plant/foliage-mid",
+    "plant/foliage-light",
 ];
-const GRASS_COLORS: [Color; 2] = [Color::srgb(0.34, 0.52, 0.14), Color::srgb(0.45, 0.62, 0.18)];
+const GRASS_SWATCHES: [&str; 2] = ["plant/grass-dark", "plant/grass-light"];
+const FEATURE_SWATCHES: [&str; 6] = [
+    TRUNK_SWATCH,
+    CANOPY_SWATCHES[0],
+    CANOPY_SWATCHES[1],
+    CANOPY_SWATCHES[2],
+    GRASS_SWATCHES[0],
+    GRASS_SWATCHES[1],
+];
 
 /// Shared renderer-owned handles for every generated surface feature.
 ///
-/// The map plugin initializes this once after Bevy's mesh and material assets.
-/// Terrain rebuilds clone these handles instead of allocating per-feature assets.
+/// The map plugin initializes the three meshes once. The first generated feature
+/// presentation resolves the accepted palette snapshot into six shared materials;
+/// later rebuilds reuse those handles and update them in place if the accepted
+/// palette changed.
 #[derive(Resource, Clone, Debug)]
 pub(crate) struct FeaturePresentationAssets {
     trunk_mesh: Handle<Mesh>,
     canopy_mesh: Handle<Mesh>,
     grass_mesh: Handle<Mesh>,
+    materials: Option<FeatureMaterials>,
+}
+
+#[derive(Clone, Debug)]
+struct FeatureMaterials {
+    palette: FeaturePalette,
     trunk_material: Handle<StandardMaterial>,
     canopy_materials: [Handle<StandardMaterial>; 3],
     grass_materials: [Handle<StandardMaterial>; 2],
@@ -72,21 +89,11 @@ impl FromWorld for FeaturePresentationAssets {
                 meshes.add(grass_geometry().into_mesh()),
             )
         };
-        let (trunk_material, canopy_materials, grass_materials) = {
-            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
-            (
-                materials.add(feature_material(TRUNK_COLOR, false)),
-                CANOPY_COLORS.map(|color| materials.add(feature_material(color, false))),
-                GRASS_COLORS.map(|color| materials.add(feature_material(color, true))),
-            )
-        };
         Self {
             trunk_mesh,
             canopy_mesh,
             grass_mesh,
-            trunk_material,
-            canopy_materials,
-            grass_materials,
+            materials: None,
         }
     }
 }
@@ -94,6 +101,136 @@ impl FromWorld for FeaturePresentationAssets {
 /// Creates the shared programmatic assets used by [`spawn_presentations`].
 pub(crate) fn register_assets(app: &mut App) {
     app.init_resource::<FeaturePresentationAssets>();
+}
+
+/// Resolves every Forest presentation swatch before any map entities are queued.
+///
+/// This uses the palette snapshot accepted with [`SubstanceTable`], so a rejected
+/// cross-file reload cannot mix new colours with the previous substance semantics.
+pub(crate) fn prepare_materials(
+    assets: &mut FeaturePresentationAssets,
+    materials: &mut Assets<StandardMaterial>,
+    table: &SubstanceTable,
+    projection: Option<&MapPresentationProjection>,
+) -> Result<(), FeaturePresentationError> {
+    let Some(projection) = projection else {
+        return Ok(());
+    };
+    if projection.features().is_empty() {
+        return Ok(());
+    }
+    assets.apply_palette(FeaturePalette::resolve(table)?, materials)
+}
+
+impl FeaturePresentationAssets {
+    fn apply_palette(
+        &mut self,
+        palette: FeaturePalette,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Result<(), FeaturePresentationError> {
+        let Some(shared) = self.materials.as_mut() else {
+            self.materials = Some(FeatureMaterials::create(palette, materials));
+            return Ok(());
+        };
+        if shared.palette == palette {
+            return Ok(());
+        }
+        shared.update(palette, materials)
+    }
+}
+
+impl FeatureMaterials {
+    fn create(palette: FeaturePalette, materials: &mut Assets<StandardMaterial>) -> Self {
+        Self {
+            palette,
+            trunk_material: materials.add(feature_material(to_color(palette.trunk), false)),
+            canopy_materials: palette
+                .canopy
+                .map(|color| materials.add(feature_material(to_color(color), false))),
+            grass_materials: palette
+                .grass
+                .map(|color| materials.add(feature_material(to_color(color), true))),
+        }
+    }
+
+    fn update(
+        &mut self,
+        palette: FeaturePalette,
+        materials: &mut Assets<StandardMaterial>,
+    ) -> Result<(), FeaturePresentationError> {
+        update_material(
+            materials,
+            &self.trunk_material,
+            palette.trunk,
+            false,
+            TRUNK_SWATCH,
+        )?;
+        for ((handle, color), swatch) in self
+            .canopy_materials
+            .iter()
+            .zip(palette.canopy)
+            .zip(CANOPY_SWATCHES)
+        {
+            update_material(materials, handle, color, false, swatch)?;
+        }
+        for ((handle, color), swatch) in self
+            .grass_materials
+            .iter()
+            .zip(palette.grass)
+            .zip(GRASS_SWATCHES)
+        {
+            update_material(materials, handle, color, true, swatch)?;
+        }
+        self.palette = palette;
+        Ok(())
+    }
+}
+
+fn update_material(
+    materials: &mut Assets<StandardMaterial>,
+    handle: &Handle<StandardMaterial>,
+    color: Rgb,
+    double_sided: bool,
+    swatch: &'static str,
+) -> Result<(), FeaturePresentationError> {
+    let Some(mut material) = materials.get_mut(handle) else {
+        return Err(FeaturePresentationError::MissingSharedMaterial { swatch });
+    };
+    *material = feature_material(to_color(color), double_sided);
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FeaturePalette {
+    trunk: Rgb,
+    canopy: [Rgb; 3],
+    grass: [Rgb; 2],
+}
+
+impl FeaturePalette {
+    fn resolve(table: &SubstanceTable) -> Result<Self, FeaturePresentationError> {
+        Ok(Self {
+            trunk: required_palette_color(table, TRUNK_SWATCH)?,
+            canopy: [
+                required_palette_color(table, CANOPY_SWATCHES[0])?,
+                required_palette_color(table, CANOPY_SWATCHES[1])?,
+                required_palette_color(table, CANOPY_SWATCHES[2])?,
+            ],
+            grass: [
+                required_palette_color(table, GRASS_SWATCHES[0])?,
+                required_palette_color(table, GRASS_SWATCHES[1])?,
+            ],
+        })
+    }
+}
+
+fn required_palette_color(
+    table: &SubstanceTable,
+    swatch: &'static str,
+) -> Result<Rgb, FeaturePresentationError> {
+    table
+        .palette_color(swatch)
+        .ok_or(FeaturePresentationError::MissingPaletteSwatch { swatch })
 }
 
 /// Private identity on the transform root of one generated feature.
@@ -115,7 +252,8 @@ enum TreePresentationArchetype {
 pub(crate) enum FeaturePresentationError {
     InvalidLevelHeight,
     NonFiniteTransform { id: FeatureId },
-    MissingSharedMaterial { id: FeatureId },
+    MissingPaletteSwatch { swatch: &'static str },
+    MissingSharedMaterial { swatch: &'static str },
 }
 
 impl fmt::Display for FeaturePresentationError {
@@ -133,10 +271,16 @@ impl fmt::Display for FeaturePresentationError {
                     "feature {id:?} produced a non-finite presentation transform"
                 )
             }
-            Self::MissingSharedMaterial { id } => {
+            Self::MissingPaletteSwatch { swatch } => {
                 write!(
                     formatter,
-                    "feature {id:?} has no shared presentation material"
+                    "feature presentation requires missing accepted palette swatch {swatch:?}"
+                )
+            }
+            Self::MissingSharedMaterial { swatch } => {
+                write!(
+                    formatter,
+                    "feature presentation lost the shared material for palette swatch {swatch:?}"
                 )
             }
         }
@@ -161,6 +305,14 @@ pub(crate) fn spawn_presentations(
     }
     let Some(projection) = projection else {
         return Ok(Vec::new());
+    };
+    if projection.features().is_empty() {
+        return Ok(Vec::new());
+    }
+    let Some(materials) = assets.materials.as_ref() else {
+        return Err(FeaturePresentationError::MissingSharedMaterial {
+            swatch: FEATURE_SWATCHES[0],
+        });
     };
 
     let tall_tree_ids = tall_tree_exemplar_ids(projection);
@@ -190,19 +342,21 @@ pub(crate) fn spawn_presentations(
                     TreePresentationArchetype::Standard
                 };
                 commands.entity(root).insert(archetype);
-                let canopy_material = assets
+                let canopy_material = materials
                     .canopy_materials
                     .get(
                         instance
                             .variant
-                            .material_index(assets.canopy_materials.len()),
+                            .material_index(materials.canopy_materials.len()),
                     )
                     .cloned()
-                    .ok_or(FeaturePresentationError::MissingSharedMaterial { id: instance.id })?;
+                    .ok_or(FeaturePresentationError::MissingSharedMaterial {
+                        swatch: CANOPY_SWATCHES[0],
+                    })?;
                 let trunk = commands
                     .spawn((
                         Mesh3d(assets.trunk_mesh.clone()),
-                        MeshMaterial3d(assets.trunk_material.clone()),
+                        MeshMaterial3d(materials.trunk_material.clone()),
                         tree_trunk_transform(level_height, archetype),
                         Pickable::IGNORE,
                         PresentationOcclusion::default(),
@@ -224,15 +378,17 @@ pub(crate) fn spawn_presentations(
                 commands.entity(root).add_children(&[trunk, canopy]);
             }
             FeatureKind::TallGrass => {
-                let grass_material = assets
+                let grass_material = materials
                     .grass_materials
                     .get(
                         instance
                             .variant
-                            .material_index(assets.grass_materials.len()),
+                            .material_index(materials.grass_materials.len()),
                     )
                     .cloned()
-                    .ok_or(FeaturePresentationError::MissingSharedMaterial { id: instance.id })?;
+                    .ok_or(FeaturePresentationError::MissingSharedMaterial {
+                        swatch: GRASS_SWATCHES[0],
+                    })?;
                 let tuft = commands
                     .spawn((
                         Mesh3d(assets.grass_mesh.clone()),
@@ -574,12 +730,45 @@ fn grass_geometry() -> RawMesh {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use bevy::ecs::world::CommandQueue;
+    use bevy::platform::collections::HashMap;
+    use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
     use hex_core::HexCoord;
 
     use super::*;
+
+    fn feature_table(omitted: Option<&str>, trunk: Rgb) -> SubstanceTable {
+        let colors = [
+            (TRUNK_SWATCH, trunk),
+            (CANOPY_SWATCHES[0], (0.12, 0.34, 0.12)),
+            (CANOPY_SWATCHES[1], (0.18, 0.42, 0.14)),
+            (CANOPY_SWATCHES[2], (0.25, 0.48, 0.16)),
+            (GRASS_SWATCHES[0], (0.34, 0.52, 0.14)),
+            (GRASS_SWATCHES[1], (0.45, 0.62, 0.18)),
+        ];
+        let swatches = colors
+            .into_iter()
+            .filter(|(id, _color)| omitted != Some(*id))
+            .map(|(id, (red, green, blue))| {
+                (
+                    SwatchId::new(id).expect("fixture swatch ids should be valid"),
+                    PaletteSwatch::new(
+                        format!("Fixture {id}"),
+                        SrgbColor::new(red, green, blue)
+                            .expect("fixture swatch colors should be valid"),
+                        BTreeSet::from(["test".to_owned()]),
+                    )
+                    .expect("fixture swatches should be valid"),
+                )
+            })
+            .collect();
+        let palette = ArtPalette::new(swatches).expect("fixture palette should be valid");
+        let substances = HashMap::from([("air".to_owned(), Substance::invisible(false, false))]);
+        SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("fixture substances should accept the fixture palette")
+    }
 
     fn feature(x: i32, y: i32, level: i32, kind: FeatureKind) -> PlannedFeature {
         PlannedFeature {
@@ -600,10 +789,101 @@ mod tests {
         let repeated = world.resource::<FeaturePresentationAssets>();
 
         assert_eq!(world.resource::<Assets<Mesh>>().len(), 3);
-        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 6);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 0);
         assert_eq!(first.trunk_mesh.id(), repeated.trunk_mesh.id());
         assert_eq!(first.canopy_mesh.id(), repeated.canopy_mesh.id());
         assert_eq!(first.grass_mesh.id(), repeated.grass_mesh.id());
+    }
+
+    #[test]
+    fn accepted_palette_drives_six_bounded_shared_materials() {
+        let projection = MapPresentationProjection::with_test_features([(
+            FeatureId(0),
+            feature(0, 0, 15, FeatureKind::Tree),
+        )]);
+        let mut world = World::new();
+        world.init_resource::<FeaturePresentationAssets>();
+        let mut assets = world.resource::<FeaturePresentationAssets>().clone();
+        let original = feature_table(None, (0.28, 0.15, 0.07));
+        {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            prepare_materials(&mut assets, &mut materials, &original, Some(&projection))
+                .expect("the complete accepted palette should prepare feature materials");
+        }
+        let shared = assets
+            .materials
+            .as_ref()
+            .expect("preparation should install shared materials");
+        let trunk_id = shared.trunk_material.id();
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 6);
+        assert_eq!(
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&shared.trunk_material)
+                .expect("the shared trunk material should exist")
+                .base_color,
+            to_color(
+                original
+                    .palette_color(TRUNK_SWATCH)
+                    .expect("the fixture should retain its trunk swatch")
+            )
+        );
+
+        let changed = feature_table(None, (0.71, 0.22, 0.09));
+        {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            prepare_materials(&mut assets, &mut materials, &changed, Some(&projection))
+                .expect("a new accepted palette should update shared materials");
+            prepare_materials(&mut assets, &mut materials, &changed, Some(&projection))
+                .expect("repeated preparation should be idempotent");
+        }
+        let shared = assets
+            .materials
+            .as_ref()
+            .expect("the updated materials should remain installed");
+        assert_eq!(shared.trunk_material.id(), trunk_id);
+        assert_eq!(world.resource::<Assets<StandardMaterial>>().len(), 6);
+        assert_eq!(
+            world
+                .resource::<Assets<StandardMaterial>>()
+                .get(&shared.trunk_material)
+                .expect("the updated trunk material should exist")
+                .base_color,
+            to_color(
+                changed
+                    .palette_color(TRUNK_SWATCH)
+                    .expect("the changed fixture should retain its trunk swatch")
+            )
+        );
+    }
+
+    #[test]
+    fn every_required_feature_swatch_fails_before_material_allocation() {
+        let projection = MapPresentationProjection::with_test_features([(
+            FeatureId(0),
+            feature(0, 0, 15, FeatureKind::Tree),
+        )]);
+        for missing in FEATURE_SWATCHES {
+            let mut world = World::new();
+            world.init_resource::<FeaturePresentationAssets>();
+            let mut assets = world.resource::<FeaturePresentationAssets>().clone();
+            let table = feature_table(Some(missing), (0.28, 0.15, 0.07));
+            let error = {
+                let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+                prepare_materials(&mut assets, &mut materials, &table, Some(&projection))
+                    .expect_err("a missing required swatch should reject feature presentation")
+            };
+
+            assert_eq!(
+                error,
+                FeaturePresentationError::MissingPaletteSwatch { swatch: missing }
+            );
+            assert_eq!(
+                world.resource::<Assets<StandardMaterial>>().len(),
+                0,
+                "missing {missing} allocated a partial material set"
+            );
+        }
     }
 
     #[test]
@@ -678,7 +958,13 @@ mod tests {
         world.init_resource::<Assets<Mesh>>();
         world.init_resource::<Assets<StandardMaterial>>();
         world.init_resource::<FeaturePresentationAssets>();
-        let assets = world.resource::<FeaturePresentationAssets>().clone();
+        let mut assets = world.resource::<FeaturePresentationAssets>().clone();
+        let table = feature_table(None, (0.28, 0.15, 0.07));
+        {
+            let mut materials = world.resource_mut::<Assets<StandardMaterial>>();
+            prepare_materials(&mut assets, &mut materials, &table, Some(&projection))
+                .expect("the fixture palette should prepare feature materials");
+        }
         let mut queue = CommandQueue::default();
         let roots = {
             let mut commands = Commands::new(&mut queue, &world);
