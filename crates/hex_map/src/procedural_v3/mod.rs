@@ -27,6 +27,11 @@ use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
 mod caves;
+#[expect(
+    dead_code,
+    reason = "Ring7 recipe integration consumes checked patch composition in the next PR"
+)]
+mod composition;
 mod fingerprint;
 mod forest;
 mod fort;
