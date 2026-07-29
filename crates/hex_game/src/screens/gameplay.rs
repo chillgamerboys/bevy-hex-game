@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use hex_combat::{Turn, TurnOrder};
-use hex_core::{Mode, Pause, Screen};
+use hex_core::{Mode, Pause, PendingDecision, Screen};
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::Player;
 
@@ -102,6 +102,7 @@ fn exploring_hint() -> String {
 fn update_hud(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
     acting: Query<(Has<Player>, &Turn)>,
     party: Query<(&LatticeSpec, &LatticeState), With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
@@ -117,23 +118,37 @@ fn update_hud(
             // being out of range is indistinguishable from a click that did not
             // register — which is precisely the complaint the tinted range answers,
             // and the number is what confirms the tint rather than merely repeating it.
-            let whose = match acting.single() {
-                Ok((true, turn)) => format!("your turn, {} to move", turn.movement_left),
-                Ok((false, _)) => "enemy turn".to_owned(),
-                Err(_) => "…".to_owned(),
+            let (whose, player_turn) = match acting.single() {
+                Ok((true, turn)) => (format!("your turn, {} to move", turn.movement_left), true),
+                Ok((false, _)) => ("enemy turn".to_owned(), false),
+                Err(_) => ("…".to_owned(), false),
             };
             format!(
-                "COMBAT   ·   round {}   ·   {}{}   ·   cast from the panel   \
-                 ·   SPACE to end turn   ·   H hides HUD   ·   ESC to pause",
+                "COMBAT   ·   round {}   ·   {}{}   ·   {}   \
+                 ·   H hides HUD   ·   ESC to pause",
                 order.round + 1,
                 whose,
-                lattice_readout(&party)
+                lattice_readout(&party),
+                combat_action_hint(player_turn, pending.is_open())
             )
         }
     };
 
     if text.0 != wanted {
         text.0 = wanted;
+    }
+}
+
+/// The action hint must agree with the command emitters: Space and casting are
+/// player-turn controls, while an open defender choice replaces every ordinary
+/// simulation command.
+fn combat_action_hint(player_turn: bool, decision_open: bool) -> &'static str {
+    if decision_open {
+        "choose a live cell above, then ENTER to confirm"
+    } else if player_turn {
+        "cast from the panel   ·   SPACE to end turn"
+    } else {
+        "waiting for the enemy"
     }
 }
 
@@ -260,6 +275,19 @@ mod tests {
             labels.iter(app.world()).next(),
             Some(&Pickable::IGNORE),
             "the HUD text blocks world picks"
+        );
+    }
+
+    #[test]
+    fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+        assert_eq!(
+            combat_action_hint(true, false),
+            "cast from the panel   ·   SPACE to end turn"
+        );
+        assert_eq!(combat_action_hint(false, false), "waiting for the enemy");
+        assert_eq!(
+            combat_action_hint(false, true),
+            "choose a live cell above, then ENTER to confirm"
         );
     }
 }

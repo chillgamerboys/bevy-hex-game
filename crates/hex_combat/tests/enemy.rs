@@ -497,6 +497,69 @@ fn a_player_defence_choice_does_not_strand_the_enemy_turn() {
     );
 }
 
+/// Resolving one defender choice must not make the hostile policy dependent on the
+/// keyboard for later rounds. The gameplay walk used to hide this by pressing Space
+/// while the hostile still held its second spent turn.
+#[test]
+fn repeated_player_defence_choices_do_not_strand_a_later_enemy_turn() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(4),
+    ));
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+    );
+    let first = LatticeCoord::ORIGIN;
+    let second = LatticeCoord::new(1, 0);
+    let spec = LatticeSpec::default()
+        .with(first, CellKind::Blank)
+        .with(second, CellKind::Blank)
+        .with(LatticeCoord::new(0, 1), CellKind::Blank);
+    let stats = LatticeStats::default();
+    let state = LatticeState::new(&spec, &stats);
+    app.world_mut()
+        .entity_mut(player)
+        .insert((ControlOwner::default(), spec, state, stats));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert(ControlOwner::default());
+    enter_gameplay(&mut app);
+
+    let player_id = unit_id(&app, player);
+    for cell in [first, second] {
+        end_turn(&mut app);
+        assert!(
+            app.world().resource::<PendingDecision>().is_open(),
+            "each adjacent hostile turn should ask the player to choose a cell"
+        );
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(IssuedCommand {
+                seat: PlayerSeat::default(),
+                command: GameCommand::ChooseDisables {
+                    unit: player_id,
+                    cells: vec![cell],
+                },
+            });
+
+        for _ in 0..240 {
+            app.update();
+            if app.world().resource::<TurnOrder>().current() == Some(player_id) {
+                break;
+            }
+        }
+        assert_eq!(
+            app.world().resource::<TurnOrder>().current(),
+            Some(player_id),
+            "the hostile's spent turn should end after defence choice at {cell:?}"
+        );
+    }
+}
+
 /// Advances the simulation without coupling enemy-policy tests to an input binding.
 #[expect(
     clippy::expect_used,

@@ -102,15 +102,19 @@
     AwaitButton("Own Cell"),
     Click(name: "Own Cell (0, 2)"),
     Click(name: "Confirm Disable Selection"),
+    AwaitButton("Cast Ember"),
     Settle(20),
     Capture("27-scry-survives-next-round"),
 
     // Advance one more complete round. At the following rollover Scrying Eye must
     // expire back to the opaque, capacity-free target card while existence remains.
+    // Prove the hostile policy has yielded before pressing Space: keyboard input is
+    // deliberately unable to skip an enemy turn.
     Key("Space"),
     AwaitButton("Own Cell"),
     Click(name: "Own Cell (1, 1)"),
     Click(name: "Confirm Disable Selection"),
+    AwaitButton("Cast Scrying Eye"),
     Settle(20),
     Capture("28-scry-expired"),
     Key("Backspace"),
