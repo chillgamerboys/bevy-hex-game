@@ -36,6 +36,16 @@ click routing, command validation, spawning, review relocation, and enemy pathfi
 all consume the same exact blocker projection through a separate adapter now awaiting
 gameplay-owner review.
 
+Authoritative spatial perception now runs headlessly every gameplay frame.
+`hex_world` publishes a renderer-independent Bright or Dim exterior tier;
+`hex_perception` derives exact exterior/interior domains, maximum-tier public local
+lights, pooled faction sight, and independent faction memory over stacked `TilePos`
+surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
+edits, unseen units disappear immediately, and the player-side traversal projection
+is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
+live in `perception.ron`. Fog/picking presentation, generated cave lamps/crystals,
+unknown-frontier routing, and combat/AI consumers are not wired yet.
+
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
 reachable set and the route before a click commits to either.
@@ -95,8 +105,10 @@ Bodies are one hex wide; there is no footprint for anything larger, and units do
 obstruct each other — so a route may be drawn straight through another piece.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
-`FactionKnowledge::view` is the one read path for a hostile lattice. Observation
-publishes existence and faction only; capacity and cells remain opaque until Reveal.
+`FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
+World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
+the gameplay adapter publishes only existence and faction, while capacity and cells
+remain opaque until Reveal.
 Scrying Eye writes a complete, expiring projection whose known cells refresh from live
 mana and disabled state without extending its lifetime. The HUD renders that projection,
 retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
@@ -250,9 +262,9 @@ The first implementation also ships with explicit limitations:
   and `needs_los` on spell content is parsed but unenforced until then.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
-  so a chamber you blow open still counts as inside. Nothing is wrong today — light
-  domains have no producer yet — but the two facts disagree the moment perception
-  lands ([boundary.md](boundary.md) ask I).
+  so a chamber you blow open still counts as inside. Live perception therefore
+  continues to classify the chamber as Interior and does not admit daylight
+  ([boundary.md](boundary.md) ask I).
 - **Casting is provisionally combat-only.** Recovery between fights is intended to be
   a rest action, but real-time casting still needs an interaction and rest flow.
   **Channelling and rituals are deferred** — `co_castable` parses and labels rituals

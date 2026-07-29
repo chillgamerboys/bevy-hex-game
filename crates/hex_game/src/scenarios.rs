@@ -419,16 +419,18 @@ mod tests {
     use bevy::MinimalPlugins;
     use hex_assets::{
         ArtPalette, CombatSettings, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
-        FormationCenter, GameAssets, LightingSettings, PlayerSettings, Roster, RosterEntry,
-        ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
+        FormationCenter, GameAssets, LightingSettings, PerceptionSettings, PlayerSettings, Roster,
+        RosterEntry, ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
-        AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
-        InteriorRegions, IssuedCommand, MapAnchorId, MapAnchors, MapViewHint, Mode,
-        PausableSystems, Pause, PlayerSeat, ResolvedMapSeed, Screen, SpecialMovementRegion,
-        SpecialMovementRegions, TerrainReady, TilePos, UnitId,
+        AppSystems, CommandQueue, ExteriorIllumination, GameCommand, GameplaySetup,
+        GameplaySetupFailure, HexGrid, IlluminationLevel, InteriorRegions, IssuedCommand,
+        KnowledgeState, LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode,
+        PausableSystems, Pause, PerceptionSystems, PlayerSeat, ResolvedMapSeed, Screen,
+        SpecialMovementRegion, SpecialMovementRegions, TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
+    use hex_perception::FactionMapKnowledge;
     use hex_units::{either_in_reach, Body, Enemy, Faction, Footing, Player, Reach, StandsOn};
     use hex_world::TimeOfDay;
 
@@ -1478,6 +1480,18 @@ mod tests {
         );
         app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
         app.configure_sets(
+            Update,
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(AppSystems::Update),
+        );
+        app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 GameplaySetup::Resources,
@@ -1489,6 +1503,18 @@ mod tests {
             )
                 .chain(),
         );
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(GameplaySetup::Perception),
+        );
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
@@ -1497,12 +1523,18 @@ mod tests {
             SubstanceTable::from_file(&substances, &palette)
                 .expect("the shipped substances should resolve through the shipped palette"),
         );
+        app.insert_resource(PerceptionSettings::default());
+        app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Bright));
         app.insert_resource(player);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
         app.insert_resource(seed);
-        app.add_plugins((hex_map::plugin, hex_units::movement::plugin));
+        app.add_plugins((
+            hex_map::plugin,
+            hex_units::movement::plugin,
+            hex_perception::plugin,
+        ));
         hex_units::units::plugin(&mut app);
         if with_combat {
             let combat: CombatSettings =
@@ -1563,6 +1595,21 @@ mod tests {
             .expect("the map should publish hostile_start");
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world()
+                .resource::<LocalMapKnowledge>()
+                .state(first_party),
+            KnowledgeState::Observed,
+            "the real terrain and actor plugins should feed initial player knowledge"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(hex_units::Faction::Player)
+                .state(first_hostile),
+            KnowledgeState::Observed,
+            "bright-map faction knowledge should include the hostile anchor"
+        );
         app.insert_resource(InteriorRegions::new());
         app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
 
@@ -1574,6 +1621,8 @@ mod tests {
         assert!(!app.world().contains_resource::<InteriorRegions>());
         assert!(!app.world().contains_resource::<MapViewHint>());
         assert!(!app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, With<HexGrid>>()
@@ -1590,6 +1639,13 @@ mod tests {
         assert!(app.world().contains_resource::<SpecialMovementRegions>());
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world()
+                .resource::<LocalMapKnowledge>()
+                .state(first_party),
+            KnowledgeState::Observed,
+            "re-entry should rebuild initial player knowledge"
+        );
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, With<HexGrid>>()

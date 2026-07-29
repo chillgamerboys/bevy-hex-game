@@ -46,7 +46,9 @@ pub mod turns;
 pub use commands::{delivers_anything, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
-pub use knowledge::{BaseVisibility, FactionKnowledge, KnownCell, LatticeKnowledge, RevealAll};
+pub use knowledge::{
+    BaseVisibility, FactionLatticeKnowledge, KnownCell, LatticeKnowledge, RevealAll,
+};
 pub use outcomes::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
 pub use turns::{Initiative, TurnOrder};
 

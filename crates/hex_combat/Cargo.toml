@@ -23,6 +23,10 @@ hex_core = { workspace = true }
 # so `hex_core` cannot see `LatticeState`, and a store of lattice knowledge therefore
 # cannot live there. It had simply not been drawn yet.
 hex_lattice = { workspace = true }
+# Spatial observation is world-owned. Combat consumes its published faction
+# knowledge to decide whether a lattice view may be exposed; it does not derive
+# visibility from combat entities.
+hex_perception = { workspace = true }
 hex_units = { workspace = true }
 serde = { workspace = true }
 

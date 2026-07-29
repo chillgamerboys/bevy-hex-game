@@ -7,6 +7,27 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 19 — feat(perception): add headless illumination and faction knowledge (2026-07-28)
+
+- **PR**: #93 — `feat/headless-perception`
+- **Outcome**: green — 1 shared-authority ship blocker fixed during Wave 3 reconciliation
+- **Lenses triggered**: 2, 4, 7, 8, D3, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, fresh-eyes | `crates/hex_combat/src/knowledge.rs`:461 | SHIP-BLOCKER | fixed during `dev` reconciliation — PR #100's gameplay lattice publisher granted every faction knowledge of every lattice-bearing unit, bypassing PR #93's world-owned observation authority; `FactionMapKnowledge` now gates lattice views through a gameplay-owned adapter |
+| 2, 4 | `crates/hex_combat/src/knowledge.rs`:230 | NON-BLOCKER | fixed during reconciliation — gameplay's ambiguous `FactionKnowledge` was renamed `FactionLatticeKnowledge`, keeping it distinct from perception's spatial `FactionKnowledge` without changing the world-owned API |
+| 7 | `crates/hex_combat/tests/knowledge.rs`:207 | NON-BLOCKER | fixed during reconciliation — an integration regression now pins observed, divined, subsequently hidden, and re-observed behavior; hidden subjects disclose no lattice view while unexpired divination remains independently stored |
+| 8, D3 | `docs/architecture.md`:10 | NON-BLOCKER | fixed during reconciliation — the crate graph, dependency table, contracts ledger, combat documentation, and status now describe the live perception-to-combat adapter instead of a future or pending edge |
+
+**Notes**: six textual conflicts from the stacked Wave 3 base were resolved by
+retaining both domains: perception settings and knowledge types remain alongside
+the promoted encounter, roster, faction, casting, and terrain-response schema.
+`hex_perception` remains the sole authority for current spatial observation;
+`hex_combat` owns only the consumer adapter and expiring lattice facts. Focused
+perception, assets, core, game, and combat suites pass, including the hidden-unit
+integration lifecycle.
+
 ## Wave 18 — feat: add procedural V3 Forest biome (2026-07-28)
 
 - **PR**: #92 — `feat/v3-forest`

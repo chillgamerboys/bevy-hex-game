@@ -20,7 +20,7 @@ use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
     BiomeRegions, CanopyOccluder, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, MapAnchorId,
-    MapAnchors, MapViewHint, PresentationOcclusion, ResolvedMapSeed, Screen,
+    MapAnchors, MapViewHint, PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, Screen,
     SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, TraversalBlockers,
     TraversalProfile,
 };
@@ -76,7 +76,8 @@ pub fn plugin(app: &mut App) {
             Update,
             apply_terrain_edits
                 .run_if(in_state(Screen::Gameplay))
-                .run_if(resource_exists::<TerrainReady>),
+                .run_if(resource_exists::<TerrainReady>)
+                .before(PerceptionSystems::ResolveIllumination),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }

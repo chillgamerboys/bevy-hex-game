@@ -3,7 +3,7 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};
-use hex_combat::{CombatSystems, FactionKnowledge};
+use hex_combat::{CombatSystems, FactionLatticeKnowledge};
 use hex_core::{
     AppSystems, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PendingDecision,
     Screen, UnitId,
@@ -312,7 +312,7 @@ fn refresh_readouts(
     casting: Res<CastReadout>,
     selection: Res<DisableSelection>,
     registry: Res<UnitRegistry>,
-    knowledge: Res<FactionKnowledge>,
+    knowledge: Res<FactionLatticeKnowledge>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
     own: OwnData,
@@ -367,7 +367,7 @@ fn refresh_readouts(
         });
 
     // No hostile `LatticeSpec` or `LatticeState` appears in this function. The
-    // target projection can only be assembled from `FactionKnowledge::view`.
+    // target projection can only be assembled from `FactionLatticeKnowledge::view`.
     let target_view = focus.0.and_then(|unit| {
         let entity = registry.entity_of(unit)?;
         let (name, faction) = identities.get(entity).ok()?;

@@ -116,7 +116,7 @@ struct Verb<'a> {
     /// lacked. One field here rather than a ninth argument on `cast::apply`.
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
-    knowledge: &'a mut crate::knowledge::FactionKnowledge,
+    knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
     /// Policy knobs: budgets, ranges, and what a strike costs.
@@ -135,7 +135,7 @@ struct Verb<'a> {
 struct ResolutionStores<'w> {
     pending: ResMut<'w, PendingDecision>,
     effects: ResMut<'w, crate::effects::PersistentEffects>,
-    knowledge: ResMut<'w, crate::knowledge::FactionKnowledge>,
+    knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
     events: MessageWriter<'w, CombatEvent>,
 }
 

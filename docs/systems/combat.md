@@ -122,12 +122,12 @@ section exists to prevent.
 
 | Channel | Answers | Owner |
 |---|---|---|
-| **Spatial perception** | *Where is that unit, and can I see it* | world owner, future `hex_perception` |
+| **Spatial perception** | *Where is that unit, and can I see it* | world owner, `hex_perception` |
 | **Lattice knowledge** | *What do I know about that unit's lattice* | `hex_combat::knowledge` |
 
 **Seeing a unit reveals nothing about its gems, its fusions, or what it can cast.**
 Observing establishes a position and permits targeting; divination is what reveals
-contents. `FactionKnowledge::view(viewer, subject)` is **the** read path for the
+contents. `FactionLatticeKnowledge::view(viewer, subject)` is **the** read path for the
 second question — the AI included — and reading a hostile `LatticeState` directly
 is a bug.
 
@@ -155,8 +155,13 @@ writes it. A local `.chain()` would look correct and race.
 
 ### What observation publishes
 
-Base visibility establishes only that the subject exists and which faction it belongs
-to. **Shape and capacity are hidden information too.** Until divination learns capacity,
+`FactionMapKnowledge` is the sole authority for whether the subject is currently
+observed. A gameplay-owned adapter copies only existence and faction into the lattice
+read seam; it does not rederive sight from combat entities. Losing observation hides
+the entire lattice view immediately. Any unexpired divination facts remain stored on
+their independent clock and become readable again only if the subject is re-observed.
+
+**Shape and capacity are hidden information too.** Until divination learns capacity,
 `known_capacity()` and `unknown_count()` both return `None`; the target panel says only
 `lattice unknown`.
 
@@ -164,11 +169,11 @@ to. **Shape and capacity are hidden information too.** Until divination learns c
 
 Units carry lattices. `lattices.ron` holds the archetypes, `spawn_units` attaches
 a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
-`Archetype`, and the publishing systems that matched nothing now populate the
-store every frame in gameplay. `view()` returns real base visibility.
+`Archetype`, and the adapter consumes world perception every frame in gameplay.
+`view()` returns base visibility only for currently observed subjects.
 
 The target panel reads no hostile `LatticeSpec` or `LatticeState`; it projects only
-`FactionKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
+`FactionLatticeKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
 and every cell. While it lasts, already-divined cells refresh mana and disabled state
 from live truth without resetting their expiry. Tier one lasts through the current
 partial round and the next complete round, expiring at the following rollover.

@@ -183,7 +183,7 @@ fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_com
 /// Per-unit readouts are the casting-UX ticket's, not this one's.
 ///
 /// Read straight off the components rather than through
-/// [`FactionKnowledge`](hex_combat::FactionKnowledge): a faction's knowledge of *itself*
+/// [`FactionLatticeKnowledge`](hex_combat::FactionLatticeKnowledge): a faction's knowledge of *itself*
 /// is not the question that store answers. It exists to gate what you know about a
 /// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
 /// routing your own hexes through it would either need a self-view nothing publishes, or

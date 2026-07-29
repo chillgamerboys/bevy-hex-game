@@ -29,7 +29,7 @@
 //!
 //! # One accessor
 //!
-//! [`FactionKnowledge::view`] is **the** read path. Anything wanting to know
+//! [`FactionLatticeKnowledge::view`] is **the** read path. Anything wanting to know
 //! something about a hostile lattice goes through it — the AI included — and
 //! reading a hostile [`LatticeState`](hex_lattice::LatticeState) directly is a bug.
 //!
@@ -38,15 +38,16 @@
 //! cast applier; the systems below keep those already-earned facts current without
 //! extending their lifetime.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 
 use hex_core::{
-    AppSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord, PausableSystems, RoundElapsed,
-    Screen, UnitId,
+    AppSystems, KnowledgeExpiry, KnowledgeSource, LatticeCoord, PausableSystems, PerceptionSystems,
+    RoundElapsed, Screen, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
+use hex_perception::FactionMapKnowledge;
 use hex_units::Faction;
 
 /// A total order on factions, so a view can key a [`BTreeMap`] deterministically.
@@ -102,8 +103,10 @@ pub struct KnownCell {
 
 /// What one faction knows about one unit's lattice.
 ///
-/// Base visibility is always present; the cell map holds only what has actually
-/// been revealed, so an absent coordinate means *unknown* rather than *empty*.
+/// A stored entry retains its base facts; [`FactionLatticeKnowledge`] separately
+/// gates whether that entry is currently readable. The cell map holds only what
+/// has actually been revealed, so an absent coordinate means *unknown* rather
+/// than *empty*.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LatticeKnowledge {
     base: BaseVisibility,
@@ -196,8 +199,8 @@ impl LatticeKnowledge {
 
     /// Ages every revealed cell by one round, dropping the lapsed ones.
     ///
-    /// Base visibility is untouched — it never decays, because it was never
-    /// hidden.
+    /// Stored base facts are untouched. Current spatial observation gates whether
+    /// the containing view is readable.
     fn decay(&mut self) {
         self.capacity = self.capacity.and_then(|mut known| {
             known.expiry.tick().map(|remaining| {
@@ -226,8 +229,14 @@ impl LatticeKnowledge {
 /// is not: the tuple-keyed maps do not project usefully into the inspector, and a
 /// derive that has to be worked around is worse than its absence.
 #[derive(Resource, Debug, Default)]
-pub struct FactionKnowledge {
+pub struct FactionLatticeKnowledge {
     by_view: BTreeMap<(FactionKey, UnitId), LatticeKnowledge>,
+    /// Subjects currently observed according to world-owned spatial knowledge.
+    ///
+    /// Divined facts remain in `by_view` while a subject is hidden, but this set
+    /// gates every ordinary read and write so stored facts cannot reveal that a
+    /// currently unseen unit exists.
+    observed: BTreeSet<(FactionKey, UnitId)>,
     /// Ground truth, populated only while the dev reveal-all toggle is on.
     ///
     /// A separate layer rather than a flag on each entry, so switching the toggle
@@ -236,7 +245,7 @@ pub struct FactionKnowledge {
     truth: BTreeMap<UnitId, LatticeKnowledge>,
 }
 
-impl FactionKnowledge {
+impl FactionLatticeKnowledge {
     /// **The** accessor. UI and AI read hostile lattices through here or not at all.
     ///
     /// Returns [`None`] when the viewer knows nothing whatsoever about the
@@ -249,9 +258,14 @@ impl FactionKnowledge {
     /// that could drift from it.
     #[must_use]
     pub fn view(&self, viewer: Faction, subject: UnitId) -> Option<&LatticeKnowledge> {
-        self.truth
-            .get(&subject)
-            .or_else(|| self.by_view.get(&(viewer.into(), subject)))
+        self.truth.get(&subject).or_else(|| {
+            let key = (viewer.into(), subject);
+            if self.observed.contains(&key) {
+                self.by_view.get(&key)
+            } else {
+                None
+            }
+        })
     }
 
     /// Publishes the facts a subject cannot hide from a viewer.
@@ -259,19 +273,34 @@ impl FactionKnowledge {
     /// Idempotent: re-publishing updates faction and leaves every divined fact
     /// alone.
     pub fn observe_base(&mut self, viewer: Faction, subject: UnitId, base: BaseVisibility) {
+        let key = (viewer.into(), subject);
+        self.observed.insert(key);
         self.by_view
-            .entry((viewer.into(), subject))
+            .entry(key)
             .and_modify(|known| known.base = base)
             .or_insert_with(|| LatticeKnowledge::new(base));
     }
 
+    /// Replaces current visibility with the authoritative spatial observation.
+    ///
+    /// Stored divination facts are deliberately retained for their own expiry
+    /// window. They become readable again only if the subject is re-observed.
+    fn replace_observed(
+        &mut self,
+        observations: impl IntoIterator<Item = (Faction, UnitId, BaseVisibility)>,
+    ) {
+        self.observed.clear();
+        for (viewer, subject, base) in observations {
+            self.observe_base(viewer, subject, base);
+        }
+    }
+
     /// Records one revealed cell for one viewer.
     ///
-    /// Does nothing when the viewer has no base visibility of the subject. That
+    /// Does nothing when the viewer does not currently observe the subject. That
     /// is deliberate rather than defensive: a reveal names a unit the caster
-    /// targeted, and targeting requires an Observed anchor, so a reveal against a
-    /// subject with no entry at all means the publishing order is wrong and
-    /// inventing an entry here would hide it.
+    /// targeted, and targeting requires an Observed anchor, so a reveal without
+    /// current spatial authority means the publishing order is wrong.
     pub fn learn(
         &mut self,
         viewer: Faction,
@@ -279,7 +308,11 @@ impl FactionKnowledge {
         coord: LatticeCoord,
         cell: KnownCell,
     ) -> bool {
-        match self.by_view.get_mut(&(viewer.into(), subject)) {
+        let key = (viewer.into(), subject);
+        if !self.observed.contains(&key) {
+            return false;
+        }
+        match self.by_view.get_mut(&key) {
             Some(known) => {
                 known.learn(coord, cell);
                 true
@@ -290,9 +323,10 @@ impl FactionKnowledge {
 
     /// Reveals a subject's complete live lattice for one expiry window.
     ///
-    /// Returns the exact coordinates revealed, or [`None`] when base visibility was
-    /// never published. Refusing to invent that base entry preserves the distinction
-    /// between "unknown subject" and "known subject with an opaque lattice".
+    /// Returns the exact coordinates revealed, or [`None`] when the subject is not
+    /// currently observed. Refusing to reveal a retained hidden entry preserves the
+    /// distinction between "unknown subject" and "observed subject with an opaque
+    /// lattice".
     pub(crate) fn reveal(
         &mut self,
         viewer: Faction,
@@ -301,7 +335,11 @@ impl FactionKnowledge {
         state: &LatticeState,
         expiry: KnowledgeExpiry,
     ) -> Option<Vec<LatticeCoord>> {
-        let known = self.by_view.get_mut(&(viewer.into(), subject))?;
+        let key = (viewer.into(), subject);
+        if !self.observed.contains(&key) {
+            return None;
+        }
+        let known = self.by_view.get_mut(&key)?;
         known.learn_capacity(spec.capacity(), expiry);
         let mut revealed = Vec::with_capacity(spec.capacity());
         for (coord, kind) in spec.cells() {
@@ -333,6 +371,7 @@ impl FactionKnowledge {
     /// remains revivable and keeps its stable id and lattice.
     pub fn forget_subject(&mut self, subject: UnitId) {
         self.by_view.retain(|&(_, known), _| known != subject);
+        self.observed.retain(|&(_, known)| known != subject);
         self.truth.remove(&subject);
     }
 
@@ -355,6 +394,7 @@ impl FactionKnowledge {
     /// Forgets everything, including the dev layer.
     pub fn clear(&mut self) {
         self.by_view.clear();
+        self.observed.clear();
         self.truth.clear();
     }
 }
@@ -362,9 +402,9 @@ impl FactionKnowledge {
 /// Shows a designer the truth behind the fog while playing.
 ///
 /// A dev affordance, not a game rule, which is why it is a separate resource
-/// rather than a field on [`FactionKnowledge`]: the store's contents stay
+/// rather than a field on [`FactionLatticeKnowledge`]: the store's contents stay
 /// exactly what the sim believes, and the toggle adds a layer over the top that
-/// [`FactionKnowledge::view`] consults. Turning it off restores the honest
+/// [`FactionLatticeKnowledge::view`] consults. Turning it off restores the honest
 /// answer without having to work out which facts the toggle invented.
 #[derive(Resource, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
 #[reflect(Resource)]
@@ -375,13 +415,16 @@ pub(crate) fn plugin(app: &mut App) {
     app.register_type::<KnowledgeSource>()
         .register_type::<KnowledgeExpiry>()
         .register_type::<RevealAll>()
-        .init_resource::<FactionKnowledge>()
+        .init_resource::<FactionLatticeKnowledge>()
         .init_resource::<RevealAll>()
         .add_systems(
             Update,
-            publish_base_visibility
+            sync_spatial_visibility
                 .in_set(AppSystems::Update)
                 .in_set(PausableSystems)
+                // World perception publishes the authoritative observation first;
+                // combat only adapts it into the lattice read seam.
+                .after(PerceptionSystems::PublishKnowledge)
                 // A Reveal applied this frame needs the existence entry first.
                 .before(crate::CombatSystems::Apply)
                 .run_if(in_state(Screen::Gameplay)),
@@ -413,51 +456,39 @@ pub(crate) fn plugin(app: &mut App) {
 
 /// Clears knowledge on leaving gameplay, so a new session cannot inherit views
 /// of units that no longer exist.
-fn reset(mut knowledge: ResMut<FactionKnowledge>, mut reveal: ResMut<RevealAll>) {
+fn reset(mut knowledge: ResMut<FactionLatticeKnowledge>, mut reveal: ResMut<RevealAll>) {
     knowledge.clear();
     *reveal = RevealAll(false);
 }
 
-/// Publishes what ordinary visibility establishes: existence and faction.
+/// Adapts world-owned current observations into the lattice knowledge seam.
 ///
-/// Base visibility is published to every faction present rather than only to
-/// hostile ones. The uniform rule means a future neutral or allied-fog case needs
-/// no new writer.
-///
-/// The viewer set is every faction with a unit in the world, **not** every
-/// faction that owns a lattice. Those differ: a side whose units carry no lattice
-/// yet still has to be able to look at one, and keying the viewers off the
-/// subject query would silently deny it a view.
-///
-/// Publishes for every unit carrying a [`LatticeSpec`], which since HEX-12's content
-/// PR is every unit an archetype resolved for.
-fn publish_base_visibility(
-    mut knowledge: ResMut<FactionKnowledge>,
-    viewers: Query<&Faction>,
-    subjects: Query<(&UnitId, &Faction, &LatticeSpec)>,
+/// The adapter filters to actual lattice subjects, but never derives observation
+/// from their ECS presence. If spatial knowledge is absent or a subject falls out
+/// of sight, its ordinary lattice view disappears immediately.
+fn sync_spatial_visibility(
+    mut knowledge: ResMut<FactionLatticeKnowledge>,
+    spatial: Option<Res<FactionMapKnowledge>>,
+    subjects: Query<&UnitId, With<LatticeSpec>>,
 ) {
-    // Collected and sorted rather than iterated straight out of the queries:
-    // query order is not stable, and the write order decides nothing here today
-    // but would the moment a writer starts allocating.
-    let mut present: Vec<Faction> = Vec::new();
-    for faction in &viewers {
-        if !present.iter().any(|seen| seen == faction) {
-            present.push(*faction);
+    let lattice_subjects: BTreeSet<UnitId> = subjects.iter().copied().collect();
+    let mut observed = Vec::new();
+    if let Some(spatial) = spatial {
+        for viewer in [Faction::Player, Faction::Hostile] {
+            for (unit, snapshot) in spatial.faction(viewer).units() {
+                if lattice_subjects.contains(&unit) {
+                    observed.push((
+                        viewer,
+                        unit,
+                        BaseVisibility {
+                            faction: snapshot.faction,
+                        },
+                    ));
+                }
+            }
         }
     }
-    let mut rows: Vec<(UnitId, Faction)> = subjects
-        .iter()
-        .map(|(unit, faction, _)| (*unit, *faction))
-        .collect();
-    present.sort_by_key(|faction| FactionKey::from(*faction));
-    rows.sort_by_key(|&(unit, _)| unit);
-
-    for (unit, faction) in rows {
-        let base = BaseVisibility { faction };
-        for viewer in &present {
-            knowledge.observe_base(*viewer, unit, base);
-        }
-    }
+    knowledge.replace_observed(observed);
 }
 
 /// Refreshes facts already earned by divination from current battle truth.
@@ -466,7 +497,7 @@ fn publish_base_visibility(
 /// taking damage appears immediately without a frame of stale authority and without
 /// silently extending the reveal.
 fn refresh_known_truth(
-    mut knowledge: ResMut<FactionKnowledge>,
+    mut knowledge: ResMut<FactionLatticeKnowledge>,
     subjects: Query<(&UnitId, &LatticeSpec, &LatticeState)>,
 ) {
     for (subject, spec, state) in &subjects {
@@ -497,7 +528,7 @@ fn refresh_known_truth(
 /// state that changes underneath it, and a stale reveal-all is worse than no
 /// reveal-all because it looks authoritative.
 fn mirror_truth(
-    mut knowledge: ResMut<FactionKnowledge>,
+    mut knowledge: ResMut<FactionLatticeKnowledge>,
     reveal: Res<RevealAll>,
     subjects: Query<(&UnitId, &Faction, &LatticeSpec, Option<&LatticeState>)>,
 ) {
@@ -543,7 +574,7 @@ fn mirror_truth(
 /// for changes, so every per-round consumer agrees on exactly when a round ended
 /// instead of each re-deriving it from the counter.
 fn decay_on_round(
-    mut knowledge: ResMut<FactionKnowledge>,
+    mut knowledge: ResMut<FactionLatticeKnowledge>,
     mut rounds: MessageReader<RoundElapsed>,
 ) {
     // `count`, not `is_empty`: two rollovers in one frame is not reachable
@@ -579,14 +610,14 @@ mod tests {
 
     #[test]
     fn a_subject_nobody_has_seen_is_absent_rather_than_opaque() {
-        let knowledge = FactionKnowledge::default();
+        let knowledge = FactionLatticeKnowledge::default();
         assert!(knowledge.view(Faction::Player, UnitId(1)).is_none());
     }
 
     /// Knowing a lattice exists reveals neither its capacity nor its contents.
     #[test]
     fn base_visibility_is_available_without_any_reveal() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
 
         let view = knowledge.view(Faction::Player, UnitId(1)).expect("a view");
@@ -599,7 +630,7 @@ mod tests {
 
     #[test]
     fn knowledge_is_per_viewer() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -623,7 +654,7 @@ mod tests {
     /// cast survives on its own schedule, with no observation behind it.
     #[test]
     fn a_divined_fact_decays_on_its_own_schedule() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -651,7 +682,7 @@ mod tests {
     /// the current round, gone at the next rollover.
     #[test]
     fn a_one_time_reveal_lasts_until_the_next_rollover() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -675,7 +706,7 @@ mod tests {
     /// measured in; only its writer ends it.
     #[test]
     fn a_sustained_fact_survives_any_number_of_rounds() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -703,7 +734,7 @@ mod tests {
     /// store applies the same decay rule to both.
     #[test]
     fn source_does_not_change_how_a_fact_decays() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.observe_base(Faction::Player, UnitId(2), base());
         knowledge.learn(
@@ -733,7 +764,7 @@ mod tests {
     /// order is wrong. Inventing an entry would hide that.
     #[test]
     fn learning_about_an_unpublished_subject_is_refused() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         let accepted = knowledge.learn(
             Faction::Player,
             UnitId(1),
@@ -747,7 +778,7 @@ mod tests {
 
     #[test]
     fn republishing_base_visibility_keeps_revealed_cells() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -776,7 +807,7 @@ mod tests {
 
     #[test]
     fn a_departed_subject_is_forgotten_by_every_viewer() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.observe_base(Faction::Hostile, UnitId(1), base());
         knowledge.observe_base(Faction::Player, UnitId(2), base());
@@ -811,7 +842,7 @@ mod tests {
     /// older mana figure has since been spent.
     #[test]
     fn a_fresher_reveal_replaces_a_stale_one() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         knowledge.learn(
             Faction::Player,
@@ -839,7 +870,7 @@ mod tests {
 
     #[test]
     fn clearing_forgets_every_view() {
-        let mut knowledge = FactionKnowledge::default();
+        let mut knowledge = FactionLatticeKnowledge::default();
         knowledge.observe_base(Faction::Player, UnitId(1), base());
         assert!(!knowledge.is_empty());
 
