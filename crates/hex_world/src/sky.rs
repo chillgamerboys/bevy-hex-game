@@ -386,9 +386,9 @@ mod tests {
             lower_glow_strength: 0.18,
             keyframes: vec![
                 keyframe(0.0, 220.0, -60.0, CelestialBody::Moon, 800.0, 6.8),
-                keyframe(6.0, 330.0, 5.0, CelestialBody::Sun, 500.0, 8.0),
+                keyframe(6.0, 330.0, 0.0, CelestialBody::Sun, 500.0, 8.0),
                 keyframe(12.0, 40.0, 60.0, CelestialBody::Sun, 10_000.0, 9.7),
-                keyframe(18.0, 150.0, -5.0, CelestialBody::Moon, 500.0, 7.8),
+                keyframe(18.0, 150.0, 0.0, CelestialBody::Moon, 500.0, 7.8),
             ],
         };
         let settings = flat_settings(LightingProfile::Cycle(cycle));
