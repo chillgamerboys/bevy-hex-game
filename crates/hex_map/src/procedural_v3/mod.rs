@@ -14,7 +14,8 @@ use hex_core::{
 
 use crate::procedural::{
     ForestMetrics as ForestReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -40,6 +41,7 @@ mod liquid;
 pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
+mod mountains;
 mod patch;
 mod seed;
 #[cfg_attr(
@@ -167,6 +169,7 @@ pub(crate) fn ensure_recipe_available(
                 patch.recipe,
                 V3RecipeSettings::Hills(_)
                     | V3RecipeSettings::SkyIslands(_)
+                    | V3RecipeSettings::Mountains(_)
                     | V3RecipeSettings::Waterfall(_)
                     | V3RecipeSettings::Forest(_)
             ) =>
@@ -233,6 +236,22 @@ pub(crate) fn build(
                 started,
                 sky_report_metrics,
                 |metrics| ProceduralRecipeMetrics::SkyIslands(sky_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::Mountains(_)) =>
+        {
+            finish_build(
+                mountains::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                mountains_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Mountains(mountains_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch)
@@ -311,6 +330,33 @@ fn sky_recipe_metrics(metrics: &sky::SkyMetrics) -> crate::procedural::SkyIsland
         satellites: metrics.satellites,
         bridge_surfaces: metrics.bridge_surfaces,
         vertical_clearance: metrics.vertical_clearance,
+    }
+}
+
+fn mountains_report_metrics(metrics: &mountains::MountainsMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.lower_bypass_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.mountain_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn mountains_recipe_metrics(metrics: &mountains::MountainsMetrics) -> MountainsReportMetrics {
+    MountainsReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        special_surfaces: metrics.special_surfaces,
+        mountain_surfaces: metrics.mountain_surfaces,
+        mountain_coverage_percent: metrics.mountain_coverage_percent,
+        accessible_mountain_surfaces: metrics.accessible_mountain_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: metrics.relief,
+        peak_count: metrics.peak_count,
+        cliff_edges: metrics.cliff_edges,
+        high_pass_steps: metrics.high_pass_steps,
+        lower_bypass_steps: metrics.lower_bypass_steps,
     }
 }
 
@@ -554,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_recipe_fails_instead_of_fabricating_a_plan() {
+    fn implemented_native_hills_is_reported_available() {
         let settings = ProceduralV3Settings {
             layout: V3LayoutSettings::Single(PatchSpec {
                 environment: V3EnvironmentSettings::TemperateGrassland,
@@ -569,10 +615,7 @@ mod tests {
             }),
         };
 
-        assert_eq!(
-            ensure_recipe_available(&settings),
-            Err(V3GenerationError::RecipeUnavailable("Hills"))
-        );
+        assert_eq!(ensure_recipe_available(&settings), Ok(()));
     }
 
     #[test]

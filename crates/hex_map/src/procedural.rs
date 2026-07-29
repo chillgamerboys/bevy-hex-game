@@ -82,6 +82,8 @@ pub enum ProceduralRecipeMetrics {
     Hills(HillsMetrics),
     /// Layered ground, island, bridge, and clearance measurements.
     SkyIslands(SkyIslandsMetrics),
+    /// Broad mountain mass, route, accessibility, and cliff measurements.
+    Mountains(MountainsMetrics),
     /// Directed river, fall, and dry-bypass measurements.
     Waterfall(WaterfallMetrics),
     /// Vegetation, clearing, route, and terrain measurements.
@@ -120,6 +122,33 @@ pub struct SkyIslandsMetrics {
     pub bridge_surfaces: u32,
     /// Minimum empty vertical separation above local ground.
     pub vertical_clearance: Level,
+}
+
+/// Exact deterministic measurements of one selected V3 Mountains plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct MountainsMetrics {
+    /// Ordinary walker surfaces in the admitted network.
+    pub ordinary_surfaces: u32,
+    /// Standable surfaces gated behind future special movement.
+    pub special_surfaces: u32,
+    /// Surface cells raised above the configured base.
+    pub mountain_surfaces: u32,
+    /// Percentage of the patch occupied by raised mountain terrain.
+    pub mountain_coverage_percent: u32,
+    /// Raised surfaces reachable by an ordinary walker.
+    pub accessible_mountain_surfaces: u32,
+    /// Distinct elevations reachable by ordinary movement.
+    pub reachable_elevation_levels: u32,
+    /// Highest surface minus the configured base.
+    pub relief: Level,
+    /// Number of authored sharp summit centres.
+    pub peak_count: u8,
+    /// Adjacent surface edges separated by at least two levels.
+    pub cliff_edges: u32,
+    /// Authored step count along the two-wide high pass.
+    pub high_pass_steps: u32,
+    /// Shortest ordinary route between the opposing landings.
+    pub lower_bypass_steps: u32,
 }
 
 /// Exact deterministic measurements of one selected V3 Waterfall plan.
