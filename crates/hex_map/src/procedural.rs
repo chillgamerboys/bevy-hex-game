@@ -82,6 +82,8 @@ pub enum ProceduralRecipeMetrics {
     Waterfall(WaterfallMetrics),
     /// Vegetation, clearing, route, and terrain measurements.
     Forest(ForestMetrics),
+    /// Worked-stone defenses, circulation, and access measurements.
+    Fort(FortMetrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Waterfall plan.
@@ -140,6 +142,41 @@ pub struct ForestMetrics {
     pub spawn_height_difference: Level,
     /// Difference between the highest reachable woodland and prairie surfaces.
     pub woodland_prairie_high_ground_difference: Level,
+}
+
+/// Exact deterministic measurements of one selected V3 Fort plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct FortMetrics {
+    /// Solid worked-stone voxels assigned to curtain walls and battlements.
+    pub wall_voxels: u32,
+    /// Ordinary surfaces in the two-wide curtain walk.
+    pub wall_walk_surfaces: u32,
+    /// Decorative outer columns excluded from the ordinary walk.
+    pub battlement_columns: u32,
+    /// Exact authored corner towers.
+    pub tower_count: u32,
+    /// Exact two-wide gate passages.
+    pub gate_count: u32,
+    /// Exact two-wide stair terraces.
+    pub stair_count: u32,
+    /// Ordinary ground surfaces inside the curtain.
+    pub courtyard_surfaces: u32,
+    /// Ordinary walker surfaces in the connected map network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest ordinary surface.
+    pub relief: Level,
+    /// Curtain height above the ground datum.
+    pub curtain_height: Level,
+    /// Keep height above the ground datum.
+    pub keep_height: Level,
+    /// Shortest ordinary path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Independently usable declared gate routes.
+    pub independent_gate_routes: u32,
+    /// Exposed surfaces whose exact supporting material is worked stone.
+    pub worked_stone_surfaces: u32,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.
@@ -3377,6 +3414,7 @@ mod tests {
             gravel: GRAVEL,
             water: WATER,
             metal: METAL,
+            worked_stone: SubstanceId(12),
             snow: SNOW,
             ice: ICE,
             basalt: BASALT,

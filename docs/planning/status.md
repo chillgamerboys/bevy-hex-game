@@ -23,7 +23,7 @@ pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
 
-V3 now has its first two complete recipe lanes. Waterfall authors deterministic
+V3 now has three complete recipe lanes. Waterfall authors deterministic
 directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
 basin, outlet, and redundant land routes; an opaque animated renderer consumes the
 same exact flow facts. Forest plans rolling terrain and clearings, places its denser
@@ -45,6 +45,13 @@ edits, unseen units disappear immediately, and the player-side traversal project
 is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
 live in `perception.ron`. Fog/picking presentation, generated cave lamps/crystals,
 unknown-frontier routing, and combat/AI consumers are not wired yet.
+
+Fort adds the first complete V3 structure recipe and the canonical worked-stone
+substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
+keep, with six stepped towers, two lintelled gates, two broad stair terraces, and
+alternating outer battlements. Exact graph validation proves that closing both gates
+seals the courtyard, either gate independently reconnects it, and every usable wall
+or tower surface remains ordinary-walker accessible.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the

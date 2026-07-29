@@ -56,8 +56,8 @@ pub mod voxel;
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
-    ForestMetrics as ForestReportMetrics, GenerationReport, ProceduralRecipeMetrics,
-    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,

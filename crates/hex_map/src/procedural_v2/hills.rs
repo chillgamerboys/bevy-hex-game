@@ -538,6 +538,7 @@ mod tests {
             gravel: GRAVEL,
             water: WATER,
             metal: METAL,
+            worked_stone: SubstanceId(12),
             snow: SNOW,
             ice: ICE,
             basalt: BASALT,

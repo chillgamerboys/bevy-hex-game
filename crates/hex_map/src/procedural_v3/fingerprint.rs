@@ -563,6 +563,7 @@ const fn solid_material_tag(material: SolidMaterialRole) -> u8 {
         SolidMaterialRole::Snow => 6,
         SolidMaterialRole::Ice => 7,
         SolidMaterialRole::Basalt => 8,
+        SolidMaterialRole::WorkedStone => 9,
     }
 }
 

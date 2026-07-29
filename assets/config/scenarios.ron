@@ -118,6 +118,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Fort",
+            category: Map,
+            blurb: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
+            world: "config/worlds/procedural-fort.ron",
+            generation_seed: Some(640367719),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Close Quarters",
             category: Combat,
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",

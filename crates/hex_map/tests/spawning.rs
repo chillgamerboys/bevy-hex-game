@@ -48,8 +48,8 @@ use hex_map::{
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
     SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
-    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3ForestSettings, V3HillsSettings,
-    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
+    V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -202,6 +202,7 @@ fn substance_table_fixture(
         ("gravel", true, true),
         ("water", false, true),
         ("metal", true, true),
+        ("worked_stone", true, true),
         ("snow", true, true),
         ("ice", true, true),
         ("basalt", true, true),
@@ -354,6 +355,32 @@ fn v3_forest_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(381_654_729));
+    app
+}
+
+fn v3_fort_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Fort(V3FortSettings),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(640_367_719));
     app
 }
 
@@ -654,6 +681,71 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             "missing Forest anchor {anchor}"
         );
     }
+}
+
+#[test]
+fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
+    let mut app = v3_fort_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 640_367_719);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(report.valid_candidates > 0);
+    assert!(!report.used_fallback);
+    assert_eq!(report.repair_rounds, 0);
+    assert!(report.repair_actions.is_empty());
+    let Some(ProceduralRecipeMetrics::Fort(metrics)) = &report.recipe_metrics else {
+        panic!("V3 Fort should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.gate_count, 2);
+    assert_eq!(metrics.stair_count, 2);
+    assert_eq!(metrics.tower_count, 6);
+    assert_eq!(metrics.independent_gate_routes, 2);
+    assert_eq!(metrics.curtain_height, 5);
+    assert_eq!(metrics.keep_height, 8);
+    assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
+    assert_eq!(
+        metrics.critical_route_steps,
+        report.metrics.critical_route_steps
+    );
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "fort_courtyard",
+        "fort_wall_walk",
+        "fort_keep",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing Fort anchor {name}"
+        );
+    }
+    let worked_stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("worked_stone")
+        .expect("Fort fixture should register worked stone");
+    assert!(app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .any(|(_coord, column)| column.iter().any(|substance| substance == worked_stone)));
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 23);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
 }
 
 #[test]

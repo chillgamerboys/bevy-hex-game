@@ -51,6 +51,11 @@
             color: (red: 0.30, green: 0.34, blue: 0.40),
             tags: ["construction", "metal", "world"],
         ),
+        "structure/worked-stone": (
+            display_name: "Worked Stone",
+            color: (red: 0.46, green: 0.48, blue: 0.52),
+            tags: ["construction", "stone", "world"],
+        ),
         "terrain/basalt": (
             display_name: "Basalt",
             color: (red: 0.20, green: 0.22, blue: 0.24),
