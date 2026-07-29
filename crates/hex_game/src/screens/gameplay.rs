@@ -97,9 +97,8 @@ fn exploring_hint() -> String {
 
 /// Rewrites the hint line to say what the game is doing and whose turn it is.
 ///
-/// The turn order is the only readout a player gets — there is no combat log and no
-/// unit portraits — so it has to say enough to act on: which mode, which round, and
-/// whether this is your go.
+/// This compact summary complements the lattice panels, initiative list, and combat
+/// log by keeping the current mode, round, and action budget visible at a glance.
 fn update_hud(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,

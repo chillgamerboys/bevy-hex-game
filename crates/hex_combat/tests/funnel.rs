@@ -22,7 +22,7 @@ use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
     IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
 };
-use hex_units::{route, Body, Faction, Footing, Standing, StandsOn, UnitRegistry};
+use hex_units::{route, Body, Downed, Faction, Footing, Standing, StandsOn, UnitRegistry};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -611,6 +611,58 @@ fn a_strike_on_a_friendly_unit_is_dropped() {
     assert!(
         app.world().get::<hex_anim::Transformation>(ally).is_none(),
         "the ally must not have been made to recoil"
+    );
+}
+
+/// Downing keeps an entity registered for restoration, but it does not leave that
+/// entity as a legal damage sink for forged or replayed commands.
+#[test]
+fn a_strike_on_a_downed_unit_is_dropped_without_spending_the_action() {
+    let mut app = test_app();
+    let striker = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let downed = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+        2,
+    );
+    app.world_mut().entity_mut(downed).insert(Downed);
+    // A live hostile keeps combat active after the downed target is excluded.
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        5,
+        3,
+    );
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+
+    let command = GameCommand::Strike {
+        unit: UnitId(1),
+        target: UnitId(2),
+    };
+    push(&mut app, command.clone());
+    app.update();
+
+    let turn = app
+        .world()
+        .get::<Turn>(striker)
+        .expect("the striker should still hold its turn");
+    assert!(!turn.acted, "a refused strike must not consume the action");
+    assert!(
+        app.world()
+            .get::<hex_anim::Transformation>(downed)
+            .is_none(),
+        "the downed target must not be made to recoil"
+    );
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
+        }]
     );
 }
 

@@ -80,10 +80,9 @@ pub struct BaseVisibility {
 
 /// One known cell, with where the knowledge came from and when it lapses.
 ///
-/// The source and expiry are stored per cell rather than per lattice because a
-/// reveal is partial: a tier-1 divination may expose two cells of a nine-cell
-/// lattice, and those two decay on their own schedule while the rest stay
-/// unknown.
+/// Source and expiry stay per-cell so facts retain their provenance and can
+/// expire independently. The current Scrying Eye reveals every cell at once,
+/// while this representation also supports future partial-knowledge sources.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KnownCell {
     /// What the inscription puts in the cell.

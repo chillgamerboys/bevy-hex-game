@@ -14,7 +14,10 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_combat::{Initiative, TurnOrder};
-use hex_core::{HexCoord, HexSpan, Mode, Screen, TilePos, Turn, UnitId};
+use hex_core::{
+    CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, Mode, PlayerSeat, Screen, TilePos,
+    Turn, UnitId,
+};
 use hex_units::{Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
@@ -295,14 +298,34 @@ fn leaving_gameplay_clears_the_order() {
     assert!(app.world().resource::<TurnOrder>().is_empty());
 }
 
-/// Presses the end-turn key for one frame.
+/// Advances the simulation without coupling general turn-order tests to input policy.
+#[expect(
+    clippy::expect_used,
+    reason = "an active combatant is a precondition for this integration-test helper"
+)]
+fn end_turn(app: &mut App) {
+    let unit = app
+        .world()
+        .resource::<TurnOrder>()
+        .current()
+        .expect("combat should have a current unit");
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::EndTurn { unit },
+        });
+    app.update();
+}
+
+/// Presses and releases the end-turn key through Bevy's real input path.
 ///
 /// Sends a real `KeyboardInput` rather than calling `ButtonInput::press` directly.
 /// Bevy's `keyboard_input_system` clears the button state at the start of *every*
 /// frame before processing events, so a press written straight into the resource is
 /// wiped before any `Update` system sees it — the key looks stuck down and nothing
 /// ever reports `just_pressed`.
-fn end_turn(app: &mut App) {
+fn press_space(app: &mut App) {
     let window = app.world_mut().spawn(()).id();
     app.world_mut().write_message(KeyboardInput {
         key_code: KeyCode::Space,
@@ -322,6 +345,47 @@ fn end_turn(app: &mut App) {
         window,
     });
     app.update();
+}
+
+/// Space ends a player turn, but cannot act as a debug shortcut through an enemy turn.
+#[test]
+fn space_cannot_skip_a_hostile_turn() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+
+    press_space(&mut app);
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(unit_id(&app, enemy)),
+        "Space should end the player's turn"
+    );
+    assert!(app.world().get::<Turn>(enemy).is_some());
+
+    press_space(&mut app);
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(unit_id(&app, enemy)),
+        "Space must not skip a hostile turn"
+    );
+    assert!(
+        !app.world()
+            .get::<Turn>(enemy)
+            .expect("the hostile should still hold its turn")
+            .acted,
+        "the ignored key press must not mutate the hostile turn"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_none(),
+        "the player must not receive another turn from the ignored key press"
+    );
 }
 
 /// A unit that already carries an explicit id (a test's, or a future load

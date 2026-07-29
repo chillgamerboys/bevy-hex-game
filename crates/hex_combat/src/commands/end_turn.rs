@@ -23,7 +23,7 @@ pub(super) fn apply(
             current: ctx.turn_order.current(),
         });
     }
-    let Ok((_, _, turn, _, _, _)) = actors.get_mut(entity) else {
+    let Ok((_, _, turn, _, _, _, _)) = actors.get_mut(entity) else {
         return Err(CommandRefusal::MissingUnitData {
             unit,
             data: UnitData::EntityRecord,

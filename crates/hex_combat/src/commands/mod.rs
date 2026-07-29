@@ -44,7 +44,7 @@ use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
     PausableSystems, PendingDecision, Screen, TilePos, Turn,
 };
-use hex_units::{Body, Faction, MovingTo, StandsOn, UnitRegistry};
+use hex_units::{Body, Downed, Faction, MovingTo, StandsOn, UnitRegistry};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
@@ -85,6 +85,7 @@ type ActorQuery<'w, 's> = Query<
         Has<Busy>,
         Option<&'static ControlOwner>,
         Option<&'static Faction>,
+        Has<Downed>,
     ),
 >;
 
@@ -261,7 +262,7 @@ fn apply_commands(
         let owner = actors
             .get(entity)
             .ok()
-            .and_then(|(_, _, _, _, owner, _)| owner.copied())
+            .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
             .unwrap_or_default();
         if owner.0 != issued.seat {
             drop_command(

@@ -45,12 +45,17 @@ pub(super) fn apply(
     let Some(target_entity) = ctx.registry.entity_of(target) else {
         return Err(CommandRefusal::UnknownTarget { target });
     };
-    let Ok((target_standing, _, _, _, _, target_faction)) = actors.get(target_entity) else {
+    let Ok((target_standing, _, _, _, _, target_faction, target_downed)) =
+        actors.get(target_entity)
+    else {
         return Err(CommandRefusal::MissingUnitData {
             unit: target,
             data: UnitData::EntityRecord,
         });
     };
+    if target_downed {
+        return Err(CommandRefusal::TargetDowned { target });
+    }
     let Some(target_standing) = target_standing.copied() else {
         return Err(CommandRefusal::MissingUnitData {
             unit: target,
@@ -64,7 +69,7 @@ pub(super) fn apply(
         });
     };
     let target_standing = target_standing.0;
-    let Ok((standing, body, turn, busy, _, faction)) = actors.get_mut(entity) else {
+    let Ok((standing, body, turn, busy, _, faction, _)) = actors.get_mut(entity) else {
         return Err(CommandRefusal::MissingUnitData {
             unit,
             data: UnitData::EntityRecord,

@@ -108,7 +108,7 @@ pub(super) fn apply(
     }
 
     let (standing, busy, caster_faction) = {
-        let Ok((standing, _, turn, busy, _, faction)) = actors.get(entity) else {
+        let Ok((standing, _, turn, busy, _, faction, _)) = actors.get(entity) else {
             return Err(CommandRefusal::MissingUnitData {
                 unit,
                 data: UnitData::EntityRecord,
@@ -187,6 +187,12 @@ pub(super) fn apply(
             target,
         });
     }
+    let target_unit = unit_standing_on(ctx, actors, target);
+    if let Some((target, _, true)) = target_unit {
+        if spec.effects.iter().any(effect_damages_unit) {
+            return Err(CommandRefusal::TargetDowned { target });
+        }
+    }
 
     // --- rung 2: the lattice -----------------------------------------------
 
@@ -248,7 +254,6 @@ pub(super) fn apply(
 
     // --- effects -----------------------------------------------------------
 
-    let target_unit = unit_standing_on(ctx, actors, target);
     let round = ctx.turn_order.round;
     let mut refusals: Vec<&'static str> = Vec::new();
     let mut played_direct_recoil = false;
@@ -527,11 +532,30 @@ pub fn delivers_anything(spell: &Spell) -> bool {
 }
 
 /// The unit standing on `pos`, if any.
-fn unit_standing_on(ctx: &Verb, actors: &ActorQuery, pos: TilePos) -> Option<(UnitId, Entity)> {
+fn unit_standing_on(
+    ctx: &Verb,
+    actors: &ActorQuery,
+    pos: TilePos,
+) -> Option<(UnitId, Entity, bool)> {
     ctx.registry.iter().find_map(|(id, entity)| {
-        let (standing, ..) = actors.get(entity).ok()?;
-        (standing?.0.pos == pos).then_some((id, entity))
+        let (standing, _, _, _, _, _, downed) = actors.get(entity).ok()?;
+        (standing?.0.pos == pos).then_some((id, entity, downed))
     })
+}
+
+/// Whether this implemented effect would further damage a unit on the anchor.
+///
+/// Downed lattices stay queryable because future restoration needs them. Damage is a
+/// narrower rule: it refuses a spent target before payment instead of opening a
+/// defender choice that can only answer with zero cells.
+fn effect_damages_unit(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::DisableHexes {
+            targeted: false,
+            ..
+        } | Effect::Burn { .. }
+    )
 }
 
 /// Lattices, as the applier reaches them.

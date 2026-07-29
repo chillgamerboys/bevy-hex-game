@@ -6,26 +6,20 @@
 //! reaches [`FactionKnowledge::view`].
 //!
 //! **These tests attach `LatticeSpec` and `LatticeState` to units by hand.**
-//! Nothing in the shipped game does that yet — HEX-12 wires lattices onto units
-//! from `lattices.ron`. Without this, every system here would match no entities
-//! and pass while doing nothing, which is exactly the silent-success failure the
-//! repo's troubleshooting doc warns about.
-//!
-//! Nothing here is visual, and the readout that would make any of it visible
-//! waits on HEX-12 too.
+//! Shipped units receive those components from content, but these fixtures stay
+//! deliberately small so the knowledge seam is tested independently of scenario
+//! loading and the gameplay readout.
 
 use std::collections::BTreeMap;
 
 use bevy::app::PluginsState;
-use bevy::input::keyboard::{Key, KeyboardInput};
-use bevy::input::ButtonState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_combat::{FactionKnowledge, Initiative, KnownCell, RevealAll, TurnOrder};
 use hex_core::{
-    ElementId, HexCoord, HexSpan, KnowledgeExpiry, KnowledgeSource, LatticeCoord, Mode, Screen,
-    TilePos, UnitId,
+    CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, KnowledgeExpiry,
+    KnowledgeSource, LatticeCoord, Mode, PlayerSeat, Screen, TilePos, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Faction, Standing, StandsOn};
@@ -111,27 +105,23 @@ fn unit_id(app: &App, entity: Entity) -> UnitId {
         .expect("combat should have dealt this unit a stable id")
 }
 
-/// Ends the acting unit's turn with a real key press. See `loop.rs` for why a
-/// synthetic `KeyboardInput` is required rather than pressing the resource.
+/// Advances the simulation without coupling knowledge tests to an input binding.
+#[expect(
+    clippy::expect_used,
+    reason = "an active combatant is a precondition for this integration-test helper"
+)]
 fn end_turn(app: &mut App) {
-    let window = app.world_mut().spawn(()).id();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Pressed,
-        text: None,
-        repeat: false,
-        window,
-    });
-    app.update();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Released,
-        text: None,
-        repeat: false,
-        window,
-    });
+    let unit = app
+        .world()
+        .resource::<TurnOrder>()
+        .current()
+        .expect("combat should have a current unit");
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::EndTurn { unit },
+        });
     app.update();
 }
 

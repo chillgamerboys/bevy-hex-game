@@ -107,6 +107,11 @@ pub enum CommandRefusal {
         /// The missing target.
         target: UnitId,
     },
+    /// A damaging command named a unit that has already gone down.
+    TargetDowned {
+        /// The downed target.
+        target: UnitId,
+    },
     /// A strike target was not hostile to its attacker.
     TargetNotHostile {
         /// The rejected target.
@@ -377,6 +382,7 @@ mod tests {
                 remaining: 4,
             },
             CommandRefusal::UnknownTarget { target: UnitId(2) },
+            CommandRefusal::TargetDowned { target: UnitId(2) },
             CommandRefusal::TargetNotHostile { target: UnitId(2) },
             CommandRefusal::TargetOutOfMeleeReach { target: UnitId(2) },
             CommandRefusal::NoTurn,

@@ -1,6 +1,9 @@
 //! Bounded combat history with disclosure frozen at ingestion time.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    time::Duration,
+};
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
@@ -62,6 +65,23 @@ impl DamagePulse {
     fn start(&mut self, target: UnitId) {
         self.target = Some(target);
         self.timer = Some(Timer::from_seconds(PULSE_SECONDS, TimerMode::Once));
+    }
+
+    /// Advances the pulse whether or not its target is currently focused.
+    ///
+    /// Focus decides only whether the pulse is painted. Letting it decide whether the
+    /// clock advances freezes an old hit when the player looks away and replays it the
+    /// next time that target is selected.
+    fn tick(&mut self, delta: Duration) -> bool {
+        let live = self.timer.as_mut().is_some_and(|timer| {
+            timer.tick(delta);
+            !timer.is_finished()
+        });
+        if !live {
+            self.target = None;
+            self.timer = None;
+        }
+        live
     }
 }
 
@@ -475,6 +495,7 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::InvalidPath => "invalid path",
         CommandRefusal::MovementBudgetExceeded { .. } => "not enough movement",
         CommandRefusal::UnknownTarget { .. } => "unknown target",
+        CommandRefusal::TargetDowned { .. } => "target is already down",
         CommandRefusal::TargetNotHostile { .. } => "target is not hostile",
         CommandRefusal::TargetOutOfMeleeReach { .. } => "target is out of reach",
         CommandRefusal::NoTurn => "no active turn",
@@ -539,14 +560,8 @@ fn pulse_panel(
     mut pulse: ResMut<DamagePulse>,
     mut panels: Query<&mut BackgroundColor, With<TargetPanel>>,
 ) {
-    let active = if pulse.target == focus.0 {
-        pulse.timer.as_mut().is_some_and(|timer| {
-            timer.tick(time.delta());
-            !timer.is_finished()
-        })
-    } else {
-        false
-    };
+    let live = pulse.tick(time.delta());
+    let active = live && pulse.target == focus.0;
     set_pulse_color(active, &mut panels);
 }
 
@@ -570,6 +585,22 @@ mod tests {
         assert_eq!(log.lines.len(), CAPACITY);
         assert_eq!(log.lines.front().map(|line| line.text.as_str()), Some("16"));
         assert_eq!(log.lines.back().map(|line| line.text.as_str()), Some("79"));
+    }
+
+    #[test]
+    fn a_pulse_expires_while_the_player_is_focused_elsewhere() {
+        let target = UnitId(1);
+        let mut pulse = DamagePulse::default();
+        pulse.start(target);
+
+        let focused_elsewhere = Some(UnitId(2));
+        let live = pulse.tick(Duration::from_secs_f32(PULSE_SECONDS + 0.01));
+        assert!(!live, "elapsed time must expire an unfocused pulse");
+        assert_ne!(pulse.target, focused_elsewhere);
+        assert_eq!(
+            pulse.target, None,
+            "refocusing the old target later must not replay the pulse"
+        );
     }
 
     #[test]

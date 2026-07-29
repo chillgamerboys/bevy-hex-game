@@ -112,7 +112,7 @@
             ],
         ),
 
-        // Divination: a Light spell that reveals part of a hidden lattice.
+        // Divination: reveals the complete live lattice for a round-scaled duration.
         "Scrying Eye": (
             requirements: [(element: "Light", mana: 1)],
             casting: Evocation,

@@ -491,33 +491,26 @@ fn a_player_defence_choice_does_not_strand_the_enemy_turn() {
     );
 }
 
-/// Presses the end-turn key for one frame.
-///
-/// A real `KeyboardInput`, not a direct `ButtonInput::press`: Bevy clears the button
-/// state at the start of every frame before processing events, so a direct press
-/// never reaches an `Update` system.
+/// Advances the simulation without coupling enemy-policy tests to an input binding.
+#[expect(
+    clippy::expect_used,
+    reason = "an active combatant is a precondition for this integration-test helper"
+)]
 fn end_turn(app: &mut App) {
-    use bevy::input::keyboard::{Key, KeyboardInput};
-    use bevy::input::ButtonState;
-
-    let window = app.world_mut().spawn(()).id();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Pressed,
-        text: None,
-        repeat: false,
-        window,
-    });
+    let unit = app
+        .world()
+        .resource::<TurnOrder>()
+        .current()
+        .expect("combat should have a current unit");
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::EndTurn { unit },
+        });
+    // The command advances to the hostile during Apply/Advance. Its policy runs
+    // in Act on the following frame, preserving the production schedule boundary.
     app.update();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Released,
-        text: None,
-        repeat: false,
-        window,
-    });
     app.update();
 }
 

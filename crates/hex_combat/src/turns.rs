@@ -397,17 +397,15 @@ fn end_combat(
 
 /// Emits an end-turn command when the player presses the key.
 ///
-/// The seat is read off the current unit itself, so the applier's ownership
-/// check passes for exactly the units this session commands. Deliberately no
-/// faction filter: the key skips whoever is acting, enemy turns included —
-/// today's debug affordance, and the funnel is where it will grow teeth when
-/// seats become real.
+/// The seat is read off the current player unit itself, so the applier's ownership
+/// check passes for exactly the unit this input controls. Enemy turns are deliberately
+/// ignored: keyboard input must not become a debug back door that skips hostile actions.
 fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
-    owners: Query<&ControlOwner>,
+    owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
     if !keys.just_pressed(KeyCode::Space) || pending.is_open() {
@@ -416,12 +414,16 @@ fn end_turn_on_space(
     let Some(current) = turn_order.current() else {
         return;
     };
-    let seat = registry
-        .entity_of(current)
-        .and_then(|entity| owners.get(entity).ok())
-        .copied()
-        .unwrap_or_default()
-        .0;
+    let Some(entity) = registry.entity_of(current) else {
+        return;
+    };
+    let Ok((owner, faction)) = owners.get(entity) else {
+        return;
+    };
+    if *faction != Faction::Player {
+        return;
+    }
+    let seat = owner.copied().unwrap_or_default().0;
     queue.push(IssuedCommand {
         seat,
         command: GameCommand::EndTurn { unit: current },

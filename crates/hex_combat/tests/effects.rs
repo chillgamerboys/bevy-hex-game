@@ -21,13 +21,15 @@ use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
     ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec,
 };
-use hex_combat::{CombatEvent, FactionKnowledge, Initiative, PersistentEffects, TurnOrder};
+use hex_combat::{
+    CombatEvent, CommandRefusal, FactionKnowledge, Initiative, PersistentEffects, TurnOrder,
+};
 use hex_core::{
     CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan,
     IssuedCommand, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
-use hex_units::{Faction, Standing, StandsOn, UnitRegistry};
+use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
 
 /// The level every unit in these tests stands on.
 const GROUND: hex_core::Level = 1;
@@ -704,6 +706,87 @@ fn successful_direct_spell_damage_reuses_the_target_recoil() {
             .get::<hex_anim::Transformation>(fight.defender)
             .is_some(),
         "direct spell damage should visibly recoil its target"
+    );
+}
+
+#[test]
+fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
+    let mut app = test_app(2);
+    let fight = two_ember_casters(&mut app);
+    app.world_mut().entity_mut(fight.defender).insert(Downed);
+    let before = app
+        .world()
+        .get::<LatticeState>(fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Ember".to_owned(),
+        target: fight.defender_pos,
+        facing: None,
+        mana: None,
+    };
+
+    push(&mut app, command.clone());
+    app.update();
+
+    let after = app
+        .world()
+        .get::<LatticeState>(fight.caster)
+        .expect("the caster kept its lattice")
+        .total_gem_mana();
+    assert_eq!(after, before, "a refused cast must not spend mana");
+    assert!(
+        !app.world()
+            .get::<Turn>(fight.caster)
+            .expect("the caster should retain its turn")
+            .acted,
+        "a refused cast must not spend the action"
+    );
+    assert!(app.world().resource::<PersistentEffects>().is_empty());
+    assert!(!app.world().resource::<PendingDecision>().is_open());
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
+        }]
+    );
+}
+
+#[test]
+fn a_non_damaging_reveal_can_still_inspect_a_downed_unit() {
+    let mut app = test_app(2);
+    let fight = two_scriers(&mut app);
+    app.world_mut().entity_mut(fight.defender).insert(Downed);
+    push(
+        &mut app,
+        GameCommand::Cast {
+            unit: UnitId(1),
+            spell: "Scry".to_owned(),
+            target: fight.defender_pos,
+            facing: None,
+            mana: None,
+        },
+    );
+
+    app.update();
+
+    let capacity = app
+        .world()
+        .resource::<FactionKnowledge>()
+        .view(Faction::Player, UnitId(2))
+        .and_then(|known| known.known_capacity());
+    assert_eq!(
+        capacity,
+        Some(5),
+        "keeping a downed lattice queryable must still permit non-damaging effects"
+    );
+    assert!(
+        take_events(&mut app)
+            .iter()
+            .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })),
+        "Reveal should not inherit the damage-only refusal"
     );
 }
 

@@ -445,11 +445,17 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
 
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
+    let mut defender_choice_effects = 0_u8;
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
-            Effect::DisableHexes { count, .. } if *count == 0 => {
-                return Err(zero("DisableHexes.count"));
+            Effect::DisableHexes { count, targeted } => {
+                if *count == 0 {
+                    return Err(zero("DisableHexes.count"));
+                }
+                if !targeted {
+                    defender_choice_effects = defender_choice_effects.saturating_add(1);
+                }
             }
             Effect::Burn { turns } if *turns == 0 => return Err(zero("Burn.turns")),
             Effect::RestoreHexes { count } if *count == 0 => {
@@ -470,6 +476,12 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             }
             _ => {}
         }
+    }
+    if defender_choice_effects > 1 {
+        return Err(format!(
+            "spell '{name}' has multiple non-targeted DisableHexes effects; only one \
+             defender choice can be pending at a time"
+        ));
     }
 
     // A spell must do something: at least one effect, or a defensive enchantment whose
@@ -771,6 +783,27 @@ mod tests {
         assert!(
             file.validate().is_ok(),
             "a defensive enchantment's point is its defense"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_multiple_effects_that_need_defender_choices() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects
+            .push(Effect::DisableHexes {
+                count: 2,
+                targeted: false,
+            });
+
+        let error = file
+            .validate()
+            .expect_err("one cast cannot overwrite its own pending damage decision");
+        assert!(
+            error.contains("multiple non-targeted DisableHexes"),
+            "{error}"
         );
     }
 
