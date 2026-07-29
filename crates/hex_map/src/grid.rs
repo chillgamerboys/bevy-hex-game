@@ -695,26 +695,36 @@ fn apply_terrain_edit(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use bevy::platform::collections::HashMap;
-    use hex_assets::{Substance, SubstanceFile};
+    use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
 
     use super::*;
 
     fn spatial_test_table() -> SubstanceTable {
-        let substances = [("air", false), ("stone", true), ("water", false)]
-            .into_iter()
-            .map(|(name, solid)| {
-                (
-                    name.to_owned(),
-                    Substance {
-                        color: (0.5, 0.5, 0.5),
-                        solid,
-                        diggable: true,
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        SubstanceTable::from_file(&SubstanceFile { substances })
+        let swatch_id = SwatchId::new("test/gray").expect("the fixture swatch id should be valid");
+        let swatch = PaletteSwatch::new(
+            "Test Gray",
+            SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+            BTreeSet::from(["test".to_owned()]),
+        )
+        .expect("the fixture swatch should be valid");
+        let palette = ArtPalette::new(BTreeMap::from([(swatch_id.clone(), swatch)]))
+            .expect("the fixture palette should be valid");
+        let substances = HashMap::from_iter([
+            ("air".to_owned(), Substance::invisible(false, false)),
+            (
+                "stone".to_owned(),
+                Substance::from_swatch(swatch_id.clone(), true, true),
+            ),
+            (
+                "water".to_owned(),
+                Substance::from_swatch(swatch_id, false, true),
+            ),
+        ]);
+        SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("the fixture substances should resolve through their palette")
     }
 
     #[test]
