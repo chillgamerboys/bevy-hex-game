@@ -1564,10 +1564,6 @@ fn select_tree_roots(
         .collect()
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "tree planning keeps the accepted object graph and exact terrain constraints explicit"
-)]
 fn plan_tree_features(
     roots: BTreeSet<TilePos>,
     woodland: &BTreeSet<HexCoord>,
@@ -1728,7 +1724,7 @@ fn plan_grass_features(
 }
 
 fn tree_family(hash: u64) -> TreeFamily {
-    if hash % 4 == 0 {
+    if hash.is_multiple_of(4) {
         TreeFamily::TallNarrow
     } else {
         TreeFamily::SmallBroadleaf
@@ -1748,10 +1744,6 @@ fn feature_rotation(
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "projection validates every exact support constraint at the planning boundary"
-)]
 fn project_tree_blockers(
     object: &ForestObjectSpec,
     root: TilePos,

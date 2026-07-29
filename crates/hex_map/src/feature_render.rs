@@ -158,7 +158,8 @@ mod tests {
         queue.apply(&mut world);
 
         assert_eq!(roots.len(), 1);
-        let entity = world.entity(roots[0]);
+        let root = *roots.first().expect("publisher should return one root");
+        let entity = world.entity(root);
         let instance = entity
             .get::<ObjectInstance>()
             .expect("publisher should attach a renderer-neutral instance");
@@ -168,7 +169,7 @@ mod tests {
             instance.origin(),
             TilePos::new(planned.root.coord, planned.root.level + 1)
         );
-        assert_eq!(instance.level_height(), 0.4);
+        assert!((instance.level_height() - 0.4).abs() < f32::EPSILON);
         assert_eq!(
             entity.get::<CanopyOccluder>(),
             Some(&CanopyOccluder(planned.root))
@@ -191,7 +192,8 @@ mod tests {
         };
         queue.apply(&mut world);
 
-        assert!(world.entity(roots[0]).get::<CanopyOccluder>().is_none());
+        let root = *roots.first().expect("publisher should return one root");
+        assert!(world.entity(root).get::<CanopyOccluder>().is_none());
     }
 
     #[test]

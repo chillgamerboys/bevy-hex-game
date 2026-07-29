@@ -196,6 +196,10 @@ fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
         .expect("the fixture substances should resolve through the fixture palette")
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time art fixtures should fail the integration test immediately"
+)]
 fn runtime_art_catalog() -> RuntimeArtCatalog {
     let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
         .expect("tracked art palette should parse");
@@ -1436,6 +1440,10 @@ fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
         .collect()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "a generated visual origin below its exact footing is a broken test fixture"
+)]
 fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     let world = app.world_mut();
     let level_height = world.resource::<MapSettings>().level_height;
