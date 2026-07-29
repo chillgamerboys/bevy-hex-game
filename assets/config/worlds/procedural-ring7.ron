@@ -1,5 +1,4 @@
-// Fixed V3 seven-region review world. Runtime dispatch is intentionally deferred
-// until whole-world candidate selection and validation land.
+// Fixed V3 seven-region review world.
 (
     grid_radius: 33,
     level_height: 0.4,
@@ -37,7 +36,7 @@
                     west: Shared((
                         elevation: (preferred: 15, min: 14, max: 16),
                         walker: (count: 2, width: 2),
-                        liquid: Dry,
+                        liquid: Outlet((width: 3)),
                         approach_depth: 3,
                     )),
                     north_west: Shared((
@@ -192,7 +191,7 @@
                     east: Shared((
                         elevation: (preferred: 15, min: 14, max: 16),
                         walker: (count: 2, width: 2),
-                        liquid: Dry,
+                        liquid: Inlet((width: 3)),
                         approach_depth: 3,
                     )),
                     south_east: Shared((
