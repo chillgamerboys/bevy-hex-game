@@ -13,9 +13,9 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    ForestMetrics as ForestReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
+    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -26,6 +26,7 @@ use world::WorldValidationIssue;
 
 mod fingerprint;
 mod forest;
+mod fort;
 mod hills;
 #[expect(
     dead_code,
@@ -172,6 +173,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Mountains(_)
                     | V3RecipeSettings::Waterfall(_)
                     | V3RecipeSettings::Forest(_)
+                    | V3RecipeSettings::Fort(_)
             ) =>
         {
             Ok(())
@@ -282,6 +284,20 @@ pub(crate) fn build(
                 started,
                 forest_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Forest(forest_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Fort(_)) => {
+            finish_build(
+                fort::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                fort_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Fort(fort_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -527,6 +543,45 @@ fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics
             metrics.woodland_prairie_high_ground_difference,
         )
         .unwrap_or(i32::MAX),
+    }
+}
+
+fn fort_report_metrics(metrics: &fort::FortMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        barrier_cells: 0,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: 0,
+        bank_high_ground_difference: 0,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics
+            .worked_stone_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.ordinary_surfaces)
+            .unwrap_or_default(),
+    }
+}
+
+fn fort_recipe_metrics(metrics: &fort::FortMetrics) -> FortReportMetrics {
+    FortReportMetrics {
+        wall_voxels: metrics.wall_voxels,
+        wall_walk_surfaces: metrics.wall_walk_surfaces,
+        battlement_columns: metrics.battlement_columns,
+        tower_count: metrics.tower_count,
+        gate_count: metrics.gate_count,
+        stair_count: metrics.stair_count,
+        courtyard_surfaces: metrics.courtyard_surfaces,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        curtain_height: i32::try_from(metrics.curtain_height).unwrap_or(i32::MAX),
+        keep_height: i32::try_from(metrics.keep_height).unwrap_or(i32::MAX),
+        critical_route_steps: metrics.critical_route_steps,
+        independent_gate_routes: metrics.independent_gate_routes,
+        worked_stone_surfaces: metrics.worked_stone_surfaces,
     }
 }
 

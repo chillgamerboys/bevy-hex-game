@@ -206,14 +206,22 @@ traversal cover topology until the tooling gains that capability.
 
 ### Fort
 
-Plan the defensive footprint and circulation before decorative details. Worked-stone
-volumes form walls, towers, gates, a courtyard, a small keep, two-wide wall walks,
-and two-wide one-level stair terraces. Edge-mounted battlements do not consume
-walkable surfaces.
+Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and
+keeps every shared-edge approach outside the structure footprint. Worked-stone
+volumes form a five-level, two-column-thick curtain, six stepped corner towers, two
+opposite two-wide gates, two independent two-wide stair terraces, a gravel
+courtyard, and an offset keep. Three-level gate apertures preserve the normal
+two-level-tall walker contract. Alternating battlement columns sit outside the usable
+wall walk and are tagged as non-ordinary review geometry.
 
-Validation requires closed defenses, an accessible wall top, at least two ordinary
-routes, two levels of headroom, and no accidental shortcut through a decorative
-feature. The fort is generated static geometry, not a player construction system.
+Validation closes both gates to prove the defenses have no accidental shortcut,
+then admits each gate separately to prove two independent ordinary routes. It also
+checks exact worked-stone structure membership, gate headroom, one-level stairs,
+wall-walk and tower access, anchor placement, and whole-network connectivity.
+Candidates vary orientation and keep placement through independent named streams;
+major structural failures reject the candidate rather than carving the topology,
+and a separately authored orientation-zero fallback passes the same checks. The
+fort remains generated static geometry, not a player construction system.
 
 ### Composite
 

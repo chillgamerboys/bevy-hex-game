@@ -60,6 +60,15 @@
             diggable: true,
         ),
 
+        // Cut and fitted masonry used by generated walls, towers, stairs, and keeps.
+        // Structural durability remains deferred, so it follows ordinary stone's
+        // current solid and diggable behavior.
+        "worked_stone": (
+            swatch: Some("structure/worked-stone"),
+            solid: true,
+            diggable: true,
+        ),
+
         // Procedural-environment materials. Their behaviour is intentionally simple
         // until temperature, slipping, and hazards exist.
         "snow": (
