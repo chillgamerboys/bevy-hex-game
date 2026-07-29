@@ -542,12 +542,27 @@ fn build_topology(
         settings.cave_floor_level,
     )?];
     for (parent, child) in tree_edges {
+        let Some((parent_center, child_center, parent_level, child_level)) = chamber_centres
+            .get(parent)
+            .zip(chamber_centres.get(child))
+            .zip(chamber_levels.get(parent))
+            .zip(chamber_levels.get(child))
+            .map(
+                |(((parent_center, child_center), parent_level), child_level)| {
+                    (*parent_center, *child_center, *parent_level, *child_level)
+                },
+            )
+        else {
+            return Err(vec![recipe_issue(
+                "Caves chamber tree references a missing chamber",
+            )]);
+        };
         routes.push(paired_route(
             mask,
-            chamber_centres[parent],
-            chamber_centres[child],
-            chamber_levels[parent],
-            chamber_levels[child],
+            parent_center,
+            child_center,
+            parent_level,
+            child_level,
         )?);
     }
 
@@ -598,7 +613,12 @@ fn build_topology(
                 .rows
                 .first()
                 .and_then(|row| row.first())
-                .map_or(0, |start| start.coord.distance(chamber_centres[*index]))
+                .and_then(|start| {
+                    chamber_centres
+                        .get(*index)
+                        .map(|center| start.coord.distance(*center))
+                })
+                .unwrap_or_default()
         })
         .unwrap_or_default();
 
@@ -723,7 +743,7 @@ fn chamber_floor_levels(
             .get(parent)
             .copied()
             .unwrap_or(settings.cave_floor_level);
-        let rises = stream.map_or(true, |stream| {
+        let rises = stream.is_none_or(|stream| {
             stream
                 .sample(u64::try_from(child).unwrap_or(u64::MAX))
                 .is_multiple_of(3)
