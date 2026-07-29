@@ -249,7 +249,10 @@ impl EditorModel {
     pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
         EditorRecoveryDraft {
             object: RawObjectDraft::from_blueprint(&self.object),
-            saved_object: RawObjectDraft::from_blueprint(&self.saved_object),
+            saved_object: self
+                .saved_object
+                .as_ref()
+                .map(RawObjectDraft::from_blueprint),
             mode: self.mode,
             tool: self.tool,
             preview_rig: self.preview_rig,
@@ -281,7 +284,7 @@ impl EditorModel {
             selection,
         } = recovery;
         let object = object.into_blueprint();
-        let saved_object = saved_object.into_blueprint();
+        let saved_object = saved_object.map(RawObjectDraft::into_blueprint);
         let (selection, sanitization) = sanitized_selection(selection, &object);
         Ok((
             Self {
@@ -1619,6 +1622,27 @@ mod tests {
             assert!(editor.object().placements.is_empty());
             assert!(editor.is_dirty());
         }
+    }
+
+    #[test]
+    fn recovery_preserves_the_absent_checkpoint_for_unsaved_documents() {
+        let mut editor = EditorModel::blank(
+            ObjectCategory::Effect,
+            ConnectivityPolicy::Free,
+            style_id("calibration/neutral"),
+        )
+        .expect("supported blank document should be valid");
+        let origin = editor.object().origin;
+        assert_eq!(editor.erase(origin), Ok(true));
+
+        let recovery = editor.recovery_snapshot();
+        assert!(recovery.saved_object.is_none());
+        let (restored, sanitization) =
+            EditorModel::from_recovery(recovery).expect("recovery should restore");
+
+        assert_eq!(sanitization, RecoverySanitization::default());
+        assert!(restored.object().placements.is_empty());
+        assert!(restored.is_dirty());
     }
 
     #[test]

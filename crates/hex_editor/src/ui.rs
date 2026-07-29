@@ -295,6 +295,8 @@ pub enum WorkshopUiAction {
     RestoreRecovery,
     /// Explicitly delete the pending startup recovery file.
     DiscardRecovery,
+    /// Keep restored work and accept the current tracked files as its overwrite baseline.
+    AcceptRecoveryBaseline,
     /// Validate, save every dirty tracked document, and close the Workshop.
     SaveAllAndClose,
     /// Explicitly discard local changes and their recovery file, then close.
@@ -740,6 +742,7 @@ fn draw_workshop_ui(
     draw_delete_confirmation(context, &mut state, &mut actions);
     draw_reload_confirmation(context, &snapshot, &mut state, &mut actions);
     draw_recovery_prompt(context, &snapshot, &mut actions);
+    draw_recovery_conflict(context, &snapshot, &mut actions);
     draw_close_confirmation(context, &snapshot, &mut actions);
     draw_review_progress(context, &snapshot);
     collect_keyboard_shortcuts(context, &snapshot, &mut state, &mut actions);
@@ -1149,7 +1152,7 @@ fn draw_top_toolbar(
                         if snapshot.recovery_conflict {
                             ui.label(egui::RichText::new("Recovery conflict").color(ERROR))
                                 .on_hover_text(
-                                    "Recovered work has an older tracked baseline; reload or use Save As",
+                                    "Recovered work predates the tracked files; choose which version to keep",
                                 );
                         }
                         if dirty {
@@ -2602,7 +2605,7 @@ fn draw_recovery_prompt(
                     ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(
-                            "Tracked art changed after this draft. Restore is safe, but overwrites remain blocked; use Save As or reload.",
+                            "Tracked art changed after this draft. Restore is safe; afterward, choose whether recovered work or the current files win.",
                         )
                         .color(WARNING),
                     );
@@ -2652,12 +2655,53 @@ fn draw_recovery_prompt(
     });
 }
 
+fn draw_recovery_conflict(
+    context: &egui::Context,
+    snapshot: &WorkshopUiSnapshot,
+    actions: &mut Vec<WorkshopUiAction>,
+) {
+    if !snapshot.recovery_conflict || snapshot.recovery_prompt.is_some() {
+        return;
+    }
+    egui::Modal::new(egui::Id::new("recovery_baseline_conflict")).show(context, |ui| {
+        ui.set_min_width(440.0);
+        ui.heading("Recovered Work Predates Tracked Files");
+        ui.label(
+            "The recovered draft was created from older source bytes. Keeping it allows later saves to overwrite the files currently on disk.",
+        );
+        ui.add_space(6.0);
+        ui.label(
+            egui::RichText::new(
+                "Choose explicitly: keep the recovered draft, or discard it and reload the current tracked files.",
+            )
+            .color(WARNING),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui
+                .button("Keep My Work")
+                .on_hover_text("Accept the current files as the recovered draft's new baseline")
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::AcceptRecoveryBaseline);
+            }
+            if ui
+                .button("Discard Recovery")
+                .on_hover_text("Delete the recovery file and reload the current tracked project")
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::ReloadProject);
+            }
+        });
+    });
+}
+
 fn draw_close_confirmation(
     context: &egui::Context,
     snapshot: &WorkshopUiSnapshot,
     actions: &mut Vec<WorkshopUiAction>,
 ) {
-    if !snapshot.close_confirmation {
+    if !snapshot.close_confirmation || snapshot.recovery_conflict {
         return;
     }
     let can_save = !snapshot.tracked_writes_blocked
@@ -2677,7 +2721,7 @@ fn draw_close_confirmation(
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(
-                    "Save All is unavailable for a new object, invalid draft, or conflicted baseline. Use Save As or reload first.",
+                    "Save All is unavailable for a new object, invalid draft, or unresolved baseline. Resolve the recovery choice, use Save As, or reload first.",
                 )
                 .color(WARNING),
             );

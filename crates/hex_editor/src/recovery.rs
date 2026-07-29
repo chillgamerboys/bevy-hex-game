@@ -212,9 +212,8 @@ impl RawObjectDraft {
 pub struct EditorRecoveryDraft {
     /// Current potentially invalid object draft.
     pub object: RawObjectDraft,
-    /// Last explicit object-save checkpoint, which may be an intentionally invalid
-    /// empty baseline for a never-saved document.
-    pub saved_object: RawObjectDraft,
+    /// Last explicit object-save checkpoint, or `None` for a never-saved document.
+    pub saved_object: Option<RawObjectDraft>,
     /// Active Workshop mode.
     pub mode: WorkshopMode,
     /// Active object-editing tool.
@@ -234,9 +233,13 @@ pub struct EditorRecoveryDraft {
 impl EditorRecoveryDraft {
     pub(crate) fn normalize_and_validate(&mut self) -> Result<(), RecoveryError> {
         self.object.normalize();
-        self.saved_object.normalize();
+        if let Some(saved_object) = &mut self.saved_object {
+            saved_object.normalize();
+        }
         self.object.validate_recovery_safety()?;
-        self.saved_object.validate_recovery_safety()?;
+        if let Some(saved_object) = &self.saved_object {
+            saved_object.validate_recovery_safety()?;
+        }
         validate_level("active recovery level", self.active_level)?;
         if self.selection.len() > MAX_OBJECT_VOXELS {
             return Err(RecoveryError::new(

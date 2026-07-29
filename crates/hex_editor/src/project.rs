@@ -1009,7 +1009,7 @@ fn normalized_relative_path(path: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
@@ -1023,12 +1023,12 @@ mod tests {
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory {
+    pub(crate) struct TestDirectory {
         path: PathBuf,
     }
 
     impl TestDirectory {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "hex-editor-project-test-{}-{sequence}",
@@ -1038,7 +1038,11 @@ mod tests {
             Self { path }
         }
 
-        fn art_root(&self) -> PathBuf {
+        pub(crate) fn repository_root(&self) -> &Path {
+            &self.path
+        }
+
+        pub(crate) fn art_root(&self) -> PathBuf {
             self.path.join(ART_PATH)
         }
     }
@@ -1061,7 +1065,7 @@ mod tests {
         ObjectAssetId::new(value).expect("test object id should be valid")
     }
 
-    fn fixture_catalog() -> VoxelStyleCatalog {
+    pub(crate) fn fixture_catalog() -> VoxelStyleCatalog {
         let mut styles = BTreeMap::new();
         styles.insert(
             style_id("plant/trunk"),
@@ -1161,7 +1165,7 @@ mod tests {
         }
     }
 
-    fn prepare_project() -> TestDirectory {
+    pub(crate) fn prepare_project() -> TestDirectory {
         let directory = TestDirectory::new();
         let art_root = directory.art_root();
         fs::create_dir_all(&art_root).expect("fixture art directory should be created");

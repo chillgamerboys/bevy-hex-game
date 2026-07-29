@@ -272,10 +272,11 @@ normal production deserializer and every tracked save still enforce the full obj
 contract.
 
 If tracked files changed after the recovery snapshot, Restore preserves the draft but
-marks a recovery conflict. Existing tracked files cannot be overwritten until the
-author reloads, or preserves the object through Save As and resolves any remaining
-catalog differences. Closing a dirty session first flushes recovery, then requires
-Save All and Quit, Discard and Quit, or Cancel. A clean explicit save removes obsolete
+requires an informed choice before overwriting anything. **Keep My Work** accepts the
+current disk bytes as the recovered draft's new baseline, allowing later saves to
+replace them. **Discard Recovery** deletes the untracked draft and reloads the current
+tracked project. Closing a dirty session first flushes recovery, then requires Save
+All and Quit, Discard and Quit, or Cancel. A clean explicit save removes obsolete
 recovery state.
 
 ## Review output
