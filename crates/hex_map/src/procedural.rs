@@ -193,6 +193,12 @@ pub struct WaterfallMetrics {
 pub struct ForestMetrics {
     /// Exact tree roots authored as traversal blockers.
     pub tree_roots: u32,
+    /// Exact ordinary surfaces blocked by all authored tree footprints.
+    pub tree_blocker_surfaces: u32,
+    /// Old-growth tree instances with multi-hex grounded roots.
+    pub old_growth_roots: u32,
+    /// Exact blocker surfaces contributed by old-growth root footprints.
+    pub old_growth_blocker_surfaces: u32,
     /// Exact non-blocking tall-grass roots.
     pub tall_grass_roots: u32,
     /// Surface cells assigned to the woodland side.

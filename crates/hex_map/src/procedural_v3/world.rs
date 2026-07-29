@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectCategory};
 use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
 use super::layout::{ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidPort};
@@ -25,10 +26,13 @@ pub(crate) enum FeatureKind {
 }
 
 /// One exact surface feature placement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlannedFeature {
     pub(crate) root: TilePos,
     pub(crate) kind: FeatureKind,
+    pub(crate) object_id: ObjectAssetId,
+    pub(crate) rotation: HexObjectRotation,
+    pub(crate) blocker_footprint: BTreeSet<TilePos>,
 }
 
 /// Exact ordinary surfaces reserved for one named critical route.
@@ -336,6 +340,7 @@ impl GeneratedWorldPlan {
         }
 
         let mut expected_blockers = BTreeSet::new();
+        let mut blocker_owners = BTreeMap::new();
         let mut roots = BTreeMap::new();
         for (id, feature) in &self.features.by_id {
             if let Some(previous) = roots.insert(feature.root, *id) {
@@ -368,14 +373,73 @@ impl GeneratedWorldPlan {
                     ),
                 ));
             }
-            if feature.kind == FeatureKind::Tree {
-                expected_blockers.insert(feature.root);
+            if let Err(error) = feature.rotation.validate() {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("feature {id:?} has invalid authored-object rotation: {error}"),
+                ));
+            }
+            let expected_category = match feature.kind {
+                FeatureKind::Tree => ObjectCategory::Plant,
+                FeatureKind::TallGrass => ObjectCategory::Prop,
+            };
+            if let Err(error) = feature.object_id.validate_for_category(expected_category) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!(
+                        "feature {id:?} has incompatible authored object '{}': {error}",
+                        feature.object_id
+                    ),
+                ));
+            }
+            match feature.kind {
+                FeatureKind::Tree => {
+                    if feature.blocker_footprint.is_empty()
+                        || !feature.blocker_footprint.contains(&feature.root)
+                    {
+                        issues.push(WorldValidationIssue::new(
+                            WorldIssueCode::Blocker,
+                            format!(
+                                "tree feature {id:?} must block a non-empty footprint containing \
+                                 its exact root"
+                            ),
+                        ));
+                    }
+                }
+                FeatureKind::TallGrass if !feature.blocker_footprint.is_empty() => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!("tall-grass feature {id:?} must remain presentation-only"),
+                    ));
+                }
+                FeatureKind::TallGrass => {}
+            }
+            for blocker in &feature.blocker_footprint {
+                if let Some(previous) = blocker_owners.insert(*blocker, *id) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "features {previous:?} and {id:?} overlap blocker footprint at \
+                             {blocker:?}"
+                        ),
+                    ));
+                }
+                if reserved_surfaces.contains(blocker) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "feature {id:?} blocker {blocker:?} occupies a protected route or \
+                             clearing"
+                        ),
+                    ));
+                }
+                expected_blockers.insert(*blocker);
             }
         }
         if self.blockers != expected_blockers {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Blocker,
-                "traversal blockers do not exactly match blocking feature roots",
+                "traversal blockers do not exactly match authored feature footprints",
             ));
         }
         for position in &self.blockers {
@@ -1032,6 +1096,10 @@ mod tests {
                 PlannedFeature {
                     root: tree_root,
                     kind: FeatureKind::Tree,
+                    object_id: hex_assets::ObjectAssetId::new("plant/small-broadleaf")
+                        .expect("fixture id should be valid"),
+                    rotation: hex_assets::HexObjectRotation::ZERO,
+                    blocker_footprint: BTreeSet::from([tree_root]),
                 },
             )]),
             protected_routes: BTreeMap::from([(
@@ -1177,6 +1245,10 @@ mod tests {
             PlannedFeature {
                 root: TilePos::new(hex_core::HexCoord::ORIGIN, 0),
                 kind: FeatureKind::TallGrass,
+                object_id: hex_assets::ObjectAssetId::new("prop/grass-tuft")
+                    .expect("fixture id should be valid"),
+                rotation: hex_assets::HexObjectRotation::ZERO,
+                blocker_footprint: BTreeSet::new(),
             },
         );
         assert!(duplicate.validate().iter().any(|issue| {
@@ -1217,14 +1289,14 @@ mod tests {
     }
 
     #[test]
-    fn blockers_exactly_equal_unique_tree_roots() {
+    fn blockers_exactly_equal_unique_authored_feature_footprints() {
         let mut missing = complete_feature_plan();
         missing.blockers.clear();
         assert!(missing.validate().iter().any(|issue| {
             issue.code == WorldIssueCode::Blocker
                 && issue
                     .detail
-                    .contains("do not exactly match blocking feature roots")
+                    .contains("do not exactly match authored feature footprints")
         }));
 
         let mut extra = complete_feature_plan();
@@ -1235,7 +1307,7 @@ mod tests {
             issue.code == WorldIssueCode::Blocker
                 && issue
                     .detail
-                    .contains("do not exactly match blocking feature roots")
+                    .contains("do not exactly match authored feature footprints")
         }));
     }
 

@@ -7,6 +7,7 @@
 use std::fmt;
 use std::time::Instant;
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{
     BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
     TraversalBlockers,
@@ -69,7 +70,9 @@ mod waterfall;
     reason = "the complete semantic plan is consumed by the V3 selection runner"
 )]
 mod world;
-pub(crate) use world::{FeatureId, FeatureKind, PlannedFeature};
+#[cfg(test)]
+pub(crate) use world::PlannedFeature;
+pub(crate) use world::{FeatureId, FeatureKind};
 
 /// Failure to construct or validate one V3 world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,6 +213,7 @@ pub(crate) fn build(
     seed: u64,
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
+    art_catalog: Option<&RuntimeArtCatalog>,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let started = Instant::now();
     match &settings.layout {
@@ -276,8 +280,13 @@ pub(crate) fn build(
             )
         }
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Forest(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Forest requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                forest::generate(grid_radius, level_height, settings, seed)?,
+                forest::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -545,6 +554,9 @@ fn forest_report_metrics(metrics: &forest::ForestMetrics) -> TacticalMetrics {
 fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics {
     ForestReportMetrics {
         tree_roots: metrics.tree_roots,
+        tree_blocker_surfaces: metrics.tree_blocker_surfaces,
+        old_growth_roots: metrics.old_growth_roots,
+        old_growth_blocker_surfaces: metrics.old_growth_blocker_surfaces,
         tall_grass_roots: metrics.tall_grass_roots,
         woodland_surfaces: metrics.woodland_surfaces,
         prairie_surfaces: metrics.prairie_surfaces,
@@ -732,6 +744,9 @@ mod tests {
     fn forest_reports_only_recipe_appropriate_legacy_metrics() {
         let metrics = forest::ForestMetrics {
             tree_roots: 20,
+            tree_blocker_surfaces: 32,
+            old_growth_roots: 2,
+            old_growth_blocker_surfaces: 14,
             tall_grass_roots: 40,
             woodland_surfaces: 120,
             prairie_surfaces: 180,

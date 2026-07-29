@@ -175,20 +175,23 @@ views of the same deterministic scenario for liquid-motion and cliff-scale revie
 ### Forest
 
 Plan the walkable surface and clearings first, then place the blocking woodland before
-routing the road through it. A deterministic weighted path bends between separated
-non-overlapping clearings and around exact tree roots. Validation requires the four
-stable clearing names and rejects any shared surface membership. Its mostly two-wide
-gravel footprint admits short one-wide constraints where the existing trees pinch it,
-then tapers for three cells into the prairie and stops. Tall grass can therefore
-reclaim the meadow instead of preserving a bare feature-free line across it.
+routing the road through it. Each planned feature carries an exact authored object id,
+one of six rotations, and its rotated blocker footprint. A deterministic weighted path
+bends between separated non-overlapping clearings and around the complete footprint,
+not merely the object origin. Validation requires the four stable clearing names and
+rejects any shared surface membership. Its mostly two-wide gravel footprint admits
+short one-wide constraints where the existing trees pinch it, then tapers for three
+cells into the prairie and stops. Tall grass can therefore reclaim the meadow instead
+of preserving a bare feature-free line across it.
 
-Trees are shared stylized low-poly features. Their root `TilePos` is a traversal
-blocker; their canopy is presentation only. The non-voxel prototype reuses the same
-semantic tree kind for a few renderer-private tall exemplars, without pretending that
-their future multi-voxel footprint exists yet. Tree roots cover roughly 20-24% of the
-woodland, while non-blocking tall grass covers 65-75% of the prairie. Tall grass has no
-concealment rule. Character-camera canopy cutaway composes with fog and cave cutaway.
-Trees cannot be chopped in this milestone.
+Small broadleaf and tall narrow trees have one-cell blockers. Old-growth trees require
+seven same-level grounded supports and publish that exact rotated footprint as
+traversal blockers; connectivity validation may deterministically substitute a
+one-cell tree where a large footprint would sever ordinary terrain. Grass tufts are
+visual-only. All features publish renderer-neutral `ObjectInstance`s, and only
+authored canopy chunks receive the composable canopy-cutaway reason. Tree roots cover
+roughly 20-24% of the woodland, while non-blocking tall grass covers 65-75% of the
+prairie. Tall grass has no concealment rule. Trees cannot be chopped in this milestone.
 
 Forest likewise uses candidate rejection rather than semantic repair: its bounded
 repair hook returns `NoChange`, selection advances to the next deterministic

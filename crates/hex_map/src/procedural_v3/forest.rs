@@ -6,6 +6,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use hex_assets::{
+    HexObjectRotation, LocalAxialCoord, ObjectAssetId, ObjectBlueprint, ObjectCategory,
+    RuntimeArtCatalog,
+};
 use hex_core::{HexCoord, MapViewHint, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -43,11 +47,18 @@ const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const FOREST_CLEARING: &str = "forest_clearing";
 const PRAIRIE_OVERLOOK: &str = "prairie_overlook";
+const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
+const TALL_NARROW_ID: &str = "plant/tall-narrow";
+const OLD_GROWTH_ID: &str = "plant/old-growth";
+const GRASS_TUFT_ID: &str = "prop/grass-tuft";
 
 /// Recipe metrics retained by the V3 candidate selector and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ForestMetrics {
     pub(crate) tree_roots: u32,
+    pub(crate) tree_blocker_surfaces: u32,
+    pub(crate) old_growth_roots: u32,
+    pub(crate) old_growth_blocker_surfaces: u32,
     pub(crate) tall_grass_roots: u32,
     pub(crate) woodland_surfaces: u32,
     pub(crate) prairie_surfaces: u32,
@@ -73,6 +84,7 @@ struct OrdinaryElevationMetrics {
 struct ForestRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
+    objects: ForestObjectSet,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -84,7 +96,10 @@ struct ForestStreams<'a> {
     clearings: SeedStream<'a>,
     routes: SeedStream<'a>,
     trees: SeedStream<'a>,
+    tree_objects: SeedStream<'a>,
+    tree_rotations: SeedStream<'a>,
     grass: SeedStream<'a>,
+    grass_rotations: SeedStream<'a>,
 }
 
 #[derive(Debug)]
@@ -93,12 +108,124 @@ struct PlannedRoad {
     surfaces: BTreeSet<HexCoord>,
 }
 
+#[derive(Debug, Clone)]
+struct ForestObjectSet {
+    small_broadleaf: ForestObjectSpec,
+    tall_narrow: ForestObjectSpec,
+    old_growth: ForestObjectSpec,
+    grass_tuft: ForestObjectSpec,
+}
+
+#[derive(Debug, Clone)]
+struct ForestObjectSpec {
+    id: ObjectAssetId,
+    origin: LocalAxialCoord,
+    blocker_footprint: Vec<LocalAxialCoord>,
+}
+
+impl ForestObjectSet {
+    fn resolve(catalog: &RuntimeArtCatalog) -> Result<Self, V3GenerationError> {
+        Ok(Self {
+            small_broadleaf: resolve_object(catalog, SMALL_BROADLEAF_ID, ObjectCategory::Plant, 1)?,
+            tall_narrow: resolve_object(catalog, TALL_NARROW_ID, ObjectCategory::Plant, 1)?,
+            old_growth: resolve_object(catalog, OLD_GROWTH_ID, ObjectCategory::Plant, 7)?,
+            grass_tuft: resolve_object(catalog, GRASS_TUFT_ID, ObjectCategory::Prop, 0)?,
+        })
+    }
+
+    fn tree(&self, family: TreeFamily) -> &ForestObjectSpec {
+        match family {
+            TreeFamily::SmallBroadleaf => &self.small_broadleaf,
+            TreeFamily::TallNarrow => &self.tall_narrow,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeFamily {
+    SmallBroadleaf,
+    TallNarrow,
+}
+
+fn resolve_object(
+    catalog: &RuntimeArtCatalog,
+    raw_id: &str,
+    expected_category: ObjectCategory,
+    expected_blocker_cells: usize,
+) -> Result<ForestObjectSpec, V3GenerationError> {
+    let id = ObjectAssetId::new(raw_id).map_err(|error| {
+        V3GenerationError::RecipeContract(format!(
+            "Forest authored-object id {raw_id:?} is invalid: {error}"
+        ))
+    })?;
+    let blueprint = catalog.object(&id).ok_or_else(|| {
+        V3GenerationError::RecipeContract(format!(
+            "Forest requires authored object {raw_id:?}, but it is absent from the accepted catalog"
+        ))
+    })?;
+    validate_forest_object(blueprint, expected_category, expected_blocker_cells)?;
+    Ok(ForestObjectSpec {
+        id,
+        origin: blueprint.origin.axial(),
+        blocker_footprint: blueprint.blocker_footprint.clone(),
+    })
+}
+
+fn validate_forest_object(
+    blueprint: &ObjectBlueprint,
+    expected_category: ObjectCategory,
+    expected_blocker_cells: usize,
+) -> Result<(), V3GenerationError> {
+    if blueprint.category != expected_category {
+        return Err(V3GenerationError::RecipeContract(format!(
+            "Forest object '{}' is {:?}; expected {expected_category:?}",
+            blueprint.id, blueprint.category
+        )));
+    }
+    if blueprint.origin.level != 0 {
+        return Err(V3GenerationError::RecipeContract(format!(
+            "Forest object '{}' must keep its authored origin at level zero",
+            blueprint.id
+        )));
+    }
+    if blueprint.blocker_footprint.len() != expected_blocker_cells {
+        return Err(V3GenerationError::RecipeContract(format!(
+            "Forest object '{}' must define exactly {expected_blocker_cells} blocker cells; got {}",
+            blueprint.id,
+            blueprint.blocker_footprint.len()
+        )));
+    }
+    if expected_blocker_cells > 0
+        && !blueprint
+            .blocker_footprint
+            .contains(&blueprint.origin.axial())
+    {
+        return Err(V3GenerationError::RecipeContract(format!(
+            "Forest tree '{}' must block its authored origin",
+            blueprint.id
+        )));
+    }
+    Ok(())
+}
+
 /// Runs the common eight-candidate V3 selector for one Forest world.
 pub(crate) fn generate(
     grid_radius: u32,
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    catalog: &RuntimeArtCatalog,
+) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
+    let objects = ForestObjectSet::resolve(catalog)?;
+    generate_with_objects(grid_radius, level_height, settings, seed, objects)
+}
+
+fn generate_with_objects(
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    seed: u64,
+    objects: ForestObjectSet,
 ) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -113,6 +240,7 @@ pub(crate) fn generate(
         &ForestRecipe {
             level_height,
             layout,
+            objects,
             #[cfg(test)]
             reject_candidates: false,
         },
@@ -154,10 +282,18 @@ impl V3Recipe for ForestRecipe {
             clearings: streams.stage("forest.clearings"),
             routes: streams.stage("forest.routes"),
             trees: streams.stage("forest.trees"),
+            tree_objects: streams.stage("forest.tree-objects"),
+            tree_rotations: streams.stage("forest.tree-rotations"),
             grass: streams.stage("forest.grass"),
+            grass_rotations: streams.stage("forest.grass-rotations"),
         };
-        construct_plan(self.layout.clone(), Some(streams), self.level_height)
-            .map_err(CandidateAttemptError::Rejected)
+        construct_plan(
+            self.layout.clone(),
+            Some(streams),
+            self.level_height,
+            &self.objects,
+        )
+        .map_err(CandidateAttemptError::Rejected)
     }
 
     fn validate(
@@ -208,15 +344,17 @@ impl V3Recipe for ForestRecipe {
                 "Forest fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(self.layout.clone(), None, self.level_height).map_err(|issues| {
-            V3GenerationError::RecipeContract(
-                issues
-                    .into_iter()
-                    .map(|issue| issue.detail)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        })
+        construct_plan(self.layout.clone(), None, self.level_height, &self.objects).map_err(
+            |issues| {
+                V3GenerationError::RecipeContract(
+                    issues
+                        .into_iter()
+                        .map(|issue| issue.detail)
+                        .collect::<Vec<_>>()
+                        .join("; "),
+                )
+            },
+        )
     }
 }
 
@@ -270,6 +408,7 @@ fn construct_plan(
     layout: ResolvedLayoutPlan,
     streams: Option<ForestStreams<'_>>,
     level_height: f32,
+    objects: &ForestObjectSet,
 ) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
     let patch = layout
         .patches
@@ -360,14 +499,31 @@ fn construct_plan(
         &surface_by_coord,
         streams.map(|streams| streams.trees),
     );
-    let tree_root_coords: BTreeSet<_> = tree_roots.iter().map(|root| root.coord).collect();
+    let tree_features = plan_tree_features(
+        tree_roots,
+        &woodland,
+        &tree_exclusions,
+        &surface_by_coord,
+        objects,
+        streams.map(|streams| streams.tree_objects),
+        streams.map(|streams| streams.tree_rotations),
+    )?;
+    let tree_blocker_coords: BTreeSet<_> = tree_features
+        .iter()
+        .flat_map(|feature| {
+            feature
+                .blocker_footprint
+                .iter()
+                .map(|position| position.coord)
+        })
+        .collect();
     let road = plan_road(
         radius,
         rotation,
         route_offset,
         &mask,
         &surface_by_coord,
-        &tree_root_coords,
+        &tree_blocker_coords,
         &clearings,
         streams.map(|streams| streams.routes),
     )?;
@@ -401,9 +557,14 @@ fn construct_plan(
         &surface_by_coord,
         streams.map(|streams| streams.grass),
     );
-    let (features, blockers) = build_feature_plan(
-        tree_roots,
+    let grass_features = plan_grass_features(
         grass_roots,
+        objects,
+        streams.map(|streams| streams.grass_rotations),
+    )?;
+    let (features, blockers) = build_feature_plan(
+        tree_features,
+        grass_features,
         road_centerline,
         road_surfaces,
         clearing_plans,
@@ -457,23 +618,21 @@ fn construct_plan(
 }
 
 fn build_feature_plan(
-    tree_roots: BTreeSet<TilePos>,
-    grass_roots: BTreeSet<TilePos>,
+    tree_features: Vec<PlannedFeature>,
+    grass_features: Vec<PlannedFeature>,
     road_centerline: Vec<TilePos>,
     road_surfaces: BTreeSet<TilePos>,
     clearings: BTreeMap<String, FeatureClearing>,
 ) -> (FeaturePlan, BTreeSet<TilePos>) {
-    let blockers = tree_roots.clone();
+    let blockers = tree_features
+        .iter()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect();
     let mut by_id = BTreeMap::new();
     let mut next_id = 0_u32;
-    for (kind, roots) in [
-        (FeatureKind::Tree, tree_roots),
-        (FeatureKind::TallGrass, grass_roots),
-    ] {
-        for root in roots {
-            by_id.insert(FeatureId(next_id), PlannedFeature { root, kind });
-            next_id = next_id.saturating_add(1);
-        }
+    for feature in tree_features.into_iter().chain(grass_features) {
+        by_id.insert(FeatureId(next_id), feature);
+        next_id = next_id.saturating_add(1);
     }
     let protected_routes = BTreeMap::from([(
         ROAD_ROUTE.to_owned(),
@@ -560,11 +719,54 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
         .filter(|feature| feature.kind == FeatureKind::TallGrass)
         .map(|feature| feature.root)
         .collect();
+    let tree_blocker_surfaces: BTreeSet<_> = plan
+        .features
+        .by_id
+        .values()
+        .filter(|feature| feature.kind == FeatureKind::Tree)
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect();
+    let old_growth: Vec<_> = plan
+        .features
+        .by_id
+        .values()
+        .filter(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
+        .collect();
+    let old_growth_blocker_surfaces: BTreeSet<_> = old_growth
+        .iter()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect();
     if !tree_roots.is_subset(&woodland) {
         issues.push(recipe_issue("Forest tree roots leave the woodland side"));
     }
+    if !tree_blocker_surfaces.is_subset(&woodland) {
+        issues.push(recipe_issue(
+            "Forest authored tree blocker footprints leave the woodland side",
+        ));
+    }
     if !grass_roots.is_subset(&prairie) {
         issues.push(recipe_issue("Forest tall grass leaves the prairie side"));
+    }
+    for feature in plan.features.by_id.values() {
+        let accepted = match feature.kind {
+            FeatureKind::Tree => matches!(
+                feature.object_id.as_str(),
+                SMALL_BROADLEAF_ID | TALL_NARROW_ID | OLD_GROWTH_ID
+            ),
+            FeatureKind::TallGrass => feature.object_id.as_str() == GRASS_TUFT_ID,
+        };
+        if !accepted {
+            issues.push(recipe_issue(format!(
+                "Forest feature at {:?} uses unsupported authored object '{}'",
+                feature.root, feature.object_id
+            )));
+        }
+        if feature.object_id.as_str() == OLD_GROWTH_ID && feature.blocker_footprint.len() != 7 {
+            issues.push(recipe_issue(format!(
+                "Forest old-growth tree at {:?} does not retain its exact seven-hex roots",
+                feature.root
+            )));
+        }
     }
     let tree_root_coords: BTreeSet<_> = tree_roots.iter().map(|root| root.coord).collect();
     if tree_root_coords.iter().any(|root| {
@@ -596,13 +798,17 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
     }
 
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+    let tree_blocker_coords = tree_blocker_surfaces
+        .iter()
+        .map(|position| position.coord)
+        .collect();
     validate_road(
         plan,
         &ordinary,
         road,
         rotation,
         route_offset,
-        &tree_root_coords,
+        &tree_blocker_coords,
         &mut issues,
     );
     let party = plan.anchors.get(PARTY_START).copied();
@@ -713,6 +919,9 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
         .collect::<BTreeSet<_>>();
     WorldValidation::Valid(ForestMetrics {
         tree_roots: count_u32(tree_roots.len()),
+        tree_blocker_surfaces: count_u32(tree_blocker_surfaces.len()),
+        old_growth_roots: count_u32(old_growth.len()),
+        old_growth_blocker_surfaces: count_u32(old_growth_blocker_surfaces.len()),
         tall_grass_roots: count_u32(grass_roots.len()),
         woodland_surfaces: count_u32(woodland.len()),
         prairie_surfaces: count_u32(prairie.len()),
@@ -1355,6 +1564,216 @@ fn select_tree_roots(
         .collect()
 }
 
+fn plan_tree_features(
+    roots: BTreeSet<TilePos>,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &ForestObjectSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+    let mut occupied_blockers = BTreeSet::new();
+    let mut features = Vec::with_capacity(roots.len());
+    let mut old_growth_by_root = BTreeMap::new();
+    if object_stream.is_some() {
+        let mut ranked_roots = roots.iter().copied().collect::<Vec<_>>();
+        ranked_roots.sort_unstable_by_key(|root| {
+            (feature_priority(object_stream, root.coord, 17), root.coord)
+        });
+        let target = roots.len().saturating_mul(12).div_ceil(100).max(1);
+        for root in ranked_roots {
+            if old_growth_by_root.len() >= target {
+                break;
+            }
+            let rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+            let Some(blockers) = project_tree_blockers(
+                &objects.old_growth,
+                root,
+                rotation,
+                woodland,
+                exclusions,
+                surfaces,
+                &occupied_blockers,
+            ) else {
+                continue;
+            };
+            occupied_blockers.extend(blockers.iter().copied());
+            old_growth_by_root.insert(root, (rotation, blockers));
+        }
+    }
+
+    for root in roots {
+        if let Some((rotation, blockers)) = old_growth_by_root.remove(&root) {
+            features.push(PlannedFeature {
+                root,
+                kind: FeatureKind::Tree,
+                object_id: objects.old_growth.id.clone(),
+                rotation,
+                blocker_footprint: blockers,
+            });
+            continue;
+        }
+        let family_hash = feature_priority(object_stream, root.coord, 17);
+        let family = tree_family(family_hash);
+        let rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+        let preferred = objects.tree(family);
+        let secondary = match family {
+            TreeFamily::SmallBroadleaf | TreeFamily::TallNarrow => &objects.small_broadleaf,
+        };
+        let mut selected = None;
+        for object in [preferred, secondary, &objects.small_broadleaf] {
+            if let Some(blockers) = project_tree_blockers(
+                object,
+                root,
+                rotation,
+                woodland,
+                exclusions,
+                surfaces,
+                &occupied_blockers,
+            ) {
+                selected = Some((object, blockers));
+                break;
+            }
+        }
+        let Some((object, blockers)) = selected else {
+            return Err(vec![recipe_issue(format!(
+                "Forest tree root {root:?} cannot support any accepted authored tree"
+            ))]);
+        };
+        occupied_blockers.extend(blockers.iter().copied());
+        features.push(PlannedFeature {
+            root,
+            kind: FeatureKind::Tree,
+            object_id: object.id.clone(),
+            rotation,
+            blocker_footprint: blockers,
+        });
+    }
+    while !feature_blockers_preserve_connectivity(&features, surfaces) {
+        let Some(feature) = features
+            .iter_mut()
+            .rev()
+            .find(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
+        else {
+            return Err(vec![recipe_issue(
+                "Forest authored tree blockers disconnect otherwise ordinary terrain",
+            )]);
+        };
+        feature.object_id = objects.tall_narrow.id.clone();
+        feature.blocker_footprint = BTreeSet::from([feature.root]);
+    }
+    Ok(features)
+}
+
+fn feature_blockers_preserve_connectivity(
+    features: &[PlannedFeature],
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+) -> bool {
+    let blockers = features
+        .iter()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let Some(start) = surfaces
+        .values()
+        .copied()
+        .find(|position| !blockers.contains(position))
+    else {
+        return false;
+    };
+    let expected = surfaces
+        .values()
+        .filter(|position| !blockers.contains(position))
+        .count();
+    let mut visited = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(position) = frontier.pop_front() {
+        for neighbor_coord in position.coord.neighbors() {
+            let Some(neighbor) = surfaces.get(&neighbor_coord).copied() else {
+                continue;
+            };
+            if blockers.contains(&neighbor)
+                || position.level.abs_diff(neighbor.level) > 1
+                || !visited.insert(neighbor)
+            {
+                continue;
+            }
+            frontier.push_back(neighbor);
+        }
+    }
+    visited.len() == expected
+}
+
+fn plan_grass_features(
+    roots: BTreeSet<TilePos>,
+    objects: &ForestObjectSet,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+    roots
+        .into_iter()
+        .map(|root| {
+            Ok(PlannedFeature {
+                root,
+                kind: FeatureKind::TallGrass,
+                object_id: objects.grass_tuft.id.clone(),
+                rotation: feature_rotation(rotation_stream, root.coord, 41)?,
+                blocker_footprint: BTreeSet::new(),
+            })
+        })
+        .collect()
+}
+
+fn tree_family(hash: u64) -> TreeFamily {
+    if hash.is_multiple_of(4) {
+        TreeFamily::TallNarrow
+    } else {
+        TreeFamily::SmallBroadleaf
+    }
+}
+
+fn feature_rotation(
+    stream: Option<SeedStream<'_>>,
+    coord: HexCoord,
+    salt: u64,
+) -> Result<HexObjectRotation, Vec<WorldValidationIssue>> {
+    let steps = u8::try_from(feature_priority(stream, coord, salt) % 6).unwrap_or_default();
+    HexObjectRotation::new(steps).map_err(|error| {
+        vec![recipe_issue(format!(
+            "invalid Forest object rotation: {error}"
+        ))]
+    })
+}
+
+fn project_tree_blockers(
+    object: &ForestObjectSpec,
+    root: TilePos,
+    rotation: HexObjectRotation,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    occupied: &BTreeSet<TilePos>,
+) -> Option<BTreeSet<TilePos>> {
+    let mut blockers = BTreeSet::new();
+    for local in &object.blocker_footprint {
+        let rotated = rotation.rotate_axial(*local, object.origin)?;
+        let delta_q = rotated.q.checked_sub(object.origin.q)?;
+        let delta_r = rotated.r.checked_sub(object.origin.r)?;
+        let coord = HexCoord::from_axial(
+            root.coord.x().checked_add(delta_q)?,
+            root.coord.y().checked_add(delta_r)?,
+        );
+        if !woodland.contains(&coord) || exclusions.contains(&coord) {
+            return None;
+        }
+        let support = surfaces.get(&coord).copied()?;
+        if support.level != root.level || occupied.contains(&support) {
+            return None;
+        }
+        blockers.insert(support);
+    }
+    (blockers.len() == object.blocker_footprint.len()).then_some(blockers)
+}
+
 fn select_grass_roots(
     prairie: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
@@ -1634,11 +2053,14 @@ fn recipe_issue(detail: impl Into<String>) -> WorldValidationIssue {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use super::*;
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     };
     use crate::terrain::TerrainPalette;
+    use hex_assets::{ArtPalette, ObjectBlueprint, ObjectCatalogFile, VoxelStyleCatalog};
     use hex_core::SubstanceId;
 
     const BEDROCK: SubstanceId = SubstanceId(1);
@@ -1652,6 +2074,74 @@ mod tests {
     const ICE: SubstanceId = SubstanceId(9);
     const BASALT: SubstanceId = SubstanceId(10);
     const LAVA: SubstanceId = SubstanceId(11);
+
+    fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
+        static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
+        CATALOG.get_or_init(|| {
+            let palette: ArtPalette = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/palette.ron"
+            )))
+            .expect("tracked art palette should parse");
+            let styles: VoxelStyleCatalog = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/voxel_styles.ron"
+            )))
+            .expect("tracked voxel styles should parse");
+            let manifest: ObjectCatalogFile = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/object_catalog.ron"
+            )))
+            .expect("tracked object catalog should parse");
+            let mut objects = BTreeMap::new();
+            for source in [
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/old-growth.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/grass-tuft.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-low-cluster.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-branched.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-spire.ron"
+                )),
+            ] {
+                let blueprint: ObjectBlueprint =
+                    ron::from_str(source).expect("tracked object blueprint should parse");
+                objects.insert(blueprint.id.clone(), blueprint);
+            }
+            RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+                .expect("tracked runtime art graph should resolve")
+        })
+    }
+
+    fn generate(
+        grid_radius: u32,
+        level_height: f32,
+        settings: &ProceduralV3Settings,
+        seed: u64,
+    ) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
+        let objects = ForestObjectSet::resolve(runtime_art_catalog())?;
+        generate_with_objects(grid_radius, level_height, settings, seed, objects)
+    }
 
     fn settings() -> ProceduralV3Settings {
         ProceduralV3Settings {
@@ -1897,6 +2387,18 @@ mod tests {
             generate(12, 0.4, &settings(), 381_654_729).expect("hero Forest should generate");
 
         assert_eq!(selected.metrics.tree_roots, 53);
+        assert!(selected.metrics.old_growth_roots > 0);
+        assert_eq!(
+            selected.metrics.old_growth_blocker_surfaces,
+            selected.metrics.old_growth_roots.saturating_mul(7)
+        );
+        assert_eq!(
+            selected.metrics.tree_blocker_surfaces,
+            selected
+                .metrics
+                .tree_roots
+                .saturating_add(selected.metrics.old_growth_roots.saturating_mul(6))
+        );
         assert!(
             (51..=55).contains(&selected.metrics.tree_roots),
             "the prior hero had 46 tree roots; review asked for 10-20% more"
@@ -1904,6 +2406,23 @@ mod tests {
         assert_eq!(selected.metrics.tall_grass_roots, 155);
         assert!(
             selected.metrics.tall_grass_roots.saturating_mul(2) > selected.metrics.prairie_surfaces
+        );
+        let object_ids = selected
+            .validated
+            .plan
+            .features
+            .by_id
+            .values()
+            .map(|feature| feature.object_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            object_ids,
+            BTreeSet::from([
+                SMALL_BROADLEAF_ID,
+                TALL_NARROW_ID,
+                OLD_GROWTH_ID,
+                GRASS_TUFT_ID,
+            ])
         );
     }
 
@@ -2144,12 +2663,13 @@ mod tests {
 
         assert_eq!(graph.distances_from(party).len(), graph.len());
         assert_eq!(
-            plan.blockers.len(),
+            plan.blockers,
             plan.features
                 .by_id
                 .values()
                 .filter(|feature| feature.kind == FeatureKind::Tree)
-                .count()
+                .flat_map(|feature| feature.blocker_footprint.iter().copied())
+                .collect()
         );
     }
 
@@ -2212,6 +2732,8 @@ mod tests {
             &ForestRecipe {
                 level_height: 0.4,
                 layout: resolve_layout(12, &settings()).expect("test layout should resolve"),
+                objects: ForestObjectSet::resolve(runtime_art_catalog())
+                    .expect("tracked Forest objects should resolve"),
                 reject_candidates: true,
             },
             &settings(),
@@ -2268,17 +2790,31 @@ mod tests {
         };
         let palette = palette();
         for radius in [12, 20, 40] {
-            let warmup =
-                super::super::build(radius, 0.4, &settings(), u64::MAX, &palette, &is_solid)
-                    .expect("warm-up Forest should build");
+            let warmup = super::super::build(
+                radius,
+                0.4,
+                &settings(),
+                u64::MAX,
+                &palette,
+                &is_solid,
+                Some(runtime_art_catalog()),
+            )
+            .expect("warm-up Forest should build");
             std::hint::black_box(warmup);
 
             let mut samples = Vec::new();
             for seed in 0..12 {
                 let started = std::time::Instant::now();
-                let build =
-                    super::super::build(radius, 0.4, &settings(), seed, &palette, &is_solid)
-                        .expect("benchmark Forest should build");
+                let build = super::super::build(
+                    radius,
+                    0.4,
+                    &settings(),
+                    seed,
+                    &palette,
+                    &is_solid,
+                    Some(runtime_art_catalog()),
+                )
+                .expect("benchmark Forest should build");
                 assert!(!build.report.used_fallback);
                 samples.push(started.elapsed());
                 std::hint::black_box(build);

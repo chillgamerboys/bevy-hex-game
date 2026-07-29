@@ -16,7 +16,7 @@ use std::fmt;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use hex_assets::{to_color, GameAssets, SubstanceTable};
+use hex_assets::{to_color, GameAssets, RuntimeArtCatalog, SubstanceTable};
 use hex_core::{
     BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
@@ -25,7 +25,7 @@ use hex_core::{
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
-use crate::feature_render::{self, FeaturePresentationAssets, FeaturePresentationError};
+use crate::feature_render::{self, FeaturePresentationError};
 use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
 use crate::procedural_v2;
@@ -42,7 +42,6 @@ use crate::{
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
     liquid_render::plugin(app);
-    feature_render::register_assets(app);
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
         .register_type::<HexSpan>()
@@ -90,6 +89,7 @@ fn generate_world(
     mut commands: Commands,
     settings: Res<MapSettings>,
     table: Res<SubstanceTable>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
     resolved_seed: Option<Res<ResolvedMapSeed>>,
 ) {
     commands.remove_resource::<GameplaySetupFailure>();
@@ -218,6 +218,7 @@ fn generate_world(
                 seed.0,
                 &palette,
                 &|substance| table.is_solid(substance),
+                art_catalog.as_deref(),
             ) {
                 Ok(generated) => generated,
                 Err(error) => {
@@ -293,7 +294,6 @@ fn spawn_grid(
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
-        &mut presentation_assets.features,
         interiors.as_deref(),
         presentation.as_deref(),
     ) {
@@ -313,14 +313,11 @@ fn build_grid(
     table: &SubstanceTable,
     settings: &MapSettings,
     liquid_phase_seconds: f32,
-    feature_assets: &mut FeaturePresentationAssets,
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
 ) -> Result<(), MapPresentationError> {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
-    feature_render::prepare_materials(feature_assets, materials, table, presentation)
-        .map_err(MapPresentationError::Feature)?;
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -333,13 +330,8 @@ fn build_grid(
     )
     .map_err(MapPresentationError::Liquid)?;
     children.extend(
-        feature_render::spawn_presentations(
-            commands,
-            feature_assets,
-            settings.level_height,
-            presentation,
-        )
-        .map_err(MapPresentationError::Feature)?,
+        feature_render::spawn_presentations(commands, settings.level_height, presentation)
+            .map_err(MapPresentationError::Feature)?,
     );
     children.extend(spawn_gameplay_lights(commands, presentation));
 
@@ -434,7 +426,6 @@ struct MapPresentationAssets<'w> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
-    features: ResMut<'w, FeaturePresentationAssets>,
 }
 
 impl fmt::Display for MapPresentationError {
@@ -661,7 +652,6 @@ fn apply_terrain_edits(
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
-        &mut presentation_assets.features,
         interiors.as_deref(),
         presentation.as_deref(),
     );

@@ -129,8 +129,9 @@ impl MapPresentationProjection {
     pub(crate) fn protects_feature_edit(&self, position: TilePos) -> bool {
         self.features.values().any(|feature| {
             feature.kind == FeatureKind::Tree
-                && feature.root.coord == position.coord
-                && position.level >= feature.root.level
+                && feature.blocker_footprint.iter().any(|blocker| {
+                    blocker.coord == position.coord && position.level >= blocker.level
+                })
         })
     }
 
@@ -1243,6 +1244,10 @@ mod tests {
                         PlannedFeature {
                             root: tree,
                             kind: FeatureKind::Tree,
+                            object_id: hex_assets::ObjectAssetId::new("plant/small-broadleaf")
+                                .expect("fixture id should be valid"),
+                            rotation: hex_assets::HexObjectRotation::ZERO,
+                            blocker_footprint: BTreeSet::from([tree]),
                         },
                     ),
                     (
@@ -1250,6 +1255,10 @@ mod tests {
                         PlannedFeature {
                             root: light,
                             kind: FeatureKind::TallGrass,
+                            object_id: hex_assets::ObjectAssetId::new("prop/grass-tuft")
+                                .expect("fixture id should be valid"),
+                            rotation: hex_assets::HexObjectRotation::ZERO,
+                            blocker_footprint: BTreeSet::new(),
                         },
                     ),
                 ]),
@@ -1335,7 +1344,7 @@ mod tests {
             .presentation
             .features()
             .iter()
-            .map(|(id, feature)| (*id, *feature))
+            .map(|(id, feature)| (*id, feature.clone()))
             .collect();
         assert_eq!(
             projected
