@@ -417,6 +417,10 @@ fn recipe_issues_to_error(issues: Vec<WorldValidationIssue>) -> V3GenerationErro
     )
 }
 
+#[expect(
+    dead_code,
+    reason = "the next stacked Ring7 runner consumes the patch-ready Forest constructor"
+)]
 pub(crate) fn construct_patch(
     patch: PatchRecipeContext<'_>,
     settings: &V3ForestSettings,
