@@ -731,7 +731,7 @@ fn build_feature_plan(
     )
 }
 
-fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
+pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
     let mut issues = Vec::new();
     if !plan.liquids.bodies.is_empty() {
         issues.push(recipe_issue("Forest must not contain liquid topology"));

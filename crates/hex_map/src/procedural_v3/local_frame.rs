@@ -6,10 +6,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{HexCoord, MapViewHint, TilePos};
+use hex_core::{BiomeRegionId, HexCoord, MapViewHint, TilePos};
 
 use super::composition::GeneratedPatchPlan;
-use super::layout::LayoutKind;
+use super::layout::{
+    HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedPatch,
+};
 use super::liquid::LiquidPlan;
 use super::volume::VolumePlan;
 use super::world::{FeaturePlan, InteriorPlan, LightId, PlannedGameplayLight, StructurePlan};
@@ -163,26 +165,74 @@ impl LocalPatchFrame {
         )
     }
 
-    /// Creates a local-coordinate copy for recipe-specific validation.
-    pub(crate) fn world_to_local(
+    /// Creates a canonical Single-layout copy for recipe-specific validation.
+    ///
+    /// Ring7 owns world coordinates, patch identities, and biome identities. Recipe
+    /// validators deliberately reason in the same radius-limited local frame as
+    /// their approved Single output, so this projection normalizes all three before
+    /// invoking those validators.
+    pub(crate) fn canonical_local_world(
         self,
-        plan: &GeneratedWorldPlan,
+        plan: &GeneratedPatchPlan,
     ) -> Result<GeneratedWorldPlan, String> {
-        let mut local = plan.clone();
+        let mut volume = plan.volume.clone();
+        let mut liquids = plan.liquids.clone();
+        let mut features = plan.features.clone();
+        let mut structures = plan.structures.clone();
+        let mut blockers = plan.blockers.clone();
+        let mut lights = plan.lights.clone();
+        let mut biome_regions = plan.biome_regions.clone();
+        let mut interiors = plan.interiors.clone();
+        let mut anchors = plan.anchors.clone();
+        let mut view_hint = plan.view_hint;
         self.translate_semantics(
             FrameDirection::ToLocal,
-            &mut local.volume,
-            &mut local.liquids,
-            &mut local.features,
-            &mut local.structures,
-            &mut local.blockers,
-            &mut local.lights,
-            &mut local.biome_regions,
-            &mut local.interiors,
-            &mut local.anchors,
-            &mut local.view_hint,
+            &mut volume,
+            &mut liquids,
+            &mut features,
+            &mut structures,
+            &mut blockers,
+            &mut lights,
+            &mut biome_regions,
+            &mut interiors,
+            &mut anchors,
+            &mut view_hint,
         )?;
-        Ok(local)
+        for region in biome_regions.values_mut() {
+            *region = BiomeRegionId(0);
+        }
+        let mask = volume.mask.clone();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Single,
+            grid_radius: self.scale,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: BiomeRegionId(0),
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+        };
+        Ok(GeneratedWorldPlan {
+            layout,
+            volume,
+            liquids,
+            features,
+            structures,
+            blockers,
+            lights,
+            biome_regions,
+            interiors,
+            anchors,
+            view_hint,
+        })
     }
 
     #[expect(

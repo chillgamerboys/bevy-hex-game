@@ -1069,7 +1069,7 @@ fn water_column(cell: WaterCell, bridge_deck: Option<TilePos>) -> (VolumeColumn,
     (VolumeColumn { elements }, bed)
 }
 
-fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMetrics> {
+pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMetrics> {
     let mut issues = Vec::new();
     let Some(body) = plan.liquids.bodies.get(&LiquidBodyId(0)) else {
         return WorldValidation::Invalid(vec![recipe_issue(
