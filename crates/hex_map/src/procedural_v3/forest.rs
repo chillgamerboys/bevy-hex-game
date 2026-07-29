@@ -13,8 +13,12 @@ use hex_assets::{
 use hex_core::{HexCoord, MapViewHint, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
-use super::seed::{SeedStream, SeedStreams};
+use super::local_frame::LocalPatchFrame;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
+use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
@@ -275,25 +279,23 @@ impl V3Recipe for ForestRecipe {
                 ),
             ));
         }
-        let streams = SeedStreams::new(context.seed, context.candidate, PatchId(0).0);
-        let streams = ForestStreams {
-            orientation: streams.stage("forest.orientation"),
-            landform: streams.stage("forest.landform"),
-            clearings: streams.stage("forest.clearings"),
-            routes: streams.stage("forest.routes"),
-            trees: streams.stage("forest.trees"),
-            tree_objects: streams.stage("forest.tree-objects"),
-            tree_rotations: streams.stage("forest.tree-rotations"),
-            grass: streams.stage("forest.grass"),
-            grass_rotations: streams.stage("forest.grass-rotations"),
-        };
-        construct_plan(
-            self.layout.clone(),
-            Some(streams),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
+            .map_err(CandidateAttemptError::Fatal)?;
+        let fragment = construct_patch_with_objects(
+            patch,
+            &V3ForestSettings,
+            V3EnvironmentSettings::TemperateGrassland,
             self.level_height,
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
             &self.objects,
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Rejected(vec![recipe_issue(format!("{error:?}"))])
+        })
     }
 
     fn validate(
@@ -344,17 +346,18 @@ impl V3Recipe for ForestRecipe {
                 "Forest fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(self.layout.clone(), None, self.level_height, &self.objects).map_err(
-            |issues| {
-                V3GenerationError::RecipeContract(
-                    issues
-                        .into_iter()
-                        .map(|issue| issue.detail)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                )
-            },
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch_with_objects(
+            patch,
+            &V3ForestSettings,
+            V3EnvironmentSettings::TemperateGrassland,
+            self.level_height,
+            PatchBuildMode::CanonicalFallback,
+            &self.objects,
         )
+        .map_err(recipe_issues_to_error)?;
+        compose_single_patch(self.layout.clone(), fragment)
+            .map_err(|error| V3GenerationError::RecipeContract(format!("{error:?}")))
     }
 }
 
@@ -404,20 +407,62 @@ fn validate_footprint_capacity(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
     Ok(())
 }
 
-fn construct_plan(
-    layout: ResolvedLayoutPlan,
-    streams: Option<ForestStreams<'_>>,
+fn recipe_issues_to_error(issues: Vec<WorldValidationIssue>) -> V3GenerationError {
+    V3GenerationError::RecipeContract(
+        issues
+            .into_iter()
+            .map(|issue| issue.detail)
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3ForestSettings,
+    environment: V3EnvironmentSettings,
     level_height: f32,
+    mode: PatchBuildMode,
+    catalog: &RuntimeArtCatalog,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let objects =
+        ForestObjectSet::resolve(catalog).map_err(|error| vec![recipe_issue(error.to_string())])?;
+    construct_patch_with_objects(patch, settings, environment, level_height, mode, &objects)
+}
+
+fn construct_patch_with_objects(
+    patch: PatchRecipeContext<'_>,
+    _settings: &V3ForestSettings,
+    environment: V3EnvironmentSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
     objects: &ForestObjectSet,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch = layout
-        .patches
-        .get(&PatchId(0))
-        .ok_or_else(|| vec![recipe_issue("Single Forest layout has no patch zero")])?;
-    let mask = patch.mask.clone();
-    let biome_region = patch.biome_region;
-    let radius = i32::try_from(layout.grid_radius)
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    if environment != V3EnvironmentSettings::TemperateGrassland {
+        return Err(vec![recipe_issue(
+            "Forest requires the TemperateGrassland environment",
+        )]);
+    }
+    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let mask = frame
+        .local_mask(patch.mask())
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let biome_region = patch.biome_region();
+    let patch_radius = frame.scale();
+    let radius = i32::try_from(patch_radius)
         .map_err(|error| vec![recipe_issue(format!("Forest radius exceeds i32: {error}"))])?;
+    let streams = mode.seed_streams(&patch).map(|streams| ForestStreams {
+        orientation: streams.stage("forest.orientation"),
+        landform: streams.stage("forest.landform"),
+        clearings: streams.stage("forest.clearings"),
+        routes: streams.stage("forest.routes"),
+        trees: streams.stage("forest.trees"),
+        tree_objects: streams.stage("forest.tree-objects"),
+        tree_rotations: streams.stage("forest.tree-rotations"),
+        grass: streams.stage("forest.grass"),
+        grass_rotations: streams.stage("forest.grass-rotations"),
+    });
     let rotation = streams.map_or(0, |streams| {
         u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
@@ -442,16 +487,39 @@ fn construct_plan(
         )]);
     }
     let relief = ReliefPlan::new(
-        layout.grid_radius,
+        patch_radius,
         &mask,
         rotation,
         streams.map(|streams| streams.landform),
     )?;
 
+    let local_levels = mask
+        .iter()
+        .copied()
+        .map(|coord| (coord, BASE_LEVEL.saturating_add(relief.height_at(coord))))
+        .collect();
+    let mut world_levels = frame
+        .levels_to_world(local_levels)
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let seam_shape = shape_walker_seams(&patch, &mut world_levels)?;
+    let local_levels = frame
+        .levels_to_local(world_levels)
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let local_protected = patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|issue| vec![issue])?;
+
     let mut surfaces = BTreeMap::new();
     let mut surface_by_coord = BTreeMap::new();
     for coord in &mask {
-        let surface_level = BASE_LEVEL.saturating_add(relief.height_at(*coord));
+        let surface_level = local_levels.get(coord).copied().ok_or_else(|| {
+            vec![recipe_issue(format!(
+                "Forest land plan omitted coordinate {coord:?}"
+            ))]
+        })?;
         let position = TilePos::new(*coord, surface_level);
         surfaces.insert(
             position,
@@ -487,6 +555,7 @@ fn construct_plan(
     }
 
     let mut tree_exclusions = clearing_coords.iter().copied().collect::<BTreeSet<_>>();
+    tree_exclusions.extend(local_protected.iter().copied());
     tree_exclusions.extend(
         party_coord
             .within_radius(1)
@@ -545,6 +614,7 @@ fn construct_plan(
     let road_surfaces = exact_position_set(&road.surfaces, &surface_by_coord)?;
     let prairie: BTreeSet<_> = mask.difference(&woodland).copied().collect();
     let mut grass_exclusions = road.surfaces.clone();
+    grass_exclusions.extend(local_protected.iter().copied());
     grass_exclusions.extend(
         hostile_coord
             .within_radius(1)
@@ -600,10 +670,10 @@ fn construct_plan(
         .copied()
         .map(|surface| (surface, biome_region))
         .collect();
-    let view_hint = forest_view_hint(layout.grid_radius, level_height, rotation)?;
+    let view_hint = forest_view_hint(patch_radius, level_height, rotation)?;
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let mut plan = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: Default::default(),
         features,
@@ -614,7 +684,17 @@ fn construct_plan(
         interiors: InteriorPlan::default(),
         anchors,
         view_hint,
-    })
+    };
+    frame
+        .patch_to_world(&mut plan)
+        .map_err(|error| vec![recipe_issue(error)])?;
+    seam_shape.apply(&mut plan.volume)?;
+    let seam_issues = validate_patch_walker_seams(&patch, &plan.volume);
+    if seam_issues.is_empty() {
+        Ok(plan)
+    } else {
+        Err(seam_issues)
+    }
 }
 
 fn build_feature_plan(

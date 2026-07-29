@@ -1385,16 +1385,43 @@ mod tests {
         }
         fragment.liquids = LiquidPlan::default();
         for (index, coord) in coords.into_iter().enumerate() {
-            fragment
+            let column = fragment
                 .volume
                 .columns
                 .get_mut(&coord)
-                .expect("the endpoint column belongs to the patch")
-                .elements
-                .push(VolumeElement::Fill(NonSolidFill {
+                .expect("the endpoint column belongs to the patch");
+            column.elements = vec![
+                VolumeElement::Solid(SolidMass {
+                    levels: LevelInterval::new(0, level),
+                    material: SolidMaterialRole::Stone,
+                    cutaway_for: None,
+                }),
+                VolumeElement::Fill(NonSolidFill {
                     levels: LevelInterval::new(level, level + 1),
                     material: FillMaterialRole::Water,
-                }));
+                }),
+            ];
+            let biome = fragment
+                .biome_regions
+                .iter()
+                .find_map(|(position, biome)| (position.coord == coord).then_some(*biome))
+                .expect("the endpoint column has biome membership");
+            fragment
+                .volume
+                .surfaces
+                .retain(|position, _| position.coord != coord);
+            fragment
+                .biome_regions
+                .retain(|position, _| position.coord != coord);
+            let bed = TilePos::new(coord, level.saturating_sub(1));
+            fragment.volume.surfaces.insert(
+                bed,
+                SurfaceMetadata {
+                    access: SurfaceAccess::NonStandable,
+                    interior: None,
+                },
+            );
+            fragment.biome_regions.insert(bed, biome);
             let top = TilePos::new(coord, level);
             fragment.liquids.bodies.insert(
                 LiquidBodyId(u32::try_from(index).expect("the test port is small")),
@@ -1513,22 +1540,16 @@ mod tests {
             },
         );
 
-        if context
-            .shared_edges()
-            .all(|edge| matches!(edge.contract.liquid, ResolvedLiquidPort::Dry))
-        {
-            let mut levels = patch
-                .mask
-                .iter()
-                .copied()
-                .map(|coord| (coord, 15))
-                .collect();
-            let shape =
-                shape_walker_seams(&context, &mut levels).expect("fixture seams should shape");
-            shape
-                .apply(&mut volume)
-                .expect("fixture seams should project");
-        }
+        let mut levels = patch
+            .mask
+            .iter()
+            .copied()
+            .map(|coord| (coord, 15))
+            .collect();
+        let shape = shape_walker_seams(&context, &mut levels).expect("fixture seams should shape");
+        shape
+            .apply(&mut volume)
+            .expect("fixture seams should project");
 
         let anchor = TilePos::new(anchor_coord, 15);
         let tree = TilePos::new(tree_coord, 15);
