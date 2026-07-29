@@ -41,6 +41,7 @@ mod hills;
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
 )]
 mod layout;
+mod local_frame;
 pub(crate) use layout::HexSide;
 #[expect(
     dead_code,
