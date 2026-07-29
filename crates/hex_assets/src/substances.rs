@@ -109,6 +109,30 @@ pub struct SubstanceTable {
     source_palette_fingerprint: u64,
 }
 
+/// Source semantics for one failed cross-file build.
+///
+/// Loading remains blocked while these sources are invalid, but an unchanged typo
+/// should produce one diagnostic rather than another diagnostic every frame.
+#[derive(Resource, Debug, Clone)]
+struct FailedSubstanceTableBuild {
+    source_substances: HashMap<String, Substance>,
+    source_palette_fingerprint: u64,
+}
+
+impl FailedSubstanceTableBuild {
+    fn from_sources(file: &SubstanceFile, palette: &ArtPalette) -> Self {
+        Self {
+            source_substances: file.substances.clone(),
+            source_palette_fingerprint: palette.semantic_fingerprint(),
+        }
+    }
+
+    fn matches_sources(&self, file: &SubstanceFile, palette: &ArtPalette) -> bool {
+        self.source_substances == file.substances
+            && self.source_palette_fingerprint == palette.semantic_fingerprint()
+    }
+}
+
 /// A cross-file failure while resolving authored substances through the art palette.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SubstanceTableError {
@@ -268,15 +292,29 @@ fn build_table_when_loaded(
     file: Option<Res<SubstanceFile>>,
     palette: Option<Res<ArtPalette>>,
     table: Option<Res<SubstanceTable>>,
+    failed_build: Option<Res<FailedSubstanceTableBuild>>,
 ) {
     let (Some(file), Some(palette)) = (file, palette) else {
         return;
     };
-    if !file.is_changed() && !palette.is_changed() && table.is_some() {
+    if table
+        .as_deref()
+        .is_some_and(|table| table.matches_sources(&file, &palette))
+    {
+        if failed_build.is_some() {
+            commands.remove_resource::<FailedSubstanceTableBuild>();
+        }
+        return;
+    }
+    if failed_build
+        .as_deref()
+        .is_some_and(|failed| failed.matches_sources(&file, &palette))
+    {
         return;
     }
     match SubstanceTable::from_file(&file, &palette) {
         Ok(rebuilt) => {
+            commands.remove_resource::<FailedSubstanceTableBuild>();
             commands.insert_resource(rebuilt);
         }
         Err(error) => {
@@ -284,9 +322,7 @@ fn build_table_when_loaded(
                 "could not resolve config/substances.ron through art/palette.ron: {error}; \
                  keeping the previous valid substance table"
             );
-            if table.is_none() {
-                commands.remove_resource::<SubstanceTable>();
-            }
+            commands.insert_resource(FailedSubstanceTableBuild::from_sources(&file, &palette));
         }
     }
 }
@@ -694,6 +730,68 @@ mod tests {
                 app.world().resource::<ArtPalette>()
             ),
             "an invalid source was incorrectly marked current"
+        );
+    }
+
+    #[test]
+    fn invalid_initial_sources_are_latched_until_their_semantics_change() {
+        let mut file = test_file();
+        file.substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("unknown"));
+        let palette = test_palette();
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Title);
+        app.insert_resource(file);
+        app.insert_resource(palette);
+        register_table_builder(&mut app);
+
+        app.update();
+        assert!(
+            !app.world().contains_resource::<SubstanceTable>(),
+            "an invalid initial pair fabricated a substance table"
+        );
+        let failed = app.world().resource::<FailedSubstanceTableBuild>().clone();
+        assert!(failed.matches_sources(
+            app.world().resource::<SubstanceFile>(),
+            app.world().resource::<ArtPalette>()
+        ));
+
+        app.world_mut().clear_trackers();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<FailedSubstanceTableBuild>()
+                .matches_sources(
+                    app.world().resource::<SubstanceFile>(),
+                    app.world().resource::<ArtPalette>()
+                ),
+            "unchanged invalid sources should remain latched"
+        );
+        assert!(
+            !app.world()
+                .resource_ref::<FailedSubstanceTableBuild>()
+                .is_changed(),
+            "an unchanged invalid pair was retried instead of retaining its failure latch"
+        );
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("stone"));
+        app.update();
+        assert!(
+            app.world().contains_resource::<SubstanceTable>(),
+            "changing the failed source semantics should retry the build"
+        );
+        assert!(
+            !app.world().contains_resource::<FailedSubstanceTableBuild>(),
+            "a successful retry should clear the failure latch"
         );
     }
 

@@ -4,10 +4,11 @@
 // available to the game, but terrain generation must select it before it appears
 // in a generated world.
 //
-// `air` is special and must always be present: it means empty space, and the game
-// checks for it constantly. The terrain presets select the other entries by name;
-// changing their properties is safe, but renaming them requires updating the
-// generation code.
+// `air` is special: id 0 always means empty space. The table synthesizes the same
+// non-solid, non-diggable sentinel if this explicit entry is omitted, but keeping it
+// here makes the authored contract visible. The terrain presets select the other
+// entries by name; changing their properties is safe, but renaming them requires
+// updating the generation code.
 (
     substances: {
         "air": (
