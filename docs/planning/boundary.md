@@ -81,7 +81,9 @@ PR #52 landed on `dev` on 2026-07-26 and settled two of these asks outright:
   standability and step predicates, shared by generated-map validation and
   live movement), `MapAnchorId`/`MapAnchors`, `SpecialMovementRegion(s)`,
   `TerrainReady`, `GameplaySetupFailure`, the terminal
-  `GameplaySetup::Finalize` phase, `ScenarioPlacement::Anchor`, and the
+  `GameplaySetup::Finalize` phase, `EncounterPlacement::Anchor` (called
+  `ScenarioPlacement::Anchor` until HEX-14 replaced the two-coordinate scaffold
+  with encounter rosters — same anchor mechanism, same guarantee), and the
   snow/ice/basalt/lava substances.
 
 Those are historical V1/V2 contracts, not a promise to preserve either generator

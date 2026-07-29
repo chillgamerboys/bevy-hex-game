@@ -146,6 +146,64 @@ pub enum KnowledgeState {
     Observed,
 }
 
+/// How a faction came to know something.
+///
+/// The two channels are deliberately separate, and this enum is what keeps them
+/// from being conflated. Sight establishes *where* a unit is; it reveals nothing
+/// about that unit's lattice. Divination is the channel that reveals lattice
+/// facts, and it is a sanctioned writer of knowledge in its own right rather than
+/// a modifier on observation.
+///
+/// That is why knowledge is tagged with its source and expires per entry instead
+/// of being derived from whatever is currently visible: a store keyed on "can I
+/// see it" has nowhere to put a fact that arrived from a cast.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum KnowledgeSource {
+    /// Learned by seeing it.
+    #[default]
+    Observation,
+    /// Learned from a cast that revealed it.
+    Divination,
+}
+
+/// How long one piece of knowledge survives.
+///
+/// Round-based rather than wall-clock, because the design expresses decay in
+/// rounds — "revealed information decays or is one-time, unless the divination is
+/// an enchantment" — and a round is the only clock a fight has.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum KnowledgeExpiry {
+    /// Survives this many further round rollovers, then is forgotten.
+    ///
+    /// `Rounds(0)` is the design's *one-time* reveal: known for the remainder of
+    /// the current round and gone at the next rollover. There is deliberately no
+    /// separate `OneTime` variant — it would decay identically, and two spellings
+    /// of one behaviour drift apart the moment either is edited.
+    Rounds(u32),
+    /// Never decays on its own.
+    ///
+    /// An enchantment-backed divination holds knowledge this way; ending the
+    /// enchantment is what removes it, so the writer owns the lifetime rather
+    /// than the clock.
+    Sustained,
+}
+
+impl KnowledgeExpiry {
+    /// Advances one round rollover, returning [`None`] once the fact has lapsed.
+    ///
+    /// [`Self::Sustained`] is returned unchanged, which is what makes an
+    /// enchantment's knowledge outlive the rounds a decaying reveal is measured
+    /// in.
+    #[must_use]
+    pub const fn tick(self) -> Option<Self> {
+        match self {
+            Self::Rounds(0) => None,
+            Self::Rounds(remaining) => Some(Self::Rounds(remaining - 1)),
+            Self::Sustained => Some(Self::Sustained),
+        }
+    }
+}
+
 /// Generated spatial domain containing a light source or exact position.
 ///
 /// A source affects only targets in the same domain. Domains are derived from exact

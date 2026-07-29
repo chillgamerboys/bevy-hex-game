@@ -1,7 +1,7 @@
-// The gameplay walk: both scenario families, the pause overlay, and the
-// return trip. Complements walks/menus.ron; run the same way. The long
-// settles after AwaitTerrain mirror the map-review harness's frame budget so
-// the camera and lighting have settled before the photograph.
+// The gameplay walk: map families, pause, and Wave 3's complete combat story.
+// Complements walks/menus.ron; run the same way. The long settles after
+// AwaitTerrain mirror the map-review harness's frame budget so camera and
+// lighting have settled before the photograph.
 [
     AwaitScreen("Title"),
     StartScenario(name: "The Crossing"),
@@ -24,20 +24,99 @@
     Settle(10),
     Key("Backspace"),
     AwaitScreen("Title"),
-    // Close Quarters spawns the pieces within engagement range, so this leg
-    // photographs the combat loop through the command funnel: the fight is
-    // already on in the first frame, SPACE ends the player's turn as an
-    // emitted command, and the enemy answers with its own — a strike, since
-    // it spawns adjacent.
+    // Close Quarters starts in combat: the first frame must show the player's
+    // live lattice, the stable initiative order, and the current-unit marker.
     Settle(30),
     StartScenario(name: "Close Quarters"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Settle(120),
-    Capture("13-close-quarters-combat"),
+    Capture("13-combat-overview"),
+
+    // Aiming at the adjacent raider retains it as the hostile focus. Observation
+    // alone exposes neither formation nor capacity: the target card must say only
+    // "lattice unknown".
+    Click(name: "Cast Ember"),
+    Settle(8),
+    Capture("14-ember-aim-undivined"),
+    Click(name: "Confirm Cast"),
+    // Keep this close to the impact: it catches recoil and the target-card pulse,
+    // while the frozen-disclosure log can only say that Ember damaged the raider.
+    Settle(1),
+    Capture("15-ember-impact-retained"),
+    Settle(20),
+    Capture("16-ember-qualitative-log"),
+
+    // Ending the turn produces Ember's first later, real-turn Burn tick. The
+    // capture is deliberately requested immediately so the focused target pulse
+    // is still live.
     Key("Space"),
-    Settle(90),
-    Capture("14-close-quarters-enemy-turn"),
+    Capture("17-burn-first-real-turn"),
+
+    // The adjacent raider then strikes. A Player defender must choose its own
+    // live cell; the runner waits for that Button rather than guessing a delay.
+    AwaitButton("Own Cell"),
+    Settle(2),
+    Capture("18-player-disable-decision"),
+
+    // These walk-only probes bypass quiet input filtering so the authoritative
+    // command choke point writes visible refusals for both movement and end-turn.
+    // The decision must remain armed.
+    AttemptMove,
+    AttemptEndTurn,
+    Settle(3),
+    Capture("19-modal-command-refusals"),
+
+    // H hides every ordinary combat readout but must leave the active lattice and
+    // controls usable. Select a non-load-bearing Water gem while hidden, then show
+    // the HUD again before confirming.
+    Key("KeyH"),
+    Settle(3),
+    Capture("20-hud-hidden-decision-visible"),
+    Click(name: "Own Cell (-1, 2)"),
+    Settle(3),
+    Capture("21-hidden-hud-selection"),
+    Key("KeyH"),
+    Settle(3),
+    Capture("22-hud-shown-before-confirm"),
+    Click(name: "Confirm Disable Selection"),
+    Settle(20),
+    Capture("23-decision-confirmed"),
+
+    // On the next player turn Scrying Eye is a real cast. The retained target
+    // starts opaque and becomes a complete lattice with current mana and disabled
+    // state after confirmation.
+    AwaitButton("Cast Scrying Eye"),
+    Click(name: "Cast Scrying Eye"),
+    Settle(8),
+    Capture("24-scry-aim-opaque"),
+    Click(name: "Confirm Cast"),
+    Settle(2),
+    Capture("25-scry-live-lattice"),
+
+    // Ember's second actual-turn tick lands while the divined view is live. Answer
+    // the next strike and return to the player at the following rollover: tier one
+    // must remain visible for this complete round.
+    Key("Space"),
+    Capture("26-burn-second-real-turn"),
+    AwaitButton("Own Cell"),
+    Click(name: "Own Cell (0, 2)"),
+    Click(name: "Confirm Disable Selection"),
+    AwaitButton("Cast Ember"),
+    Settle(20),
+    Capture("27-scry-survives-next-round"),
+
+    // Advance one more complete round. At the following rollover Scrying Eye must
+    // expire back to the opaque, capacity-free target card while existence remains.
+    // Prove the hostile policy has yielded before pressing Space: keyboard input is
+    // deliberately unable to skip an enemy turn.
+    Key("Space"),
+    AwaitButton("Own Cell"),
+    Click(name: "Own Cell (1, 1)"),
+    Click(name: "Confirm Disable Selection"),
+    AwaitButton("Cast Scrying Eye"),
+    Settle(20),
+    Capture("28-scry-expired"),
     Key("Backspace"),
     AwaitScreen("Title"),
     // Volcanic Hills is the only shipped scenario with lava. Keep a capture

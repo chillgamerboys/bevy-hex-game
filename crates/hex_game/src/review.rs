@@ -902,10 +902,7 @@ mod tests {
     use std::fs;
 
     use bevy::state::app::StatesPlugin;
-    use hex_assets::{
-        ArtPalette, CubeCoord, ScenarioPlacement, ScenarioSettings, Substance, SubstanceFile,
-        SwatchId,
-    };
+    use hex_assets::{ArtPalette, ScenarioCategory, Substance, SubstanceFile, SwatchId};
     use hex_core::{HexCoord, TraversalProfile};
 
     use crate::capture::{has_visual_coverage, temporary_capture_path};
@@ -915,15 +912,13 @@ mod tests {
     fn scenario(seed: Option<u64>) -> Scenario {
         Scenario {
             name: "Test".to_owned(),
+            category: ScenarioCategory::Demo,
             blurb: "A test scenario.".to_owned(),
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),
             generation_seed: seed,
             starting_time_hours: None,
-            units: ScenarioSettings {
-                player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
-                enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
-            },
+            encounter: "config/encounters/bridge-crossing.ron".to_owned(),
         }
     }
 

@@ -5,14 +5,21 @@
 //! on `OnEnter(Screen::Gameplay)`; this module deliberately does not reach into any
 //! of them. It reads `Mode` and `TurnOrder` to describe what is happening, and
 //! writes neither.
+//!
+//! Casting is [`crate::casting`]'s — the spell panel, the shape preview and the cast
+//! command all live there. This module used to carry a placeholder that cast the first
+//! damaging spell at the nearest hostile on `1`, so the damage loop could be played
+//! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
 use hex_combat::{Turn, TurnOrder};
-use hex_core::{Mode, Pause, Screen};
+use hex_core::{Mode, Pause, PendingDecision, Screen};
+use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
 use crate::menus::widgets::UiAssets;
+use crate::readouts::HudElement;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_sub_state::<Pause>();
@@ -24,6 +31,18 @@ pub(super) fn plugin(app: &mut App) {
 
     app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
+    // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
+    // `PausableSystems`, so a toggle that kept firing while paused would set the
+    // resource with nothing to carry it out — leaving the store holding a full reveal
+    // the flag says is off, which is the stale-and-authoritative state its own doc
+    // calls worse than no reveal at all.
+    #[cfg(feature = "dev")]
+    app.add_systems(
+        Update,
+        toggle_reveal_all
+            .in_set(hex_core::PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
     app.add_systems(
         OnEnter(Screen::Gameplay),
         (reset_pause, reset_mode, spawn_hud),
@@ -40,6 +59,7 @@ fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((
             Name::new("Gameplay HUD"),
+            HudElement,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(12.0),
@@ -71,19 +91,20 @@ fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn exploring_hint() -> String {
     "EXPLORING   ·   click a tile to move   ·   right-drag to orbit   ·   \
-     WASD to pan   ·   scroll to zoom   ·   ESC to pause"
+     WASD to pan   ·   scroll to zoom   ·   H hides HUD   ·   ESC to pause"
         .to_owned()
 }
 
 /// Rewrites the hint line to say what the game is doing and whose turn it is.
 ///
-/// The turn order is the only readout a player gets — there is no combat log and no
-/// unit portraits — so it has to say enough to act on: which mode, which round, and
-/// whether this is your go.
+/// This compact summary complements the lattice panels, initiative list, and combat
+/// log by keeping the current mode, round, and action budget visible at a glance.
 fn update_hud(
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
     acting: Query<(Has<Player>, &Turn)>,
+    party: Query<(&LatticeSpec, &LatticeState), With<Player>>,
     mut hud: Query<&mut Text, With<HudText>>,
 ) {
     let Ok(mut text) = hud.single_mut() else {
@@ -97,16 +118,18 @@ fn update_hud(
             // being out of range is indistinguishable from a click that did not
             // register — which is precisely the complaint the tinted range answers,
             // and the number is what confirms the tint rather than merely repeating it.
-            let whose = match acting.single() {
-                Ok((true, turn)) => format!("your turn, {} to move", turn.movement_left),
-                Ok((false, _)) => "enemy turn".to_owned(),
-                Err(_) => "…".to_owned(),
+            let (whose, player_turn) = match acting.single() {
+                Ok((true, turn)) => (format!("your turn, {} to move", turn.movement_left), true),
+                Ok((false, _)) => ("enemy turn".to_owned(), false),
+                Err(_) => ("…".to_owned(), false),
             };
             format!(
-                "COMBAT   ·   round {}   ·   {}   ·   SPACE to end turn   \
-                 ·   ESC to pause",
+                "COMBAT   ·   round {}   ·   {}{}   ·   {}   \
+                 ·   H hides HUD   ·   ESC to pause",
                 order.round + 1,
-                whose
+                whose,
+                lattice_readout(&party),
+                combat_action_hint(player_turn, pending.is_open())
             )
         }
     };
@@ -114,6 +137,79 @@ fn update_hud(
     if text.0 != wanted {
         text.0 = wanted;
     }
+}
+
+/// The action hint must agree with the command emitters: Space and casting are
+/// player-turn controls, while an open defender choice replaces every ordinary
+/// simulation command.
+fn combat_action_hint(player_turn: bool, decision_open: bool) -> &'static str {
+    if decision_open {
+        "choose a live cell above, then ENTER to confirm"
+    } else if player_turn {
+        "cast from the panel   ·   SPACE to end turn"
+    } else {
+        "waiting for the enemy"
+    }
+}
+
+/// Flips the dev reveal-all toggle, so a designer can see the truth behind the
+/// fog while playing.
+///
+/// Behind the `dev` feature deliberately: the shipped build has no key that
+/// exposes hidden information, and hidden information is the game's source of
+/// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
+/// `Space`, `Tab`, `Q`, `H`, `C`, `Enter` and `WASD` are all taken.
+///
+/// The resource is initialised by `hex_combat`'s plugin, which the binary always
+/// adds, so this cannot be the observer-on-the-title-screen crash: it is a
+/// system, it is gated on the gameplay screen, and its parameter always resolves.
+///
+/// Logs the new state as well as updating the hostile lattice panel. The line is
+/// useful when a designer is validating disclosure and the HUD itself is hidden.
+#[cfg(feature = "dev")]
+fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_combat::RevealAll>) {
+    if keys.just_pressed(KeyCode::KeyK) {
+        reveal.0 = !reveal.0;
+        info!("reveal-all {}", if reveal.0 { "on" } else { "off" });
+    }
+}
+
+/// Your party's hexes still standing, out of the hexes it started with.
+///
+/// A **sum across the party**, not one unit's lattice, and the label says "party" for
+/// that reason: every shipped encounter fields one player unit today, so an unqualified
+/// count would read correctly by accident and then quietly become an aggregate the first
+/// time somebody adds a second line to a roster — which the encounter files openly invite.
+/// Per-unit readouts are the casting-UX ticket's, not this one's.
+///
+/// Read straight off the components rather than through
+/// [`FactionKnowledge`](hex_combat::FactionKnowledge): a faction's knowledge of *itself*
+/// is not the question that store answers. It exists to gate what you know about a
+/// **hostile** lattice, where seeing a unit reveals nothing about its contents — and
+/// routing your own hexes through it would either need a self-view nothing publishes, or
+/// teach the next reader that `view()` is how you look at anything, which is exactly the
+/// confusion the two-channel split exists to prevent.
+///
+/// Empty while nothing carries a lattice, so a party of one inert unit reads exactly as
+/// it did before this — no readout rather than a zero.
+fn lattice_readout(party: &Query<(&LatticeSpec, &LatticeState), With<Player>>) -> String {
+    let mut live = 0_usize;
+    let mut total = 0_usize;
+    for (spec, state) in party {
+        // The spec is what says which cells exist; the state only says which of them
+        // are down. Counting the state alone would miss every cell that has never been
+        // touched, which early in a fight is all of them.
+        for (coord, _) in spec.cells() {
+            total += 1;
+            if !state.is_disabled(coord) {
+                live += 1;
+            }
+        }
+    }
+    if total == 0 {
+        return String::new();
+    }
+    format!("   ·   party {live}/{total} hexes")
 }
 
 /// Entering gameplay always starts unpaused, so a pause left set from a previous
@@ -179,6 +275,19 @@ mod tests {
             labels.iter(app.world()).next(),
             Some(&Pickable::IGNORE),
             "the HUD text blocks world picks"
+        );
+    }
+
+    #[test]
+    fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
+        assert_eq!(
+            combat_action_hint(true, false),
+            "cast from the panel   ·   SPACE to end turn"
+        );
+        assert_eq!(combat_action_hint(false, false), "waiting for the enemy");
+        assert_eq!(
+            combat_action_hint(false, true),
+            "choose a live cell above, then ENTER to confirm"
         );
     }
 }

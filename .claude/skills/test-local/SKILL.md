@@ -23,9 +23,9 @@ cargo clippy --workspace --all-targets --all-features --profile ci -- -D warning
 cargo test --workspace --all-features --profile ci
 ```
 
-Sum all `test result:` lines (23 suites across the 9 crates, plus
-doctests). Expected baseline: ≈226 — informational; the count drifts
-and `/update-docs` owns the exact number in CLAUDE.md.
+Sum all `test result:` lines across the eleven workspace crates plus
+doctests. The count drifts, and `/update-docs` owns the exact number
+in CLAUDE.md.
 
 ## Step 4 — Dependency audit
 

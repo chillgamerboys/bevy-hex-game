@@ -251,8 +251,8 @@ Hidden information is the game's uncertainty mechanism, and one accessor is
 both the feature and the future anti-cheat filter: `FactionKnowledge` maps
 (viewer faction, subject) to what has been revealed and until when; UI and AI
 read hostile lattices only through `view()`; a decay system ticks reveals at
-round ends. Ships with a dev reveal-all toggle and a v1 "unknown lattice,
-N hexes" readout from base visibility.
+round ends. Ships with a dev reveal-all toggle and an opaque "lattice unknown"
+readout from base visibility; capacity is itself divination-gated.
 
 ### Ship-hygiene basics
 

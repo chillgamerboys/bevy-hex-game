@@ -5,8 +5,8 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, GameCommand, HexCoord, IssuedCommand, PlayerSeat, SimSeeds, SubstanceId,
-    TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PendingDecision, PlayerSeat,
+    Sextant, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -83,6 +83,54 @@ fn wire_formats_are_pinned() {
         json,
         r#"{"seat":0,"command":{"MoveAlong":{"unit":1,"path":[{"coord":{"q":0,"r":0},"level":1}]}}}"#
     );
+
+    // The defender's answer, which needs pinning more than the others rather than
+    // less: it is the one command whose absence would let a replay re-derive a choice
+    // and land on a different one. This is also the only place `LatticeCoord`'s wire
+    // shape is save-visible, so it is the only place a rename of its fields would show.
+    let answer = IssuedCommand {
+        seat: PlayerSeat(0),
+        command: GameCommand::ChooseDisables {
+            unit: UnitId(2),
+            cells: vec![LatticeCoord::new(0, 0), LatticeCoord::new(1, -1)],
+        },
+    };
+    let json = serde_json::to_string(&answer).expect("serialize");
+    assert_eq!(
+        json,
+        r#"{"seat":0,"command":{"ChooseDisables":{"unit":2,"cells":[{"q":0,"r":0},{"q":1,"r":-1}]}}}"#
+    );
+
+    // And the field is serde-defaulted, so a line recorded before it existed still
+    // decodes — as an empty answer, which is what a zero-hex decision looks like.
+    let old_line = r#"{"seat":0,"command":{"ChooseDisables":{"unit":2}}}"#;
+    let decoded: IssuedCommand = serde_json::from_str(old_line).expect("an older line decodes");
+    assert_eq!(
+        decoded.command,
+        GameCommand::ChooseDisables {
+            unit: UnitId(2),
+            cells: Vec::new()
+        }
+    );
+}
+
+/// A save taken mid-resolution has to come back still owing the same answer, or the
+/// fight resumes with damage that was announced and never landed.
+#[test]
+fn pending_decisions_round_trip() {
+    assert_round_trips!(PendingDecision::None);
+    assert_round_trips!(PendingDecision::ChooseDisables {
+        decider: UnitId(2),
+        count: 3,
+        source: UnitId(1),
+    });
+    // The degenerate count, because `is_open()` gates resolution and a zero-hex
+    // decision is still a decision somebody has to answer.
+    assert_round_trips!(PendingDecision::ChooseDisables {
+        decider: UnitId(2),
+        count: 0,
+        source: UnitId(1),
+    });
 }
 
 #[test]
@@ -151,9 +199,33 @@ fn issued_commands_round_trip() {
             target: UnitId(9),
         },
         GameCommand::EndTurn { unit },
-        GameCommand::Cast { unit },
+        // Both shapes a cast can take: a directed variable-mana ritual, and
+        // the plain anchored form where the optional fields are absent.
+        GameCommand::Cast {
+            unit,
+            spell: "Flamethrower".to_owned(),
+            target: TilePos::new(HexCoord::from_axial(2, -1), 3),
+            facing: Some(Sextant::C),
+            mana: Some(4),
+        },
+        GameCommand::Cast {
+            unit,
+            spell: "Ember".to_owned(),
+            target: TilePos::new(HexCoord::ORIGIN, 1),
+            facing: None,
+            mana: None,
+        },
         GameCommand::Channel { unit },
-        GameCommand::ChooseDisables { unit },
+        // The defender's answer is part of the log, or a replay would re-derive it and
+        // could choose differently.
+        GameCommand::ChooseDisables {
+            unit,
+            cells: vec![LatticeCoord::new(0, 0), LatticeCoord::new(1, -1)],
+        },
+        GameCommand::ChooseDisables {
+            unit,
+            cells: Vec::new(),
+        },
     ];
     for command in commands {
         assert_round_trips!(IssuedCommand {
