@@ -1,0 +1,27 @@
+// Wave 4's complete-party proof on the authored Crossing.
+//
+// Stable roster order is deliberate: ids, party-strip order, formation assignment,
+// and deterministic tie-breaks all derive from declaration order.
+(
+    name: "Party Trial",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Fixed((x: 0, y: 8, z: -8)), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Formation(center: Fixed((x: 0, y: -8, z: 8)), spread: 2),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "raider"),
+                (archetype: "wolf"),
+            ],
+        ),
+    ],
+)

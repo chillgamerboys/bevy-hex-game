@@ -27,6 +27,7 @@ use bevy::prelude::*;
 use hex_core::{HexCoord, Level, Screen, SpellId};
 use serde::Deserialize;
 
+use crate::fingerprint::FingerprintEncoder;
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// One gem a spell requires: a distinct adjacent source of `element` contributing
@@ -445,7 +446,7 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
 
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
-    let mut defender_choice_effects = 0_u8;
+    let mut exact_cell_decisions = 0_u8;
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
@@ -454,12 +455,15 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
                     return Err(zero("DisableHexes.count"));
                 }
                 if !targeted {
-                    defender_choice_effects = defender_choice_effects.saturating_add(1);
+                    exact_cell_decisions = exact_cell_decisions.saturating_add(1);
                 }
             }
             Effect::Burn { turns } if *turns == 0 => return Err(zero("Burn.turns")),
             Effect::RestoreHexes { count } if *count == 0 => {
                 return Err(zero("RestoreHexes.count"));
+            }
+            Effect::RestoreHexes { .. } => {
+                exact_cell_decisions = exact_cell_decisions.saturating_add(1);
             }
             Effect::ModifyIncomingDisables { amount } if *amount == 0 => {
                 return Err(zero("ModifyIncomingDisables.amount"));
@@ -477,10 +481,10 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             _ => {}
         }
     }
-    if defender_choice_effects > 1 {
+    if exact_cell_decisions > 1 {
         return Err(format!(
-            "spell '{name}' has multiple non-targeted DisableHexes effects; only one \
-             defender choice can be pending at a time"
+            "spell '{name}' has multiple exact-cell decision effects; only one damage \
+             or restoration choice can be pending at a time"
         ));
     }
 
@@ -505,6 +509,9 @@ pub struct SpellBook {
     by_name: HashMap<String, SpellId>,
     #[reflect(ignore)]
     spells: HashMap<SpellId, Spell>,
+    /// Canonical semantics of the `SpellFile` this book was built from.
+    #[reflect(ignore)]
+    source_fingerprint: u64,
 }
 
 impl SpellBook {
@@ -546,6 +553,16 @@ impl SpellBook {
         self.by_id.is_empty()
     }
 
+    /// Whether this book was built from the current authored spell semantics.
+    #[must_use]
+    pub fn matches_source(&self, file: &SpellFile) -> bool {
+        self.source_fingerprint == spell_file_fingerprint(file)
+    }
+
+    pub(crate) const fn source_fingerprint(&self) -> u64 {
+        self.source_fingerprint
+    }
+
     /// Builds a book from a loaded file, assigning ids from sorted names.
     #[must_use]
     pub fn from_file(file: &SpellFile) -> Self {
@@ -566,6 +583,119 @@ impl SpellBook {
             by_id,
             by_name,
             spells,
+            source_fingerprint: spell_file_fingerprint(file),
+        }
+    }
+}
+
+fn spell_file_fingerprint(file: &SpellFile) -> u64 {
+    let mut encoder = FingerprintEncoder::new(b"hex-spell-file-v1");
+    let mut entries: Vec<_> = file.spells.iter().collect();
+    entries.sort_by_key(|(name, _)| *name);
+    encoder.usize(entries.len());
+    for (name, spell) in entries {
+        encoder.string(name);
+        encoder.usize(spell.requirements.len());
+        for requirement in &spell.requirements {
+            encoder.string(&requirement.element);
+            encoder.u16(requirement.mana);
+        }
+        match spell.casting {
+            CastingAxis::Evocation => encoder.u8(0),
+            CastingAxis::Enchantment { defense } => {
+                encoder.u8(1);
+                encoder.u16(defense);
+            }
+        }
+        encoder.u8(match spell.mana {
+            ManaAxis::Fixed => 0,
+            ManaAxis::Variable => 1,
+        });
+        encoder.bool(spell.co_castable);
+        encoder.u8(spell.targeting.range);
+        fingerprint_shape(&mut encoder, &spell.targeting.shape);
+        encoder.bool(spell.targeting.needs_los);
+        encoder.usize(spell.effects.len());
+        for effect in &spell.effects {
+            fingerprint_effect(&mut encoder, effect);
+        }
+    }
+    encoder.finish()
+}
+
+fn fingerprint_shape(encoder: &mut FingerprintEncoder, shape: &TargetShape) {
+    match shape {
+        TargetShape::SelfCast => encoder.u8(0),
+        TargetShape::Single => encoder.u8(1),
+        TargetShape::Sphere { radius } => {
+            encoder.u8(2);
+            encoder.u8(*radius);
+        }
+        TargetShape::Column { height } => {
+            encoder.u8(3);
+            encoder.u8(*height);
+        }
+        TargetShape::Line { length, width } => {
+            encoder.u8(4);
+            encoder.u8(*length);
+            encoder.u8(*width);
+        }
+        TargetShape::Cone { length, spread } => {
+            encoder.u8(5);
+            encoder.u8(*length);
+            encoder.u8(*spread);
+        }
+        TargetShape::Path { offsets } => {
+            encoder.u8(6);
+            encoder.usize(offsets.len());
+            for offset in offsets {
+                encoder.i32(offset.coord.x());
+                encoder.i32(offset.coord.y());
+                encoder.i32(offset.level);
+            }
+        }
+    }
+}
+
+fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
+    match effect {
+        Effect::DisableHexes { count, targeted } => {
+            encoder.u8(0);
+            encoder.u8(*count);
+            encoder.bool(*targeted);
+        }
+        Effect::Burn { turns } => {
+            encoder.u8(1);
+            encoder.u16(*turns);
+        }
+        Effect::RestoreHexes { count } => {
+            encoder.u8(2);
+            encoder.u8(*count);
+        }
+        Effect::ModifyIncomingDisables { amount } => {
+            encoder.u8(3);
+            encoder.u16(*amount);
+        }
+        Effect::Reveal { tier } => {
+            encoder.u8(4);
+            encoder.u8(*tier);
+        }
+        Effect::Illuminate { radius } => {
+            encoder.u8(5);
+            encoder.u8(*radius);
+        }
+        Effect::SetTerrain { substance } => {
+            encoder.u8(6);
+            encoder.string(substance);
+        }
+        Effect::ClearTerrain => encoder.u8(7),
+        Effect::SpawnWall { substance } => {
+            encoder.u8(8);
+            encoder.string(substance);
+        }
+        Effect::Displace { distance } => {
+            encoder.u8(9);
+            encoder.u8(*distance);
         }
     }
 }
@@ -802,7 +932,25 @@ mod tests {
             .validate()
             .expect_err("one cast cannot overwrite its own pending damage decision");
         assert!(
-            error.contains("multiple non-targeted DisableHexes"),
+            error.contains("multiple exact-cell decision effects"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_damage_choice_combined_with_a_restoration_choice() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects
+            .push(Effect::RestoreHexes { count: 1 });
+
+        let error = file
+            .validate()
+            .expect_err("one cast cannot overwrite damage with restoration");
+        assert!(
+            error.contains("multiple exact-cell decision effects"),
             "{error}"
         );
     }

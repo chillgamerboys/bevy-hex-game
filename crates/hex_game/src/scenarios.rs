@@ -70,6 +70,10 @@ pub(super) struct ScenarioToLoad {
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
 }
 
+/// Exact launch input retained for deterministic defeat retry.
+#[derive(Resource, Debug, Clone)]
+pub(super) struct ActiveScenario(pub(super) ScenarioToLoad);
+
 /// The selected scenario's authored hour, snapshotted before its lighting loads.
 ///
 /// Keeping this separate from [`TimeOfDay`] lets the loading contract distinguish an
@@ -129,6 +133,10 @@ fn apply_selected_scenario(
     };
     let scenario = pending.scenario.clone();
     let resolved_seed = pending.resolved_seed;
+    commands.insert_resource(ActiveScenario(ScenarioToLoad {
+        scenario: scenario.clone(),
+        resolved_seed,
+    }));
     commands.remove_resource::<ScenarioToLoad>();
 
     if let Some(seed) = resolved_seed {
@@ -375,6 +383,7 @@ fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<ScenarioTimeOverride>();
     commands.remove_resource::<TimeOfDay>();
+    commands.remove_resource::<ActiveScenario>();
 }
 
 /// Derives the session's sim seeds from what already determines the world.
@@ -412,6 +421,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     use bevy::app::PluginsState;
     use bevy::asset::AssetPlugin;
@@ -419,27 +430,39 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        ArtPalette, CombatSettings, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
-        FormationCenter, GameAssets, LightingSettings, ObjectBlueprint, ObjectCatalogFile,
-        ObjectInstance, PerceptionSettings, PlayerSettings, Roster, RosterEntry, RuntimeArtCatalog,
-        ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
+        AiProfileCatalog, ArtPalette, CombatSettings, ContentIndex, CubeCoord, ElementCatalog,
+        ElementFile, Encounter, EncounterFaction, EncounterPlacement, FormationCatalog,
+        FormationCenter, GameAssets, LatticeFile, LatticeLibrary, LightingSettings,
+        ObjectBlueprint, ObjectCatalogFile, ObjectInstance, PerceptionSettings, PlayerSettings,
+        Roster, RosterEntry, RuntimeArtCatalog, ScenarioLibrary, SettingsRegistry, SpellBook,
+        SpellFile, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
+    };
+    use hex_combat::{
+        AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder,
+        MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
     };
     use hex_core::{
-        AppSystems, CommandQueue, ExteriorIllumination, GameCommand, GameplaySetup,
-        GameplaySetupFailure, HexGrid, IlluminationLevel, InteriorRegions, IssuedCommand,
-        KnowledgeState, LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode,
-        PausableSystems, Pause, PerceptionSystems, PlayerSeat, ResolvedMapSeed, Screen,
-        SpecialMovementRegion, SpecialMovementRegions, TerrainReady, TilePos, UnitId,
+        AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
+        GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+        IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
+        LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
+        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
+        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
+        TraversalBlockers, Turn, UnitId,
     };
+    use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
     use hex_perception::FactionMapKnowledge;
-    use hex_units::{either_in_reach, Body, Enemy, Faction, Footing, Player, Reach, StandsOn};
+    use hex_units::{
+        either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
+        FormationMember, Player, Reach, StandsOn,
+    };
     use hex_world::TimeOfDay;
 
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, validate_gameplay_lighting_contract, validate_loaded_scenario,
-        ScenarioTimeOverride, ScenarioToLoad,
+        ActiveScenario, ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -516,6 +539,8 @@ mod tests {
             units: vec![RosterEntry {
                 archetype: archetype.to_owned(),
                 placement: None,
+                ai_profile: None,
+                ai_group: None,
             }],
         };
         Encounter {
@@ -1005,6 +1030,8 @@ mod tests {
                 .map(|_| RosterEntry {
                     archetype: "hedge-mage".to_owned(),
                     placement: None,
+                    ai_profile: None,
+                    ai_group: None,
                 })
                 .collect(),
         };
@@ -1218,6 +1245,134 @@ mod tests {
             vec![
                 Some(CubeCoord { x: 0, y: 4, z: -4 }),
                 Some(CubeCoord { x: 0, y: -4, z: 4 }),
+            ]
+        );
+    }
+
+    /// The integrated trial keeps both complete parties stable and outside engagement
+    /// range so formation editing and the bridge approach remain player decisions.
+    #[test]
+    fn party_trial_starts_matching_stable_parties_apart() {
+        let library = library();
+        let trial = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Party Trial")
+            .expect("the shipped library should contain Party Trial");
+        let encounter = encounter_of(trial);
+
+        assert_eq!(encounter.rosters.len(), 2);
+        assert_eq!(
+            encounter
+                .rosters
+                .iter()
+                .map(|roster| roster.faction)
+                .collect::<Vec<_>>(),
+            vec![EncounterFaction::Player, EncounterFaction::Hostile]
+        );
+        for roster in &encounter.rosters {
+            assert_eq!(
+                roster
+                    .units
+                    .iter()
+                    .map(|unit| unit.archetype.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["hedge-mage", "raider", "wolf"]
+            );
+            let EncounterPlacement::Formation { spread, .. } = roster.placement else {
+                panic!("Party Trial rosters must use formation placement");
+            };
+            assert_eq!(spread, 2);
+        }
+
+        let centres = encounter
+            .rosters
+            .iter()
+            .map(|roster| match roster.placement {
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(coord),
+                    ..
+                } => coord,
+                _ => unreachable!("checked above"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            centres,
+            vec![
+                CubeCoord { x: 0, y: 8, z: -8 },
+                CubeCoord { x: 0, y: -8, z: 8 },
+            ]
+        );
+        let [first, second] = centres.as_slice() else {
+            panic!("Party Trial should have exactly two roster centres");
+        };
+        let separation = (first.x - second.x)
+            .abs()
+            .max((first.y - second.y).abs())
+            .max((first.z - second.z).abs());
+        assert!(
+            separation > 4,
+            "Party Trial must begin beyond engagement range"
+        );
+    }
+
+    /// Automated combat UI walks use minimal flat fixtures instead of making ability
+    /// assertions depend on the Crossing's routing and six-unit initiative.
+    #[test]
+    fn focused_ui_trials_are_flat_and_roster_only_the_roles_they_need() {
+        let library = library();
+        let ability = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Ability Lab")
+            .expect("the shipped library should contain Ability Lab");
+        let mirror = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Raider Mirror")
+            .expect("the shipped library should contain Raider Mirror");
+
+        assert_eq!(ability.world, "config/worlds/flat-combat.ron");
+        assert_eq!(mirror.world, ability.world);
+        let world_path = assets_dir().join(&ability.world);
+        let world_text = fs::read_to_string(&world_path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", world_path.display()));
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the flat combat world should parse");
+        let TerrainSettings::Perlin(perlin) = world.terrain else {
+            panic!("the flat combat fixture must not carry authored terrain features");
+        };
+        assert!(
+            perlin.steps.is_empty(),
+            "an empty height recipe is level everywhere"
+        );
+
+        let ability = encounter_of(ability);
+        assert_eq!(ability.unit_count(EncounterFaction::Player), 2);
+        assert_eq!(ability.unit_count(EncounterFaction::Hostile), 1);
+        assert_eq!(
+            ability
+                .entries()
+                .map(|unit| (unit.faction, unit.archetype))
+                .collect::<Vec<_>>(),
+            vec![
+                (EncounterFaction::Player, "hedge-mage"),
+                (EncounterFaction::Player, "wolf"),
+                (EncounterFaction::Hostile, "raider"),
+            ]
+        );
+
+        let mirror = encounter_of(mirror);
+        assert_eq!(mirror.unit_count(EncounterFaction::Player), 1);
+        assert_eq!(mirror.unit_count(EncounterFaction::Hostile), 1);
+        assert_eq!(
+            mirror
+                .entries()
+                .map(|unit| (unit.faction, unit.archetype))
+                .collect::<Vec<_>>(),
+            vec![
+                (EncounterFaction::Player, "raider"),
+                (EncounterFaction::Hostile, "raider"),
             ]
         );
     }
@@ -1443,6 +1598,16 @@ mod tests {
             app.world().get_resource::<ResolvedMapSeed>(),
             Some(&ResolvedMapSeed(configured))
         );
+        let active = app.world().resource::<ActiveScenario>();
+        let entries = library();
+        let selected = entries
+            .scenarios
+            .get(procedural_index)
+            .expect("the selected scenario still exists");
+        assert_eq!(active.0.scenario.name, selected.name);
+        assert_eq!(active.0.scenario.world, selected.world);
+        assert_eq!(active.0.scenario.encounter, selected.encounter);
+        assert_eq!(active.0.resolved_seed, Some(ResolvedMapSeed(configured)));
     }
 
     /// Selecting an authored map after a generated one cannot leak its old seed.
@@ -1477,6 +1642,40 @@ mod tests {
         procedural_gameplay_app_with_combat(scenario_name, false)
     }
 
+    fn shipped_combat_content(
+        substances: &SubstanceTable,
+    ) -> (
+        ElementCatalog,
+        SpellBook,
+        ContentIndex,
+        LatticeLibrary,
+        AiProfileCatalog,
+        FormationCatalog,
+    ) {
+        let elements_file: ElementFile =
+            ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                .expect("the shipped elements should deserialize");
+        let spells_file: SpellFile =
+            ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                .expect("the shipped spells should deserialize");
+        let lattices_file: LatticeFile =
+            ron::from_str(include_str!("../../../assets/config/lattices.ron"))
+                .expect("the shipped lattices should deserialize");
+        let profiles: AiProfileCatalog =
+            ron::from_str(include_str!("../../../assets/config/ai_profiles.ron"))
+                .expect("the shipped AI profiles should deserialize");
+        let formations: FormationCatalog =
+            ron::from_str(include_str!("../../../assets/config/formations.ron"))
+                .expect("the shipped formations should deserialize");
+        let elements = ElementCatalog::from_file(&elements_file);
+        let spells = SpellBook::from_file(&spells_file);
+        let index = ContentIndex::build(&elements, &spells, substances)
+            .expect("the shipped combat content should cross-resolve");
+        let lattices = LatticeLibrary::build(&lattices_file, &elements, &spells)
+            .expect("the shipped lattices should resolve");
+        (elements, spells, index, lattices, profiles, formations)
+    }
+
     fn procedural_gameplay_app_with_combat(scenario_name: &str, with_combat: bool) -> App {
         let entry = library()
             .scenarios
@@ -1496,13 +1695,15 @@ mod tests {
         let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
             .expect("the shipped art palette should deserialize");
         let art_catalog = runtime_art_catalog(&palette);
-        let seed = entry
-            .generation_seed
-            .map(ResolvedMapSeed)
-            .expect("the hero scenario should have a seed");
+        let seed = entry.generation_seed.map(ResolvedMapSeed);
 
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            StatesPlugin,
+            bevy::input::InputPlugin,
+        ));
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
         app.init_state::<Screen>();
@@ -1558,10 +1759,9 @@ mod tests {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
         });
-        app.insert_resource(
-            SubstanceTable::from_file(&substances, &palette)
-                .expect("the shipped substances should resolve through the shipped palette"),
-        );
+        let substances = SubstanceTable::from_file(&substances, &palette)
+            .expect("the shipped substances should resolve through the shipped palette");
+        app.insert_resource(substances.clone());
         app.insert_resource(PerceptionSettings::default());
         app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Bright));
         app.insert_resource(player);
@@ -1569,7 +1769,9 @@ mod tests {
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
-        app.insert_resource(seed);
+        if let Some(seed) = seed {
+            app.insert_resource(seed);
+        }
         app.add_plugins((
             hex_map::plugin,
             hex_units::movement::plugin,
@@ -1580,8 +1782,19 @@ mod tests {
             let combat: CombatSettings =
                 ron::from_str(include_str!("../../../assets/config/combat.ron"))
                     .expect("the shipped combat settings should deserialize");
+            let (elements, spells, index, lattices, profiles, formations) =
+                shipped_combat_content(&substances);
             app.insert_resource(combat);
-            app.add_plugins(hex_combat::plugin);
+            app.insert_resource(elements);
+            app.insert_resource(spells);
+            app.insert_resource(index);
+            app.insert_resource(lattices);
+            app.insert_resource(profiles);
+            app.insert_resource(formations);
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_millis(100),
+            ));
+            app.add_plugins((hex_anim::plugin, hex_combat::plugin));
         }
         app.add_systems(
             OnEnter(Screen::Gameplay),
@@ -1607,6 +1820,411 @@ mod tests {
         let world = app.world_mut();
         let mut query = world.query_filtered::<&StandsOn, With<T>>();
         query.iter(world).next().map(|standing| standing.0.pos)
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct PartyTrialReplay {
+        player_stream: Vec<IssuedCommand>,
+        summary: CombatSummary,
+        turn_order: Vec<UnitId>,
+        current: Option<UnitId>,
+        round: u32,
+        positions: Vec<(UnitId, TilePos)>,
+    }
+
+    fn footing_for(app: &mut App, body: Body) -> Footing {
+        let substances = app.world().resource::<SubstanceTable>().clone();
+        let world = app.world_mut();
+        let mut tiles =
+            world.query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+        Footing::from_tiles(
+            tiles.iter(world),
+            &substances,
+            body,
+            world.get_resource::<TraversalBlockers>(),
+        )
+    }
+
+    fn party_trial_move(app: &mut App) -> GameCommand {
+        let formation = app.world().resource::<PartyFormation>().clone();
+        let formations = app.world().resource::<FormationCatalog>();
+        let preset = formations
+            .get(&formation.preset)
+            .expect("Party Trial should start with a resolved formation")
+            .clone();
+        let anchor_slot = preset
+            .anchor()
+            .expect("the shipped formation should have an anchor");
+        let anchor = formation
+            .assignments
+            .iter()
+            .find_map(|(&unit, &slot)| (slot == anchor_slot).then_some(unit))
+            .expect("the party formation should assign its anchor");
+
+        let mut facts = {
+            let world = app.world_mut();
+            let mut players = world.query_filtered::<(&UnitId, &StandsOn, &Body), With<Player>>();
+            players
+                .iter(world)
+                .map(|(unit, standing, body)| (*unit, standing.0, *body))
+                .collect::<Vec<_>>()
+        };
+        facts.sort_by_key(|(unit, ..)| *unit);
+        let (_, anchor_standing, anchor_body) = facts
+            .iter()
+            .find(|(unit, ..)| *unit == anchor)
+            .copied()
+            .expect("the formation anchor should be a live player");
+        let anchor_footing = Arc::new(footing_for(app, anchor_body));
+        let destination = anchor_footing
+            .at_coord(HexCoord::from_axial(0, -4))
+            .iter()
+            .max_by_key(|standing| standing.pos.level)
+            .copied()
+            .expect("Party Trial should expose the far bridge landing");
+        let anchor_path = Reach::from(anchor_standing, &anchor_footing, None)
+            .path_to(destination.pos)
+            .expect("the party anchor should have a complete crossing route");
+        let mut footing_by_body = vec![(anchor_body, Arc::clone(&anchor_footing))];
+        for (_, _, body) in &facts {
+            if footing_by_body
+                .iter()
+                .all(|(cached_body, _)| cached_body != body)
+            {
+                footing_by_body.push((*body, Arc::new(footing_for(app, *body))));
+            }
+        }
+        let members = facts
+            .into_iter()
+            .map(|(unit, standing, body)| FormationMember {
+                unit,
+                standing,
+                footing: Arc::clone(
+                    &footing_by_body
+                        .iter()
+                        .find(|(cached_body, _)| *cached_body == body)
+                        .expect("every member body should have a footing projection")
+                        .1,
+                ),
+            })
+            .collect();
+        let plan = plan_formation_move(&preset, &formation, &anchor_path, members)
+            .expect("the Party Trial party should compress across the bridge");
+        GameCommand::MoveParty {
+            anchor,
+            paths: plan.paths,
+        }
+    }
+
+    fn queue_player_command(app: &mut App, stream: &mut Vec<IssuedCommand>, command: GameCommand) {
+        let issued = IssuedCommand {
+            seat: PlayerSeat(0),
+            command,
+        };
+        stream.push(issued.clone());
+        app.world_mut().resource_mut::<CommandQueue>().push(issued);
+    }
+
+    fn player_decision_command(app: &mut App) -> Option<GameCommand> {
+        let pending = app.world().resource::<PendingDecision>().clone();
+        let (decider, target, count, restoring) = match pending {
+            PendingDecision::None => return None,
+            PendingDecision::ChooseDisables { decider, count, .. } => {
+                (decider, decider, count, false)
+            }
+            PendingDecision::ChooseRestores {
+                decider,
+                target,
+                count,
+            } => (decider, target, count, true),
+        };
+        let player_owns_decision = {
+            let world = app.world_mut();
+            let mut owners = world.query::<(&UnitId, &ControlOwner)>();
+            owners
+                .iter(world)
+                .any(|(unit, owner)| *unit == decider && owner.0 == PlayerSeat(0))
+        };
+        if !player_owns_decision {
+            return None;
+        }
+        let mut cells = {
+            let world = app.world_mut();
+            let mut lattices = world.query::<(&UnitId, &LatticeSpec, &LatticeState)>();
+            let (_, spec, state) = lattices.iter(world).find(|(unit, ..)| **unit == target)?;
+            spec.cells()
+                .filter(|(cell, _)| state.is_disabled(*cell) == restoring)
+                .map(|(cell, _)| cell)
+                .collect::<Vec<LatticeCoord>>()
+        };
+        cells.sort_unstable();
+        cells.truncate(usize::from(count));
+        Some(if restoring {
+            GameCommand::ChooseRestores {
+                unit: decider,
+                target,
+                cells,
+            }
+        } else {
+            GameCommand::ChooseDisables {
+                unit: decider,
+                cells,
+            }
+        })
+    }
+
+    fn finish_presentations(app: &mut App) {
+        let moving = {
+            let world = app.world_mut();
+            let mut moving = world.query_filtered::<Entity, With<hex_anim::Transformation>>();
+            moving.iter(world).collect::<Vec<_>>()
+        };
+        for entity in moving {
+            app.world_mut()
+                .entity_mut(entity)
+                .remove::<hex_anim::Transformation>();
+        }
+    }
+
+    fn player_turn_command(app: &mut App, actor: UnitId) -> Option<GameCommand> {
+        let (standing, body, turn) = {
+            let world = app.world_mut();
+            let mut actors = world.query_filtered::<
+                (&UnitId, &StandsOn, &Body, &Turn),
+                (With<Player>, Without<Downed>, Without<Busy>),
+            >();
+            let (_, standing, body, turn) =
+                actors.iter(world).find(|(unit, ..)| **unit == actor)?;
+            (standing.0, *body, *turn)
+        };
+        let mut hostiles = {
+            let world = app.world_mut();
+            let mut targets =
+                world.query_filtered::<(&UnitId, &StandsOn), (With<Enemy>, Without<Downed>)>();
+            targets
+                .iter(world)
+                .map(|(unit, standing)| (*unit, standing.0))
+                .collect::<Vec<_>>()
+        };
+        hostiles.sort_by_key(|(unit, ..)| *unit);
+        let footing = footing_for(app, body);
+        if !turn.acted {
+            if let Some((target, _)) = hostiles.iter().find(|(_, target)| {
+                standing.pos.coord.distance(target.pos.coord) == 1
+                    && (footing.admits_step(standing.pos, target.pos)
+                        || footing.admits_step(target.pos, standing.pos))
+            }) {
+                return Some(GameCommand::Strike {
+                    unit: actor,
+                    target: *target,
+                });
+            }
+        }
+        if turn.movement_left == 0 {
+            return Some(GameCommand::EndTurn { unit: actor });
+        }
+
+        let occupied = {
+            let world = app.world_mut();
+            let mut units = world.query::<&StandsOn>();
+            units
+                .iter(world)
+                .map(|standing| standing.0.pos)
+                .collect::<Vec<_>>()
+        };
+        let reach = Reach::from(standing, &footing, None);
+        let route = hostiles
+            .iter()
+            .flat_map(|(target, target_standing)| {
+                footing
+                    .standings()
+                    .into_iter()
+                    .filter(|candidate| {
+                        candidate.pos.coord.distance(target_standing.pos.coord) == 1
+                            && (footing.admits_step(candidate.pos, target_standing.pos)
+                                || footing.admits_step(target_standing.pos, candidate.pos))
+                            && (candidate.pos == standing.pos || !occupied.contains(&candidate.pos))
+                    })
+                    .filter_map(|candidate| {
+                        reach
+                            .path_to(candidate.pos)
+                            .map(|path| (*target, candidate.pos, path))
+                    })
+            })
+            .min_by_key(|(target, destination, path)| (path.len(), *target, *destination))
+            .map(|(_, _, mut path)| {
+                path.truncate(
+                    usize::try_from(turn.movement_left)
+                        .unwrap_or(usize::MAX)
+                        .saturating_add(1),
+                );
+                path
+            });
+        if let Some(path) = route.filter(|path| path.len() > 1) {
+            return Some(GameCommand::MoveAlong {
+                unit: actor,
+                path: path.into_iter().map(|step| step.pos).collect(),
+            });
+        }
+        Some(GameCommand::EndTurn { unit: actor })
+    }
+
+    fn run_party_trial_replay() -> PartyTrialReplay {
+        let mut app = procedural_gameplay_app_with_combat("Party Trial", true);
+        enter_screen(&mut app, Screen::Gameplay);
+        assert_eq!(
+            *app.world().resource::<State<Mode>>().get(),
+            Mode::Exploring,
+            "Party Trial should leave room for formation travel"
+        );
+
+        let mut player_stream = Vec::new();
+        let crossing = party_trial_move(&mut app);
+        queue_player_command(&mut app, &mut player_stream, crossing);
+
+        for _ in 0..4_000 {
+            finish_presentations(&mut app);
+            if app
+                .world()
+                .resource::<EncounterResolution>()
+                .outcome()
+                .is_some()
+            {
+                app.update();
+                break;
+            }
+            if app.world().resource::<CommandQueue>().is_empty() {
+                if let Some(answer) = player_decision_command(&mut app) {
+                    queue_player_command(&mut app, &mut player_stream, answer);
+                } else {
+                    let current = app.world().resource::<TurnOrder>().current();
+                    if let Some(command) =
+                        current.and_then(|current| player_turn_command(&mut app, current))
+                    {
+                        queue_player_command(&mut app, &mut player_stream, command);
+                    }
+                }
+            }
+            app.update();
+        }
+        let outcome = app.world().resource::<EncounterResolution>().outcome();
+        assert_eq!(
+            outcome,
+            Some(EncounterOutcome::Defeat),
+            "the deterministic player policy should reach defeat; mode={:?}, pending={:?}, \
+             round={}, moves={}, casts={}, strikes={}, downings={}",
+            app.world().resource::<State<Mode>>().get(),
+            app.world().resource::<PendingDecision>(),
+            app.world().resource::<TurnOrder>().round,
+            app.world().resource::<CombatSummary>().moves,
+            app.world().resource::<CombatSummary>().casts,
+            app.world().resource::<CombatSummary>().strikes,
+            app.world().resource::<CombatSummary>().downings,
+        );
+        assert!(
+            app.world().resource::<CommandQueue>().is_empty(),
+            "the resolved Party Trial left an undrained command"
+        );
+        assert!(
+            app.world().resource::<AiDecisionTraces>().entries.len() <= MAX_AI_DECISION_TRACES,
+            "the live inspection window exceeded its bound"
+        );
+
+        let summary = app.world().resource::<CombatSummary>().clone();
+        assert!(
+            summary.ai_selections.len() <= MAX_COMBAT_SUMMARY_DETAILS,
+            "the retained AI-decision window exceeded its bound"
+        );
+        assert!(
+            summary.events.len() <= MAX_COMBAT_SUMMARY_DETAILS,
+            "the retained combat-event window exceeded its bound"
+        );
+        let order = app.world().resource::<TurnOrder>();
+        let turn_order = order.order().to_vec();
+        let current = order.current();
+        let round = order.round;
+        let mut positions = {
+            let world = app.world_mut();
+            let mut units = world.query::<(&UnitId, &StandsOn)>();
+            units
+                .iter(world)
+                .map(|(unit, standing)| (*unit, standing.0.pos))
+                .collect::<Vec<_>>()
+        };
+        positions.sort_by_key(|(unit, ..)| *unit);
+        PartyTrialReplay {
+            player_stream,
+            summary,
+            turn_order,
+            current,
+            round,
+            positions,
+        }
+    }
+
+    /// Runs the shipped 3v3 scenario twice from its authored state.
+    ///
+    /// `CombatSummary::ai_selections` carries each exact observation, canonical legal
+    /// set/fingerprint, selected route/command, and profile/algorithm dispatch. The
+    /// remaining fields cover the player command stream, structured events, final
+    /// positions, turn order, and outcome. Equality here is therefore the integrated
+    /// replay contract rather than a second, weaker simulation snapshot.
+    #[test]
+    fn party_trial_replays_identically_end_to_end() {
+        let first = run_party_trial_replay();
+        assert!(
+            matches!(
+                first.player_stream.first().map(|issued| &issued.command),
+                Some(GameCommand::MoveParty { paths, .. })
+                    if paths.iter().all(|path| path.path.len() > 2)
+            ),
+            "the replay stream should contain exact full-party crossing routes"
+        );
+        assert!(
+            first
+                .summary
+                .ai_selections
+                .iter()
+                .any(|trace| matches!(trace.command, Some(GameCommand::Cast { .. }))),
+            "the baseline hostile party should select a cast"
+        );
+        assert!(first.summary.rounds > 0);
+        assert!(first.summary.downings >= 3);
+        assert_eq!(first.summary.outcome, Some(EncounterOutcome::Defeat));
+        assert_eq!(
+            first,
+            run_party_trial_replay(),
+            "the same Party Trial stream diverged"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release-mode 100-run Party Trial deterministic soak"]
+    fn party_trial_one_hundred_run_soak_is_deterministic() {
+        let started = Instant::now();
+        let expected = run_party_trial_replay();
+        for run in 1..100 {
+            assert_eq!(
+                run_party_trial_replay(),
+                expected,
+                "Party Trial run {} diverged from the reference",
+                run + 1
+            );
+        }
+        eprintln!(
+            "PARTY_TRIAL_SOAK runs=100 elapsed_ms={} outcome={:?} rounds={} \
+             ai_count={} ai_fingerprint={} event_count={} event_fingerprint={} \
+             retained_ai={} retained_events={}",
+            started.elapsed().as_millis(),
+            expected.summary.outcome,
+            expected.summary.rounds,
+            expected.summary.ai_selection_count,
+            expected.summary.ai_selection_fingerprint,
+            expected.summary.event_count,
+            expected.summary.event_fingerprint,
+            expected.summary.ai_selections.len(),
+            expected.summary.events.len(),
+        );
     }
 
     /// The real map and unit plugins agree on seed, exact anchor surfaces, teardown,

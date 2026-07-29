@@ -2,9 +2,8 @@
 //!
 //! Once [`ContentIndex`] and the [`SpellBook`] are built, this logs the parsed spell
 //! list — each spell's tier, effect count, whether it is a ritual, and how many of
-//! its requirements the cross-file index resolved. It is the smallest consumer that
-//! exercises files → tables → cross-file resolution, standing in until the lattice
-//! engine reads this content for real (HEX-12). Behind the `dev` feature only.
+//! its requirements the cross-file index resolved. It provides a compact inspection
+//! surface alongside the live lattice/combat consumers. Behind the `dev` feature only.
 
 use bevy::prelude::*;
 use hex_assets::{ContentIndex, SpellBook};

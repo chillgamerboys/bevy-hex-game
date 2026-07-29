@@ -29,6 +29,7 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::{Duration, Instant};
 
 use hex_assets::GameAssets;
 use hex_assets::{
@@ -2109,6 +2110,161 @@ fn terrain_edits_below_the_floor_are_ignored() {
     assert_eq!(
         grid_after, grid_before,
         "an ignored edit should not rebuild the grid"
+    );
+}
+
+#[test]
+fn one_hundred_idle_frames_do_not_rebuild_or_republish_terrain() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let grid_before = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should exist");
+    let tiles_before: BTreeSet<_> = {
+        let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+        tiles.iter(app.world()).collect()
+    };
+    app.world_mut().clear_trackers();
+
+    for _ in 0..100 {
+        app.update();
+    }
+
+    let grid_after = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should still exist");
+    let tiles_after: BTreeSet<_> = {
+        let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+        tiles.iter(app.world()).collect()
+    };
+    assert_eq!(grid_after, grid_before);
+    assert_eq!(
+        tiles_after, tiles_before,
+        "idle terrain reconciliation replaced unchanged run entities"
+    );
+    assert!(
+        !app.world().resource_ref::<VoxelMap>().is_changed(),
+        "an empty terrain-edit stream marked voxel storage changed"
+    );
+    assert!(
+        !app.world()
+            .resource_ref::<SpecialMovementRegions>()
+            .is_changed(),
+        "an empty terrain-edit stream marked special regions changed"
+    );
+}
+
+#[test]
+#[ignore = "manual release-mode localized terrain-edit stress gate"]
+fn one_hundred_localized_terrain_edits_stay_within_the_interactive_budget() {
+    let mut app = procedural_app();
+    enter_gameplay(&mut app);
+
+    let (target, original) = {
+        let map = app.world().resource::<VoxelMap>();
+        let table = app.world().resource::<SubstanceTable>();
+        map.columns()
+            .find_map(|(coord, column)| {
+                let level = column.surface()?;
+                let substance = column.get(level);
+                table
+                    .is_diggable(substance)
+                    .then_some((TilePos::new(coord, level), substance))
+            })
+            .expect("radius-12 Hills should expose diggable surface terrain")
+    };
+    let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+    let materials_before = app.world().resource::<Assets<StandardMaterial>>().len();
+    let mut samples = Vec::with_capacity(100);
+    let mut created_entities = 0_usize;
+    let mut maximum_created = 0_usize;
+    let mut assets_after_warmup = None;
+
+    for index in 0..100 {
+        let before: BTreeSet<_> = {
+            let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+            tiles.iter(app.world()).collect()
+        };
+        if index % 2 == 0 {
+            app.world_mut()
+                .write_message(TerrainEdit::Clear { pos: target });
+        } else {
+            app.world_mut().write_message(TerrainEdit::Set {
+                pos: target,
+                substance: original,
+            });
+        }
+
+        let started = Instant::now();
+        app.update();
+        samples.push(started.elapsed());
+
+        let after: BTreeSet<_> = {
+            let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+            tiles.iter(app.world()).collect()
+        };
+        let created = after.difference(&before).count();
+        created_entities = created_entities.saturating_add(created);
+        maximum_created = maximum_created.max(created);
+        let expected = if index % 2 == 0 {
+            SubstanceId::AIR
+        } else {
+            original
+        };
+        assert_eq!(
+            app.world().resource::<VoxelMap>().get(target),
+            expected,
+            "localized edit {index} did not settle in one update"
+        );
+        if index == 3 {
+            assets_after_warmup = Some((
+                app.world().resource::<Assets<Mesh>>().len(),
+                app.world().resource::<Assets<StandardMaterial>>().len(),
+            ));
+        }
+    }
+
+    samples.sort_unstable();
+    let p95 = samples
+        .get(94)
+        .copied()
+        .expect("the terrain benchmark records exactly 100 samples");
+    let worst = samples
+        .get(99)
+        .copied()
+        .expect("the terrain benchmark records exactly 100 samples");
+    let (meshes_after_warmup, materials_after_warmup) =
+        assets_after_warmup.expect("the terrain benchmark completes its four-edit warmup");
+    let meshes_after = app.world().resource::<Assets<Mesh>>().len();
+    let materials_after = app.world().resource::<Assets<StandardMaterial>>().len();
+    eprintln!(
+        "radius-12 localized terrain edits: p95={p95:?}, worst={worst:?}, \
+         created_total={created_entities}, max_created_per_edit={maximum_created}, \
+         meshes={meshes_before}->{meshes_after_warmup}->{meshes_after}, \
+         materials={materials_before}->{materials_after_warmup}->{materials_after}"
+    );
+    assert_eq!(
+        meshes_after, meshes_after_warmup,
+        "localized terrain edits kept allocating mesh assets after the warmup"
+    );
+    assert_eq!(
+        materials_after, materials_after_warmup,
+        "localized terrain edits kept allocating material assets after the warmup"
+    );
+
+    let (p95_budget, worst_budget) = if cfg!(debug_assertions) {
+        (Duration::from_millis(100), Duration::from_millis(250))
+    } else {
+        (Duration::from_micros(16_700), Duration::from_millis(50))
+    };
+    assert!(
+        p95 < p95_budget && worst < worst_budget,
+        "localized terrain edits exceeded the interaction budget: p95={p95:?}, worst={worst:?}"
     );
 }
 
