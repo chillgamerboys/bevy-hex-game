@@ -639,7 +639,11 @@ mod tests {
         );
 
         let mut fragments = complete_fragments(&layout);
-        fragments.push(fragments[0].clone());
+        let duplicate = fragments
+            .first()
+            .expect("the fixture has a center fragment")
+            .clone();
+        fragments.push(duplicate);
         assert_eq!(
             compose_world(layout.clone(), fragments, composition_settings())
                 .expect_err("the duplicate fragment must fail"),
@@ -647,9 +651,14 @@ mod tests {
         );
 
         let mut fragments = complete_fragments(&layout);
-        let mut unexpected = fragments[0].clone();
+        let mut unexpected = fragments
+            .first()
+            .expect("the fixture has a center fragment")
+            .clone();
         unexpected.patch_id = PatchId(9);
-        fragments[0] = unexpected;
+        *fragments
+            .first_mut()
+            .expect("the fixture has a center fragment") = unexpected;
         assert_eq!(
             compose_world(layout, fragments, composition_settings())
                 .expect_err("the unexpected fragment must fail"),
