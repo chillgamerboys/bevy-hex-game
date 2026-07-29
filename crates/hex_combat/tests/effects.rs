@@ -746,10 +746,15 @@ fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
     assert!(!app.world().resource::<PendingDecision>().is_open());
     assert_eq!(
         take_events(&mut app),
-        vec![CombatEvent::CommandRefused {
-            command,
-            refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
-        }]
+        vec![
+            CombatEvent::CommandRefused {
+                command,
+                refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
+            },
+            CombatEvent::EncounterResolved {
+                outcome: hex_combat::EncounterOutcome::Victory,
+            },
+        ]
     );
 }
 

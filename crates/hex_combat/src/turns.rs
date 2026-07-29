@@ -33,6 +33,7 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 use hex_assets::CombatSettings;
 use hex_core::{
@@ -77,6 +78,16 @@ pub struct TurnOrder {
     current: usize,
     /// How many full rounds have elapsed. Purely for display.
     pub round: u32,
+}
+
+/// Revived units waiting for the next round boundary before rejoining initiative.
+#[derive(Resource, Debug, Default)]
+pub(crate) struct PendingRevivals(BTreeMap<UnitId, u32>);
+
+impl PendingRevivals {
+    pub(crate) fn schedule(&mut self, unit: UnitId, round: u32) {
+        self.0.insert(unit, round);
+    }
 }
 
 impl TurnOrder {
@@ -169,6 +180,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<Initiative>()
         .register_type::<Turn>()
         .init_resource::<TurnOrder>()
+        .init_resource::<PendingRevivals>()
         // Idempotent alongside hex_units' own init: combat resolves the order
         // through these, so they must exist even in a test app that composes
         // only the combat half.
@@ -203,7 +215,12 @@ pub fn plugin(app: &mut App) {
                 // turn must not then be handed that turn.
                 check_for_downed
                     .after(crate::CombatSystems::Apply)
-                    .before(crate::CombatSystems::Advance)
+                    .in_set(crate::CombatSystems::Resolve)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
+                crate::resolution::detect_outcome
+                    .after(check_for_downed)
+                    .in_set(crate::CombatSystems::Resolve)
                     .in_set(PausableSystems)
                     .run_if(in_state(Mode::Combat)),
                 advance_turn
@@ -217,8 +234,9 @@ pub fn plugin(app: &mut App) {
 
 /// Clears everything on leaving gameplay, so a new session cannot inherit an order
 /// full of despawned entities.
-fn reset(mut order: ResMut<TurnOrder>) {
+fn reset(mut order: ResMut<TurnOrder>, mut revivals: ResMut<PendingRevivals>) {
     order.clear();
+    revivals.0.clear();
 }
 
 /// Starts and stops fights based on whether anyone can reach anyone.
@@ -262,7 +280,9 @@ fn engagement(
         // side is gone entirely. That is a different thing from "far apart", and
         // collapsing them would leave combat running with nobody to fight.
         Mode::Combat => {
-            if any_hostile_in_reach(&units, disengage, levels_per_bonus) != Some(true) {
+            // Elimination is terminal and belongs to the retained-world outcome
+            // modal. Only two surviving sides that have separated may disengage.
+            if any_hostile_in_reach(&units, disengage, levels_per_bonus) == Some(false) {
                 next.set(Mode::Exploring);
             }
         }
@@ -386,12 +406,14 @@ fn begin_combat(
 fn end_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
+    mut revivals: ResMut<PendingRevivals>,
     acting: Query<Entity, With<Turn>>,
 ) {
     for entity in &acting {
         commands.entity(entity).remove::<Turn>();
     }
     turn_order.clear();
+    revivals.0.clear();
     info!("combat ends");
 }
 
@@ -443,6 +465,9 @@ fn advance_turn(
     settings: Res<CombatSettings>,
     mut rounds: MessageWriter<RoundElapsed>,
     acting: Query<(Entity, &Turn, Has<Busy>)>,
+    initiatives: Query<&Initiative>,
+    downed: Query<(), With<Downed>>,
+    mut revivals: ResMut<PendingRevivals>,
 ) {
     let Some(current) = turn_order.current() else {
         return;
@@ -464,6 +489,35 @@ fn advance_turn(
 
     commands.entity(entity).remove::<Turn>();
     if turn_order.advance() {
+        let round = turn_order.round;
+        let due: Vec<_> = revivals
+            .0
+            .iter()
+            .filter(|(_, reenters)| **reenters <= round)
+            .map(|(&unit, _)| unit)
+            .collect();
+        for unit in &due {
+            revivals.0.remove(unit);
+            let active = registry
+                .entity_of(*unit)
+                .is_some_and(|entity| !downed.contains(entity));
+            if active && !turn_order.order.contains(unit) {
+                turn_order.order.push(*unit);
+            }
+        }
+        if !due.is_empty() {
+            turn_order.order.sort_by(|a, b| {
+                let initiative = |unit: &UnitId| {
+                    registry
+                        .entity_of(*unit)
+                        .and_then(|entity| initiatives.get(entity).ok())
+                        .copied()
+                        .unwrap_or(Initiative(0))
+                };
+                initiative(b).cmp(&initiative(a)).then(a.cmp(b))
+            });
+            turn_order.current = 0;
+        }
         rounds.write(RoundElapsed);
     }
     if let Some(next) = turn_order

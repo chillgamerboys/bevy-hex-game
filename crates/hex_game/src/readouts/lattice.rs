@@ -45,6 +45,7 @@ struct OwnLattice {
 struct DecisionSummary {
     chosen: usize,
     owed: usize,
+    restoring: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -83,7 +84,9 @@ impl DisableSelection {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DisableDecision {
     pub(super) decider: UnitId,
+    pub(super) target: UnitId,
     pub(super) owed: usize,
+    pub(super) restoring: bool,
     pub(super) live: Vec<hex_core::LatticeCoord>,
 }
 
@@ -263,19 +266,19 @@ type OwnData<'w, 's> = Query<
         &'static LatticeState,
         &'static LatticeStats,
     ),
-    With<Player>,
 >;
 
 fn sync_disable_selection(
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,
-    players: Query<(&LatticeSpec, &LatticeState), With<Player>>,
+    lattices: Query<(&LatticeSpec, &LatticeState)>,
+    players: Query<(), With<Player>>,
     mut selection: ResMut<DisableSelection>,
 ) {
     let next = match *pending {
         PendingDecision::ChooseDisables { decider, count, .. } => registry
             .entity_of(decider)
-            .and_then(|entity| players.get(entity).ok())
+            .and_then(|entity| lattices.get(entity).ok())
             .map(|(spec, state)| {
                 let live: Vec<_> = spec
                     .cells()
@@ -284,11 +287,36 @@ fn sync_disable_selection(
                     .collect();
                 DisableDecision {
                     decider,
+                    target: decider,
                     owed: usize::from(count).min(live.len()),
+                    restoring: false,
                     live,
                 }
             }),
-        PendingDecision::None | PendingDecision::ChooseRestores { .. } => None,
+        PendingDecision::ChooseRestores {
+            decider,
+            target,
+            count,
+        } => registry
+            .entity_of(decider)
+            .filter(|&entity| players.contains(entity))
+            .and_then(|_| registry.entity_of(target))
+            .and_then(|entity| lattices.get(entity).ok())
+            .map(|(spec, state)| {
+                let disabled: Vec<_> = spec
+                    .cells()
+                    .filter(|&(coord, _)| state.is_disabled(coord))
+                    .map(|(coord, _)| coord)
+                    .collect();
+                DisableDecision {
+                    decider,
+                    target,
+                    owed: usize::from(count).min(disabled.len()),
+                    restoring: true,
+                    live: disabled,
+                }
+            }),
+        PendingDecision::None => None,
     };
     reconcile_selection(&mut selection, next);
 }
@@ -316,6 +344,7 @@ fn refresh_readouts(
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
     own: OwnData,
+    players: Query<(), With<Player>>,
     selected: Query<&UnitId, (With<Player>, With<Selected>)>,
     identities: Query<(&Name, &Faction)>,
 ) {
@@ -324,7 +353,7 @@ fn refresh_readouts(
     };
 
     let own_unit = own_focus(
-        player_decider(&pending, &registry, &own),
+        player_decision_focus(&pending, &registry, &players),
         casting.caster.map(|caster| caster.unit),
         selected.iter().copied().next(),
     );
@@ -338,7 +367,7 @@ fn refresh_readouts(
                 .cells()
                 .map(|(coord, kind)| {
                     let armed = selection.decision.as_ref().is_some_and(|decision| {
-                        decision.decider == *unit && decision.live.contains(&coord)
+                        decision.target == *unit && decision.live.contains(&coord)
                     });
                     live_cell_view(
                         coord,
@@ -359,10 +388,11 @@ fn refresh_readouts(
             decision: selection
                 .decision
                 .as_ref()
-                .filter(|decision| decision.decider == *unit)
+                .filter(|decision| decision.target == *unit)
                 .map(|decision| DecisionSummary {
                     chosen: selection.cells.len(),
                     owed: decision.owed,
+                    restoring: decision.restoring,
                 }),
         });
 
@@ -412,14 +442,21 @@ fn refresh_readouts(
     }
 }
 
-fn player_decider(
+fn player_decision_focus(
     pending: &PendingDecision,
     registry: &UnitRegistry,
-    own: &OwnData,
+    players: &Query<(), With<Player>>,
 ) -> Option<UnitId> {
-    let unit = pending.decider()?;
-    let entity = registry.entity_of(unit)?;
-    own.contains(entity).then_some(unit)
+    let decider = pending.decider()?;
+    let decider_entity = registry.entity_of(decider)?;
+    if !players.contains(decider_entity) {
+        return None;
+    }
+    match *pending {
+        PendingDecision::ChooseRestores { target, .. } => Some(target),
+        PendingDecision::ChooseDisables { .. } => Some(decider),
+        PendingDecision::None => None,
+    }
 }
 
 fn own_focus(
@@ -508,7 +545,16 @@ fn spawn_decision_controls(
 ) {
     body.spawn(fine(
         assets,
-        format!("{}/{} cells chosen", decision.chosen, decision.owed),
+        format!(
+            "{}/{} {} cells chosen",
+            decision.chosen,
+            decision.owed,
+            if decision.restoring {
+                "disabled"
+            } else {
+                "live"
+            }
+        ),
     ));
     body.spawn((
         Name::new("Disable Decision Controls"),
@@ -574,24 +620,39 @@ fn handle_decision_input(
     mut selection: ResMut<DisableSelection>,
     cells: Query<(&Interaction, &OwnCell), Changed<Interaction>>,
     controls: Query<(&Interaction, &DecisionControl), Changed<Interaction>>,
-    players: Query<(&LatticeSpec, &LatticeState, &ControlOwner), With<Player>>,
+    lattices: Query<(&LatticeSpec, &LatticeState)>,
+    owners: Query<&ControlOwner, With<Player>>,
 ) {
-    let PendingDecision::ChooseDisables { decider, count, .. } = *pending else {
-        return;
+    let (decider, target, count, restoring) = match *pending {
+        PendingDecision::ChooseDisables { decider, count, .. } => (decider, decider, count, false),
+        PendingDecision::ChooseRestores {
+            decider,
+            target,
+            count,
+        } => (decider, target, count, true),
+        PendingDecision::None => return,
     };
     if queue.holds_answer_for(decider) {
         return;
     }
-    let Some(entity) = registry.entity_of(decider) else {
+    let Some(decider_entity) = registry.entity_of(decider) else {
         return;
     };
-    let Ok((spec, state, owner)) = players.get(entity) else {
+    let Some(target_entity) = registry.entity_of(target) else {
+        return;
+    };
+    let (Ok((spec, state)), Ok(owner)) = (lattices.get(target_entity), owners.get(decider_entity))
+    else {
         return;
     };
     let Some(decision) = selection
         .decision
         .as_ref()
-        .filter(|decision| decision.decider == decider)
+        .filter(|decision| {
+            decision.decider == decider
+                && decision.target == target
+                && decision.restoring == restoring
+        })
         .cloned()
     else {
         return;
@@ -620,23 +681,31 @@ fn handle_decision_input(
     if !confirm {
         return;
     }
-    let live: Vec<_> = spec
+    let selectable: Vec<_> = spec
         .cells()
-        .filter(|&(coord, _)| !state.is_disabled(coord))
+        .filter(|&(coord, _)| state.is_disabled(coord) == restoring)
         .map(|(coord, _)| coord)
         .collect();
-    let owed = usize::from(count).min(live.len());
+    let owed = usize::from(count).min(selectable.len());
     let valid = owed == decision.owed
         && selection.cells.len() == owed
-        && selection.cells.iter().all(|cell| live.contains(cell));
+        && selection.cells.iter().all(|cell| selectable.contains(cell));
     if !valid {
         return;
     }
     queue.push(IssuedCommand {
         seat: owner.0,
-        command: GameCommand::ChooseDisables {
-            unit: decider,
-            cells: selection.cells.clone(),
+        command: if restoring {
+            GameCommand::ChooseRestores {
+                unit: decider,
+                target,
+                cells: selection.cells.clone(),
+            }
+        } else {
+            GameCommand::ChooseDisables {
+                unit: decider,
+                cells: selection.cells.clone(),
+            }
         },
     });
 }
@@ -727,7 +796,9 @@ mod tests {
             &mut selection,
             Some(DisableDecision {
                 decider: UnitId(4),
+                target: UnitId(4),
                 owed: 2,
+                restoring: false,
                 live: live.clone(),
             }),
         );
@@ -742,7 +813,9 @@ mod tests {
         let mut selection = DisableSelection {
             decision: Some(DisableDecision {
                 decider: UnitId(4),
+                target: UnitId(4),
                 owed: 1,
+                restoring: false,
                 // Disabled and off-lattice cells are absent from this live set.
                 live: vec![first, second],
             }),
@@ -820,6 +893,75 @@ mod tests {
                 command: GameCommand::ChooseDisables {
                     unit,
                     cells: vec![LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn restoration_uses_the_casters_owner_and_the_targets_disabled_cells() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<PendingDecision>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<CommandQueue>()
+            .init_resource::<DisableSelection>()
+            .add_systems(
+                Update,
+                (sync_disable_selection, handle_decision_input).chain(),
+            );
+        let stats = LatticeStats::new(BTreeMap::from([(ElementId(0), 2)]), BTreeMap::new());
+        let spec = LatticeSpec::default().with(
+            LatticeCoord::ORIGIN,
+            hex_lattice::CellKind::Gem {
+                element: ElementId(0),
+            },
+        );
+        let caster = UnitId(5);
+        let caster_entity = app
+            .world_mut()
+            .spawn((
+                Player,
+                caster,
+                ControlOwner(PlayerSeat(8)),
+                spec.clone(),
+                LatticeState::new(&spec, &stats),
+                stats.clone(),
+            ))
+            .id();
+        let target = UnitId(6);
+        let mut target_state = LatticeState::new(&spec, &stats);
+        hex_lattice::apply_disables(&mut target_state, &[LatticeCoord::ORIGIN]);
+        let target_entity = app
+            .world_mut()
+            .spawn((Player, target, spec, target_state, stats))
+            .id();
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(caster, caster_entity);
+        app.world_mut()
+            .resource_mut::<UnitRegistry>()
+            .register(target, target_entity);
+        *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
+            decider: caster,
+            target,
+            count: 2,
+        };
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        app.update();
+
+        assert_eq!(
+            app.world_mut().resource_mut::<CommandQueue>().pop(),
+            Some(IssuedCommand {
+                seat: PlayerSeat(8),
+                command: GameCommand::ChooseRestores {
+                    unit: caster,
+                    target,
+                    cells: vec![LatticeCoord::ORIGIN],
                 },
             })
         );

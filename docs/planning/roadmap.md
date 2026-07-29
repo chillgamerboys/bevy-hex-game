@@ -33,7 +33,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Run bottoms on tiles | publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to wave 3 terrain casting | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
-| Outcomes and recovery | retained-world Victory/Defeat modals, same-seed Retry, Renewal restoration choices and next-round revival, plus exploration Rest | combat/game |
 | Party-combat playtest checkpoint | deterministic 3v3 Party Trial, summary/replay gates, scripted walks, and a mandatory human walk before Part 2 planning | game/docs |
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a Wave 4 Part 1 gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
@@ -67,6 +66,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | AI host | Wave 4 Part 1: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
 | Party controls | Wave 4 Part 1: stable six-member strip and number-key selection, camera focus, combat-owned acting selection, Group/Solo mode, and preset/member-slot editing |
 | Formation traversal | Wave 4 Part 1: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
+| Outcomes and recovery | Wave 4 Part 1: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 
 ## Sequencing — independent lanes behind one contract
 

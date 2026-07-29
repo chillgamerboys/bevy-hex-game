@@ -363,8 +363,26 @@ pub(super) fn apply(
                     defender.0
                 );
             }
-            Effect::RestoreHexes { .. } => {
-                refusals.push("RestoreHexes waits on choosing which hexes come back");
+            Effect::RestoreHexes { count } => {
+                let Some((target_unit, target_entity, _)) = target_unit else {
+                    continue;
+                };
+                let Ok((target_spec, target_state)) = lattices.get(target_entity) else {
+                    refusals.push("the restoration target has no lattice");
+                    continue;
+                };
+                let disabled = target_spec
+                    .cells()
+                    .filter(|&(coord, _)| target_state.is_disabled(coord))
+                    .count();
+                let owed = usize::from(*count).min(disabled);
+                if owed > 0 {
+                    *ctx.pending = PendingDecision::ChooseRestores {
+                        decider: unit,
+                        target: target_unit,
+                        count: u16::try_from(owed).unwrap_or(u16::MAX),
+                    };
+                }
             }
             Effect::ModifyIncomingDisables { .. } => {
                 refusals.push("one-shot wards have nowhere to live in the lattice yet");

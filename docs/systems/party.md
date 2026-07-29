@@ -62,3 +62,16 @@ unit obstruction remains deferred, but they cannot finish together.
 If combat begins during presentation, the existing movement interruption reconciles
 every moving party member to its nearest whole route surface before turn construction.
 Solo mode bypasses this planner and continues to emit one selected-unit `MoveAlong`.
+
+## Exploration rest
+
+The party strip exposes Rest and the `R` shortcut while Exploring. Both emit one
+`GameCommand::Rest`; the applier validates that its issuer belongs to the party and
+then recovers every roster member in stable order.
+
+Rest restores every disabled lattice cell, removes `Downed`, fills live unlocked gems
+to authored capacity, and removes persistent effects targeting party members. Active
+enchantments, their locks, and locked mana remain intact. Enchantments already broken
+by damage are not recreated. Positions, terrain, the encounter roster, and downed
+hostiles are untouched, and one structured `Rested` event records each member's exact
+cells and refilled mana.

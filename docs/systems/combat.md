@@ -69,6 +69,28 @@ defender choice. Damage commands aimed at an already downed unit are refused bef
 spending action or mana; non-damaging inspection such as Reveal remains legal because
 the retained lattice is the future restoration target.
 
+### Terminal outcomes retain the battlefield
+
+After commands apply, outstanding decisions settle, and newly spent lattices become
+`Downed`, combat counts active factions. A surviving player side with no active
+hostile is Victory; no active player is Defeat, including simultaneous elimination.
+The result is emitted once and stored in `EncounterResolution`.
+
+That resource gates the same `PausableSystems` set as ordinary pause, freezing
+movement, casting, AI, effects, command application, and turns while the world remains
+visible. Outcome UI runs outside the gate. Victory continues into Exploring. Defeat
+can rebuild the retained scenario snapshot with its original resolved seed, or return
+to the title screen.
+
+### Revival waits for a round boundary
+
+`RestoreHexes` opens `ChooseRestores` for the caster, naming the target and quota.
+The answer is a command containing exact target cells; every coordinate must be a
+distinct disabled cell on that target, and the answer count is the smaller of the
+authored amount and the cells currently disabled. Restoring at least one cell removes
+`Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
+it rejoins the initiative sort by initiative then stable `UnitId`.
+
 ## Saying no out loud
 
 Clicking a tile can fail for five different reasons — not your turn, nothing standable
