@@ -7,6 +7,23 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 18 — feat: add procedural V3 Forest biome (2026-07-28)
+
+- **PR**: #92 — `feat/v3-forest`
+- **Outcome**: green — 2 post-Wave-3 integration blockers fixed
+- **Lenses triggered**: 4, 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 8, fresh-eyes | `assets/config/scenarios.ron`:113 | SHIP-BLOCKER | fixed during `dev` reconciliation — Forest now supplies PR #100's required `Map` category and shared anchored encounter instead of the removed inline `units` field |
+| 7 | `crates/hex_game/src/screens/title.rs`:842 | SHIP-BLOCKER | fixed during `dev` reconciliation — the shipped-lane assertion now includes Forest as the tenth Map scenario and eleventh entry |
+| 7, 8 | `crates/hex_game/src/walk.rs`:642 | NON-BLOCKER | fixed during merge-conflict resolution — both Forest's pinned hero-seed regression and Wave 3's cross-walk scenario-name validation are retained |
+
+**Notes**: the blocker projection introduced by Forest is consumed by the reconciled
+movement adapter in PR #102. Targeted map, spawning, unit, and game suites pass,
+including exact feature lifecycle, palette, blocker, protected-route, anchor,
+fingerprint, teardown, and deterministic rebuild coverage.
+
 ## Wave 17 — feat: adapt movement to generated blockers (2026-07-28)
 
 - **PR**: #102 — `feat/traversal-blocker-adapter`

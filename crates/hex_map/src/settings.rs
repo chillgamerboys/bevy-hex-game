@@ -2782,6 +2782,14 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-caves.ron"),
                 2,
             ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
+                3,
+            ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-forest.ron"),
+                3,
+            ),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
@@ -2790,8 +2798,12 @@ mod tests {
             };
             assert_eq!(procedural.generator_version(), expected_version);
             assert_eq!(
-                matches!(procedural, ProceduralSettings::V2(_)),
+                matches!(&procedural, ProceduralSettings::V2(_)),
                 expected_version == 2
+            );
+            assert_eq!(
+                matches!(&procedural, ProceduralSettings::V3(_)),
+                expected_version == 3
             );
         }
     }

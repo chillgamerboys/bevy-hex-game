@@ -624,6 +624,7 @@ mod tests {
             "../../walks/menus.ron",
             "../../walks/gameplay.ron",
             "../../walks/waterfall.ron",
+            "../../walks/forest.ron",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -636,6 +637,26 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
             }
         }
+    }
+
+    #[test]
+    fn forest_walk_pins_the_shipped_hero_seed() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenario library parses");
+        let hero_seed = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Forest")
+            .and_then(|scenario| scenario.generation_seed)
+            .expect("the shipped Forest scenario has a hero seed");
+        let steps: Vec<WalkStep> = ron::from_str(include_str!("../../../walks/forest.ron"))
+            .expect("the shipped Forest walk parses");
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Forest".to_owned(),
+            seed: Some(hero_seed),
+        }));
     }
 
     /// Every scenario a shipped walk starts must still exist in `scenarios.ron`.

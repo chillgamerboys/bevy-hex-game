@@ -110,6 +110,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Forest",
+            category: Map,
+            blurb: "Low wooded hills open onto a tall-grass prairie through protected clearings and trails.",
+            world: "config/worlds/procedural-forest.ron",
+            generation_seed: Some(381654729),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Close Quarters",
             category: Combat,
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
