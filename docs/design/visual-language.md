@@ -54,9 +54,10 @@ cross-cutting visual rewrite. During the staged period, a palette entry can be a
 inventory of a live literal rather than its authority. Its tag includes `legacy` until
 the corresponding renderer resolves the swatch directly.
 
-`liquid/foam` stores the sRGB encoding of the liquid shader's former linear blend
-target. Moving that colour into the palette therefore changes its ownership without
-intentionally changing the rendered Waterfall appearance.
+`liquid/foam` stores the nearest f32-representable sRGB encoding of the liquid
+shader's former linear blend target (within two ULP per channel after conversion).
+Moving that colour into the palette therefore changes its ownership without a
+visible change to the rendered Waterfall appearance.
 
 ## Adding a colour
 

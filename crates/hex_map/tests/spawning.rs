@@ -140,7 +140,7 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
             foam,
             PaletteSwatch::new(
                 "Water Foam",
-                SrgbColor::new(0.896_24, 0.959_34, 0.991_16)
+                SrgbColor::new(0.896_243_8, 0.959_346_6, 0.991_156_4)
                     .expect("the fixture foam color should be valid"),
                 BTreeSet::from(["test".to_owned()]),
             )
