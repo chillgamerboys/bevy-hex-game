@@ -293,12 +293,12 @@ frames and publishes deterministic artifacts beneath
 - a canonical `report.ron` with identity, bounds, origin, connectivity, occupied-cell
   counts by style and part, exact masks, resolved style and swatch dependencies,
   framing, validation, and independent object, style-catalog, and palette
-  fingerprints.
+  fingerprints plus the exact renderer-mesh byte revision.
 
 Review framing, the neutral render rig, file order, and report format are versioned.
 The report excludes absolute paths, timings, and machine or GPU details. The composite
 review fingerprint changes when the object, style catalog, or palette semantics
-change, regardless of RON formatting.
+change, regardless of RON formatting, and when the shared voxel mesh bytes change.
 
 Frames are rendered to an offscreen target and rejected if they are blank, black, or
 the wrong size. The tool stages the complete pack beside its final directory and
@@ -308,10 +308,10 @@ same fingerprint is reported as a collision and never overwrites it. Review outp
 derived and untracked. A saved object remains the only source of truth.
 
 Request creation, renderer startup, and publication each verify the exact tracked
-source-byte revisions used to prepare the review. Publication checks once before
-staging and again immediately before the atomic rename. A source change at any of
-those points aborts the export, removes its staging directory, and requires a project
-reload.
+art-source revisions and `assets/meshes/hex.glb` bytes used to prepare the review.
+Publication checks once before staging and again immediately before the atomic rename.
+A source change at any of those points aborts the export, removes its staging
+directory, and requires a project reload or fresh review request.
 
 ## Procedural follow-up
 

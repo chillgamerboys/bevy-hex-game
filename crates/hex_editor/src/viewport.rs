@@ -24,7 +24,7 @@ use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 /// World-space height of one authored voxel level.
 pub const DEFAULT_LEVEL_HEIGHT: f32 = 0.4;
 
-const HEX_MESH: &str = "meshes/hex.glb";
+pub(crate) const HEX_MESH_ASSET_PATH: &str = "meshes/hex.glb";
 const DEFAULT_GRID_RADIUS: u8 = 6;
 const GUIDE_THICKNESS: f32 = 0.012;
 const GRID_LINE_LIFT: f32 = 0.008;
@@ -420,7 +420,7 @@ fn spawn_viewport(
             mesh: 0,
             primitive: 0,
         }
-        .from_asset(HEX_MESH),
+        .from_asset(HEX_MESH_ASSET_PATH),
     );
     let guide_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.32, 0.36, 0.40, 0.10),

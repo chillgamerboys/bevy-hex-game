@@ -919,19 +919,29 @@ pub(crate) fn current_project_revisions(
     Ok(revision_set_from_sources(&sources))
 }
 
+/// Reads the exact byte revision of one repository-relative renderer source.
+pub(crate) fn current_file_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<ByteRevision, ProjectError> {
+    let path = repository_root.join(relative_path);
+    let source =
+        fs::read(&path).map_err(|error| ProjectError::at("read renderer source", &path, error))?;
+    Ok(byte_revision(&source))
+}
+
+fn byte_revision(source: &[u8]) -> ByteRevision {
+    ByteRevision {
+        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
+        fingerprint: xxh3_64(source),
+    }
+}
+
 fn revision_set_from_sources(sources: &BTreeMap<PathBuf, Vec<u8>>) -> ProjectRevisionSet {
     ProjectRevisionSet {
         files: sources
             .iter()
-            .map(|(path, source)| {
-                (
-                    normalized_relative_path(path),
-                    ByteRevision {
-                        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
-                        fingerprint: xxh3_64(source),
-                    },
-                )
-            })
+            .map(|(path, source)| (normalized_relative_path(path), byte_revision(source)))
             .collect(),
     }
 }

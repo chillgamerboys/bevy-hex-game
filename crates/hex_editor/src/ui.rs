@@ -157,6 +157,8 @@ pub struct WorkshopUiSnapshot {
     pub recovery_conflict: bool,
     /// Whether any tracked replacement is currently blocked.
     pub tracked_writes_blocked: bool,
+    /// Whether the open object draft currently passes save validation.
+    pub object_save_ready: bool,
     /// Whether the current document satisfies every one-click review precondition.
     pub review_ready: bool,
     /// Whether the deterministic renderer is currently producing a review pack.
@@ -211,6 +213,7 @@ impl WorkshopUiSnapshot {
         self.recovery_prompt = recovery_prompt;
         self.recovery_conflict = recovery_conflict;
         self.tracked_writes_blocked = recovery_conflict || !external_changes.is_empty();
+        self.object_save_ready = editor.blueprint_for_save(style_draft).is_ok();
         self.review_ready = review_ready;
         self.review_in_progress = review_in_progress;
         self.close_confirmation = close_confirmation;
@@ -231,6 +234,7 @@ impl WorkshopUiSnapshot {
         self.recovery_prompt = None;
         self.recovery_conflict = false;
         self.tracked_writes_blocked = true;
+        self.object_save_ready = false;
         self.review_ready = false;
         self.review_in_progress = false;
         self.close_confirmation = false;
@@ -753,6 +757,7 @@ fn draw_workshop_ui(
         || state.pending_delete.is_some()
         || state.pending_reload
         || snapshot.recovery_prompt.is_some()
+        || snapshot.recovery_conflict
         || snapshot.close_confirmation
         || snapshot.review_in_progress
         || context.any_popup_open();
@@ -762,7 +767,7 @@ fn draw_workshop_ui(
         context.egui_is_using_pointer(),
         overlay_open,
     );
-    suppression.keyboard = context.egui_wants_keyboard_input();
+    suppression.keyboard = context.egui_wants_keyboard_input() || overlay_open;
     if let Some(mut viewport_input) = viewport_input {
         viewport_input.0 = !suppression.pointer;
     }
@@ -795,6 +800,7 @@ fn collect_keyboard_shortcuts(
         || state.pending_delete.is_some()
         || state.pending_reload
         || snapshot.recovery_prompt.is_some()
+        || snapshot.recovery_conflict
         || snapshot.close_confirmation
         || snapshot.review_in_progress
     {
@@ -998,7 +1004,7 @@ fn draw_top_toolbar(
 
                 let save_ready = match mode {
                     WorkshopMode::VoxelStyles => project_ready,
-                    WorkshopMode::Objects => saved_document,
+                    WorkshopMode::Objects => saved_document && snapshot.object_save_ready,
                 } && !snapshot.tracked_writes_blocked;
                 if ui
                     .add_enabled(save_ready, egui::Button::new("Save"))
@@ -2706,7 +2712,10 @@ fn draw_close_confirmation(
     }
     let can_save = !snapshot.tracked_writes_blocked
         && match snapshot.document_state {
-            WorkshopDocumentState::Saved => true,
+            WorkshopDocumentState::Saved => snapshot
+                .editor
+                .as_ref()
+                .is_none_or(|editor| !editor.dirty || snapshot.object_save_ready),
             WorkshopDocumentState::Calibration | WorkshopDocumentState::Unsaved => {
                 snapshot.editor.as_ref().is_none_or(|editor| !editor.dirty)
             }
@@ -2719,12 +2728,12 @@ fn draw_close_confirmation(
         );
         if !can_save {
             ui.add_space(6.0);
-            ui.label(
-                egui::RichText::new(
-                    "Save All is unavailable for a new object, invalid draft, or unresolved baseline. Resolve the recovery choice, use Save As, or reload first.",
-                )
-                .color(WARNING),
-            );
+            let guidance = if snapshot.tracked_writes_blocked {
+                "Save All is unavailable while tracked files or the recovery baseline conflict. Reload or resolve the recovery choice first; Save As can preserve only an object draft when shared catalogs are unchanged."
+            } else {
+                "Save All is unavailable for a new or invalid object draft. Correct the draft, or use Save As after it passes validation."
+            };
+            ui.label(egui::RichText::new(guidance).color(WARNING));
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {

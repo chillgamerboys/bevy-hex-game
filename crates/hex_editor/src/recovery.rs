@@ -19,7 +19,7 @@ use hex_assets::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::model::{EditorTool, PreviewRig, WorkshopMode};
+use crate::model::{EditorTool, PreviewRig, WorkshopMode, CALIBRATION_OBJECT_ID};
 use crate::project::ProjectRevisionSet;
 
 /// Current editor-only recovery schema.
@@ -390,7 +390,7 @@ impl RecoveryEnvelope {
         workshop.normalize_and_validate()?;
         let recovered_id = &workshop.editor.object.id;
         let identity_matches = match &self.document {
-            RecoveryDocument::Calibration => recovered_id.as_str() == "calibration/scene",
+            RecoveryDocument::Calibration => recovered_id.as_str() == CALIBRATION_OBJECT_ID,
             RecoveryDocument::Unsaved(id) | RecoveryDocument::Saved(id) => id == recovered_id,
         };
         if !identity_matches {

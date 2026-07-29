@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bevy::asset::AssetPlugin;
@@ -18,7 +18,9 @@ use hex_assets::{
 
 use crate::launch::resolve_repository_root;
 use crate::model::{validate_position, EditorModel, EditorTool, PreviewRig, WorkshopMode};
-use crate::project::{AssetProject, ExternalAssetChange, ProjectRevisionSet};
+use crate::project::{
+    current_file_revision, AssetProject, ExternalAssetChange, ProjectRevisionSet,
+};
 use crate::recovery::{RecoveryDocument, RecoveryEnvelope, RecoveryStore, RecoveryWorkshopDraft};
 use crate::review::{ReviewPresentation, ReviewPublishOutcome, ReviewReport, REVIEW_FRAME_SPECS};
 use crate::review_capture::{ReviewCaptureFinished, ReviewCapturePlugin, ReviewCaptureRequest};
@@ -30,7 +32,7 @@ use crate::viewport::{
     CameraSnap, CameraSnapRequest, FrameViewportRequest, HoveredFaceTarget, RenderedVoxel,
     ViewportContent, ViewportContentUpdate, ViewportEmission, ViewportFaceTarget,
     ViewportInputEnabled, ViewportMode, ViewportPickSource, ViewportPreviewRig, ViewportStyle,
-    ViewportSystems,
+    ViewportSystems, HEX_MESH_ASSET_PATH,
 };
 use crate::workshop::WorkshopDraft;
 
@@ -60,6 +62,7 @@ enum PendingRecovery {
 
 #[derive(Debug, Clone, PartialEq)]
 struct RecoverableSession {
+    base_revisions: ProjectRevisionSet,
     document: RecoveryDocument,
     workshop: RecoveryWorkshopDraft,
 }
@@ -454,9 +457,19 @@ fn apply_ui_action(
             if !runtime.recovery_conflict {
                 return Ok(Some("Recovery baseline is already current".to_owned()));
             }
-            runtime.recovery_conflict = false;
+            let previous_draft = runtime.draft.clone();
+            let previous_document = runtime.document.clone();
+            let previous_baseline = runtime.recovery_base_revisions.clone();
             refresh_recovery_baseline(runtime);
-            let _wrote_recovery = write_recovery_now(runtime)?;
+            let accepted = rebase_recovered_object_checkpoint(runtime)
+                .and_then(|()| write_recovery_now(runtime).map(|_written| ()));
+            if let Err(error) = accepted {
+                runtime.draft = previous_draft;
+                runtime.document = previous_document;
+                runtime.recovery_base_revisions = previous_baseline;
+                return Err(error);
+            }
+            runtime.recovery_conflict = false;
             Ok(Some(
                 "Kept recovered work; later saves may replace the current tracked files".to_owned(),
             ))
@@ -940,6 +953,28 @@ fn refresh_recovery_baseline(runtime: &mut WorkshopRuntime) {
         .map(AssetProject::revision_snapshot);
 }
 
+fn rebase_recovered_object_checkpoint(runtime: &mut WorkshopRuntime) -> Result<(), String> {
+    let OpenDocument::Saved(id) = runtime.document.clone() else {
+        return Ok(());
+    };
+    let checkpoint = runtime
+        .project
+        .as_ref()
+        .ok_or_else(|| runtime.load_error_message())?
+        .object(&id)
+        .cloned();
+    let tracked_object_exists = checkpoint.is_some();
+    runtime
+        .draft_mut()?
+        .editor_mut_untracked()
+        .rebase_saved_checkpoint(checkpoint)
+        .map_err(|error| error.to_string())?;
+    if !tracked_object_exists {
+        runtime.document = OpenDocument::Unsaved(id);
+    }
+    Ok(())
+}
+
 fn resolve_recovery_conflict_after_tracked_write(runtime: &mut WorkshopRuntime) {
     if runtime.recovery_conflict {
         let resolved = runtime
@@ -1050,6 +1085,7 @@ fn restore_pending_recovery(runtime: &mut WorkshopRuntime) -> Result<Option<Stri
     let base_conflict = envelope.base_revisions != current_revisions;
     let document = open_document_from_recovery(&envelope.document);
     let session = RecoverableSession {
+        base_revisions: envelope.base_revisions.clone(),
         document: envelope.document.clone(),
         workshop: envelope.workshop.clone(),
     };
@@ -1730,7 +1766,18 @@ fn recoverable_session(runtime: &WorkshopRuntime) -> Result<RecoverableSession, 
         .draft
         .as_ref()
         .ok_or_else(|| runtime.load_error_message())?;
+    let base_revisions = runtime
+        .recovery_base_revisions
+        .clone()
+        .or_else(|| {
+            runtime
+                .project
+                .as_ref()
+                .map(AssetProject::revision_snapshot)
+        })
+        .ok_or_else(|| "tracked art revisions are unavailable".to_owned())?;
     Ok(RecoverableSession {
+        base_revisions,
         document: recovery_document(&runtime.document),
         workshop: draft.recovery_snapshot(),
     })
@@ -1746,29 +1793,20 @@ fn write_recovery_now(runtime: &mut WorkshopRuntime) -> Result<bool, String> {
         .as_ref()
         .cloned()
         .ok_or_else(|| "recovery storage is unavailable".to_owned())?;
-    let base_revisions = runtime
-        .recovery_base_revisions
-        .clone()
-        .or_else(|| {
-            runtime
-                .project
-                .as_ref()
-                .map(AssetProject::revision_snapshot)
-        })
-        .ok_or_else(|| "tracked art revisions are unavailable".to_owned())?;
     let envelope = RecoveryEnvelope::new(
         unix_timestamp_millis()?,
-        base_revisions.clone(),
+        session.base_revisions.clone(),
         session.document.clone(),
         session.workshop.clone(),
     )
     .map_err(|error| error.to_string())?;
     store.write(&envelope).map_err(|error| error.to_string())?;
     let written_session = RecoverableSession {
+        base_revisions: envelope.base_revisions.clone(),
         document: envelope.document,
         workshop: envelope.workshop,
     };
-    runtime.recovery_base_revisions = Some(base_revisions);
+    runtime.recovery_base_revisions = Some(written_session.base_revisions.clone());
     runtime.recovery_autosave.last_observed = Some(written_session.clone());
     runtime.recovery_autosave.last_written = Some(written_session);
     Ok(true)
@@ -1798,10 +1836,18 @@ fn poll_external_changes(
             let newly_conflicted = runtime.external_changes.is_empty() && !changes.is_empty();
             runtime.external_changes = changes;
             if newly_conflicted {
-                runtime.set_status(
-                    WorkshopStatusKind::Warning,
-                    "Tracked art files changed outside this editor; reload or use Save As",
-                );
+                let shared_catalog_changed = runtime.external_changes.iter().any(|change| {
+                    matches!(
+                        change.path.to_str(),
+                        Some("palette.ron" | "voxel_styles.ron")
+                    )
+                });
+                let guidance = if shared_catalog_changed {
+                    "Tracked shared catalogs changed outside this editor; reload first. Save As cannot preserve a draft until the catalog conflict is resolved."
+                } else {
+                    "Tracked object files changed outside this editor; reload before overwriting them, or use Save As with a new object id."
+                };
+                runtime.set_status(WorkshopStatusKind::Warning, guidance);
             } else {
                 runtime.needs_sync = true;
             }
@@ -1923,7 +1969,12 @@ fn build_review_capture_request(runtime: &WorkshopRuntime) -> Result<ReviewCaptu
         .editor()
         .blueprint_for_save(draft.styles())
         .map_err(|error| error.to_string())?;
-    let report = ReviewReport::new(&object, draft.styles(), draft.palette())
+    let mesh_revision = current_file_revision(
+        project.repository_root(),
+        &Path::new("assets").join(HEX_MESH_ASSET_PATH),
+    )
+    .map_err(|error| error.to_string())?;
+    let report = ReviewReport::new(&object, draft.styles(), draft.palette(), mesh_revision)
         .map_err(|error| error.to_string())?;
 
     let contents = build_review_viewport_contents(draft);
@@ -2434,6 +2485,157 @@ mod tests {
             .expect("accepted recovery should remain readable")
             .expect("accepted recovery should be persisted");
         assert_eq!(Some(stored.base_revisions), runtime.recovery_base_revisions);
+    }
+
+    #[test]
+    fn accepting_recovery_rebases_a_clean_saved_draft_to_the_current_disk_object() {
+        let (_directory, mut runtime) = tracked_write_runtime();
+        let style = runtime
+            .project
+            .as_ref()
+            .expect("fixture project should exist")
+            .styles()
+            .styles()
+            .keys()
+            .next()
+            .cloned()
+            .expect("fixture project should contain a style");
+        let mut old_editor =
+            EditorModel::blank(ObjectCategory::Plant, ConnectivityPolicy::Grounded, style)
+                .expect("fixture object editor should be valid");
+        let id = ObjectAssetId::new("plant/rebased-recovery").expect("fixture id should be valid");
+        old_editor
+            .set_unsaved_identity(id.clone(), "Recovered Version")
+            .expect("fixture identity should be valid");
+        let old_object = old_editor
+            .blueprint_for_save(
+                runtime
+                    .project
+                    .as_ref()
+                    .expect("fixture project should exist")
+                    .styles(),
+            )
+            .expect("fixture recovered object should validate");
+        let mut disk_object = old_object.clone();
+        disk_object.display_name = "Current Disk Version".to_owned();
+        runtime
+            .project_mut()
+            .expect("fixture project should exist")
+            .save_object_as(disk_object, id.clone())
+            .expect("current disk object should save");
+        let recovered_editor =
+            EditorModel::from_blueprint(old_object).expect("recovered editor should be valid");
+        let project = runtime
+            .project
+            .as_ref()
+            .expect("fixture project should exist");
+        runtime.draft = Some(WorkshopDraft::new(
+            project.palette().clone(),
+            project.styles().clone(),
+            recovered_editor,
+        ));
+        runtime.document = OpenDocument::Saved(id);
+        assert!(!runtime
+            .draft
+            .as_ref()
+            .expect("recovered draft should exist")
+            .editor()
+            .is_dirty());
+
+        drop(
+            apply_ui_action(WorkshopUiAction::AcceptRecoveryBaseline, &mut runtime, None)
+                .expect("current disk object should become the saved checkpoint"),
+        );
+
+        assert!(runtime
+            .draft
+            .as_ref()
+            .expect("recovered draft should remain")
+            .editor()
+            .is_dirty());
+        assert!(!runtime.recovery_conflict);
+    }
+
+    #[test]
+    fn app_autosave_persists_a_refreshed_baseline_after_deleting_another_object() {
+        let (_directory, mut runtime) = tracked_write_runtime();
+        let style = runtime
+            .project
+            .as_ref()
+            .expect("fixture project should exist")
+            .styles()
+            .styles()
+            .keys()
+            .next()
+            .cloned()
+            .expect("fixture project should contain a style");
+        let mut other_editor =
+            EditorModel::blank(ObjectCategory::Plant, ConnectivityPolicy::Grounded, style)
+                .expect("fixture object editor should be valid");
+        let other_object =
+            ObjectAssetId::new("plant/non-open").expect("fixture object id should be valid");
+        other_editor
+            .set_unsaved_identity(other_object.clone(), "Non-Open Object")
+            .expect("fixture object identity should be valid");
+        let other_blueprint = other_editor
+            .blueprint_for_save(
+                runtime
+                    .project
+                    .as_ref()
+                    .expect("fixture project should exist")
+                    .styles(),
+            )
+            .expect("fixture object should pass save validation");
+        runtime
+            .project_mut()
+            .expect("fixture project should exist")
+            .save_object_as(other_blueprint, other_object.clone())
+            .expect("fixture object should save");
+        drop(
+            apply_ui_action(WorkshopUiAction::AcceptRecoveryBaseline, &mut runtime, None)
+                .expect("fixture recovery baseline should be accepted"),
+        );
+        let previous_stored = runtime
+            .recovery_store
+            .as_ref()
+            .expect("fixture recovery store should exist")
+            .load()
+            .expect("fixture recovery should be readable")
+            .expect("accepted recovery should be persisted");
+        drop(
+            apply_ui_action(
+                WorkshopUiAction::DeleteObject(other_object),
+                &mut runtime,
+                None,
+            )
+            .expect("deleting a non-open object should succeed"),
+        );
+        let refreshed_baseline = runtime
+            .recovery_base_revisions
+            .clone()
+            .expect("tracked write should refresh the baseline");
+        assert_ne!(previous_stored.base_revisions, refreshed_baseline);
+
+        let store = runtime
+            .recovery_store
+            .as_ref()
+            .expect("fixture recovery store should exist")
+            .clone();
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default())
+            .insert_resource(runtime)
+            .add_systems(Update, autosave_recovery);
+        app.update();
+        app.world_mut()
+            .resource_mut::<Time<()>>()
+            .advance_by(std::time::Duration::from_secs(4));
+        app.update();
+
+        let stored = store
+            .load()
+            .expect("autosaved recovery should be readable")
+            .expect("dirty draft should retain recovery");
+        assert_eq!(stored.base_revisions, refreshed_baseline);
     }
 
     #[test]

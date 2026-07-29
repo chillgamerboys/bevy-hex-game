@@ -20,7 +20,9 @@ use hex_assets::{
 };
 use image::RgbaImage;
 
-use crate::project::{current_project_revisions, ProjectRevisionSet};
+use crate::project::{
+    current_file_revision, current_project_revisions, ByteRevision, ProjectRevisionSet,
+};
 use crate::review::{
     captured_rgba, publish_review_pack_with_pre_rename_check, ReviewPresentation,
     ReviewPublishOutcome, ReviewReport, REVIEW_CLEAR_RGBA, REVIEW_FRAME_COUNT, REVIEW_FRAME_HEIGHT,
@@ -28,7 +30,7 @@ use crate::review::{
 };
 use crate::viewport::{
     HoveredFaceTarget, RenderedVoxel, ViewportContent, ViewportEmission, ViewportInputEnabled,
-    ViewportMode, ViewportPreviewRig, ViewportStyle,
+    ViewportMode, ViewportPreviewRig, ViewportStyle, HEX_MESH_ASSET_PATH,
 };
 
 const SETTLE_FRAMES: u8 = 6;
@@ -91,6 +93,7 @@ impl ReviewCaptureRequest {
         verify_project_revisions(
             &self.repository_root,
             &self.expected_revisions,
+            self.report.renderer_mesh_revision(),
             RevisionCheckPoint::RequestCreation,
         )
     }
@@ -126,6 +129,7 @@ enum RevisionCheckPoint {
 fn verify_project_revisions(
     repository_root: &Path,
     expected: &ProjectRevisionSet,
+    expected_renderer_mesh: ByteRevision,
     checkpoint: RevisionCheckPoint,
 ) -> Result<(), String> {
     let current = current_project_revisions(repository_root).map_err(|error| {
@@ -139,47 +143,67 @@ fn verify_project_revisions(
              resolve the filesystem error, reload the project, and retry the review export"
         )
     })?;
-    if &current == expected {
-        return Ok(());
-    }
-
-    let changes = expected
-        .files
-        .keys()
-        .chain(current.files.keys())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .filter_map(|path| {
-            let change = match (expected.files.get(path), current.files.get(path)) {
-                (None, Some(_)) => "added",
-                (Some(_), None) => "removed",
-                (Some(expected), Some(current)) if expected != current => "modified",
-                _ => return None,
-            };
-            Some(format!("{path} ({change})"))
-        })
-        .collect::<Vec<_>>();
-    let examples = changes
-        .iter()
-        .take(5)
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    let remainder = changes.len().saturating_sub(5);
-    let suffix = if remainder == 0 {
-        String::new()
-    } else {
-        format!(", and {remainder} more")
-    };
     let timing = match checkpoint {
         RevisionCheckPoint::RequestCreation => "after the saved asset snapshot was prepared",
         RevisionCheckPoint::CaptureStart => "before the review renderer started",
         RevisionCheckPoint::Publication => "while the review capture was running",
     };
-    Err(format!(
-        "tracked art sources changed {timing}: {examples}{suffix}; \
-         no review pack was published, so reload the project and retry the review export"
-    ))
+    if &current != expected {
+        let changes = expected
+            .files
+            .keys()
+            .chain(current.files.keys())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|path| {
+                let change = match (expected.files.get(path), current.files.get(path)) {
+                    (None, Some(_)) => "added",
+                    (Some(_), None) => "removed",
+                    (Some(expected), Some(current)) if expected != current => "modified",
+                    _ => return None,
+                };
+                Some(format!("{path} ({change})"))
+            })
+            .collect::<Vec<_>>();
+        let examples = changes
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remainder = changes.len().saturating_sub(5);
+        let suffix = if remainder == 0 {
+            String::new()
+        } else {
+            format!(", and {remainder} more")
+        };
+        return Err(format!(
+            "tracked art sources changed {timing}: {examples}{suffix}; \
+             no review pack was published, so reload the project and retry the review export"
+        ));
+    }
+
+    let renderer_mesh_path = Path::new("assets").join(HEX_MESH_ASSET_PATH);
+    let current_renderer_mesh = current_file_revision(repository_root, &renderer_mesh_path)
+        .map_err(|error| {
+            format!(
+                "could not verify renderer mesh while {}: {error}; \
+                 restore the renderer asset and retry the review export",
+                match checkpoint {
+                    RevisionCheckPoint::RequestCreation => "creating the review request",
+                    RevisionCheckPoint::CaptureStart => "starting the review capture",
+                    RevisionCheckPoint::Publication => "publishing the review capture",
+                }
+            )
+        })?;
+    if current_renderer_mesh != expected_renderer_mesh {
+        return Err(format!(
+            "renderer source changed {timing}: {} (modified); \
+             no review pack was published, so retry the review export",
+            renderer_mesh_path.display()
+        ));
+    }
+    Ok(())
 }
 
 fn publish_review_pack_if_sources_current(
@@ -207,6 +231,7 @@ fn publish_review_pack_if_sources_current_with_hook(
     verify_project_revisions(
         repository_root,
         expected_revisions,
+        report.renderer_mesh_revision(),
         RevisionCheckPoint::Publication,
     )?;
     publish_review_pack_with_pre_rename_check(repository_root, report, frames, || {
@@ -214,6 +239,7 @@ fn publish_review_pack_if_sources_current_with_hook(
         verify_project_revisions(
             repository_root,
             expected_revisions,
+            report.renderer_mesh_revision(),
             RevisionCheckPoint::Publication,
         )
     })
@@ -532,6 +558,7 @@ fn begin_capture(
     verify_project_revisions(
         &request.repository_root,
         &request.expected_revisions,
+        request.report.renderer_mesh_revision(),
         RevisionCheckPoint::CaptureStart,
     )?;
     let first_content = request
@@ -1138,8 +1165,29 @@ mod tests {
         object
             .validate(&styles)
             .expect("fixture object should be valid");
-        let report =
-            ReviewReport::new(&object, &styles, &palette).expect("fixture report should build");
+        let sequence = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("test clock should follow the Unix epoch")
+            .as_nanos();
+        let local_sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "hex-editor-review-capture-{}-{sequence}-{local_sequence}",
+            std::process::id(),
+        ));
+        let mesh_path = root.join("assets").join(HEX_MESH_ASSET_PATH);
+        fs::create_dir_all(
+            mesh_path
+                .parent()
+                .expect("fixture renderer mesh should have a parent"),
+        )
+        .expect("fixture renderer directory should be created");
+        fs::write(&mesh_path, b"fixture-hex-mesh")
+            .expect("fixture renderer mesh should be written");
+        let mesh_revision =
+            current_file_revision(&root, &Path::new("assets").join(HEX_MESH_ASSET_PATH))
+                .expect("fixture renderer mesh should be readable");
+        let report = ReviewReport::new(&object, &styles, &palette, mesh_revision)
+            .expect("fixture report should build");
         let resolved_style = ViewportStyle {
             color: swatch.color(),
             surface_mode: VoxelSurfaceMode::Opaque,
@@ -1182,16 +1230,6 @@ mod tests {
                 show_canopy_overlay: canopy,
             });
         }
-        let sequence = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("test clock should follow the Unix epoch")
-            .as_nanos();
-        let local_sequence = FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "hex-editor-review-capture-{}-{sequence}-{local_sequence}",
-            std::process::id(),
-        ));
-        fs::create_dir_all(&root).expect("fixture repository root should be created");
         (root, report, contents, style_id)
     }
 
@@ -1364,6 +1402,25 @@ mod tests {
             .expect_err("a stale source snapshot must reject request creation");
         assert!(error.contains("palette.ron (modified)"));
         assert!(error.contains("reload the project"));
+        fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    #[test]
+    fn request_creation_rejects_a_stale_renderer_mesh() {
+        let (root, report, contents, _style_id) = fixture();
+        let mesh_path = root.join("assets").join(HEX_MESH_ASSET_PATH);
+        fs::write(&mesh_path, b"changed-hex-mesh")
+            .expect("fixture renderer mesh should be modified");
+
+        let error = ReviewCaptureRequest::new(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            contents,
+        )
+        .expect_err("a stale renderer mesh must reject request creation");
+        assert!(error.contains("assets/meshes/hex.glb (modified)"));
+        assert!(error.contains("retry the review export"));
         fs::remove_dir_all(root).expect("fixture repository should be removable");
     }
 

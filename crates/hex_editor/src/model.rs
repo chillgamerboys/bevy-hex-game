@@ -20,6 +20,8 @@ use crate::recovery::{
     sanitized_selection, EditorRecoveryDraft, RawObjectDraft, RecoveryError, RecoverySanitization,
 };
 
+pub(crate) const CALIBRATION_OBJECT_ID: &str = "calibration/scene";
+
 /// The two authoring workspaces sharing one editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkshopMode {
@@ -306,7 +308,7 @@ impl EditorModel {
 
     /// Builds the unsaved, in-memory scene shown when no authored object is open.
     pub fn calibration_scene() -> Result<Self, EditorModelError> {
-        let id = ObjectAssetId::new("calibration/scene")
+        let id = ObjectAssetId::new(CALIBRATION_OBJECT_ID)
             .map_err(|error| EditorModelError::new(error.to_string()))?;
         let style = VoxelStyleId::new("calibration/neutral")
             .map_err(|error| EditorModelError::new(error.to_string()))?;
@@ -514,6 +516,27 @@ impl EditorModel {
     /// Marks the current draft as the saved checkpoint.
     pub fn mark_saved(&mut self) {
         self.saved_object = Some(self.object.clone());
+    }
+
+    /// Re-pins the saved checkpoint to the current tracked object after recovery.
+    pub(crate) fn rebase_saved_checkpoint(
+        &mut self,
+        checkpoint: Option<ObjectBlueprint>,
+    ) -> Result<(), EditorModelError> {
+        if let Some(checkpoint) = &checkpoint {
+            checkpoint
+                .validate_intrinsic()
+                .map_err(EditorModelError::new)?;
+            if checkpoint.id != self.object.id {
+                return Err(EditorModelError::new(format!(
+                    "tracked checkpoint '{}' does not match open object '{}'",
+                    checkpoint.id.as_str(),
+                    self.object.id.as_str()
+                )));
+            }
+        }
+        self.saved_object = checkpoint;
+        Ok(())
     }
 
     /// Adopts the immutable identity assigned by a successful Save As operation.
