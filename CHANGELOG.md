@@ -4,7 +4,7 @@ Release sections are prepended here and dated when their promoted `main` commit 
 tagged. The repository has no earlier release tags; `v0.3.0` is planned as its first
 tagged build.
 
-## v0.3.0 — Unreleased
+## v0.3.0 — 2026-07-28
 
 ### Features
 
