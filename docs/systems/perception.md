@@ -9,10 +9,9 @@ compile against one boundary without reaching into one another's crates.
 > Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
 > V3 Caves publishes fixed local gameplay lights into that live pipeline.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
-> consume that authority. Fog/picking presentation, visible crystal and
-> physical-light presentation,
-> unknown-frontier movement, engagement, and lost-contact search remain later
-> isolated work.
+> consume that authority. Fog/picking presentation, visible cave crystals and
+> physical-light presentation, unknown-frontier movement, engagement, and
+> lost-contact search remain later isolated work.
 
 ## Four facts, not one
 
