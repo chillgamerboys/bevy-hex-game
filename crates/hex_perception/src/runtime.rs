@@ -161,7 +161,6 @@ pub fn plugin(app: &mut App) {
             Update,
             detect_perception_input_changes
                 .in_set(PerceptionSystems::ResolveIllumination)
-                .in_set(PausableSystems)
                 .after(MovementSystems::Reconcile)
                 .before(resolve_illumination)
                 .run_if(in_state(Screen::Gameplay))
@@ -643,12 +642,15 @@ fn clear_session(
 #[cfg(test)]
 mod tests {
     use std::any::TypeId;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::{Duration, Instant};
 
     use bevy_ecs::reflect::{AppTypeRegistry, ReflectResource};
     use bevy_platform::collections::HashMap;
     use bevy_state::app::StatesPlugin;
-    use hex_assets::{SightPreset, Substance, SubstanceFile};
+    use hex_assets::{
+        ArtPalette, PaletteSwatch, SightPreset, SrgbColor, Substance, SubstanceFile, SwatchId,
+    };
     use hex_core::{HexCoord, InteriorRegionId, KnowledgeState, SightProfile, TraversalProfile};
     use hex_units::Standing;
 
@@ -664,18 +666,28 @@ mod tests {
     struct PerceptionUpdatesEnabled(bool);
 
     fn test_table() -> (SubstanceTable, TestSubstances) {
-        let mut substances = HashMap::default();
-        for (name, solid) in [("air", false), ("stone", true), ("water", false)] {
-            substances.insert(
-                name.to_owned(),
-                Substance {
-                    color: (0.5, 0.5, 0.5),
-                    solid,
-                    diggable: true,
-                },
-            );
-        }
-        let table = SubstanceTable::from_file(&SubstanceFile { substances });
+        let swatch_id = SwatchId::new("test/gray").expect("the fixture swatch id should be valid");
+        let swatch = PaletteSwatch::new(
+            "Test Gray",
+            SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+            BTreeSet::from(["test".to_owned()]),
+        )
+        .expect("the fixture swatch should be valid");
+        let palette = ArtPalette::new(BTreeMap::from([(swatch_id.clone(), swatch)]))
+            .expect("the fixture palette should be valid");
+        let substances = HashMap::from_iter([
+            ("air".to_owned(), Substance::invisible(false, false)),
+            (
+                "stone".to_owned(),
+                Substance::from_swatch(swatch_id.clone(), true, true),
+            ),
+            (
+                "water".to_owned(),
+                Substance::from_swatch(swatch_id, false, true),
+            ),
+        ]);
+        let table = SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("the fixture substances should resolve through their palette");
         let ids = TestSubstances {
             stone: table.id("stone").expect("stone fixture"),
             water: table.id("water").expect("water fixture"),
@@ -1066,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn perception_update_pipeline_stops_with_pausable_systems() {
+    fn paused_perception_records_changes_without_resolving_them() {
         let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
         let player = pos(0, 0, 5);
         spawn_tile(&mut app, player, substances.stone, 2);
@@ -1079,7 +1091,17 @@ mod tests {
             ExteriorIllumination::new(IlluminationLevel::Dim);
         app.update();
         let paused = *app.world().resource::<PerceptionRuntimeStats>();
-        assert_eq!(paused, before);
+        assert_eq!(paused.frames_checked, before.frames_checked + 1);
+        assert_eq!(paused.surface_rebuilds, before.surface_rebuilds);
+        assert_eq!(
+            paused.illumination_resolutions,
+            before.illumination_resolutions
+        );
+        assert_eq!(
+            paused.observation_resolutions,
+            before.observation_resolutions
+        );
+        assert_eq!(paused.knowledge_publications, before.knowledge_publications);
 
         app.world_mut().resource_mut::<PerceptionUpdatesEnabled>().0 = true;
         app.update();
@@ -1087,6 +1109,54 @@ mod tests {
         assert_eq!(
             resumed.illumination_resolutions,
             before.illumination_resolutions + 1
+        );
+    }
+
+    #[test]
+    fn removals_during_pause_invalidate_cached_perception_for_resume() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Dark);
+        let player = pos(0, 0, 5);
+        spawn_tile(&mut app, player, substances.stone, 2);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        let light = app
+            .world_mut()
+            .spawn((player, GameplayLight::new(IlluminationLevel::Bright, 1)))
+            .id();
+
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(
+            app.world()
+                .resource::<ResolvedIllumination>()
+                .get(player)
+                .expect("player illumination")
+                .level,
+            IlluminationLevel::Bright
+        );
+
+        app.world_mut().resource_mut::<PerceptionUpdatesEnabled>().0 = false;
+        let before = *app.world().resource::<PerceptionRuntimeStats>();
+        app.world_mut().despawn(light);
+        app.update();
+        let paused = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(
+            paused.illumination_resolutions,
+            before.illumination_resolutions
+        );
+
+        app.world_mut().resource_mut::<PerceptionUpdatesEnabled>().0 = true;
+        app.update();
+        let resumed = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(
+            resumed.illumination_resolutions,
+            before.illumination_resolutions + 1
+        );
+        assert_eq!(
+            app.world()
+                .resource::<ResolvedIllumination>()
+                .get(player)
+                .expect("player illumination")
+                .level,
+            IlluminationLevel::Dark
         );
     }
 

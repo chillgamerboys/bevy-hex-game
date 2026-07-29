@@ -60,10 +60,14 @@ impl PerceptionSettings {
         ] {
             ranges.validate(name)?;
         }
+        self.expansive
+            .validate_covers("expansive", self.focused, "focused")?;
+        self.focused
+            .validate_covers("focused", self.tight, "tight")?;
         if self.downhill_levels_per_bonus <= 0 {
             return Err("perception.ron: downhill_levels_per_bonus must be positive".to_owned());
         }
-        let contract_cap = SightProfile::DEFAULT.max_downhill_bonus;
+        let contract_cap = SightProfile::MAX_DOWNHILL_BONUS;
         if self.max_downhill_bonus > contract_cap {
             return Err(format!(
                 "perception.ron: max_downhill_bonus must not exceed {}",
@@ -184,6 +188,33 @@ impl SightRanges {
             return Err(format!(
                 "perception.ron: {name} vertical sight must satisfy bright >= dim >= dark"
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_covers(
+        self,
+        name: &str,
+        narrower: Self,
+        narrower_name: &str,
+    ) -> Result<(), String> {
+        for (tier, broader, narrower) in [
+            ("bright", self.bright, narrower.bright),
+            ("dim", self.dim, narrower.dim),
+            ("dark", self.dark, narrower.dark),
+        ] {
+            if broader.horizontal < narrower.horizontal {
+                return Err(format!(
+                    "perception.ron: {name}.{tier}.horizontal must be at least \
+                     {narrower_name}.{tier}.horizontal"
+                ));
+            }
+            if broader.vertical < narrower.vertical {
+                return Err(format!(
+                    "perception.ron: {name}.{tier}.vertical must be at least \
+                     {narrower_name}.{tier}.vertical"
+                ));
+            }
         }
         Ok(())
     }
@@ -329,6 +360,16 @@ mod tests {
                 "max_downhill_bonus: 6",
                 "max_downhill_bonus: 7",
                 "max_downhill_bonus",
+            ),
+            (
+                "bright: (horizontal: 36, vertical: 36)",
+                "bright: (horizontal: 23, vertical: 36)",
+                "expansive.bright.horizontal",
+            ),
+            (
+                "dim: (horizontal: 8, vertical: 8)",
+                "dim: (horizontal: 8, vertical: 5)",
+                "focused.dim.vertical",
             ),
         ] {
             let invalid = PERCEPTION_RON.replacen(needle, replacement, 1);
