@@ -1,0 +1,123 @@
+name: Stress
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 7 * * 1"
+
+concurrency:
+  group: stress-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  generator-corpora:
+    name: Corpus (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: v1-hills
+            filter: procedural::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v2-caves
+            filter: procedural_v2::caves::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v2-caves-expanded
+            filter: procedural_v2::caves::tests::expanded_ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v2-mountains
+            filter: procedural_v2::mountains::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v2-mountains-expanded
+            filter: procedural_v2::mountains::tests::expanded_ten_thousand_seed_corpora_have_less_than_one_percent_fallbacks
+          - name: v2-sky
+            filter: procedural_v2::sky::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v3-forest
+            filter: procedural_v3::forest::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v3-waterfall
+            filter: procedural_v3::waterfall::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Run release corpus
+        shell: bash
+        run: |
+          set -o pipefail
+          { time cargo test --release --package hex_map "${{ matrix.filter }}" -- --ignored --exact --nocapture --test-threads=1; } 2>&1 | tee stress.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corpus-${{ matrix.name }}
+          path: stress.log
+          if-no-files-found: error
+
+  performance:
+    name: Release performance probes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Run ignored release benchmarks
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            time cargo test --release --package hex_map benchmark -- --ignored --nocapture --test-threads=1
+            time cargo test --release --package hex_map --test spawning one_hundred_localized_terrain_edits_stay_within_the_interactive_budget -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_ai tests::baseline_ai_radius_team_matrix_release_benchmark -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_units formation::tests::six_member_formation_benchmark_matrix -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_perception runtime::tests::radius_40_recomputation_benchmark -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_perception runtime::tests::radius_40_ten_thousand_idle_frames_reuse_every_projection -- --ignored --exact --nocapture --test-threads=1
+          } 2>&1 | tee performance.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: performance-probes
+          path: performance.log
+          if-no-files-found: error
+
+  combat-soak:
+    name: Deterministic combat soak
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Run deterministic release soaks
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            time cargo test --release --package hex_game scenarios::tests::party_trial_one_hundred_run_soak_is_deterministic -- --ignored --exact --nocapture --test-threads=1
+            time cargo test --release --package hex_combat --test enemy ten_thousand_turn_stalemate_keeps_diagnostics_bounded -- --ignored --exact --nocapture --test-threads=1
+          } 2>&1 | tee combat-soak.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: combat-soak
+          path: combat-soak.log
+          if-no-files-found: error

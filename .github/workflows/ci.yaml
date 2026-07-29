@@ -8,6 +8,13 @@ on:
   push:
     branches: [main, dev]
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
   # Fail fast and keep logs readable rather than emitting incremental artefacts
@@ -27,6 +34,7 @@ jobs:
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
@@ -73,6 +81,7 @@ jobs:
     name: Format and dependencies
     needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -113,6 +122,7 @@ jobs:
     name: Clippy and tests
     needs: changes
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.outputs.code == 'true'
@@ -121,6 +131,8 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+      - uses: taiki-e/install-action@nextest
         if: needs.changes.outputs.code == 'true'
       # Bevy needs these to build on Linux even for a check-only run.
       - name: Install Linux dependencies
@@ -132,8 +144,29 @@ jobs:
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
         if: needs.changes.outputs.code == 'true'
-      - run: cargo test --workspace --all-features --profile ci
+      - name: Run ordinary tests with per-test timing
         if: needs.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            time cargo nextest run \
+              --workspace \
+              --all-features \
+              --cargo-profile ci \
+              --profile ci
+            # Nextest deliberately does not execute doctests.
+            time cargo test --workspace --all-features --profile ci --doc
+          } 2>&1 | tee test-timing.log
+      - name: Upload test timing artifacts
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-timings
+          path: |
+            test-timing.log
+            target/nextest/ci/junit.xml
+          if-no-files-found: error
       # Docs are a deliverable here, not a nicety: the map is owned by someone who
       # does not write Rust. A broken intra-doc link is a broken handoff.
       #
@@ -150,6 +183,7 @@ jobs:
     name: Build (${{ matrix.os }})
     needs: changes
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -167,6 +201,48 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-      # No --all-features: this must build exactly what ships, without hex_dev.
-      - run: cargo build --workspace --profile ci
+      # No --all-features and only the shipping package: this must not accidentally
+      # validate a workspace-only development binary in place of the game.
+      - run: cargo build --package hex_game --release
         if: needs.changes.outputs.code == 'true'
+
+  coverage:
+    name: Domain coverage
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+      - uses: taiki-e/install-action@cargo-llvm-cov
+        if: needs.changes.outputs.code == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Measure headless domain coverage
+        if: needs.changes.outputs.code == 'true'
+        run: >-
+          cargo llvm-cov
+          --package hex_core
+          --package hex_lattice
+          --package hex_ai
+          --package hex_perception
+          --all-features
+          --lcov
+          --output-path coverage.lcov
+      - name: Upload coverage
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: domain-coverage
+          path: coverage.lcov
+          if-no-files-found: error
