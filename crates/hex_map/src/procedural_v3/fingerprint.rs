@@ -1237,6 +1237,18 @@ mod tests {
             fingerprint_liquid(&changed_downstream),
             baseline_fingerprint
         );
+
+        let mut changed_downstream_level = baseline.clone();
+        changed_downstream_level
+            .bodies
+            .get_mut(&LiquidBodyId(7))
+            .and_then(|body| body.nodes.get_mut(&upstream))
+            .expect("the node exists")
+            .downstream = Some(TilePos::new(downstream.coord, downstream.level - 1));
+        assert_ne!(
+            fingerprint_liquid(&changed_downstream_level),
+            baseline_fingerprint
+        );
     }
 
     #[test]

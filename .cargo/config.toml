@@ -12,4 +12,6 @@ BEVY_ASSET_ROOT = { value = ".", relative = true }
 [alias]
 # The inspector is behind the `dev` feature and off by default, so release builds
 # never link egui. This is the everyday run command.
-dev = "run --features dev"
+dev = "run -p hex_game --features dev"
+# Standalone art authoring. It is intentionally not a screen inside `hex_game`.
+editor = "run -p hex_editor"

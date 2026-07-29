@@ -1,4 +1,4 @@
-# Getting started
+# Map contributor onboarding
 
 For someone taking ownership of **the map** — the hex grid, its terrain, and how it
 is drawn. It assumes no Rust and no game-engine experience, and it should get you
@@ -7,40 +7,18 @@ from nothing to a running game you can change.
 If you only want to tweak numbers — how tall the hills are, what colour the tiles
 are — you may not need this at all. Try [config.md](config.md) first.
 
-## 1. Run it
+## Before you begin
 
-```sh
-cargo dev
-```
+Follow [setup.md](setup.md) through its first-run smoke test. Come back here once
+**The Crossing** launches correctly; everything below is specific to understanding
+and changing the map.
 
-The first build takes 10–20 minutes; it is compiling the entire game engine. After
-that it is seconds. You should get a title screen listing the available scenarios.
-
-Click **The Crossing**. You should get a hex grid, two pieces, and a sky. Then:
-
-| | |
-|---|---|
-| Right-drag | turn the camera |
-| `W` `A` `S` `D` | move the camera |
-| Scroll | zoom |
-| Click a tile | the piece walks there |
-| `H` | hide/show gameplay readouts |
-| `ESC` | pause |
-| `BACKSPACE` | back to the title screen |
-
-`cargo dev` gives you a live inspector and reloads asset files as you save them.
-`cargo run --release` is the faster, shipping build with neither.
-
-**Always start it through `cargo`.** Running the built file directly gives you a
-plain blue window, because the game looks for its artwork in the wrong place. It is
-not a crash and there is no useful error.
-
-## 2. The words
+## The words
 
 Enough to read the code and the other docs.
 
 **Crate** — a folder of code that gets compiled as a unit, like a module or package.
-This project has seven, under `crates/`. Yours is `hex_map`.
+This project has eleven, under `crates/`. Yours is `hex_map`.
 
 **Entity** — one thing in the world: a tile, the player piece, the camera, the sun.
 Just an ID.
@@ -114,7 +92,7 @@ The practical version: **never write code that reduces a coordinate to one heigh
 If one column exposes several surfaces and you keep only the highest, every lower
 one silently becomes unreachable.
 
-## 3. What is yours
+## What the map owns
 
 ```
 crates/
@@ -122,9 +100,13 @@ crates/
   hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
   hex_world/     camera and sky
-  hex_units/  the player and movement
+  hex_units/     the player and movement
+  hex_combat/    turns, commands, and combat policy
+  hex_lattice/   the pure magic rules engine
+  hex_anim/      reusable animation vocabulary
   hex_dev/       the inspector
   hex_game/      wiring it all together
+  hex_editor/    the standalone Asset Workshop
 assets/
   config/world.ron        ← YOURS. the map's shape and terrain settings
   config/substances.ron   ← YOURS. the map's substance catalogue
@@ -156,7 +138,7 @@ and the shared `SubstanceTable` live in `hex_assets`, because gameplay also need
 to ask whether a substance is solid, but decisions about the map's settings and
 substance catalogue belong here.
 
-## 4. Knowing you have not broken anything
+## Knowing you have not broken anything
 
 ```sh
 cargo test --workspace     # full workspace suite, a couple of seconds
@@ -171,7 +153,7 @@ found in this project so far was found by a person looking at the window — inc
 a crash and a piece sunk into the ground, both of which passed every automated check
 at the time. The tests raise the floor; they do not replace looking.
 
-## 5. When it will not build
+## When it will not build
 
 The compiler is strict here on purpose, because much of this code is written by AI
 agents and the rules catch a specific class of mistake. The messages are usually
@@ -196,7 +178,7 @@ use `.get()`, `.first()`, or destructuring in tests too.
 created yet. Usually a system in the wrong stage; see the scheduling notes in
 `crates/hex_map/CLAUDE.md`.
 
-## 6. Where to go next
+## Where to go next
 
 | | |
 |---|---|

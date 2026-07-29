@@ -15,6 +15,7 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+pub mod art_palette;
 pub mod content_index;
 pub mod elements;
 /// What stands on the map when a scenario starts.
@@ -22,12 +23,18 @@ pub mod encounter;
 /// Who each of them is: archetype lattices, resolved from content.
 pub mod lattices;
 pub mod loader;
+pub mod object_blueprint;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
 pub mod spells;
 pub mod substances;
 
+pub use art_palette::{
+    ArtContractError, ArtPalette, ObjectAssetId, PaletteSwatch, SrgbColor, SwatchId, SwatchMatch,
+    VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
+    ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
+};
 pub use content_index::{ContentError, ContentIndex, ContentTables};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
@@ -40,6 +47,11 @@ pub use lattices::{
 };
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
+};
+pub use object_blueprint::{
+    ConnectivityPolicy, EffectPart, LocalAxialCoord, LocalVoxelCoord, ObjectBlueprint,
+    ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart, PropPart,
+    MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
 pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{

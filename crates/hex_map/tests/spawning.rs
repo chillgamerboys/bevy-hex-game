@@ -903,6 +903,24 @@ fn tile_count(app: &mut App) -> usize {
         .count()
 }
 
+fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &Name, &ChildOf, &Pickable, Option<&HexTile>)>();
+    query
+        .iter(world)
+        .filter(|(_entity, name, _parent, _pickable, _tile)| {
+            matches!(name.as_str(), "LiquidCap" | "LiquidFallCurtain")
+        })
+        .map(|(entity, _name, parent, pickable, tile)| {
+            assert!(
+                tile.is_none(),
+                "presentation entities must not become tiles"
+            );
+            (entity, parent.parent(), *pickable)
+        })
+        .collect()
+}
+
 #[test]
 fn nonprocedural_maps_publish_an_empty_region_registry() {
     let mut app = test_app();
@@ -925,6 +943,82 @@ fn entering_gameplay_spawns_a_full_grid() {
         tile_count(&mut app) >= columns,
         "every column should spawn at least one prism"
     );
+}
+
+#[test]
+fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
+    let mut app = procedural_app();
+    enter_gameplay(&mut app);
+
+    let expected_tiles: usize = app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(_coord, column)| hex_map::runs(column).len())
+        .sum();
+    assert_eq!(
+        tile_count(&mut app),
+        expected_tiles,
+        "presentation geometry changed the authoritative tile count"
+    );
+
+    let first_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the first grid should exist");
+    let first_presentations = liquid_presentations(&mut app);
+    assert!(
+        !first_presentations.is_empty(),
+        "the procedural river should produce presentation caps"
+    );
+    assert!(first_presentations
+        .iter()
+        .all(|(_entity, parent, pickable)| *parent == first_grid && *pickable == Pickable::IGNORE));
+
+    let solid_edit = {
+        let world = app.world();
+        let table = world.resource::<SubstanceTable>();
+        world
+            .resource::<VoxelMap>()
+            .columns()
+            .find_map(|(coord, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .find(|run| table.is_solid(run.substance) && table.is_diggable(run.substance))
+                    .map(|run| TilePos::new(coord, run.top - 1))
+            })
+            .expect("the generated map should contain diggable solid terrain")
+    };
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: solid_edit });
+    app.update();
+    app.update();
+
+    let second_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the rebuilt grid should exist");
+    assert_ne!(second_grid, first_grid);
+    assert!(first_presentations
+        .iter()
+        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
+    let second_presentations = liquid_presentations(&mut app);
+    assert!(!second_presentations.is_empty());
+    assert!(
+        second_presentations
+            .iter()
+            .all(|(_entity, parent, pickable)| *parent == second_grid
+                && *pickable == Pickable::IGNORE)
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(liquid_presentations(&mut app).is_empty());
 }
 
 #[test]
