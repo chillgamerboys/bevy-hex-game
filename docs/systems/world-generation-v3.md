@@ -176,10 +176,11 @@ views of the same deterministic scenario for liquid-motion and cliff-scale revie
 
 Plan the walkable surface and clearings first, then place the blocking woodland before
 routing the road through it. A deterministic weighted path bends between separated
-clearings and around exact tree roots. Its mostly two-wide gravel footprint admits
-short one-wide constraints where the existing trees pinch it, then tapers for three
-cells into the prairie and stops. Tall grass can therefore reclaim the meadow instead
-of preserving a bare feature-free line across it.
+non-overlapping clearings and around exact tree roots. Validation requires the four
+stable clearing names and rejects any shared surface membership. Its mostly two-wide
+gravel footprint admits short one-wide constraints where the existing trees pinch it,
+then tapers for three cells into the prairie and stops. Tall grass can therefore
+reclaim the meadow instead of preserving a bare feature-free line across it.
 
 Trees are shared stylized low-poly features. Their root `TilePos` is a traversal
 blocker; their canopy is presentation only. The non-voxel prototype reuses the same
@@ -194,6 +195,14 @@ repair hook returns `NoChange`, selection advances to the next deterministic
 candidate, and the canonical fallback remains the final hard-valid result.
 Recipe-specific repair actions will be added only when they can preserve the
 validated topology instead of disguising regeneration as repair.
+
+The recipe publishes exactly `party_start`, `hostile_start`, `forest_clearing`, and
+`prairie_overlook`. The two review anchors are bound to the primary clearing and the
+recipe's exact prairie overlook surface. `walks/forest.ron` pins the shipped hero seed
+and captures map and character-camera presentation. The current walk DSL cannot
+address map-space tiles, so that script is not a route traversal: exact graph
+validation and recorded manual traversal cover topology until the tooling gains that
+capability.
 
 ### Fort
 
@@ -258,12 +267,14 @@ they remain:
 - V3 reports and captures compare behavior and visual intent, not identical hashes.
 
 Each active recipe migrates only after its V3 fixed corpus, stress corpus, captures,
-and critical-route walk pass. Once every shipped scenario and review tool uses V3,
-archive one migration report and remove V1/V2 parsing, dispatch, generator code,
-assets, and runtime tests together. Do not leave a permanent three-version matrix.
-Migration is not a literal geometry port: once the supporting V3 layers exist, each
-recipe also receives the appropriate liquid, vegetation, structure, and gameplay
-lighting semantics.
+and critical-route traversal pass. Where review tooling cannot yet address map-space
+tiles, exact graph validation plus a recorded manual traversal supplies that gate;
+capture-only scripts must not be described as route walks. Once every shipped scenario
+and review tool uses V3, archive one migration report and remove V1/V2 parsing,
+dispatch, generator code, assets, and runtime tests together. Do not leave a permanent
+three-version matrix. Migration is not a literal geometry port: once the supporting V3
+layers exist, each recipe also receives the appropriate liquid, vegetation, structure,
+and gameplay lighting semantics.
 
 ## Verification
 

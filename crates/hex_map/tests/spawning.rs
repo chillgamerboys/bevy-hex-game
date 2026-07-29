@@ -542,7 +542,26 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(metrics.tall_grass_roots, 155);
     assert!(metrics.tall_grass_roots.saturating_mul(2) > metrics.prairie_surfaces);
     assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
-    assert_eq!(metrics.tree_roots, report.metrics.barrier_cells);
+    assert_eq!(
+        metrics.critical_route_steps,
+        report.metrics.critical_route_steps
+    );
+    assert_eq!(
+        metrics.spawn_height_difference,
+        report.metrics.spawn_height_difference
+    );
+    assert_eq!(
+        report.metrics.barrier_cells, 0,
+        "distributed tree blockers are not a semantic hazard barrier"
+    );
+    assert_eq!(
+        report.metrics.bank_high_ground_difference, 0,
+        "Forest has woodland and prairie sides, not opposing river banks"
+    );
+    assert!(
+        metrics.woodland_prairie_high_ground_difference <= metrics.relief,
+        "side-specific high ground cannot exceed total ordinary relief"
+    );
 
     let blockers: BTreeSet<_> = app.world().resource::<TraversalBlockers>().iter().collect();
     let roots = feature_roots(&mut app);

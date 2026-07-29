@@ -134,6 +134,12 @@ pub struct ForestMetrics {
     pub reachable_elevation_levels: u32,
     /// Highest ordinary surface minus the lowest ordinary surface.
     pub relief: Level,
+    /// Shortest ordinary-walker path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Exact elevation difference between the required actor anchors.
+    pub spawn_height_difference: Level,
+    /// Difference between the highest reachable woodland and prairie surfaces.
+    pub woodland_prairie_high_ground_difference: Level,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.

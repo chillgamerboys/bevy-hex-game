@@ -58,7 +58,7 @@ pub(crate) struct ForestMetrics {
     pub(crate) reachable_elevation_levels: u32,
     pub(crate) relief: u32,
     pub(crate) spawn_height_difference: u32,
-    pub(crate) side_high_ground_difference: u32,
+    pub(crate) woodland_prairie_high_ground_difference: u32,
     pub(crate) critical_route_steps: u32,
 }
 
@@ -66,7 +66,7 @@ pub(crate) struct ForestMetrics {
 struct OrdinaryElevationMetrics {
     reachable_levels: BTreeSet<i32>,
     relief: u32,
-    side_high_ground_difference: u32,
+    woodland_prairie_high_ground_difference: u32,
 }
 
 #[derive(Debug)]
@@ -639,11 +639,16 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
         .values()
         .flat_map(|clearing| clearing.surfaces.iter().copied())
         .collect();
-    if plan.features.clearings.len() != CLEARING_COUNT {
+    let expected_clearing_names: BTreeSet<_> = (0..CLEARING_COUNT)
+        .map(|index| format!("forest_clearing_{index}"))
+        .collect();
+    let actual_clearing_names: BTreeSet<_> = plan.features.clearings.keys().cloned().collect();
+    if actual_clearing_names != expected_clearing_names {
         issues.push(recipe_issue(format!(
-            "Forest requires {CLEARING_COUNT} named clearings"
+            "Forest requires exactly the named clearings {expected_clearing_names:?}"
         )));
     }
+    let mut claimed_clearing_surfaces = BTreeMap::new();
     for (name, clearing) in &plan.features.clearings {
         if clearing.surfaces.len() < 10 {
             issues.push(recipe_issue(format!(
@@ -660,7 +665,24 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
                 "Forest clearing {name:?} is not walker-connected"
             )));
         }
+        if let Some((position, previous)) = clearing.surfaces.iter().find_map(|position| {
+            claimed_clearing_surfaces
+                .get(position)
+                .map(|previous| (*position, *previous))
+        }) {
+            issues.push(recipe_issue(format!(
+                "Forest clearings {previous:?} and {name:?} overlap at {position:?}"
+            )));
+        }
+        claimed_clearing_surfaces.extend(
+            clearing
+                .surfaces
+                .iter()
+                .copied()
+                .map(|position| (position, name.as_str())),
+        );
     }
+    validate_review_anchors(plan, rotation, &prairie, &mut issues);
 
     let elevation = ordinary_elevation_metrics(&ordinary, rotation);
     if !(3..=u32::try_from(MAX_RELIEF).unwrap_or_default()).contains(&elevation.relief) {
@@ -701,9 +723,52 @@ fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> 
         reachable_elevation_levels: count_u32(elevation.reachable_levels.len()),
         relief: elevation.relief,
         spawn_height_difference,
-        side_high_ground_difference: elevation.side_high_ground_difference,
+        woodland_prairie_high_ground_difference: elevation.woodland_prairie_high_ground_difference,
         critical_route_steps,
     })
+}
+
+fn validate_review_anchors(
+    plan: &GeneratedWorldPlan,
+    rotation: u8,
+    prairie: &BTreeSet<TilePos>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let expected_names = BTreeSet::from([
+        PARTY_START,
+        HOSTILE_START,
+        FOREST_CLEARING,
+        PRAIRIE_OVERLOOK,
+    ]);
+    let actual_names: BTreeSet<_> = plan.anchors.keys().map(String::as_str).collect();
+    if actual_names != expected_names {
+        issues.push(recipe_issue(format!(
+            "Forest requires exactly the anchors {expected_names:?}"
+        )));
+    }
+
+    let primary_clearing = plan.features.clearings.get("forest_clearing_0");
+    let clearing_anchor = plan.anchors.get(FOREST_CLEARING);
+    if !clearing_anchor
+        .zip(primary_clearing)
+        .is_some_and(|(anchor, clearing)| clearing.surfaces.contains(anchor))
+    {
+        issues.push(recipe_issue(
+            "Forest forest_clearing anchor must name an exact surface in forest_clearing_0",
+        ));
+    }
+
+    let radius = i32::try_from(plan.layout.grid_radius).unwrap_or(i32::MAX);
+    let expected_overlook_coord = rotate(HexCoord::from_axial(radius / 2, -(radius / 4)), rotation);
+    let expected_overlook = prairie
+        .iter()
+        .find(|position| position.coord == expected_overlook_coord);
+    if plan.anchors.get(PRAIRIE_OVERLOOK) != expected_overlook {
+        issues.push(recipe_issue(format!(
+            "Forest prairie_overlook anchor must name the exact prairie surface at \
+             {expected_overlook_coord:?}"
+        )));
+    }
 }
 
 fn ordinary_elevation_metrics(ordinary: &OrdinaryGraph, rotation: u8) -> OrdinaryElevationMetrics {
@@ -727,7 +792,7 @@ fn ordinary_elevation_metrics(ordinary: &OrdinaryGraph, rotation: u8) -> Ordinar
     OrdinaryElevationMetrics {
         reachable_levels,
         relief: min_level.abs_diff(max_level),
-        side_high_ground_difference: woodland_high.abs_diff(prairie_high),
+        woodland_prairie_high_ground_difference: woodland_high.abs_diff(prairie_high),
     }
 }
 
@@ -1201,6 +1266,7 @@ fn clearing_coordinates(
         HexCoord::from_axial(-(radius / 4), radius / 4),
     ];
     let mut clearings = Vec::new();
+    let mut claimed = BTreeSet::new();
     for (index, base) in base_centers.into_iter().enumerate() {
         let mut center = rotate(base, rotation);
         if let Some(stream) = stream {
@@ -1216,15 +1282,15 @@ fn clearing_coordinates(
                 center = candidate;
             }
         }
-        if !mask.contains(&center) || !woodland.contains(&center) {
+        if !mask.contains(&center) || !woodland.contains(&center) || claimed.contains(&center) {
             return Err(vec![recipe_issue(format!(
-                "Forest clearing {index} center leaves its woodland footprint"
+                "Forest clearing {index} center leaves its available woodland footprint"
             ))]);
         }
         let mut interior = BTreeSet::new();
         let mut optional_edge = Vec::new();
         for coord in center.within_radius(2) {
-            if !mask.contains(&coord) || !woodland.contains(&coord) {
+            if !mask.contains(&coord) || !woodland.contains(&coord) || claimed.contains(&coord) {
                 continue;
             }
             if center.distance(coord) <= 1 {
@@ -1250,6 +1316,7 @@ fn clearing_coordinates(
                 "Forest clearing {index} cannot fit ten irregular surfaces"
             ))]);
         }
+        claimed.extend(interior.iter().copied());
         clearings.push(PlannedClearing {
             center,
             coords: interior,
@@ -1658,6 +1725,28 @@ mod tests {
         mass.material = material;
     }
 
+    fn assert_distinct_clearings(plan: &GeneratedWorldPlan) {
+        let expected_names: BTreeSet<_> = (0..CLEARING_COUNT)
+            .map(|index| format!("forest_clearing_{index}"))
+            .collect();
+        assert_eq!(
+            plan.features
+                .clearings
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            expected_names
+        );
+        let mut claimed = BTreeSet::new();
+        for (name, clearing) in &plan.features.clearings {
+            assert!(
+                claimed.is_disjoint(&clearing.surfaces),
+                "Forest clearing {name:?} overlaps an earlier named clearing"
+            );
+            claimed.extend(clearing.surfaces.iter().copied());
+        }
+    }
+
     #[test]
     fn fixed_corpus_builds_valid_forests_at_supported_radii() {
         for radius in [12, 20, 40] {
@@ -1669,6 +1758,7 @@ mod tests {
                 assert!(selected.metrics.tree_roots > 0);
                 assert!(selected.metrics.tall_grass_roots > 0);
                 assert_eq!(selected.validated.plan.validate(), Vec::new());
+                assert_distinct_clearings(&selected.validated.plan);
             }
         }
     }
@@ -1886,6 +1976,88 @@ mod tests {
     }
 
     #[test]
+    fn validator_requires_exact_review_anchors_in_their_semantic_regions() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let baseline = selected.validated.plan;
+
+        for missing in [FOREST_CLEARING, PRAIRIE_OVERLOOK] {
+            let mut plan = baseline.clone();
+            let _removed = plan
+                .anchors
+                .remove(missing)
+                .expect("the generated Forest should publish every review anchor");
+            assert_eq!(
+                plan.validate(),
+                Vec::new(),
+                "the common plan deliberately permits recipe-specific anchor sets"
+            );
+            let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+                panic!("missing Forest review anchor {missing:?} must fail");
+            };
+            assert!(issues.iter().any(|issue| issue.detail.contains(missing)));
+        }
+
+        let mut misplaced_clearing = baseline.clone();
+        let party = misplaced_clearing
+            .anchors
+            .get(PARTY_START)
+            .copied()
+            .expect("Forest should publish party_start");
+        misplaced_clearing
+            .anchors
+            .insert(FOREST_CLEARING.to_owned(), party);
+        let WorldValidation::Invalid(issues) = validate_forest(&misplaced_clearing) else {
+            panic!("a clearing anchor outside forest_clearing_0 must fail");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("forest_clearing_0")));
+
+        let mut misplaced_overlook = baseline;
+        let hostile = misplaced_overlook
+            .anchors
+            .get(HOSTILE_START)
+            .copied()
+            .expect("Forest should publish hostile_start");
+        misplaced_overlook
+            .anchors
+            .insert(PRAIRIE_OVERLOOK.to_owned(), hostile);
+        let WorldValidation::Invalid(issues) = validate_forest(&misplaced_overlook) else {
+            panic!("a prairie overlook away from its exact review surface must fail");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("exact prairie surface")));
+    }
+
+    #[test]
+    fn validator_rejects_overlapping_named_clearings() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let mut plan = selected.validated.plan;
+        let first = plan
+            .features
+            .clearings
+            .get("forest_clearing_0")
+            .cloned()
+            .expect("Forest should publish its primary clearing");
+        plan.features
+            .clearings
+            .insert("forest_clearing_1".to_owned(), first);
+
+        assert_eq!(
+            plan.validate(),
+            Vec::new(),
+            "the common feature vocabulary permits recipe-owned clearing topology"
+        );
+        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+            panic!("overlapping Forest clearings must fail");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("overlap at")));
+    }
+
+    #[test]
     fn validator_rejects_stray_disconnected_gravel_in_the_road_footprint() {
         let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
         let mut plan = selected.validated.plan;
@@ -2013,7 +2185,7 @@ mod tests {
             .max()
             .unwrap_or(BASE_LEVEL);
         assert_eq!(
-            blocked.side_high_ground_difference,
+            blocked.woodland_prairie_high_ground_difference,
             expected_woodland_high.abs_diff(expected_prairie_high)
         );
     }

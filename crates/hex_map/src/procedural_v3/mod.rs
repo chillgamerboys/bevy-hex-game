@@ -361,11 +361,10 @@ fn waterfall_recipe_metrics(metrics: &waterfall::WaterfallMetrics) -> WaterfallR
 fn forest_report_metrics(metrics: &forest::ForestMetrics) -> TacticalMetrics {
     TacticalMetrics {
         relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
-        barrier_cells: metrics.tree_roots,
+        barrier_cells: 0,
         critical_route_steps: metrics.critical_route_steps,
         spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
-        bank_high_ground_difference: i32::try_from(metrics.side_high_ground_difference)
-            .unwrap_or(i32::MAX),
+        bank_high_ground_difference: 0,
         reachable_surfaces: metrics.ordinary_surfaces,
         reachable_elevation_levels: metrics.reachable_elevation_levels,
         alternate_detour_percent: 0,
@@ -395,6 +394,12 @@ fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics
         ordinary_surfaces: metrics.ordinary_surfaces,
         reachable_elevation_levels: metrics.reachable_elevation_levels,
         relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
+        woodland_prairie_high_ground_difference: i32::try_from(
+            metrics.woodland_prairie_high_ground_difference,
+        )
+        .unwrap_or(i32::MAX),
     }
 }
 
@@ -493,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn forest_environment_signature_uses_the_full_recipe_footprint() {
+    fn forest_reports_only_recipe_appropriate_legacy_metrics() {
         let metrics = forest::ForestMetrics {
             tree_roots: 20,
             tall_grass_roots: 40,
@@ -506,12 +511,18 @@ mod tests {
             reachable_elevation_levels: 4,
             relief: 4,
             spawn_height_difference: 0,
-            side_high_ground_difference: 1,
+            woodland_prairie_high_ground_difference: 1,
             critical_route_steps: 24,
         };
 
         let reported = forest_report_metrics(&metrics);
+        let recipe = forest_recipe_metrics(&metrics);
 
         assert_eq!(reported.environment_signature_percent, 20);
+        assert_eq!(reported.barrier_cells, 0);
+        assert_eq!(reported.bank_high_ground_difference, 0);
+        assert_eq!(recipe.critical_route_steps, 24);
+        assert_eq!(recipe.spawn_height_difference, 0);
+        assert_eq!(recipe.woodland_prairie_high_ground_difference, 1);
     }
 }
