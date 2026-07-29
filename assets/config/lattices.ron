@@ -39,6 +39,7 @@
         // verb every unit has, and its four gems are pure durability — four hits to put
         // down. Attunement 1 with no spell to spend it on is the data saying so.
         "wolf": (
+            ai_profile: Some("baseline"),
             cells: [
                 (at: (q: 0, r: 0), kind: Gem("Earth")),
                 (at: (q: 1, r: 0), kind: Gem("Earth")),
@@ -53,6 +54,7 @@
         // what fund it, which makes them the correct thing to break first: disabling
         // either one drops the shield and burns the mana locked in it.
         "raider": (
+            ai_profile: Some("baseline"),
             cells: [
                 (at: (q: 0, r: 0), kind: Spell("Metal Shield")),
                 (at: (q: 1, r: 0), kind: Gem("Metal")),
@@ -73,6 +75,7 @@
         // the two feeder gems worth more than their own hexes: taking either one down
         // kills the fusion and everything downstream of it.
         "hedge-mage": (
+            ai_profile: Some("baseline"),
             cells: [
                 (at: (q: 0, r: 0), kind: Fusion("Lightning")),
                 (at: (q: 1, r: 0), kind: Gem("Light")),

@@ -14,18 +14,13 @@ use hex_lattice::{CellKind, LatticeSpec};
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
 use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
-use crate::menus::widgets::{heading, panel, UiAssets, DANGER, FINE_SIZE, LABEL};
-use crate::readouts::HudElement;
-use crate::screens::DespawnOnExit;
+use crate::menus::widgets::{blurb, panel, UiAssets, DANGER, LABEL};
+use crate::readouts::{region, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
 
 const CAPACITY: usize = 64;
-const VISIBLE_LINES: usize = 6;
+const FEED_LINES: usize = 3;
+const DRAWER_LINES: usize = 12;
 const PULSE_SECONDS: f32 = 0.28;
-const FRAME: Pickable = Pickable {
-    should_block_lower: true,
-    is_hoverable: false,
-};
-
 #[derive(Debug, Clone, PartialEq)]
 struct LogLine {
     text: String,
@@ -88,10 +83,23 @@ impl DamagePulse {
 #[derive(Component)]
 struct LogBody;
 
+#[derive(Component)]
+struct LogPanel;
+
+#[derive(Component)]
+struct LogHeading;
+
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+struct LogExpanded(bool);
+
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLog>()
         .init_resource::<DamagePulse>()
-        .add_systems(OnEnter(Screen::Gameplay), (spawn_panel, reset))
+        .init_resource::<LogExpanded>()
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            (spawn_panel, reset).in_set(HudSetup::Panels),
+        )
         // Not pausable. Bevy messages age out after two frames, so pausing on
         // the resolution frame must not erase the outcome from history.
         .add_systems(
@@ -104,36 +112,37 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (rebuild, pulse_panel)
+            (toggle_history, rebuild, pulse_panel)
                 .chain()
                 .after(ingest)
                 .run_if(in_state(Screen::Gameplay)),
         );
 }
 
-fn spawn_panel(mut commands: Commands, assets: Res<UiAssets>) {
-    commands
+fn spawn_panel(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    regions: Query<(Entity, &HudRegion)>,
+) {
+    let panel = commands
         .spawn((
             Name::new("Combat Log Panel"),
+            LogPanel,
             HudElement,
             panel(),
-            FRAME,
-            DespawnOnExit(Screen::Gameplay),
+            READ_ONLY_HUD,
         ))
         .insert(Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(66.0),
-            left: Val::Px(310.0),
-            width: Val::Px(470.0),
+            width: Val::Percent(100.0),
             flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(12.0)),
+            padding: UiRect::all(Val::Px(8.0)),
             border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            row_gap: Val::Px(4.0),
+            border_radius: BorderRadius::all(Val::Px(8.0)),
+            row_gap: Val::Px(3.0),
             ..default()
         })
         .with_children(|panel| {
-            panel.spawn(heading(&assets, "combat log"));
+            panel.spawn((LogHeading, blurb(&assets, "RECENT EVENTS · L HISTORY")));
             panel.spawn((
                 Name::new("Combat Log Body"),
                 LogBody,
@@ -144,12 +153,31 @@ fn spawn_panel(mut commands: Commands, assets: Res<UiAssets>) {
                 },
                 Pickable::IGNORE,
             ));
-        });
+        })
+        .id();
+    if let Some(events) = region(HudRegion::Events, &regions) {
+        commands.entity(events).add_child(panel);
+    }
 }
 
-fn reset(mut log: ResMut<CombatLog>, mut pulse: ResMut<DamagePulse>) {
+fn reset(
+    mut log: ResMut<CombatLog>,
+    mut pulse: ResMut<DamagePulse>,
+    mut expanded: ResMut<LogExpanded>,
+) {
     *log = CombatLog::default();
     *pulse = DamagePulse::default();
+    *expanded = LogExpanded::default();
+}
+
+fn toggle_history(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut expanded: ResMut<LogExpanded>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleLog) {
+        expanded.0 = !expanded.0;
+    }
 }
 
 type IdentityQuery<'w, 's> = Query<
@@ -378,6 +406,33 @@ fn format_event(
             text: format!("{} went down", unit_name(*unit, registry, identities)),
             danger: true,
         },
+        CombatEvent::PartyMoved { paths, .. } => LogLine {
+            text: format!("Party moved in formation ({} members)", paths.len()),
+            danger: false,
+        },
+        CombatEvent::HexesRestored { target, cells, .. } => LogLine {
+            text: format!(
+                "{} restored {} lattice cells",
+                unit_name(*target, registry, identities),
+                cells.len()
+            ),
+            danger: false,
+        },
+        CombatEvent::Revived { unit, .. } => LogLine {
+            text: format!("{} was revived", unit_name(*unit, registry, identities)),
+            danger: false,
+        },
+        CombatEvent::Rested { unit, .. } => LogLine {
+            text: format!(
+                "{} recovered during rest",
+                unit_name(*unit, registry, identities)
+            ),
+            danger: false,
+        },
+        CombatEvent::EncounterResolved { outcome } => LogLine {
+            text: format!("Encounter resolved: {outcome:?}"),
+            danger: false,
+        },
         CombatEvent::CommandRefused { command, refusal } => LogLine {
             text: format!(
                 "{} could not {}: {}",
@@ -474,11 +529,14 @@ fn unit_name(unit: UnitId, registry: &UnitRegistry, identities: &IdentityQuery) 
 fn command_label(command: &GameCommand) -> &'static str {
     match command {
         GameCommand::MoveAlong { .. } => "move",
+        GameCommand::MoveParty { .. } => "move the party",
         GameCommand::Strike { .. } => "strike",
         GameCommand::EndTurn { .. } => "end the turn",
         GameCommand::Cast { .. } => "cast",
         GameCommand::Channel { .. } => "channel",
         GameCommand::ChooseDisables { .. } => "choose damaged cells",
+        GameCommand::ChooseRestores { .. } => "choose restored cells",
+        GameCommand::Rest { .. } => "rest",
     }
 }
 
@@ -511,6 +569,13 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::CastBlocked { .. } => "lattice cannot pay",
         CommandRefusal::CastPlanStale { .. } => "lattice changed",
         CommandRefusal::ChannelUnavailable => "channelling is unavailable",
+        CommandRefusal::PartyMovementUnavailable => "party movement is unavailable",
+        CommandRefusal::RestorationUnavailable => "restoration is unavailable",
+        CommandRefusal::RestUnavailable => "rest is unavailable",
+        CommandRefusal::PartyMove { .. } => "party move is invalid",
+        CommandRefusal::Restoration { .. } => "restoration answer is invalid",
+        CommandRefusal::RestExploringOnly => "rest is exploration only",
+        CommandRefusal::EncounterResolved { .. } => "the encounter is resolved",
         CommandRefusal::NoPendingDecision => "no decision is open",
         CommandRefusal::WrongDecisionUnit { .. } => "another unit must decide",
         CommandRefusal::WrongDisableCount { .. } => "wrong number of cells",
@@ -523,35 +588,48 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
 fn rebuild(
     mut commands: Commands,
     log: Res<CombatLog>,
+    expanded: Res<LogExpanded>,
     bodies: Query<Entity, With<LogBody>>,
+    mut headings: Query<&mut Text, With<LogHeading>>,
     assets: Res<UiAssets>,
 ) {
-    if !log.is_changed() {
+    if !log.is_changed() && !expanded.is_changed() {
         return;
+    }
+    if let Ok(mut heading) = headings.single_mut() {
+        heading.0 = if expanded.0 {
+            format!("COMBAT HISTORY · {} EVENTS · L CLOSE", log.lines.len())
+        } else {
+            "RECENT EVENTS · L HISTORY".to_owned()
+        };
     }
     let Ok(body) = bodies.single() else { return };
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|rows| {
-        for line in log
-            .lines
-            .iter()
-            .rev()
-            .take(VISIBLE_LINES)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-        {
+        for line in visible_lines(&log, expanded.0) {
             rows.spawn((
                 Text::new(line.text.clone()),
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(FINE_SIZE)
+                    ..TextFont::from_font_size(13.0)
                 },
                 TextColor(if line.danger { DANGER } else { LABEL }),
                 Pickable::IGNORE,
             ));
         }
     });
+}
+
+fn visible_lines(log: &CombatLog, expanded: bool) -> Vec<&LogLine> {
+    let visible = if expanded { DRAWER_LINES } else { FEED_LINES };
+    log.lines
+        .iter()
+        .rev()
+        .take(visible)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect()
 }
 
 fn pulse_panel(
@@ -561,7 +639,7 @@ fn pulse_panel(
     mut panels: Query<&mut BackgroundColor, With<TargetPanel>>,
 ) {
     let live = pulse.tick(time.delta());
-    let active = live && pulse.target == focus.0;
+    let active = live && pulse.target == focus.unit;
     set_pulse_color(active, &mut panels);
 }
 
@@ -585,6 +663,30 @@ mod tests {
         assert_eq!(log.lines.len(), CAPACITY);
         assert_eq!(log.lines.front().map(|line| line.text.as_str()), Some("16"));
         assert_eq!(log.lines.back().map(|line| line.text.as_str()), Some("79"));
+    }
+
+    #[test]
+    fn the_feed_is_three_lines_without_discarding_drawer_history() {
+        let mut log = CombatLog::default();
+        for number in 0..8 {
+            log.push(LogLine {
+                text: number.to_string(),
+                danger: number == 6,
+            });
+        }
+
+        let feed: Vec<_> = visible_lines(&log, false)
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect();
+        let drawer: Vec<_> = visible_lines(&log, true)
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect();
+        assert_eq!(feed, ["5", "6", "7"]);
+        assert_eq!(drawer, ["0", "1", "2", "3", "4", "5", "6", "7"]);
+        assert!(log.lines.get(6).is_some_and(|line| line.danger));
+        assert_eq!(log.lines.len(), 8, "opening the drawer is non-destructive");
     }
 
     #[test]

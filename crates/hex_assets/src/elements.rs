@@ -250,8 +250,8 @@ impl ElementCatalog {
     /// The inputs a fusion producing `output` consumes, or [`None`] if `output` is a
     /// basic element rather than a fusion output.
     ///
-    /// Shaped to feed `hex_lattice::FusionTable::recipe` once that seam is wired
-    /// (HEX-12): each entry is an `(element, mana)` pair.
+    /// Shaped to feed `hex_lattice::FusionTable::recipe`: each entry is an
+    /// `(element, mana)` pair.
     #[must_use]
     pub fn recipe(&self, output: ElementId) -> Option<&[(ElementId, u16)]> {
         self.fusions.get(&output).map(Vec::as_slice)

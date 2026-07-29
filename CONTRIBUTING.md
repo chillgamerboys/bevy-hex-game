@@ -61,9 +61,11 @@ the above. Several failure modes here produce a clean log and a wrong window: mi
 assets render as a plain blue screen, a sky shader that fails to load renders a black
 sky, and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
-If your change touches rendering, movement, or state transitions, walk it: splash
-→ title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
-**BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
+If your change touches rendering, movement, persistence, or state transitions, walk
+it: splash → title → New Game → Party Trial, orbit, move the party, **ESC** to pause,
+save with **F5**, return to the title, and Continue. Open Settings, persist one change,
+restart, and confirm it survived. Launch an affected Map or focused Demo separately
+when the change touches one.
 
 If it touches the Asset Workshop, run `cargo editor` and complete the relevant
 [authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Persistence
@@ -84,7 +86,8 @@ version:
 | Generic asset loading; domain schema/settings modules | `hex_assets` | loader infra gameplay; each schema and its content follow the domain owner |
 | Sky, camera, presentation cutaways | `hex_world` | world |
 | Rules: input, movement, interaction | `hex_units` | gameplay |
-| Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
+| Authoritative illumination, sight, and faction map knowledge | `hex_perception` | world |
+| Runtime rendering of authored static voxel objects | `hex_objects` | shared presentation |
 | A debug tool | `hex_dev` | gameplay |
 | Palette, voxel-style, and object authoring workflow | `hex_editor` | shared tooling |
 | A screen or menu | `hex_game` | shared |

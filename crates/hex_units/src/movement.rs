@@ -287,6 +287,18 @@ impl Footing {
         self.surfaces.get(&coord).map_or(&[], Vec::as_slice)
     }
 
+    /// Every standable surface in exact positional order.
+    ///
+    /// The backing maps are hash maps for fast pathfinding. Formation compression
+    /// needs to compare the whole candidate set, so it receives an explicitly sorted
+    /// projection rather than inheriting hash iteration order.
+    #[must_use]
+    pub fn standings(&self) -> Vec<Standing> {
+        let mut standings: Vec<_> = self.by_pos.values().copied().collect();
+        standings.sort_by_key(|standing| standing.pos);
+        standings
+    }
+
     /// The lowest standable surface at a coordinate — the ground, rather than any
     /// bridge built over it.
     #[must_use]

@@ -1,15 +1,16 @@
 //! The command funnel's vocabulary: what may be asked of the sim, and by whom.
 //!
-//! Every mutation of sim state — moving, striking, ending a turn — is expressed
-//! as a [`GameCommand`], stamped with the [`PlayerSeat`] that issued it, and
-//! pushed onto the [`CommandQueue`]. One applier (in `hex_combat`) drains the
-//! queue, validates each command against the rules, and either applies it or
-//! drops it with a logged reason. Input handlers and the AI *emit*; they no
-//! longer mutate.
+//! Player and AI intent — moving, striking, casting, choosing damage, ending a
+//! turn — is expressed as a [`GameCommand`], stamped with the [`PlayerSeat`] that
+//! issued it, and pushed onto the [`CommandQueue`]. One applier (in `hex_combat`)
+//! drains the queue, validates each command against the rules, and either applies
+//! it or drops it with a logged reason. Passive effects and derived consequences
+//! run at their own deterministic schedule points.
 //!
-//! That single choke point is what makes a replay possible — the sim's entire
-//! input is the ordered command sequence — and what makes co-op honest: a
-//! command from the wrong seat dies in validation rather than in a code review.
+//! That choke point makes a future replay possible: recording the ordered command
+//! sequence preserves every player/AI choice, while deterministic systems reproduce
+//! their consequences. The live queue itself is consumed and is not a replay log.
+//! Seat validation also gives co-op one authoritative place to reject commands.
 //!
 //! # Why a queue resource and not a `Message`
 //!
@@ -31,6 +32,7 @@ use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::formation::PartyPath;
 use crate::hex::Sextant;
 use crate::lattice_ids::LatticeCoord;
 use crate::unit_ids::{PlayerSeat, UnitId};
@@ -43,9 +45,8 @@ use crate::voxel::TilePos;
 /// and in every save. The applier grounds them against the live world and
 /// refuses the ones that no longer make sense.
 ///
-/// The last three variants are the design's future verbs, defined now so the
-/// wire format is stable. The applier rejects them loudly; see each variant
-/// for what it waits on.
+/// Implemented verbs share this vocabulary with the still-deferred [`Self::Channel`].
+/// The applier rejects that future verb loudly; see the variant for what it waits on.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum GameCommand {
     /// Walk this exact surface path, whose first step is where the unit stands.
@@ -58,6 +59,13 @@ pub enum GameCommand {
         unit: UnitId,
         /// Every surface in order, starting with the current one.
         path: Vec<TilePos>,
+    },
+    /// Move an exploration party as one atomic formation plan.
+    MoveParty {
+        /// Member assigned to the authored anchor slot.
+        anchor: UnitId,
+        /// Exact path for every participating party member.
+        paths: Vec<PartyPath>,
     },
     /// Swing at a target within melee reach.
     Strike {
@@ -74,8 +82,8 @@ pub enum GameCommand {
     /// Cast a spell through the lattice and combat appliers.
     ///
     /// The payload is settled ahead of the implementation on purpose: the
-    /// command log is the replay log, so every field is a permanent save
-    /// commitment, and two separate tickets need different halves of it.
+    /// command wire format is a future replay/save commitment, and separate
+    /// implementations need different halves of it.
     /// Later additions arrive as optional serde-default fields or new
     /// variants — never as speculative fields added now.
     Cast {
@@ -95,8 +103,8 @@ pub enum GameCommand {
         #[serde(default)]
         mana: Option<u16>,
     },
-    /// Sustain a channelled spell. **Not built** — waits on channelling
-    /// (HEX-12).
+    /// Sustain a channelled spell. **Not built** — waits on the channelling
+    /// design and combat implementation.
     Channel {
         /// Who channels.
         unit: UnitId,
@@ -121,6 +129,21 @@ pub enum GameCommand {
         #[serde(default)]
         cells: Vec<LatticeCoord>,
     },
+    /// Answer a restoration decision with exact disabled cells on one target.
+    ChooseRestores {
+        /// Caster who owns the decision.
+        unit: UnitId,
+        /// Unit whose disabled cells are restored.
+        target: UnitId,
+        /// Exact disabled cells to restore.
+        #[serde(default)]
+        cells: Vec<LatticeCoord>,
+    },
+    /// Fully recover the player party while exploring.
+    Rest {
+        /// Selected party member issuing the session command.
+        unit: UnitId,
+    },
 }
 
 impl GameCommand {
@@ -129,11 +152,14 @@ impl GameCommand {
     pub fn unit(&self) -> UnitId {
         match *self {
             Self::MoveAlong { unit, .. }
+            | Self::MoveParty { anchor: unit, .. }
             | Self::Strike { unit, .. }
             | Self::EndTurn { unit }
             | Self::Cast { unit, .. }
             | Self::Channel { unit }
-            | Self::ChooseDisables { unit, .. } => unit,
+            | Self::ChooseDisables { unit, .. }
+            | Self::ChooseRestores { unit, .. }
+            | Self::Rest { unit } => unit,
         }
     }
 }
@@ -197,11 +223,10 @@ impl CommandQueue {
     /// queued for the same unit, which is what asking the broader question would do.
     #[must_use]
     pub fn holds_answer_for(&self, unit: UnitId) -> bool {
-        self.queue.iter().any(|issued| {
-            matches!(
-                issued.command,
-                GameCommand::ChooseDisables { unit: named, .. } if named == unit
-            )
+        self.queue.iter().any(|issued| match issued.command {
+            GameCommand::ChooseDisables { unit: named, .. }
+            | GameCommand::ChooseRestores { unit: named, .. } => named == unit,
+            _ => false,
         })
     }
 
@@ -267,6 +292,15 @@ pub enum PendingDecision {
         /// Who dealt it. The combat log and presentation need it; the rules do not.
         source: UnitId,
     },
+    /// A caster must choose exact disabled cells to restore on a target.
+    ChooseRestores {
+        /// Caster who owns this decision.
+        decider: UnitId,
+        /// Unit receiving the restoration.
+        target: UnitId,
+        /// Exact number of disabled cells required.
+        count: u16,
+    },
 }
 
 impl PendingDecision {
@@ -281,7 +315,9 @@ impl PendingDecision {
     pub fn decider(&self) -> Option<UnitId> {
         match *self {
             Self::None => None,
-            Self::ChooseDisables { decider, .. } => Some(decider),
+            Self::ChooseDisables { decider, .. } | Self::ChooseRestores { decider, .. } => {
+                Some(decider)
+            }
         }
     }
 }
@@ -316,6 +352,13 @@ mod tests {
                 unit,
                 path: Vec::new(),
             },
+            GameCommand::MoveParty {
+                anchor: unit,
+                paths: vec![PartyPath {
+                    member: unit,
+                    path: Vec::new(),
+                }],
+            },
             GameCommand::Strike {
                 unit,
                 target: UnitId(9),
@@ -333,6 +376,12 @@ mod tests {
                 unit,
                 cells: vec![crate::LatticeCoord::new(0, 0)],
             },
+            GameCommand::ChooseRestores {
+                unit,
+                target: UnitId(9),
+                cells: vec![crate::LatticeCoord::new(0, 0)],
+            },
+            GameCommand::Rest { unit },
         ];
         for command in commands {
             assert_eq!(command.unit(), unit);
@@ -365,5 +414,13 @@ mod tests {
         };
         assert!(waiting.is_open());
         assert_eq!(waiting.decider(), Some(UnitId(2)));
+
+        let restoring = PendingDecision::ChooseRestores {
+            decider: UnitId(1),
+            target: UnitId(2),
+            count: 2,
+        };
+        assert!(restoring.is_open());
+        assert_eq!(restoring.decider(), Some(UnitId(1)));
     }
 }

@@ -7,6 +7,7 @@ description = "RON asset definitions, loaders, and load tracking."
 
 [dependencies]
 bevy = { workspace = true }
+hex_ai = { workspace = true }
 hex_core = { workspace = true }
 # The engine's designed seat, per architecture.md: this crate implements `Tables` over
 # `elements.ron`/`spells.ron` and turns authored lattices into `LatticeSpec`, so the
