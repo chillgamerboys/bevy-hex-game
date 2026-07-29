@@ -445,6 +445,7 @@ fn construct_patch_with_objects(
     }
     let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
         .map_err(|error| vec![recipe_issue(error)])?;
+    let stitched_patch = patch.layout().kind == super::layout::LayoutKind::Ring7;
     let mask = frame
         .local_mask(patch.mask())
         .map_err(|error| vec![recipe_issue(error)])?;
@@ -562,6 +563,7 @@ fn construct_patch_with_objects(
         &ordinary_coords,
         &woodland,
         streams.map(|streams| streams.clearings),
+        stitched_patch,
     )?;
     let mut clearing_plans = BTreeMap::new();
     let mut clearing_coords = BTreeSet::new();
@@ -576,9 +578,12 @@ fn construct_patch_with_objects(
 
     let mut tree_exclusions = clearing_coords.iter().copied().collect::<BTreeSet<_>>();
     tree_exclusions.extend(local_protected.iter().copied());
-    tree_exclusions.extend(
-        (0..=PRAIRIE_TAPER_DEPTH).map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation)),
-    );
+    if stitched_patch {
+        tree_exclusions.extend(
+            (0..=PRAIRIE_TAPER_DEPTH)
+                .map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation)),
+        );
+    }
     tree_exclusions.extend(
         party_coord
             .within_radius(1)
@@ -590,7 +595,7 @@ fn construct_patch_with_objects(
         &tree_exclusions,
         &ordinary_surface_by_coord,
         streams.map(|streams| streams.trees),
-        patch.layout().kind == super::layout::LayoutKind::Ring7,
+        stitched_patch,
     );
     let tree_features = plan_tree_features(
         tree_roots,
@@ -619,6 +624,7 @@ fn construct_patch_with_objects(
         &tree_blocker_coords,
         &clearings,
         streams.map(|streams| streams.routes),
+        stitched_patch,
     )?;
 
     let mut columns = BTreeMap::new();
@@ -1519,29 +1525,41 @@ fn plan_road(
     trees: &BTreeSet<HexCoord>,
     clearings: &[PlannedClearing],
     stream: Option<SeedStream<'_>>,
+    stitched_patch: bool,
 ) -> Result<PlannedRoad, Vec<WorldValidationIssue>> {
     let taper = (0..=PRAIRIE_TAPER_DEPTH)
         .map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation))
         .collect::<Vec<_>>();
-    if taper.iter().any(|coord| {
-        !mask.contains(coord) || !surfaces.contains_key(coord) || trees.contains(coord)
-    }) || taper.windows(2).any(|pair| {
-        !matches!(pair, [from, to]
-            if from.distance(*to) == 1
-                && surfaces
-                    .get(from)
-                    .zip(surfaces.get(to))
-                    .is_some_and(|(first, second)| first.level.abs_diff(second.level) <= 1))
-    }) {
-        return Err(vec![recipe_issue(
-            "Forest road cannot fit its exact three-cell prairie taper",
-        )]);
-    }
-    let taper_start = taper.first().copied().ok_or_else(|| {
-        vec![recipe_issue(
-            "Forest road cannot resolve its prairie taper start",
-        )]
-    })?;
+    let (road_end, maximum_local_x) = if stitched_patch {
+        if taper.iter().any(|coord| {
+            !mask.contains(coord) || !surfaces.contains_key(coord) || trees.contains(coord)
+        }) || taper.windows(2).any(|pair| {
+            !matches!(pair, [from, to]
+                if from.distance(*to) == 1
+                    && surfaces
+                        .get(from)
+                        .zip(surfaces.get(to))
+                        .is_some_and(|(first, second)| first.level.abs_diff(second.level) <= 1))
+        }) {
+            return Err(vec![recipe_issue(
+                "Forest road cannot fit its exact three-cell prairie taper",
+            )]);
+        }
+        let taper_start = taper.first().copied().ok_or_else(|| {
+            vec![recipe_issue(
+                "Forest road cannot resolve its prairie taper start",
+            )]
+        })?;
+        (taper_start, 0)
+    } else {
+        (
+            rotate(
+                HexCoord::from_axial(PRAIRIE_TAPER_DEPTH, route_offset),
+                rotation,
+            ),
+            PRAIRIE_TAPER_DEPTH,
+        )
+    };
     let mut ordered_clearings: Vec<_> = clearings.iter().map(|clearing| clearing.center).collect();
     ordered_clearings
         .sort_unstable_by_key(|coord| (unrotate(*coord, rotation).x(), std::cmp::Reverse(*coord)));
@@ -1580,7 +1598,7 @@ fn plan_road(
         .ok_or_else(|| vec![recipe_issue("Forest road has no late clearing")])?;
 
     let mut centerline = Vec::new();
-    for (segment_index, pair) in [start, early, late, taper_start].windows(2).enumerate() {
+    for (segment_index, pair) in [start, early, late, road_end].windows(2).enumerate() {
         let [from, to] = pair else {
             continue;
         };
@@ -1596,6 +1614,7 @@ fn plan_road(
             &forbidden,
             stream,
             u64::try_from(segment_index).unwrap_or_default(),
+            maximum_local_x,
         )
         .ok_or_else(|| {
             vec![recipe_issue(format!(
@@ -1608,7 +1627,9 @@ fn plan_road(
                 .skip(usize::from(!centerline.is_empty())),
         );
     }
-    centerline.extend(taper.into_iter().skip(1));
+    if stitched_patch {
+        centerline.extend(taper.into_iter().skip(1));
+    }
     if centerline.iter().copied().collect::<BTreeSet<_>>().len() != centerline.len() {
         return Err(vec![recipe_issue(
             "Forest road guide produced a self-intersecting centerline",
@@ -1661,6 +1682,7 @@ fn find_road_segment(
     forbidden: &BTreeSet<HexCoord>,
     stream: Option<SeedStream<'_>>,
     salt: u64,
+    maximum_local_x: i32,
 ) -> Option<Vec<HexCoord>> {
     if trees.contains(&start) || trees.contains(&goal) {
         return None;
@@ -1690,7 +1712,7 @@ fn find_road_segment(
             if !mask.contains(&neighbor)
                 || trees.contains(&neighbor)
                 || (forbidden.contains(&neighbor) && neighbor != goal)
-                || unrotate(neighbor, rotation).x() > 0
+                || unrotate(neighbor, rotation).x() > maximum_local_x
             {
                 continue;
             }
@@ -1735,6 +1757,7 @@ fn clearing_coordinates(
     mask: &BTreeSet<HexCoord>,
     woodland: &BTreeSet<HexCoord>,
     stream: Option<SeedStream<'_>>,
+    allow_relocation: bool,
 ) -> Result<Vec<PlannedClearing>, Vec<WorldValidationIssue>> {
     let base_centers = [
         HexCoord::from_axial(-(radius.saturating_mul(3) / 5), -(radius / 6)),
@@ -1757,6 +1780,21 @@ fn clearing_coordinates(
             .ok()?;
             initial_options.get(sampled).copied()
         });
+        if !allow_relocation {
+            let center = sampled.unwrap_or(nominal);
+            let Some(interior) = clearing_footprint(center, mask, woodland, &claimed, stream)
+            else {
+                return Err(vec![recipe_issue(format!(
+                    "Forest clearing {index} cannot fit ten irregular surfaces"
+                ))]);
+            };
+            claimed.extend(interior.iter().copied());
+            clearings.push(PlannedClearing {
+                center,
+                coords: interior,
+            });
+            continue;
+        }
         let mut candidates = woodland.iter().copied().collect::<Vec<_>>();
         candidates.sort_unstable_by_key(|coord| {
             (
