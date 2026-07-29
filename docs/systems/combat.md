@@ -38,8 +38,8 @@ the end wraps and counts a round.
 `Transformation` component is what "finished moving" means, and advancing before then
 would cut the animation off and strand the piece between two hexes.
 
-Keys: `SPACE` ends a turn. `ESC` and `BACKSPACE` were already taken by pause and
-quit-to-title.
+Keys: `SPACE` ends the current player turn and is ignored while a hostile owns the
+turn. `ESC` and `BACKSPACE` were already taken by pause and quit-to-title.
 
 ### A defender choice is command-modal, not Pause
 
@@ -62,6 +62,12 @@ Every accepted outcome and refusal is also a public, serde-capable `CombatEvent`
 lattice-coordinate lists—never session-local spell ids or formatted presentation
 strings. The combat log applies faction disclosure when it ingests each event, so later
 divination cannot rewrite what an older line was allowed to reveal.
+
+The one-decision seam is also an authoring boundary: a spell may contain at most one
+non-targeted `DisableHexes` effect, because two would otherwise overwrite each other's
+defender choice. Damage commands aimed at an already downed unit are refused before
+spending action or mana; non-damaging inspection such as Reveal remains legal because
+the retained lattice is the future restoration target.
 
 ## Saying no out loud
 

@@ -640,11 +640,12 @@ lattice: a spell draws only from the six cells touching it. Laying one out *is* 
 problem, and a spell whose neighbours cannot pay is simply offline — it is not an error,
 it is a lattice that cannot cast that spell.
 
-That is also the mistake worth knowing about, because nothing at runtime will tell you.
-A spell cell one hex too far from the gems meant to fund it parses, loads and spawns
-perfectly, and the unit stands there never casting. **A test catches it** — every shipped
-archetype must be able to cast everything it inscribes, checked on a fresh lattice — so a
-misplaced cell fails `cargo test` rather than a playtest.
+That is also the mistake worth knowing about because it is not a load error. A spell
+cell one hex too far from the gems meant to fund it parses, loads and spawns perfectly;
+the cast panel reports it as blocked when that unit is controlled. **A test catches it
+earlier for shipped content** — every shipped archetype must be able to cast everything
+it inscribes on a fresh lattice — so a misplaced cell fails `cargo test` rather than
+waiting for a playtest.
 
 ```ron
 "raider": (

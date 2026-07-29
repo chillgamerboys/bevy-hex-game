@@ -4,7 +4,7 @@ How a spell becomes a change to the world: what makes a cast legal, what shape i
 affects, who decides what happens to the material inside that shape, and how effects
 that outlive their turn are expressed.
 
-> **Status:** this is the normative contract for wave 3's casting work. Unit effects,
+> **Status:** this is the normative contract for the 0.3 casting slice. Unit effects,
 > Burn, Reveal, geometry, aiming, and the command path are built. Terrain announcements,
 > obstruction, and spell-created illumination remain contracts.
 
@@ -117,9 +117,8 @@ applier in `hex_combat` is authoritative.
 3. **Targeting** — the anchor is in range, the shape resolves to a voxel set, and the
    trajectory is clear. Range uses
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
-   inherit high-ground-buys-range automatically** — the rule was written for this and
-   has had exactly one consumer until now, engagement. Trajectory is deferred; see
-   *Obstruction*.
+   inherit high-ground-buys-range automatically** from the same rule engagement uses.
+   Trajectory is deferred; see *Obstruction*.
 4. **Unit interaction — provisional first-wave safety policy.** The current unit-effect
    applier reaches the unit on the anchor. Content therefore refuses a unit-affecting
    spell only when its resolved shape can contain more than one distinct voxel. Boundary
@@ -225,7 +224,7 @@ Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and
 
 ### Obstruction
 
-**Volumes are geometric in wave 3** — a sphere next to a cave wall fills voxels inside
+**Volumes are geometric in 0.3** — a sphere next to a cave wall fills voxels inside
 the rock and the chamber beyond it. This is wrong, it is documented as wrong, and it is
 bounded: obstruction-aware clipping arrives with the same line-of-sight work that
 `RunBottom` unlocks, and `needs_los` on `TargetingSpec` (**built**, parsed) is unenforced
@@ -273,7 +272,7 @@ three hats, so they are built once:
 Vocabulary in `hex_core`, runtime in `hex_combat`, lattice payloads applied through
 `hex_lattice`'s existing functions — the same split the command funnel uses.
 
-- **End conditions in wave 3**: after N affected-unit turns, after N rounds, or bound
+- **End conditions in 0.3**: after N affected-unit turns, after N rounds, or bound
   to an enchantment (ending when it breaks). Area-lingering zones and dispel effects
   come later.
 - **Tick point is per payload.** Some effects are personal and tick at the start of the
@@ -288,7 +287,7 @@ without touching the framework, which is the point of having one.
 - **There is no ally/enemy targeting filter, and there will not be one.** You may heal
   an enemy and immolate a friend. Multi-voxel unit effects are fail-closed until the
   applier can honor the eventual every-occupant contract.
-- **Combat-only casting is provisional in wave 3.** Shaping terrain out of combat is
+- **Combat-only casting is provisional in 0.3.** Shaping terrain out of combat is
   attractive, and the mana half of that question now has an answer: recovery between
   fights is an explicit **rest action** (ruled 2026-07-27 — see
   [design/game.md](../design/game.md#recovery-and-death)), because channelling's
@@ -299,9 +298,13 @@ without touching the framework, which is the point of having one.
   `Spell::is_ritual()` (**built**, and read today only by the lattice demo and the dev
   content dump); it has no mechanical effect. Co-casting is entangled with the
   unresolved initiative question.
-- **Downed-first death is provisional.** Wave 3 initially removes a fully disabled
+- **Downed-first death is provisional.** Version 0.3 removes a fully disabled
   unit from the turn order and leaves it revivable by a restoring spell. Functional
-  death and permadeath remain separate design decisions.
+  death and permadeath remain separate design decisions. Further damaging casts refuse
+  a downed target before payment, while Reveal may still inspect its retained lattice.
+- **One cast may open at most one defender choice.** Content validation rejects a spell
+  with several non-targeted `DisableHexes` effects; the pending-decision resource holds
+  one exact answer, so accepting that authoring shape would overwrite damage silently.
 - **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
   complete tier-bounded view through the knowledge seam. Spell-created lights still
   wait on the perception lane and must not silently do nothing.
