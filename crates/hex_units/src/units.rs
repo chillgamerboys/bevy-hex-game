@@ -29,8 +29,8 @@ use std::collections::BTreeMap;
 
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause, Screen,
-    SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
+    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause,
+    PendingDecision, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
@@ -339,6 +339,7 @@ fn on_tile_clicked(
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
+    pending: Option<Res<PendingDecision>>,
 ) {
     // Every resource here is an `Option`. Observers are global: this one fires on the
     // title screen, in menus, and before anything has loaded. Bevy validates system
@@ -355,6 +356,9 @@ fn on_tile_clicked(
     // out the moment the game resumes — a click through the pause overlay must mean
     // nothing at all, not "something, later".
     if pause.is_some_and(|pause| pause.get().0) {
+        return;
+    }
+    if pending.is_some_and(|decision| decision.is_open()) {
         return;
     }
 

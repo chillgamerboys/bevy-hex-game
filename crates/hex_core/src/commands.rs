@@ -256,8 +256,8 @@ pub enum PendingDecision {
     ///
     /// The design's one mid-resolution decision: damage names a count, and **the
     /// defender picks which hexes** — except for the rare abilities that target hexes
-    /// directly. An auto-policy answers this today; another player answers it in co-op,
-    /// through the same seam and the same [`GameCommand::ChooseDisables`].
+    /// directly. A player answers through the lattice UI and non-player defenders use
+    /// an auto-policy, both through the same [`GameCommand::ChooseDisables`] seam.
     ChooseDisables {
         /// Who chooses — the unit taking the damage.
         decider: UnitId,

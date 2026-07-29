@@ -166,9 +166,9 @@ pub(crate) fn plugin(app: &mut App) {
     // Unit ids reset between sessions, so a held-over command would name
     // somebody else's unit next launch.
     app.add_systems(OnExit(Screen::Gameplay), clear_session_state);
-    // A decision open when a fight ends has nobody left to answer it: the auto-policy
-    // runs only in combat, so it would park every later cast behind "a decision is
-    // still open" for the rest of the session.
+    // A decision open when a fight ends has nobody left to answer it: both answer paths
+    // are combat-only, so it would park every later cast behind "a decision is still
+    // open" for the rest of the session.
     app.add_systems(OnExit(Mode::Combat), clear_pending_decision);
 }
 
@@ -245,6 +245,10 @@ fn apply_commands(
     let in_combat = *mode.get() == Mode::Combat;
 
     while let Some(issued) = queue.pop() {
+        if let Some(refusal) = modal_refusal(&stores.pending, &issued.command) {
+            drop_command(&mut emitted, &issued, refusal);
+            continue;
+        }
         let unit = issued.command.unit();
         let Some(entity) = registry.entity_of(unit) else {
             drop_command(&mut emitted, &issued, CommandRefusal::UnknownUnit);
@@ -340,6 +344,21 @@ fn apply_commands(
     stores.events.write_batch(emitted);
 }
 
+/// While resolution is waiting on a defender, the answer is the whole command
+/// vocabulary. Nothing else may interleave with the lattice state it settles.
+fn modal_refusal(pending: &PendingDecision, command: &GameCommand) -> Option<CommandRefusal> {
+    let PendingDecision::ChooseDisables { decider, .. } = *pending else {
+        return None;
+    };
+    match command {
+        GameCommand::ChooseDisables { unit, .. } if *unit == decider => None,
+        GameCommand::ChooseDisables { .. } => {
+            Some(CommandRefusal::WrongDecisionUnit { expected: decider })
+        }
+        _ => Some(CommandRefusal::DecisionPending { decider }),
+    }
+}
+
 /// Says exactly what was refused and why, once per drop.
 fn drop_command(events: &mut Vec<CombatEvent>, issued: &IssuedCommand, refusal: CommandRefusal) {
     warn!("command dropped ({refusal:?}): {issued:?}");
@@ -347,4 +366,69 @@ fn drop_command(events: &mut Vec<CombatEvent>, issued: &IssuedCommand, refusal: 
         command: issued.command.clone(),
         refusal,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_core::{LatticeCoord, UnitId};
+
+    use super::*;
+
+    #[test]
+    fn a_disable_decision_is_modal_for_every_other_command() {
+        let decider = UnitId(4);
+        let pending = PendingDecision::ChooseDisables {
+            decider,
+            count: 1,
+            source: UnitId(2),
+        };
+        let blocked = [
+            GameCommand::MoveAlong {
+                unit: decider,
+                path: vec![TilePos::ORIGIN],
+            },
+            GameCommand::Strike {
+                unit: decider,
+                target: UnitId(8),
+            },
+            GameCommand::EndTurn { unit: decider },
+            GameCommand::Cast {
+                unit: decider,
+                spell: "Ember".to_owned(),
+                target: TilePos::ORIGIN,
+                facing: None,
+                mana: None,
+            },
+            GameCommand::Channel { unit: decider },
+        ];
+        for command in &blocked {
+            assert_eq!(
+                modal_refusal(&pending, command),
+                Some(CommandRefusal::DecisionPending { decider }),
+                "{command:?} escaped the modal gate"
+            );
+        }
+
+        assert_eq!(
+            modal_refusal(
+                &pending,
+                &GameCommand::ChooseDisables {
+                    unit: UnitId(9),
+                    cells: vec![LatticeCoord::ORIGIN],
+                }
+            ),
+            Some(CommandRefusal::WrongDecisionUnit { expected: decider })
+        );
+        assert_eq!(
+            modal_refusal(
+                &pending,
+                &GameCommand::ChooseDisables {
+                    unit: decider,
+                    cells: vec![LatticeCoord::ORIGIN],
+                }
+            ),
+            None,
+            "the exact matching answer is the one legal command"
+        );
+    }
 }

@@ -17,11 +17,12 @@ use bevy::state::app::StatesPlugin;
 
 use hex_combat::{CombatEvent, CommandRefusal, FactionKnowledge, Initiative, KnownCell, TurnOrder};
 use hex_core::{
-    CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, KnowledgeExpiry,
-    KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
+    CommandQueue, ControlOwner, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand,
+    KnowledgeExpiry, KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen,
+    TilePos, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
-use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
+use hex_units::{Downed, Faction, Player, Standing, StandsOn, UnitRegistry};
 
 fn test_app() -> App {
     let mut app = App::new();
@@ -150,6 +151,97 @@ fn a_disable_decision_is_answered_through_the_command_log() {
     );
 }
 
+#[test]
+fn the_auto_policy_waits_for_a_player_decider() {
+    let mut app = test_app();
+    let player = spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    app.world_mut()
+        .entity_mut(player)
+        .insert((Player, ControlOwner::default()));
+    spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(0),
+        count: 1,
+        source: UnitId(1),
+    };
+    app.update();
+
+    assert!(
+        app.world().resource::<PendingDecision>().is_open(),
+        "the AI must leave a player choice open for the UI"
+    );
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "the AI must not queue a player answer"
+    );
+    assert!(
+        !app.world()
+            .entity(player)
+            .get::<LatticeState>()
+            .is_some_and(|state| state.is_disabled(LatticeCoord::ORIGIN)),
+        "waiting for the player must not mutate the lattice"
+    );
+}
+
+#[test]
+fn the_auto_policy_uses_the_hostile_deciders_control_owner() {
+    let mut app = test_app();
+    let player = spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    app.world_mut().entity_mut(player).insert(Player);
+    let hostile = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    app.world_mut()
+        .entity_mut(hostile)
+        .insert(ControlOwner(PlayerSeat(7)));
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 1,
+        source: UnitId(0),
+    };
+    app.update();
+
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the correctly owned AI answer should apply"
+    );
+    assert!(
+        app.world()
+            .entity(hostile)
+            .get::<LatticeState>()
+            .is_some_and(|state| state.is_disabled(LatticeCoord::ORIGIN)),
+        "the hostile's deterministic first choice should be disabled"
+    );
+    assert!(
+        take_events(&mut app).iter().any(|event| matches!(
+            event,
+            CombatEvent::HexesDisabled {
+                target: UnitId(1),
+                ..
+            }
+        )),
+        "the answer should resolve rather than being refused for seat zero"
+    );
+}
+
 /// An answer that does not match the open decision is refused rather than applied.
 ///
 /// A replayed or forged log must not be able to disable a bystander's hexes by naming
@@ -222,6 +314,87 @@ fn a_mismatched_answer_is_refused() {
             vec![CombatEvent::CommandRefused { command, refusal }]
         );
     }
+}
+
+#[test]
+fn a_wrong_decider_and_an_already_disabled_cell_are_refused() {
+    let mut app = test_app();
+    spawn(&mut app, UnitId(1), Faction::Hostile, HexCoord::ORIGIN);
+    spawn(
+        &mut app,
+        UnitId(2),
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 1,
+        source: UnitId(0),
+    };
+    let wrong = GameCommand::ChooseDisables {
+        unit: UnitId(2),
+        cells: vec![LatticeCoord::ORIGIN],
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: wrong.clone(),
+        });
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: wrong,
+            refusal: CommandRefusal::WrongDecisionUnit {
+                expected: UnitId(1),
+            },
+        }]
+    );
+
+    let first = GameCommand::ChooseDisables {
+        unit: UnitId(1),
+        cells: vec![LatticeCoord::ORIGIN],
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: first,
+        });
+    app.update();
+    take_events(&mut app);
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+        decider: UnitId(1),
+        count: 1,
+        source: UnitId(0),
+    };
+    let corpse = GameCommand::ChooseDisables {
+        unit: UnitId(1),
+        cells: vec![LatticeCoord::ORIGIN],
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: corpse.clone(),
+        });
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: corpse,
+            refusal: CommandRefusal::CellAlreadyDisabled {
+                cell: LatticeCoord::ORIGIN,
+            },
+        }]
+    );
+    assert!(
+        app.world().resource::<PendingDecision>().is_open(),
+        "a refused corpse choice keeps the real decision open"
+    );
 }
 
 /// A unit whose every hex is disabled leaves the turn order and is marked down.

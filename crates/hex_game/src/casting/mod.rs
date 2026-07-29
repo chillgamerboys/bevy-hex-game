@@ -587,11 +587,15 @@ fn resolve_aim_input(
     readout: Res<CastReadout>,
     mut aiming: ResMut<Aiming>,
     mut queue: ResMut<CommandQueue>,
+    pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
     units: Query<(&Faction, &StandsOn), Without<Downed>>,
 ) {
+    if pending.is_open() {
+        return;
+    }
     let Some(request) = requested(&keys, &chooses, &controls) else {
         return;
     };

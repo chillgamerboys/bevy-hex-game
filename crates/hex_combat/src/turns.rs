@@ -37,7 +37,7 @@ use bevy::prelude::*;
 use hex_assets::CombatSettings;
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, RoundElapsed, Screen, TilePos, Turn, UnitId,
+    PausableSystems, PendingDecision, RoundElapsed, Screen, TilePos, Turn, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
@@ -406,10 +406,11 @@ fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
+    pending: Res<PendingDecision>,
     owners: Query<&ControlOwner>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) {
+    if !keys.just_pressed(KeyCode::Space) || pending.is_open() {
         return;
     }
     let Some(current) = turn_order.current() else {

@@ -270,8 +270,8 @@ fn burn_source(effects: &PersistentEffects, target: UnitId) -> Option<UnitId> {
 /// Ticks the acting unit's personal effects, at the start of its turn.
 ///
 /// Runs before [`CombatSystems::Act`](crate::CombatSystems), so the decision a due burn
-/// parks is already open when the auto-policy looks for one — a tick inside `Act` would
-/// be unordered against the system that answers it.
+/// parks is already open when its human or policy answerer looks for one — a tick inside
+/// `Act` would be unordered against the systems that answer it.
 fn tick_turn_effects(
     order: Res<TurnOrder>,
     turns: Query<&UnitId, Added<Turn>>,
@@ -341,12 +341,12 @@ fn tick_turn_effects(
 ///
 /// # Never park a decision nobody can answer
 ///
-/// The seam has exactly one answerer, `ai::answer_disable_decision`, and it needs the
-/// decider's [`LatticeState`] to pick hexes from. A unit spawned from an archetype
+/// Every answer path needs the decider's [`LatticeState`] to offer valid cells. A unit
+/// spawned from an archetype
 /// `lattices.ron` does not define has no lattice — `hex_units` warns and spawns it inert —
 /// and it still joins the turn order. Parking its choice would deadlock the entire fight:
-/// nothing answers, so nothing clears `pending`, so no unit acts and every later cast and
-/// strike is refused, until the player walks far enough away to end combat.
+/// neither UI nor policy can answer, so nothing clears `pending`, no unit acts, and every
+/// later cast and strike is refused until the player walks far enough away to end combat.
 ///
 /// So the hit is **dropped, loudly**, rather than parked. A fire on something that cannot
 /// burn is content that needs fixing, and the log says which unit.

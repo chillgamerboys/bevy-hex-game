@@ -14,8 +14,8 @@
 //! the same log produce a different fight.
 //!
 //! So the applier parks a [`PendingDecision`], something answers it by pushing a
-//! `ChooseDisables`, and this handler applies that answer. Today an auto-policy in
-//! [`crate::ai`] answers immediately; a second player answers through the same seam.
+//! `ChooseDisables`, and this handler applies that answer. The lattice UI answers for
+//! a player defender; the policy in [`crate::ai`] answers for everyone else.
 
 use bevy::prelude::*;
 

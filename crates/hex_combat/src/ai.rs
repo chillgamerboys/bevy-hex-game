@@ -28,10 +28,11 @@ use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand,
-    LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, SubstanceId, TilePos, Turn,
-    UnitId,
+    LatticeCoord, Mode, PausableSystems, PendingDecision, SubstanceId, TilePos, Turn, UnitId,
 };
-use hex_units::{route, Body, Downed, Enemy, Faction, Footing, Standing, StandsOn, UnitRegistry};
+use hex_units::{
+    route, Body, Downed, Enemy, Faction, Footing, Player, Standing, StandsOn, UnitRegistry,
+};
 
 use hex_lattice::{CellKind, LatticeSpec, LatticeState};
 
@@ -278,10 +279,9 @@ fn approach(from: Standing, target: Standing, footing: &Footing, budget: u32) ->
 
 /// Answers an open [`PendingDecision::ChooseDisables`] on the defender's behalf.
 ///
-/// **The auto-policy the design names.** Defender-chooses is a protocol fact, not a UI
-/// feature: the decision exists, something answers it, and today that something is this.
-/// A second player answers through the same seam in co-op, and a human player answers
-/// through it when there is UI for it — neither needs the applier to change.
+/// Defender-chooses is a protocol fact, not a UI feature: the decision exists and
+/// something answers it. This policy answers for non-player defenders; a player uses
+/// the command-modal lattice UI through the same command seam.
 ///
 /// The policy itself is deliberately the dumbest defensible one: **give up the cheapest
 /// hexes first**, where cheapest means blank cells, then gems holding the least mana,
@@ -295,7 +295,7 @@ fn answer_disable_decision(
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,
     mut queue: ResMut<CommandQueue>,
-    lattices: Query<(&LatticeSpec, &LatticeState)>,
+    lattices: Query<(&LatticeSpec, &LatticeState, Has<Player>, &ControlOwner)>,
 ) {
     let PendingDecision::ChooseDisables { decider, count, .. } = *pending else {
         return;
@@ -308,9 +308,15 @@ fn answer_disable_decision(
     let Some(entity) = registry.entity_of(decider) else {
         return;
     };
-    let Ok((spec, state)) = lattices.get(entity) else {
+    let Ok((spec, state, is_player, owner)) = lattices.get(entity) else {
         return;
     };
+    // A player-controlled defender is command-modal UI, not an AI policy choice.
+    // `ControlOwner` supplies the seat for either side; the marker identifies which
+    // side has a human input path.
+    if is_player {
+        return;
+    }
 
     let mut candidates: Vec<(u8, u16, LatticeCoord)> = spec
         .cells()
@@ -343,7 +349,7 @@ fn answer_disable_decision(
         info!("damage: {decider:?} has fewer hexes left than the hit — all of them go");
     }
     queue.push(IssuedCommand {
-        seat: PlayerSeat::default(),
+        seat: owner.0,
         command: GameCommand::ChooseDisables {
             unit: decider,
             cells,

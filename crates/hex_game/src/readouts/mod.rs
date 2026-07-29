@@ -50,14 +50,15 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut hud: ResMut<HudVisibility>) {
 
 fn apply_hud_visibility(
     hud: Res<HudVisibility>,
-    mut roots: Query<&mut Visibility, With<HudElement>>,
+    selection: Res<lattice::DisableSelection>,
+    mut roots: Query<(&mut Visibility, Has<lattice::DecisionLattice>), With<HudElement>>,
 ) {
-    let wanted = if hud.shown {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
-    for mut visibility in &mut roots {
+    for (mut visibility, decision_lattice) in &mut roots {
+        let wanted = if hud.shown || (decision_lattice && selection.is_active()) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         if *visibility != wanted {
             *visibility = wanted;
         }
@@ -75,6 +76,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<HudVisibility>()
+            .init_resource::<lattice::DisableSelection>()
             .add_systems(Update, apply_hud_visibility);
         let root = app
             .world_mut()
@@ -89,5 +91,40 @@ mod tests {
             Some(&Visibility::Hidden)
         );
         assert!(app.world().get_entity(root).is_ok(), "the root stays alive");
+    }
+
+    #[test]
+    fn an_active_decision_lattice_stays_visible_when_the_hud_is_hidden() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<HudVisibility>()
+            .init_resource::<lattice::DisableSelection>()
+            .add_systems(Update, apply_hud_visibility);
+        let ordinary = app
+            .world_mut()
+            .spawn((HudElement, Visibility::Inherited))
+            .id();
+        let decision = app
+            .world_mut()
+            .spawn((HudElement, lattice::DecisionLattice, Visibility::Inherited))
+            .id();
+        app.world_mut().resource_mut::<HudVisibility>().shown = false;
+        app.world_mut()
+            .resource_mut::<lattice::DisableSelection>()
+            .decision = Some(lattice::DisableDecision {
+            decider: hex_core::UnitId(3),
+            owed: 1,
+            live: vec![hex_core::LatticeCoord::ORIGIN],
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Visibility>(ordinary),
+            Some(&Visibility::Hidden)
+        );
+        assert_eq!(
+            app.world().get::<Visibility>(decision),
+            Some(&Visibility::Inherited)
+        );
     }
 }
