@@ -28,27 +28,21 @@
 
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use hex_core::Screen;
+use hex_combat::TurnOrder;
+use hex_core::{CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PendingDecision};
+use hex_units::{Faction, UnitRegistry};
 
-use crate::menus::widgets::{
-    blurb, divider, fine, heading, label, row_button, small_button, UiAssets, EDGE, PANEL_BG,
-    SMALL_BUTTON_WIDTH,
+use crate::menus::widgets::{blurb, fine, heading, row_button, UiAssets, EDGE, LABEL, PANEL_BG};
+use crate::readouts::{
+    region, spawn_decision_controls, DecisionHud, DisableSelection, GameplayUiContext, HudElement,
+    HudRegion,
 };
-use crate::readouts::HudElement;
-use crate::screens::DespawnOnExit;
 
 use super::preview::AimVolume;
 use super::{AimControl, Aiming, AimsSpell, CastReadout, SpellRow};
 
-/// Width of the panel. Wide enough for the demo's 132px action slot beside a spell's
-/// name and a line of detail, and no wider — it is sitting on top of the game.
-const PANEL_WIDTH: f32 = 396.0;
-
-/// Width of the panel's content, inside its padding.
-const CONTENT_WIDTH: f32 = PANEL_WIDTH - 28.0;
-
 /// Width of the three aim controls, which have to fit side by side inside the content.
-const CONTROL_WIDTH: f32 = 112.0;
+const CONTROL_WIDTH: f32 = 104.0;
 
 /// Width of the colour bar carrying a spell's element.
 const SWATCH_WIDTH: f32 = 5.0;
@@ -67,6 +61,12 @@ const FRAME: Pickable = Pickable {
 #[derive(Component)]
 pub(super) struct PanelBody;
 
+#[derive(Component)]
+pub(super) struct CastingPanel;
+
+#[derive(Component)]
+pub(super) struct EndTurnControl;
+
 /// Spawns the panel frame, and clears whatever the last session left in the interface.
 ///
 /// Resetting the readout here is load-bearing rather than tidy: the rebuild is driven
@@ -77,22 +77,26 @@ pub(super) fn spawn_panel(
     mut readout: ResMut<CastReadout>,
     mut aiming: ResMut<Aiming>,
     assets: Res<UiAssets>,
+    regions: Query<(Entity, &HudRegion)>,
 ) {
     *readout = CastReadout::default();
     aiming.0 = None;
 
-    commands
+    let panel = commands
         .spawn((
             Name::new("Casting Panel"),
+            CastingPanel,
+            DecisionHud,
             HudElement,
             Node {
                 position_type: PositionType::Absolute,
-                top: Val::Px(12.0),
-                right: Val::Px(12.0),
-                width: Val::Px(PANEL_WIDTH),
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(98.0),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                padding: UiRect::all(Val::Px(14.0)),
+                row_gap: Val::Px(4.0),
+                padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(10.0)),
                 ..default()
@@ -100,21 +104,26 @@ pub(super) fn spawn_panel(
             BorderColor::all(EDGE),
             BackgroundColor(PANEL_BG),
             FRAME,
-            DespawnOnExit(Screen::Gameplay),
         ))
         .with_children(|panel| {
-            panel.spawn((heading(&assets, "casting"), Pickable::IGNORE));
+            panel.spawn((heading(&assets, "actions"), Pickable::IGNORE));
             panel.spawn((
                 Name::new("Casting Body"),
                 PanelBody,
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(6.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(6.0),
+                    align_items: AlignItems::Center,
                     ..default()
                 },
                 Pickable::IGNORE,
             ));
-        });
+        })
+        .id();
+    if let Some(actions) = region(HudRegion::Actions, &regions) {
+        commands.entity(actions).add_child(panel);
+    }
 }
 
 /// Redraws the panel whenever what it says has changed, and not otherwise.
@@ -127,33 +136,114 @@ pub(super) fn rebuild_panel(
     readout: Res<CastReadout>,
     aiming: Res<Aiming>,
     volume: Res<AimVolume>,
+    mode: Res<State<Mode>>,
+    context: Res<GameplayUiContext>,
+    decision: Res<DisableSelection>,
+    pending: Res<PendingDecision>,
+    mut panels: Query<&mut Node, With<CastingPanel>>,
     bodies: Query<Entity, With<PanelBody>>,
     assets: Res<UiAssets>,
 ) {
-    if !readout.is_changed() && !aiming.is_changed() && !volume.is_changed() {
+    if !readout.is_changed()
+        && !aiming.is_changed()
+        && !volume.is_changed()
+        && !mode.is_changed()
+        && !context.is_changed()
+        && !decision.is_changed()
+        && !pending.is_changed()
+    {
+        return;
+    }
+    let Ok(mut panel) = panels.single_mut() else {
+        return;
+    };
+    panel.display = if *mode.get() == Mode::Combat {
+        Display::Flex
+    } else {
+        Display::None
+    };
+    if panel.display == Display::None {
         return;
     }
     let Ok(body) = bodies.single() else { return };
 
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|rows| {
+        if let Some(summary) = decision.summary() {
+            let owner = context
+                .decision_owner
+                .as_ref()
+                .map_or_else(|| "UNKNOWN ALLY".to_owned(), |unit| unit.label());
+            let target = context
+                .decision_target
+                .as_ref()
+                .map_or_else(|| "UNKNOWN TARGET".to_owned(), |unit| unit.label());
+            rows.spawn(blurb(
+                &assets,
+                if summary.restoring {
+                    format!("RESTORE TARGET · {owner} → {target}")
+                } else {
+                    format!("DAMAGE CHOICE · {owner}")
+                },
+            ));
+            spawn_decision_controls(rows, summary, &assets);
+            return;
+        }
+        if pending.is_open() {
+            let owner = context
+                .decision_owner
+                .as_ref()
+                .map_or_else(|| "UNKNOWN UNIT".to_owned(), |unit| unit.label());
+            let task = match *pending {
+                PendingDecision::ChooseDisables { .. } => "DAMAGE CHOICE",
+                PendingDecision::ChooseRestores { .. } => "RESTORATION CHOICE",
+                PendingDecision::None => unreachable!("the decision was checked as open"),
+            };
+            rows.spawn(blurb(
+                &assets,
+                format!("RESOLVING {task} · {owner} · PLAYER COMMANDS LOCKED"),
+            ));
+            return;
+        }
+        if context
+            .acting
+            .as_ref()
+            .is_some_and(|unit| unit.faction == Faction::Hostile)
+        {
+            rows.spawn(blurb(&assets, "ENEMY TURN · PLAYER COMMANDS LOCKED"));
+            return;
+        }
         if readout.caster.is_none() {
             rows.spawn(blurb(&assets, "no unit to cast from"));
+            spawn_end_turn(rows, &assets);
             return;
         }
         if readout.spells.is_empty() {
             rows.spawn(blurb(&assets, "this unit inscribes no spells"));
+            spawn_end_turn(rows, &assets);
             return;
         }
         if let Some(reason) = readout.unavailable {
-            rows.spawn(fine(&assets, format!("· {reason}")));
+            rows.spawn(blurb(&assets, reason.to_uppercase()));
         }
-        for row in &readout.spells {
-            spawn_row(rows, row, readout.unavailable.is_some(), &assets);
+        if aiming.0.is_some() {
+            spawn_footer(rows, &readout, &aiming, &volume, &assets);
+            spawn_end_turn(rows, &assets);
+        } else {
+            for row in &readout.spells {
+                spawn_row(rows, row, readout.unavailable.is_some(), &assets);
+            }
+            spawn_end_turn(rows, &assets);
         }
-        rows.spawn((divider(CONTENT_WIDTH), Pickable::IGNORE));
-        spawn_footer(rows, &readout, &aiming, &volume, &assets);
     });
+}
+
+fn spawn_end_turn(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
+    rows.spawn((row_button("End Turn", 94.0), EndTurnControl))
+        .with_children(|button| {
+            button.spawn(blurb(assets, "end turn"));
+            button.spawn(fine(assets, "SPACE"));
+        });
 }
 
 /// One spell: its element bar, its action slot, and what it is.
@@ -166,8 +256,11 @@ fn spawn_row(
     rows.spawn((
         Name::new("Spell Row"),
         Node {
+            flex_basis: Val::Px(0.0),
+            flex_grow: 1.0,
+            min_width: Val::Px(0.0),
             flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(10.0),
+            column_gap: Val::Px(4.0),
             align_items: AlignItems::Center,
             ..default()
         },
@@ -177,7 +270,7 @@ fn spawn_row(
         entry.spawn((
             Node {
                 width: Val::Px(SWATCH_WIDTH),
-                height: Val::Px(44.0),
+                height: Val::Px(56.0),
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
@@ -193,11 +286,35 @@ fn spawn_row(
                 // handle — entity order is not stable across UI rebuilds.
                 entry
                     .spawn((
-                        small_button(format!("Cast {}", row.name)),
+                        Name::new(format!("Cast {}", row.name)),
+                        Button,
                         AimsSpell(row.name.clone()),
+                        Node {
+                            width: Val::Px(148.0),
+                            max_width: Val::Px(148.0),
+                            flex_grow: 1.0,
+                            height: Val::Px(56.0),
+                            padding: UiRect::all(Val::Px(7.0)),
+                            flex_direction: FlexDirection::Column,
+                            justify_content: JustifyContent::Center,
+                            row_gap: Val::Px(2.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(6.0)),
+                            ..default()
+                        },
+                        BorderColor::all(EDGE),
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
                     ))
                     .with_children(|button| {
-                        button.spawn(blurb(assets, "aim"));
+                        button.spawn((
+                            Text::new(row.name.clone()),
+                            TextFont {
+                                font: assets.body.clone().into(),
+                                ..TextFont::from_font_size(14.0)
+                            },
+                            TextColor(LABEL),
+                            Pickable::IGNORE,
+                        ));
                         button.spawn(fine(assets, row.cost.clone()));
                     });
             }
@@ -209,36 +326,66 @@ fn spawn_row(
                 entry.spawn((
                     Name::new("Blocked Reason"),
                     Node {
-                        width: Val::Px(SMALL_BUTTON_WIDTH),
+                        width: Val::Px(148.0),
+                        max_width: Val::Px(148.0),
+                        flex_grow: 1.0,
+                        height: Val::Px(56.0),
+                        padding: UiRect::all(Val::Px(7.0)),
+                        flex_direction: FlexDirection::Column,
+                        justify_content: JustifyContent::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
                         ..default()
                     },
+                    BorderColor::all(EDGE),
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
                     Pickable::IGNORE,
-                    children![fine(
-                        assets,
-                        // A spell the lattice cannot pay for says so; one held back
-                        // only by whose turn it is keeps showing its price, because
-                        // that reason is already on the line above the list.
-                        blocked.map_or_else(
-                            || row.cost.clone(),
-                            |reason| format!("blocked · {reason}")
+                    children![
+                        blurb(assets, row.name.clone()),
+                        fine(
+                            assets,
+                            blocked.map_or_else(
+                                || row.cost.clone(),
+                                |reason| format!("BLOCKED · {reason}")
+                            )
                         )
-                    )],
+                    ],
                 ));
             }
         }
+    });
+}
 
-        entry.spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-            children![
-                label(assets, row.name.clone()),
-                fine(assets, row.detail.clone())
-            ],
-        ));
+pub(super) fn end_turn_from_button(
+    clicks: Query<&Interaction, (Changed<Interaction>, With<EndTurnControl>)>,
+    order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    owners: Query<(Option<&ControlOwner>, &Faction)>,
+    mut queue: ResMut<CommandQueue>,
+) {
+    if pending.is_open()
+        || !clicks
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        return;
+    }
+    let Some(unit) = order.current() else {
+        return;
+    };
+    let Some(entity) = registry.entity_of(unit) else {
+        return;
+    };
+    let Ok((owner, faction)) = owners.get(entity) else {
+        return;
+    };
+    if *faction != Faction::Player {
+        return;
+    }
+    queue.push(IssuedCommand {
+        seat: owner.copied().unwrap_or_default().0,
+        command: GameCommand::EndTurn { unit },
     });
 }
 
@@ -255,25 +402,15 @@ fn spawn_footer(
         return;
     };
 
-    rows.spawn(blurb(assets, format!("aiming {}", aim.spell)));
-    // The anchor is written as a whole `TilePos`, level included. A bare coordinate
-    // would read identically for a bridge deck and the ground beneath it, which is the
-    // one distinction a player aiming down a shaft most needs.
-    rows.spawn(fine(
+    rows.spawn(blurb(
         assets,
         format!(
-            "anchor ({}, {}) level {}   ·   {} voxels, {} on surfaces",
-            aim.anchor.coord.x(),
-            aim.anchor.coord.y(),
-            aim.anchor.level,
+            "AIMING {} · {} VOXELS / {} SURFACES",
+            aim.spell.to_uppercase(),
             volume.voxels,
             volume.painted
         ),
     ));
-    if volume.painted == 0 {
-        // Otherwise a spell aimed into open air looks like a preview that failed.
-        rows.spawn(fine(assets, "· nothing on that volume to paint"));
-    }
     if readout.unavailable.is_some() {
         return;
     }
@@ -310,7 +447,6 @@ fn spawn_footer(
                 button.spawn(fine(assets, "Q"));
             });
     });
-    rows.spawn(fine(assets, "click a lit surface to aim somewhere else"));
 }
 
 #[cfg(test)]
@@ -347,6 +483,10 @@ mod tests {
         app.init_resource::<CastReadout>();
         app.init_resource::<Aiming>();
         app.init_resource::<AimVolume>();
+        app.init_resource::<GameplayUiContext>();
+        app.init_resource::<DisableSelection>();
+        app.init_resource::<PendingDecision>();
+        app.insert_resource(State::new(Mode::Combat));
         app.add_systems(Startup, spawn_panel);
         app.add_systems(Update, rebuild_panel);
         app.update();
@@ -463,5 +603,135 @@ mod tests {
                 .any(|name| name.as_str() == "Confirm Cast");
             assert_eq!(present, expected, "aiming was {aiming}");
         }
+    }
+
+    #[test]
+    fn a_hostile_turn_replaces_player_commands_with_a_lock_message() {
+        let mut app = drawn_panel(false);
+        app.world_mut().resource_mut::<GameplayUiContext>().acting =
+            Some(crate::readouts::UiUnitIdentity {
+                unit: UnitId(9),
+                name: "raider #9".to_owned(),
+                faction: Faction::Hostile,
+                party_slot: None,
+            });
+        app.update();
+
+        let names: Vec<_> = app
+            .world_mut()
+            .query_filtered::<&Name, With<Button>>()
+            .iter(app.world())
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        assert!(!names.iter().any(|name| name.starts_with("Cast ")));
+        assert!(!names.iter().any(|name| name == "End Turn"));
+        let texts: Vec<_> = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .map(|text| text.0.clone())
+            .collect();
+        assert!(texts.iter().any(|text| text.contains("COMMANDS LOCKED")));
+    }
+
+    #[test]
+    fn a_hostile_ai_decision_never_exposes_player_commands() {
+        let mut app = drawn_panel(false);
+        let hostile = crate::readouts::UiUnitIdentity {
+            unit: UnitId(9),
+            name: "raider #9".to_owned(),
+            faction: Faction::Hostile,
+            party_slot: None,
+        };
+        app.world_mut()
+            .resource_mut::<GameplayUiContext>()
+            .decision_owner = Some(hostile.clone());
+        app.world_mut()
+            .resource_mut::<GameplayUiContext>()
+            .decision_target = Some(hostile);
+        *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
+            decider: UnitId(9),
+            count: 1,
+            source: UnitId(1),
+        };
+        app.update();
+
+        let names: Vec<_> = app
+            .world_mut()
+            .query_filtered::<&Name, With<Button>>()
+            .iter(app.world())
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        assert!(!names.iter().any(|name| name.starts_with("Cast ")));
+        assert!(!names.iter().any(|name| name == "End Turn"));
+        let texts: Vec<_> = app
+            .world_mut()
+            .query::<&Text>()
+            .iter(app.world())
+            .map(|text| text.0.clone())
+            .collect();
+        assert!(texts.iter().any(|text| {
+            text.contains("RESOLVING DAMAGE CHOICE")
+                && text.contains("HOSTILE · RAIDER #9")
+                && text.contains("COMMANDS LOCKED")
+        }));
+    }
+
+    #[test]
+    fn a_player_without_spells_still_has_an_end_turn_control() {
+        let mut app = drawn_panel(false);
+        app.world_mut().resource_mut::<CastReadout>().spells.clear();
+        app.update();
+
+        let names: Vec<_> = app
+            .world_mut()
+            .query_filtered::<&Name, With<Button>>()
+            .iter(app.world())
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        assert!(names.iter().any(|name| name == "End Turn"));
+        assert!(!names.iter().any(|name| name.starts_with("Cast ")));
+    }
+
+    #[test]
+    fn a_decision_replaces_ordinary_actions_with_clear_and_confirm() {
+        let mut app = drawn_panel(false);
+        app.world_mut()
+            .resource_mut::<DisableSelection>()
+            .begin_test_decision(UnitId(1), UnitId(2), 1, true);
+        app.update();
+
+        let names: Vec<_> = app
+            .world_mut()
+            .query_filtered::<&Name, With<Button>>()
+            .iter(app.world())
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        assert!(!names.iter().any(|name| name.starts_with("Cast ")));
+        assert!(!names.iter().any(|name| name == "End Turn"));
+        assert!(names.iter().any(|name| name == "Clear Disable Selection"));
+        assert!(
+            !names.iter().any(|name| name == "Confirm Disable Selection"),
+            "confirmation stays disabled until the quota is selected"
+        );
+
+        let disabled = app
+            .world_mut()
+            .query::<(Entity, &Name)>()
+            .iter(app.world())
+            .find_map(|(entity, name)| {
+                (name.as_str() == "Confirm Disable Selection Disabled").then_some(entity)
+            })
+            .expect("the disabled confirmation should be drawn");
+        let node = app
+            .world()
+            .entity(disabled)
+            .get::<Node>()
+            .expect("the disabled confirmation is a UI node");
+        assert_eq!(
+            node.flex_direction,
+            FlexDirection::Column,
+            "the hint belongs below confirm rather than overflowing beside it"
+        );
     }
 }

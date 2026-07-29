@@ -12,12 +12,14 @@ Everything about the map:
 | `src/voxel.rs` | Voxel storage — `VoxelMap`, `Column`, and the run-merging |
 | `src/generator.rs` | The optional Perlin height field |
 | `src/terrain.rs` | Pure Showcase and Perlin construction |
-| `src/procedural.rs` | Versioned procedural planning, validation, candidate selection, and diagnostics |
+| `src/procedural.rs` / `src/procedural_v2/` | Frozen V1/V2 procedural oracles while V3 recipes migrate |
+| `src/procedural_v3/` | Private semantic plans, patches, recipes, validation, selection, fingerprints, fallback, and exact projections |
 | `src/grid.rs` | Map lifecycle, tile entities, rendering, and terrain edits |
 | `src/settings.rs` | Validated designer-facing settings from a world file, e.g. `assets/config/world.ron` |
 
-Plus `assets/config/world.ron` and `assets/config/substances.ron`, both edited by a
-non-programmer.
+Plus the world schema/content under `assets/config/world.ron`,
+`assets/config/worlds/`, and `assets/config/substances.ron`, all editable without
+Rust.
 
 **Read [`docs/systems/map.md`](../../docs/systems/map.md) before changing the model.** It
 explains the voxel representation and the rules everything else depends on.
@@ -34,14 +36,14 @@ or `Headroom`, which is why the component contract and visual checks below matte
 
 ## The one contract you must keep
 
-The rest of the game learns about terrain **through components on tile entities**,
-never by reading anything defined here:
+The rest of the game learns about terrain through shared components on tile entities
+plus exact shared resources; it never reads map-private storage or plans:
 
 ```rust
 commands.spawn((
     HexTile,       // marker
     hex_coord,     // HexCoord  — which hex
-    tile_pos,      // TilePos   — the run's TOPMOST SOLID VOXEL, not its base
+    tile_pos,      // TilePos   — the run's TOPMOST MATERIAL VOXEL, not its base
     span,          // HexSpan   — the run's world extent
     substance,     // SubstanceId
     headroom,      // Headroom  — clear voxels above the run, 0 if buried
@@ -50,8 +52,11 @@ commands.spawn((
 ```
 
 `hex_units` queries `(&TilePos, &HexSpan, &SubstanceId, &Headroom)` with
-`With<HexTile>`. That is the entire read interface, and `TerrainEdit` is the entire
-write interface.
+`With<HexTile>` and consumes exact projections such as `TraversalBlockers`.
+`MapAnchors`, `BiomeRegions`, `InteriorRegions`, and view hints use the same shared,
+stack-safe pattern. `TerrainEdit` is the only live write interface; the accepted
+`TerrainImpact`/`TerrainImpactOutcome` pair remains the separate future material-
+response path.
 
 ### `Headroom` is not optional, and it is yours to get right
 
@@ -215,9 +220,9 @@ Editing `assets/config/world.ron` while `cargo dev` is running reloads it, but t
 world is only rebuilt on entering gameplay — press `BACKSPACE`, then click its
 scenario to see terrain changes.
 
-`terrain::build_non_procedural_map` and `procedural::build` are pure: settings and
-their explicit generation inputs go in, and a complete `VoxelMap` comes out. Keep ECS
-resources, commands, and rendering out of them.
+`terrain::build_non_procedural_map` and the versioned procedural builders are pure:
+settings and their explicit generation inputs go in, and a complete semantic plan or
+`VoxelMap` comes out. Keep ECS resources, commands, and rendering out of them.
 
 `HeightGenerator` implementations used by the optional Perlin preset must also be
 pure. Results are cached, so an impure generator produces terrain that changes

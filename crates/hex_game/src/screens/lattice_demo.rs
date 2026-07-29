@@ -61,6 +61,7 @@ const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 const LOG_LINES: usize = 6;
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
     app.add_systems(
         Update,
@@ -244,12 +245,12 @@ fn free_neighbor(
         .find(|slot| !cells.contains_key(slot))
 }
 
-/// Fabricates the character stats the content pipeline does not yet supply.
+/// Fabricates generous stats for the isolated lattice demonstration.
 ///
 /// Capacity is the largest single cost the content ever asks of that element
 /// (floor 3); channelling is capacity plus two, generous enough that one end
-/// of turn refills what one cast drained. When real attunement stats land
-/// (HEX-12 and beyond), this function is what they replace.
+/// of turn refills what one cast drained. Gameplay uses authored archetype stats;
+/// this screen intentionally remains a rules sandbox.
 fn build_demo_stats(
     spec: &LatticeSpec,
     spells: &SpellBook,
@@ -650,8 +651,14 @@ fn spawn_control_panel(
         });
 }
 
-fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Screen>>) {
-    if keys.just_pressed(KeyCode::Backspace) || keys.just_pressed(KeyCode::Escape) {
+fn handle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ReturnTitle)
+        || bindings.just_pressed(&keys, hex_core::InputAction::Cancel)
+    {
         next.set(Screen::Title);
     }
 }

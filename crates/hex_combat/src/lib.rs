@@ -40,16 +40,26 @@ pub mod effects;
 pub mod knowledge;
 /// Structured outcomes produced by combat resolution.
 pub mod outcomes;
+/// Terminal encounter detection and its simulation gate.
+pub mod resolution;
+/// Deterministic session combat reporting.
+pub mod summary;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
+pub use ai::{AiAlgorithmRegistry, AiDecisionTraces};
 pub use commands::{delivers_anything, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
 pub use knowledge::{
     BaseVisibility, FactionLatticeKnowledge, KnownCell, LatticeKnowledge, RevealAll,
 };
-pub use outcomes::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
+pub use outcomes::{
+    CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
+    RestorationRefusal, UnitData,
+};
+pub use resolution::{encounter_unresolved, EncounterResolution};
+pub use summary::{CombatSummary, CommandKind};
 pub use turns::{Initiative, TurnOrder};
 
 /// The order a turn resolves in.
@@ -79,22 +89,30 @@ pub enum CombatSystems {
     /// frame, and the applier's committed presentation is visible to
     /// [`Self::Advance`].
     Apply,
+    /// Mark newly downed units and detect a terminal encounter.
+    Resolve,
     /// Pass the turn on, once whoever holds it has finished.
     Advance,
 }
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.add_message::<CombatEvent>();
     app.configure_sets(
         Update,
         (
             CombatSystems::Act,
             CombatSystems::Apply,
+            CombatSystems::Resolve,
             CombatSystems::Advance,
         )
             .chain()
             .in_set(AppSystems::Update),
+    );
+    app.configure_sets(
+        Update,
+        hex_core::PausableSystems.run_if(resolution::encounter_unresolved),
     );
     app.add_plugins((
         turns::plugin,
@@ -102,5 +120,7 @@ pub fn plugin(app: &mut App) {
         commands::plugin,
         effects::plugin,
         knowledge::plugin,
+        resolution::plugin,
+        summary::plugin,
     ));
 }
