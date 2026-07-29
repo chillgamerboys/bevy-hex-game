@@ -425,8 +425,10 @@ pub(crate) fn plugin(app: &mut App) {
                 // World perception publishes the authoritative observation first;
                 // combat only adapts it into the lattice read seam.
                 .after(PerceptionSystems::PublishKnowledge)
-                // A Reveal applied this frame needs the existence entry first.
-                .before(crate::CombatSystems::Apply)
+                // AI and player commands in this frame must consume the same current
+                // spatial publication. A Reveal applied later still needs the
+                // existence entry first.
+                .before(crate::CombatSystems::Act)
                 .run_if(in_state(Screen::Gameplay)),
         )
         .add_systems(

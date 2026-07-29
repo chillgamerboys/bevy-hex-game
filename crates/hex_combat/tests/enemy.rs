@@ -9,7 +9,7 @@
 //! not need to: it consumes `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bevy::app::PluginsState;
 use bevy::prelude::*;
@@ -20,14 +20,21 @@ use hex_assets::{
     ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
     SwatchId,
 };
-use hex_combat::{Initiative, TurnOrder};
+use hex_combat::{
+    AiDecisionTraces, CombatSummary, CombatTranscriptRecorder, EncounterOutcome,
+    EncounterResolution, Initiative, TurnOrder, MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
+};
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand,
-    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId,
-    MAX_HEADROOM,
+    LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos,
+    Turn, UnitId, MAX_HEADROOM,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
-use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    SurfaceSnapshot, SurfaceSnapshots,
+};
+use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn, UnitAllocator};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -114,12 +121,14 @@ fn unit_id(app: &App, entity: Entity) -> UnitId {
 }
 
 fn spawn_unit(app: &mut App, faction: Faction, coord: HexCoord, initiative: u32) -> Entity {
+    let id = app.world_mut().resource_mut::<UnitAllocator>().allocate();
     let standing = Standing {
         pos: TilePos::new(coord, GROUND_LEVEL),
         span: HexSpan::new(GROUND - 1.0, GROUND),
     };
     let mut unit = app.world_mut().spawn((
         faction,
+        id,
         StandsOn(standing),
         Body::new(hex_core::TraversalProfile::WALKER),
         Initiative(initiative),
@@ -138,8 +147,59 @@ fn enter_gameplay(app: &mut App) {
         .resource_mut::<NextState<Screen>>()
         .set(Screen::Gameplay);
     app.update();
+    publish_fixture_knowledge(app);
     app.update();
     app.update();
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid deterministic fixture projections should fail at their construction seam"
+)]
+fn publish_fixture_knowledge(app: &mut App) {
+    let surfaces = {
+        let world = app.world_mut();
+        let mut tiles =
+            world.query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+        SurfaceSnapshots::try_from_iter(tiles.iter(world).map(
+            |(&pos, &span, &substance, &headroom)| SurfaceSnapshot {
+                pos,
+                span,
+                substance,
+                headroom,
+                is_solid: true,
+                blocked: false,
+                domain: LightDomain::Exterior,
+            },
+        ))
+        .expect("the fixture should publish unique terrain surfaces")
+    };
+    let units = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .map(|(&id, &faction, standing)| ObservedUnit {
+                id,
+                faction,
+                pos: standing.0.pos,
+                provides_sight: true,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut observation = FactionObservation::new();
+    for (position, _) in surfaces.iter() {
+        observation.insert_surface(position);
+    }
+    for unit in units {
+        observation
+            .try_insert_unit(unit)
+            .expect("fixture unit identities should be unique");
+    }
+    let observations = FactionObservations::from_factions(observation.clone(), observation);
+    let mut knowledge = FactionMapKnowledge::new();
+    apply_observations(&mut knowledge, &surfaces, &observations);
+    app.insert_resource(knowledge);
 }
 
 /// Stands in for the walk animation finishing.
@@ -162,6 +222,124 @@ fn finish_moving(app: &mut App, entity: Entity) {
 /// call site where it is also more informative.
 fn coord_of(app: &App, entity: Entity) -> Option<HexCoord> {
     Some(app.world().get::<StandsOn>(entity)?.0.pos.coord)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StalemateFingerprint {
+    outcome: Option<EncounterOutcome>,
+    current: Option<UnitId>,
+    round: u32,
+    idle_turns: u32,
+    ai_selection_count: u64,
+    ai_selection_fingerprint: u64,
+    event_count: u64,
+    event_fingerprint: u64,
+    retained_traces: usize,
+    retained_ai_selections: usize,
+    retained_events: usize,
+}
+
+fn run_ten_thousand_turn_stalemate(turns: u32) -> StalemateFingerprint {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+    );
+    enter_gameplay(&mut app);
+    app.update();
+    assert_eq!(*app.world().resource::<State<Mode>>().get(), Mode::Combat);
+
+    let player_id = unit_id(&app, player);
+    let enemy_id = unit_id(&app, enemy);
+    // Both units remain physically within engagement range, but the hostile faction
+    // has no authorized target. Its only legal action is therefore EndTurn.
+    app.insert_resource(FactionMapKnowledge::new());
+
+    for turn in 0..turns {
+        let before = app.world().resource::<TurnOrder>().current();
+        if before == Some(player_id) {
+            app.world_mut()
+                .resource_mut::<CommandQueue>()
+                .push(IssuedCommand {
+                    seat: PlayerSeat::default(),
+                    command: GameCommand::EndTurn { unit: player_id },
+                });
+        } else {
+            assert_eq!(
+                before,
+                Some(enemy_id),
+                "stalemate lost its current unit at turn {turn}"
+            );
+        }
+        app.update();
+        assert_ne!(
+            app.world().resource::<TurnOrder>().current(),
+            before,
+            "turn {turn} deadlocked"
+        );
+        assert!(
+            app.world().resource::<CommandQueue>().is_empty(),
+            "turn {turn} left an undrained command"
+        );
+    }
+
+    let summary = app.world().resource::<CombatSummary>();
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let transcript = app.world().resource::<CombatTranscriptRecorder>();
+    assert_eq!(summary.idle_turns, turns);
+    assert_eq!(summary.ai_selection_count, u64::from(turns / 2));
+    assert_eq!(traces.entries.len(), MAX_AI_DECISION_TRACES);
+    assert_eq!(
+        summary.ai_selections.len(),
+        MAX_COMBAT_SUMMARY_DETAILS,
+        "the long soak should exercise the retained AI-detail cap"
+    );
+    assert!(summary.events.len() <= MAX_COMBAT_SUMMARY_DETAILS);
+    assert!(!transcript.is_enabled());
+    assert!(transcript.ai_selections().is_empty());
+    assert!(transcript.events().is_empty());
+
+    StalemateFingerprint {
+        outcome: app.world().resource::<EncounterResolution>().outcome(),
+        current: app.world().resource::<TurnOrder>().current(),
+        round: app.world().resource::<TurnOrder>().round,
+        idle_turns: summary.idle_turns,
+        ai_selection_count: summary.ai_selection_count,
+        ai_selection_fingerprint: summary.ai_selection_fingerprint,
+        event_count: summary.event_count,
+        event_fingerprint: summary.event_fingerprint,
+        retained_traces: traces.entries.len(),
+        retained_ai_selections: summary.ai_selections.len(),
+        retained_events: summary.events.len(),
+    }
+}
+
+#[test]
+#[ignore = "manual release-mode 10,000-turn combat stalemate soak"]
+fn ten_thousand_turn_stalemate_keeps_diagnostics_bounded() {
+    let started = Instant::now();
+    let first = run_ten_thousand_turn_stalemate(10_000);
+    let second = run_ten_thousand_turn_stalemate(10_000);
+    assert_eq!(first, second, "identical stalemates diverged");
+    assert_eq!(first.outcome, None);
+    assert_ne!(first.ai_selection_fingerprint, 0);
+    eprintln!(
+        "COMBAT_SOAK turns_per_run=10000 runs=2 elapsed_ms={} rounds={} \
+         ai_count={} ai_fingerprint={} event_count={} event_fingerprint={} \
+         retained_traces={} retained_ai={} retained_events={}",
+        started.elapsed().as_millis(),
+        first.round,
+        first.ai_selection_count,
+        first.ai_selection_fingerprint,
+        first.event_count,
+        first.event_fingerprint,
+        first.retained_traces,
+        first.retained_ai_selections,
+        first.retained_events,
+    );
 }
 
 /// The enemy has a lower initiative here, so the player acts first. Ending the

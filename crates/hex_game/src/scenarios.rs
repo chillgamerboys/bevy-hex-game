@@ -421,6 +421,8 @@ mod tests {
     use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Instant;
 
     use bevy::app::PluginsState;
     use bevy::asset::AssetPlugin;
@@ -435,7 +437,10 @@ mod tests {
         Roster, RosterEntry, RuntimeArtCatalog, ScenarioLibrary, SettingsRegistry, SpellBook,
         SpellFile, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
     };
-    use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder};
+    use hex_combat::{
+        AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder,
+        MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
+    };
     use hex_core::{
         AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
         GameplayLight, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
@@ -1870,7 +1875,7 @@ mod tests {
             .find(|(unit, ..)| *unit == anchor)
             .copied()
             .expect("the formation anchor should be a live player");
-        let anchor_footing = footing_for(app, anchor_body);
+        let anchor_footing = Arc::new(footing_for(app, anchor_body));
         let destination = anchor_footing
             .at_coord(HexCoord::from_axial(0, -4))
             .iter()
@@ -1880,12 +1885,27 @@ mod tests {
         let anchor_path = Reach::from(anchor_standing, &anchor_footing, None)
             .path_to(destination.pos)
             .expect("the party anchor should have a complete crossing route");
+        let mut footing_by_body = vec![(anchor_body, Arc::clone(&anchor_footing))];
+        for (_, _, body) in &facts {
+            if footing_by_body
+                .iter()
+                .all(|(cached_body, _)| cached_body != body)
+            {
+                footing_by_body.push((*body, Arc::new(footing_for(app, *body))));
+            }
+        }
         let members = facts
             .into_iter()
             .map(|(unit, standing, body)| FormationMember {
                 unit,
                 standing,
-                footing: footing_for(app, body),
+                footing: Arc::clone(
+                    &footing_by_body
+                        .iter()
+                        .find(|(cached_body, _)| *cached_body == body)
+                        .expect("every member body should have a footing projection")
+                        .1,
+                ),
             })
             .collect();
         let plan = plan_formation_move(&preset, &formation, &anchor_path, members)
@@ -2101,8 +2121,24 @@ mod tests {
             app.world().resource::<CombatSummary>().strikes,
             app.world().resource::<CombatSummary>().downings,
         );
+        assert!(
+            app.world().resource::<CommandQueue>().is_empty(),
+            "the resolved Party Trial left an undrained command"
+        );
+        assert!(
+            app.world().resource::<AiDecisionTraces>().entries.len() <= MAX_AI_DECISION_TRACES,
+            "the live inspection window exceeded its bound"
+        );
 
         let summary = app.world().resource::<CombatSummary>().clone();
+        assert!(
+            summary.ai_selections.len() <= MAX_COMBAT_SUMMARY_DETAILS,
+            "the retained AI-decision window exceeded its bound"
+        );
+        assert!(
+            summary.events.len() <= MAX_COMBAT_SUMMARY_DETAILS,
+            "the retained combat-event window exceeded its bound"
+        );
         let order = app.world().resource::<TurnOrder>();
         let turn_order = order.order().to_vec();
         let current = order.current();
@@ -2159,6 +2195,35 @@ mod tests {
             first,
             run_party_trial_replay(),
             "the same Party Trial stream diverged"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual release-mode 100-run Party Trial deterministic soak"]
+    fn party_trial_one_hundred_run_soak_is_deterministic() {
+        let started = Instant::now();
+        let expected = run_party_trial_replay();
+        for run in 1..100 {
+            assert_eq!(
+                run_party_trial_replay(),
+                expected,
+                "Party Trial run {} diverged from the reference",
+                run + 1
+            );
+        }
+        eprintln!(
+            "PARTY_TRIAL_SOAK runs=100 elapsed_ms={} outcome={:?} rounds={} \
+             ai_count={} ai_fingerprint={} event_count={} event_fingerprint={} \
+             retained_ai={} retained_events={}",
+            started.elapsed().as_millis(),
+            expected.summary.outcome,
+            expected.summary.rounds,
+            expected.summary.ai_selection_count,
+            expected.summary.ai_selection_fingerprint,
+            expected.summary.event_count,
+            expected.summary.event_fingerprint,
+            expected.summary.ai_selections.len(),
+            expected.summary.events.len(),
         );
     }
 
