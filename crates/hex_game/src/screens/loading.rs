@@ -8,7 +8,8 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    ArtPalette, ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
+    AcceptedContentRevision, ArtPalette, ContentIndex, ContentReadinessSystems, ElementCatalog,
+    ElementFile, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellBook, SpellFile,
     SubstanceFile, SubstanceTable,
 };
 use hex_core::Screen;
@@ -26,6 +27,7 @@ pub(super) fn plugin(app: &mut App) {
             enter_gameplay_when_ready,
         )
             .chain()
+            .after(ContentReadinessSystems::PublishAcceptedRevision)
             .run_if(in_state(Screen::Loading)),
     );
     app.add_systems(OnExit(Screen::Loading), despawn_screen(Screen::Loading));
@@ -55,10 +57,10 @@ fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
 ///
 /// The registry tracks the raw `SubstanceFile` and `ArtPalette`; `SubstanceTable` is
 /// resolved from both by a separate `Update` system. This check runs in `PostUpdate`,
-/// after deferred resource insertions, and waits until both sources are unchanged and
-/// match the derived table. That prevents an existing table from satisfying the check
-/// during either kind of hot reload, while a rejected pair can settle back to the
-/// resolver's last accepted source snapshot.
+/// after deferred resource insertions, and compares deterministic source identities
+/// rather than transient Bevy change ticks. That prevents an existing table from
+/// satisfying the check during either kind of hot reload even after a rejected edit
+/// has remained settled for many frames.
 fn enter_gameplay_when_ready(
     assets: Res<GameAssets>,
     asset_server: Res<AssetServer>,
@@ -67,9 +69,13 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
+    accepted_content: Option<Res<AcceptedContentRevision>>,
     content: Option<Res<ContentIndex>>,
     lattices: Option<Res<LatticeLibrary>>,
-    spells: Option<Res<SpellFile>>,
+    element_file: Option<Res<ElementFile>>,
+    elements: Option<Res<ElementCatalog>>,
+    spell_file: Option<Res<SpellFile>>,
+    spells: Option<Res<SpellBook>>,
     lattice_file: Option<Res<LatticeFile>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -77,30 +83,46 @@ fn enter_gameplay_when_ready(
         .as_ref()
         .zip(palette.as_ref())
         .zip(substances.as_ref())
-        .is_some_and(|((file, palette), table)| {
-            !file.is_changed() && !palette.is_changed() && table.matches_sources(file, palette)
-        });
+        .is_some_and(|((file, palette), table)| table.matches_sources(file, palette));
 
     let scenario_is_valid = scenario_contract
         .as_deref()
         .is_some_and(|status| *status == ScenarioContractStatus::Ready);
 
-    // Currency, not presence, for the same reason `substances_are_current` is: both
-    // builders keep the last valid value on failure and insert nothing, so after one
-    // success neither resource can ever go *absent* again. A presence check would stall
-    // only the very first load and wave every later bad edit straight through — a
-    // designer renaming a gem's element at the title screen would see the error in the
-    // log, press Play, and get a fight built from the pre-edit library with nothing
-    // on screen saying so.
-    //
-    // Comparing against the files means a failed rebuild leaves the source changed and
-    // the resolved value stale, which holds the gate until the file is fixed.
-    let content_is_current = spells
-        .as_ref()
-        .is_some_and(|file| !file.is_changed() && content.is_some())
-        && lattice_file
-            .as_ref()
-            .is_some_and(|file| !file.is_changed() && lattices.is_some());
+    // Every layer must describe the same semantic revision. The builders deliberately
+    // retain their last valid values after a rejected cross-file edit, so presence and
+    // change ticks cannot establish coherence: the changed flag settles after one frame
+    // while the retained ids remain stale indefinitely.
+    let content_is_current = match (
+        accepted_content.as_deref(),
+        content.as_deref(),
+        lattices.as_deref(),
+        element_file.as_deref(),
+        elements.as_deref(),
+        spell_file.as_deref(),
+        spells.as_deref(),
+        lattice_file.as_deref(),
+        substances.as_deref(),
+    ) {
+        (
+            Some(accepted),
+            Some(content),
+            Some(lattices),
+            Some(element_file),
+            Some(elements),
+            Some(spell_file),
+            Some(spells),
+            Some(lattice_file),
+            Some(substances),
+        ) => {
+            accepted.matches_resolved(content, lattices)
+                && elements.matches_source(element_file)
+                && spells.matches_source(spell_file)
+                && content.matches_sources(elements, spells, substances)
+                && lattices.matches_sources(lattice_file, elements, spells)
+        }
+        _ => false,
+    };
 
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
@@ -164,6 +186,11 @@ mod tests {
     fn app_with_resolved_substances(file: SubstanceFile, palette: ArtPalette) -> App {
         let table = SubstanceTable::from_file(&file, &palette)
             .expect("the initial test substance sources should resolve");
+        let element_file: ElementFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/elements.ron"
+        )))
+        .expect("the shipped element fixture should parse");
         let spells: SpellFile = ron::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../assets/config/spells.ron"
@@ -174,6 +201,12 @@ mod tests {
             "/../../assets/config/lattices.ron"
         )))
         .expect("the shipped lattice fixture should parse");
+        let elements = ElementCatalog::from_file(&element_file);
+        let spell_book = SpellBook::from_file(&spells);
+        let content = ContentIndex::build(&elements, &spell_book, &table)
+            .expect("the stable fixtures should form a valid content index");
+        let lattices = LatticeLibrary::build(&lattice_file, &elements, &spell_book)
+            .expect("the stable fixtures should form a valid lattice library");
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -196,7 +229,10 @@ mod tests {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
         });
-        app.add_plugins(hex_assets::substances::plugin);
+        app.add_plugins((
+            hex_assets::substances::plugin,
+            hex_assets::content_index::plugin,
+        ));
         // This test installs the cross-file sources directly, so the fixed-file
         // loader registered by the substances plugin has nothing to wait for.
         app.insert_resource(SettingsRegistry::default());
@@ -204,12 +240,15 @@ mod tests {
         app.insert_resource(file);
         app.insert_resource(palette);
         app.insert_resource(table);
-        // These tests isolate substance/palette recovery. Satisfy the independent
-        // spell/lattice currency gate with stable fixtures so it cannot mask that seam.
+        // These tests isolate substance/palette recovery. Install one fully coherent
+        // content graph so the independent acceptance gate cannot mask that seam.
+        app.insert_resource(element_file);
+        app.insert_resource(elements);
         app.insert_resource(spells);
+        app.insert_resource(spell_book);
         app.insert_resource(lattice_file);
-        app.insert_resource(ContentIndex::default());
-        app.insert_resource(LatticeLibrary::default());
+        app.insert_resource(content);
+        app.insert_resource(lattices);
         plugin(&mut app);
         app
     }
@@ -225,6 +264,56 @@ mod tests {
             ),
             "Loading should proceed after the accepted source pair has settled"
         );
+    }
+
+    #[test]
+    fn loading_rejects_a_settled_stale_content_graph_and_recovers_after_repair() {
+        let mut app = app_with_resolved_substances(substance_file("stone"), test_palette(0.5));
+        app.update();
+        assert!(
+            app.world().contains_resource::<AcceptedContentRevision>(),
+            "the fixture should begin as one accepted content revision"
+        );
+
+        let original = app.world().resource::<SpellFile>().clone();
+        let mut broken = original.clone();
+        broken
+            .spells
+            .get_mut("Ember")
+            .expect("the shipped fixture contains Ember")
+            .requirements
+            .first_mut()
+            .expect("Ember has a requirement")
+            .element = "Aether".to_owned();
+        app.world_mut()
+            .insert_resource(SpellBook::from_file(&broken));
+        app.world_mut().insert_resource(broken);
+        app.world_mut()
+            .insert_resource(ScenarioContractStatus::Ready);
+
+        for _ in 0..4 {
+            app.update();
+            assert!(
+                matches!(
+                    app.world().resource::<NextState<Screen>>(),
+                    &NextState::Unchanged
+                ),
+                "Loading must remain blocked after source change ticks settle"
+            );
+            assert!(
+                !app.world().contains_resource::<AcceptedContentRevision>(),
+                "a stale retained index must not remain accepted"
+            );
+        }
+
+        app.world_mut()
+            .insert_resource(SpellBook::from_file(&original));
+        app.world_mut().insert_resource(original);
+        app.update();
+        assert!(matches!(
+            app.world().resource::<NextState<Screen>>(),
+            &NextState::Pending(Screen::Gameplay)
+        ));
     }
 
     /// A settings replacement queued in `Update` must be visible before readiness is

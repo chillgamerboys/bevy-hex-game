@@ -21,7 +21,9 @@
 use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
-use hex_core::{Busy, KnowledgeExpiry, LatticeCoord, PendingDecision, TilePos, UnitId};
+use hex_core::{
+    Busy, KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TilePos, UnitId,
+};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
 
@@ -179,10 +181,12 @@ pub(super) fn apply(
         });
     }
 
-    // Observation. Returns true because no fog exists yet — every current target
-    // genuinely *is* observed — and it is written as a function rather than omitted so
-    // that the day `hex_perception` lands, this is the one line that changes.
-    if !anchor_is_observed(target) {
+    let Some(spatial) = ctx.spatial else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SpatialKnowledge,
+        });
+    };
+    if spatial.faction(caster_faction).state(target) != KnowledgeState::Observed {
         return Err(CommandRefusal::TargetUnobserved {
             spell: spell_name.to_owned(),
             target,
@@ -450,16 +454,6 @@ pub(crate) fn spell_cell(
         fallback = fallback.or(Some(coord));
     }
     fallback
-}
-
-/// Whether the cast's anchor is currently observed by the acting faction.
-///
-/// **True, and that is the truth rather than a stub.** The rule is absolute — a cast
-/// must anchor on an observed position, including divination — but no fog exists yet, so
-/// every position genuinely is observed. Written as a function so the day `hex_perception`
-/// publishes what a faction can see, this is the one line that changes, in one crate.
-const fn anchor_is_observed(_anchor: TilePos) -> bool {
-    true
 }
 
 /// Parks the defender's choice of which hexes go down.

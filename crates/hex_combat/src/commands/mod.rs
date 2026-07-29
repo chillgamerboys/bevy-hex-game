@@ -44,6 +44,7 @@ use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
     PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
 };
+use hex_perception::FactionMapKnowledge;
 use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitRegistry};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
@@ -119,6 +120,11 @@ struct Verb<'a> {
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
     knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
+    /// World-owned current and remembered spatial knowledge for both factions.
+    ///
+    /// Casting fails closed when this is absent; no command may infer observation
+    /// directly from authoritative terrain or unit entities.
+    spatial: Option<&'a FactionMapKnowledge>,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
     /// Restored units waiting for a round boundary before initiative.
@@ -143,6 +149,7 @@ struct ResolutionStores<'w> {
     pending: ResMut<'w, PendingDecision>,
     effects: ResMut<'w, crate::effects::PersistentEffects>,
     knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
+    spatial: Option<Res<'w, FactionMapKnowledge>>,
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
@@ -318,6 +325,7 @@ fn apply_commands(
             pending: &mut stores.pending,
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
+            spatial: stores.spatial.as_deref(),
             events: &mut emitted,
             revivals: &mut stores.revivals,
             combat: combat.as_deref(),

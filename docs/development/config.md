@@ -63,6 +63,15 @@ The split exists because some values are read continuously while the game runs a
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
 
+Elements, substances, spells, and lattices form one semantic revision at the Loading
+boundary. A bad cross-file edit may leave the last valid resolved catalogs available
+for inspection, but Loading does not treat their presence as readiness. It waits
+until canonical source fingerprints prove that every raw file, direct catalog,
+`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
+or reverting the edit publishes a new `AcceptedContentRevision` and allows the
+rebuild; leaving an invalid edit settled for several frames never admits a mixed
+revision.
+
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
 
@@ -722,7 +731,11 @@ waiting for a playtest.
 ```
 
 Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
-matters, not where it sits.
+matters, not where it sits. Every authored archetype must form one contiguous
+hex arrangement. A disconnected island is rejected while resolving
+`LatticeLibrary`, and the error names the offending archetype; it cannot survive as a
+valid-but-unreachable part of a character. Cell order in the RON file does not affect
+that check or the semantic content fingerprint.
 
 `attunement` is how much mana one gem of that element holds when full. `channelling` is
 how much a channel action puts back per turn. An element with no attunement entry resolves
