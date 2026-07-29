@@ -11,6 +11,7 @@ hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
+{Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (planned standalone tool)
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -34,6 +35,13 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
+| `hex_editor` | **Planned:** standalone voxel-style and object authoring; editor UI, safe writes, recovery, and review captures | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
+
+`hex_editor` is not a game screen and does not depend on runtime world or gameplay
+crates. Reusable art schemas and validation live in `hex_assets`; the editor owns only
+authoring workflow and filesystem side effects. The canonical palette and object
+contracts are described in [design/visual-language.md](design/visual-language.md) and
+[systems/asset-workshop.md](systems/asset-workshop.md).
 
 ### `hex_map` is a leaf, on purpose
 
@@ -90,6 +98,10 @@ and perform their routine exports and registration without waiting on a permanen
 loader gate. A change to the generic loading mechanism or to a cross-domain contract
 still requires the owning review; placing domain code in `hex_assets` does not waive
 the crate graph or the contract-first process.
+
+Authored-art schemas and `assets/art/` are a shared visual-content contract: either
+owner may add assets, while schema changes receive both reviews. Runtime adapters stay
+with the crate that draws or consumes them.
 
 Where the two meet is [contracts.md](contracts.md); what each is still asking of the
 other is [planning/boundary.md](planning/boundary.md).
