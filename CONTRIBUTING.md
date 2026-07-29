@@ -61,9 +61,11 @@ the above. Several failure modes here produce a clean log and a wrong window: mi
 assets render as a plain blue screen, a sky shader that fails to load renders a black
 sky, and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
-If your change touches rendering, movement, or state transitions, walk it: splash
-→ title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
-**BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
+If your change touches rendering, movement, persistence, or state transitions, walk
+it: splash → title → New Game → Party Trial, orbit, move the party, **ESC** to pause,
+save with **F5**, return to the title, and Continue. Open Settings, persist one change,
+restart, and confirm it survived. Launch an affected Map or focused Demo separately
+when the change touches one.
 
 If it touches the Asset Workshop, run `cargo editor` and complete the relevant
 [authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Persistence

@@ -37,10 +37,11 @@ slot assigns the selected member; an occupied slot swaps its occupant into the
 selected member's old slot. Any unassigned members fill remaining authored slots in
 stable order.
 
-`PartyFormation` contains only current-session choices: preset, assignments, facing,
-and Group/Solo mode. Entering a new gameplay session resets it, and spawning a roster
-selects Compact when available. Save/load may serialize the same vocabulary later,
-but no formation choice persists between sessions today.
+`PartyFormation` contains the preset, assignments, facing, and Group/Solo mode.
+Entering an ordinary new gameplay session resets it and spawning a roster selects
+Compact when available. The pre-alpha exploration resume serializes this same
+vocabulary and restores it only when the build, content, roster, and terrain contract
+still match; New Game never inherits the saved formation.
 
 The miniature grid is an editor as well as a readout. A diamond marks the authored
 anchor. Its slot positions are the actual axial offsets, so changing a preset's
