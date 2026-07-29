@@ -32,7 +32,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hex_assets::GameAssets;
 use hex_assets::{
-    ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+    ArtPalette, ObjectBlueprint, ObjectCatalogFile, ObjectInstance, PaletteSwatch,
+    RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+    VoxelStyleCatalog,
 };
 use hex_core::{
     BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplaySetup,
@@ -130,25 +132,18 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
-fn substance_table_without_swatch(omitted: &str) -> SubstanceTable {
-    substance_table_fixture(None, Some(omitted))
-}
-
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
-    substance_table_fixture(omitted, None)
+    substance_table_fixture(omitted)
 }
 
 #[expect(
     clippy::expect_used,
     reason = "invalid compile-time fixture data should fail the integration test immediately"
 )]
-fn substance_table_fixture(
-    omitted_substance: Option<&str>,
-    omitted_swatch: Option<&str>,
-) -> SubstanceTable {
+fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
     let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
-    let mut swatches = BTreeMap::from([
+    let swatches = BTreeMap::from([
         (
             foam,
             PaletteSwatch::new(
@@ -169,28 +164,6 @@ fn substance_table_fixture(
             .expect("the fixture swatch should be valid"),
         ),
     ]);
-    for (id, display_name, (red, green, blue)) in [
-        ("plant/trunk", "Tree Trunk", (0.28, 0.15, 0.07)),
-        ("plant/foliage-dark", "Dark Foliage", (0.12, 0.34, 0.12)),
-        ("plant/foliage-mid", "Mid Foliage", (0.18, 0.42, 0.14)),
-        ("plant/foliage-light", "Light Foliage", (0.25, 0.48, 0.16)),
-        ("plant/grass-dark", "Dark Grass Blade", (0.34, 0.52, 0.14)),
-        ("plant/grass-light", "Light Grass Blade", (0.45, 0.62, 0.18)),
-    ] {
-        if omitted_swatch == Some(id) {
-            continue;
-        }
-        swatches.insert(
-            SwatchId::new(id).expect("fixture plant swatch ids should be valid"),
-            PaletteSwatch::new(
-                display_name,
-                SrgbColor::new(red, green, blue)
-                    .expect("fixture plant swatch colors should be valid"),
-                BTreeSet::from(["test".to_owned()]),
-            )
-            .expect("fixture plant swatches should be valid"),
-        );
-    }
     let palette = ArtPalette::new(swatches).expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
@@ -221,6 +194,33 @@ fn substance_table_fixture(
     }
     SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
         .expect("the fixture substances should resolve through the fixture palette")
+}
+
+fn runtime_art_catalog() -> RuntimeArtCatalog {
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .expect("tracked art palette should parse");
+    let styles: VoxelStyleCatalog =
+        ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))
+            .expect("tracked voxel styles should parse");
+    let manifest: ObjectCatalogFile =
+        ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+            .expect("tracked object catalog should parse");
+    let mut objects = BTreeMap::new();
+    for source in [
+        include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+        include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+        include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+        include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
+    ] {
+        let blueprint: ObjectBlueprint =
+            ron::from_str(source).expect("tracked object blueprint should parse");
+        objects.insert(blueprint.id.clone(), blueprint);
+    }
+    RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+        .expect("tracked runtime art catalog should resolve")
 }
 
 /// Runs the app until it has entered gameplay and the world has settled.
@@ -333,6 +333,7 @@ fn v3_waterfall_app() -> App {
 
 fn v3_forest_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -563,15 +564,26 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(14_183_726_856_212_867_729)
+        Some(18_228_041_691_196_337_561)
     );
-    assert_eq!(report.map_fingerprint, 17_318_082_348_573_723_024);
+    assert_eq!(report.map_fingerprint, 9_451_210_891_195_990_324);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
     assert_eq!(metrics.clearing_count, 4);
     assert_eq!(metrics.relief, 4);
     assert_eq!(metrics.tree_roots, 53);
+    assert!(metrics.old_growth_roots > 0);
+    assert_eq!(
+        metrics.old_growth_blocker_surfaces,
+        metrics.old_growth_roots.saturating_mul(7)
+    );
+    assert_eq!(
+        metrics.tree_blocker_surfaces,
+        metrics
+            .tree_roots
+            .saturating_add(metrics.old_growth_roots.saturating_mul(6))
+    );
     assert_eq!(metrics.tall_grass_roots, 155);
     assert!(metrics.tall_grass_roots.saturating_mul(2) > metrics.prairie_surfaces);
     assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
@@ -610,18 +622,25 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             (kind == "GeneratedTallGrass").then_some(*position)
         })
         .collect();
-    assert_eq!(tree_roots, blockers);
+    assert!(tree_roots.is_subset(&blockers));
+    assert_eq!(
+        blockers.len(),
+        usize::try_from(metrics.tree_blocker_surfaces).unwrap_or(usize::MAX)
+    );
     assert!(grass_roots.is_disjoint(&blockers));
     let canopy_roots: BTreeSet<_> = {
         let world = app.world_mut();
-        let mut canopies =
-            world.query::<(&CanopyOccluder, &PresentationOcclusion, Option<&HexTile>)>();
+        let mut canopies = world.query::<(
+            &CanopyOccluder,
+            Option<&PresentationOcclusion>,
+            Option<&HexTile>,
+        )>();
         canopies
             .iter(world)
             .map(|(canopy, occlusion, tile)| {
                 assert!(tile.is_none(), "a tree canopy became terrain footing");
                 assert!(
-                    !occlusion.is_hidden(),
+                    occlusion.is_none_or(|occlusion| !occlusion.is_hidden()),
                     "a freshly spawned canopy carried a stale cutaway reason"
                 );
                 canopy.0
@@ -657,17 +676,17 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
 }
 
 #[test]
-fn v3_forest_missing_required_feature_swatch_fails_presentation_setup() {
+fn v3_forest_missing_runtime_art_catalog_fails_before_terrain_publication() {
     let mut app = v3_forest_app();
-    app.insert_resource(substance_table_without_swatch("plant/foliage-mid"));
+    app.world_mut().remove_resource::<RuntimeArtCatalog>();
     enter_gameplay(&mut app);
 
     let failure = app
         .world()
         .get_resource::<GameplaySetupFailure>()
-        .expect("missing Forest presentation colour should publish a setup failure");
+        .expect("missing Forest art graph should publish a setup failure");
     assert!(
-        failure.reason.contains("plant/foliage-mid"),
+        failure.reason.contains("runtime art catalog"),
         "unexpected setup failure: {}",
         failure.reason
     );
@@ -727,8 +746,10 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
         .collect();
     assert_eq!(unchanged_roots, initial_roots);
 
-    let root_coords: BTreeSet<_> = initial_roots
-        .keys()
+    let blocker_coords: BTreeSet<_> = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
         .map(|position| position.coord)
         .collect();
     let unrelated = {
@@ -737,7 +758,7 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
         world
             .resource::<VoxelMap>()
             .columns()
-            .filter(|(coord, _column)| !root_coords.contains(coord))
+            .filter(|(coord, _column)| !blocker_coords.contains(coord))
             .find_map(|(coord, column)| {
                 hex_map::runs(column)
                     .into_iter()
@@ -1418,31 +1439,27 @@ fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
 fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     let world = app.world_mut();
     let level_height = world.resource::<MapSettings>().level_height;
-    let mut query = world.query::<(Entity, &Name, &Transform, &ChildOf, Option<&HexTile>)>();
+    let mut query = world.query::<(Entity, &Name, &ObjectInstance, &ChildOf, Option<&HexTile>)>();
     query
         .iter(world)
-        .filter(|(_entity, name, _transform, _parent, _tile)| {
+        .filter(|(_entity, name, _instance, _parent, _tile)| {
             matches!(name.as_str(), "GeneratedTree" | "GeneratedTallGrass")
         })
-        .map(|(entity, name, transform, parent, tile)| {
+        .map(|(entity, name, instance, parent, tile)| {
             assert!(
                 tile.is_none(),
                 "feature roots must not become terrain tiles"
             );
-            let surface_boundary = transform.translation.y / level_height;
-            assert!(
-                (surface_boundary - surface_boundary.round()).abs() < 1.0e-4,
-                "feature root height must resolve to one exact voxel boundary"
-            );
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "validated map levels are bounded signed integers"
-            )]
-            let level = surface_boundary.round() as i32 - 1;
+            assert!((instance.level_height() - level_height).abs() <= f32::EPSILON);
+            let visual_origin = instance.origin();
+            let level = visual_origin
+                .level
+                .checked_sub(1)
+                .expect("Forest visual origins should sit above their exact footing");
             (
                 entity,
                 name.as_str().to_owned(),
-                TilePos::new(HexCoord::from_world(transform.translation), level),
+                TilePos::new(visual_origin.coord, level),
                 parent.parent(),
             )
         })

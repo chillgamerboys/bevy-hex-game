@@ -2332,16 +2332,23 @@ mod tests {
         };
         let palette = palette();
         for radius in [12, 20, 40] {
-            let warmup =
-                super::super::build(radius, 0.4, &settings(), u64::MAX, &palette, &is_solid)
-                    .expect("warm-up Waterfall should build");
+            let warmup = super::super::build(
+                radius,
+                0.4,
+                &settings(),
+                u64::MAX,
+                &palette,
+                &is_solid,
+                None,
+            )
+            .expect("warm-up Waterfall should build");
             std::hint::black_box(warmup);
 
             let mut samples = Vec::new();
             for seed in 0..12 {
                 let started = std::time::Instant::now();
                 let build =
-                    super::super::build(radius, 0.4, &settings(), seed, &palette, &is_solid)
+                    super::super::build(radius, 0.4, &settings(), seed, &palette, &is_solid, None)
                         .expect("benchmark Waterfall should build");
                 assert!(!build.report.used_fallback);
                 samples.push(started.elapsed());

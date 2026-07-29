@@ -608,6 +608,9 @@ fn encode_features(encoder: &mut FingerprintEncoder, features: &FeaturePlan) -> 
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
         });
+        encoder.str(feature.object_id.as_str())?;
+        encoder.u8(feature.rotation.steps());
+        encode_tile_set(encoder, &feature.blocker_footprint)?;
     }
     encoder.collection_count(features.protected_routes.len())?;
     for (name, route) in &features.protected_routes {
@@ -1308,6 +1311,10 @@ mod tests {
                 PlannedFeature {
                     root: TilePos::ORIGIN,
                     kind: FeatureKind::TallGrass,
+                    object_id: hex_assets::ObjectAssetId::new("prop/grass-tuft")
+                        .expect("fixture id should be valid"),
+                    rotation: hex_assets::HexObjectRotation::ZERO,
+                    blocker_footprint: BTreeSet::new(),
                 },
             );
         }
