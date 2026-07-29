@@ -24,6 +24,7 @@
 
 use bevy::app::PluginsState;
 use bevy::asset::AssetPlugin;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
@@ -44,10 +45,11 @@ use hex_map::{
     CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
-    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
-    ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings, SubstanceRun, TacticalMetrics,
-    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
-    V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, VoxelMap,
+    PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
+    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
+    SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
+    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings,
+    V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -270,6 +272,32 @@ fn v3_hills_app() -> App {
     app
 }
 
+fn v3_waterfall_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Waterfall(V3WaterfallSettings),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(771_203_419));
+    app
+}
+
 fn sky_islands_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
@@ -373,6 +401,77 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
         "the hills recipe does not introduce optional regions yet"
     );
     assert!(app.world().resource::<InteriorRegions>().is_empty());
+}
+
+#[test]
+fn v3_waterfall_publishes_exact_resources_and_report_identity() {
+    let mut app = v3_waterfall_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 771_203_419);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert_eq!(report.valid_candidates, 8);
+    assert_eq!(report.selected_candidate, Some(4));
+    assert!(!report.used_fallback);
+    assert_eq!(report.repair_rounds, 0);
+    assert!(report.repair_actions.is_empty());
+    assert!(report.notes.is_empty());
+    assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(13_149_356_101_097_810_401)
+    );
+    assert_eq!(report.map_fingerprint, 17_075_345_429_537_665_322);
+    assert_ne!(
+        report.semantic_plan_fingerprint,
+        Some(report.map_fingerprint),
+        "semantic and materialized identities use independent domains"
+    );
+    assert_eq!(report.metrics.relief, 13);
+    assert_eq!(report.metrics.critical_route_steps, 11);
+    let Some(ProceduralRecipeMetrics::Waterfall(metrics)) = &report.recipe_metrics else {
+        panic!("V3 Waterfall should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.fall_height, 11);
+    assert_eq!(metrics.fall_nodes, 3);
+    assert_eq!(metrics.bypass_steps, 11);
+    assert_eq!(metrics.alternate_bypass_steps, 13);
+    assert_eq!(metrics.raised_terrain, 95);
+    assert_eq!(report.metrics.alternate_detour_percent, 18);
+    assert_eq!(metrics.water_nodes, report.metrics.barrier_cells);
+    assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    let party = anchors
+        .get(&MapAnchorId::from("party_start"))
+        .expect("Waterfall should publish party_start");
+    let hostile = anchors
+        .get(&MapAnchorId::from("hostile_start"))
+        .expect("Waterfall should publish hostile_start");
+    assert_eq!(party.level - hostile.level, 11);
+    for review_anchor in ["fall_overlook", "basin_overlook"] {
+        assert!(
+            anchors.get(&MapAnchorId::from(review_anchor)).is_some(),
+            "missing Waterfall review anchor {review_anchor}"
+        );
+    }
+
+    assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 6);
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    assert_eq!(app.world().resource::<BiomeRegions>().len(), 475);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
 }
 
 #[test]
@@ -850,6 +949,7 @@ fn insert_stale_generated_resources(app: &mut App) {
         semantic_plan_fingerprint: Some(2),
         map_fingerprint: 3,
         metrics: TacticalMetrics::default(),
+        recipe_metrics: None,
         elapsed_micros: 4,
         notes: vec!["stale".to_owned()],
     });
@@ -1050,6 +1150,134 @@ fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
     app.update();
     app.update();
     assert!(liquid_presentations(&mut app).is_empty());
+}
+
+#[test]
+fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
+    let mut app = v3_waterfall_app();
+    enter_gameplay(&mut app);
+
+    let world = app.world_mut();
+    let mut query = world.query::<(
+        &Name,
+        &ChildOf,
+        &Pickable,
+        Option<&NotShadowCaster>,
+        Option<&HexTile>,
+    )>();
+    let mut caps = 0;
+    let mut curtains = 0;
+    for (name, _parent, pickable, no_shadow, tile) in query.iter(world) {
+        if !matches!(name.as_str(), "LiquidCap" | "LiquidFallCurtain") {
+            continue;
+        }
+        assert_eq!(*pickable, Pickable::IGNORE);
+        assert!(no_shadow.is_some());
+        assert!(tile.is_none());
+        match name.as_str() {
+            "LiquidCap" => caps += 1,
+            "LiquidFallCurtain" => curtains += 1,
+            _ => unreachable!(),
+        }
+    }
+    assert!(caps > 30, "every Waterfall liquid run should receive a cap");
+    assert_eq!(
+        curtains, 1,
+        "the three adjacent fall lanes share one water curtain mesh"
+    );
+}
+
+#[test]
+fn v3_waterfall_rejects_liquid_and_support_edits_but_rebuilds_dry_terrain() {
+    let mut app = v3_waterfall_app();
+    enter_gameplay(&mut app);
+
+    let (water_position, support_position, dry_position, water, support) = {
+        let world = app.world();
+        let map = world.resource::<VoxelMap>();
+        let table = world.resource::<SubstanceTable>();
+        let water = table.id("water").expect("water should exist");
+        let water_position = map
+            .columns()
+            .find_map(|(coord, column)| {
+                column.iter().enumerate().find_map(|(index, substance)| {
+                    (substance == water).then(|| {
+                        TilePos::new(coord, i32::try_from(index).expect("test levels fit in i32"))
+                    })
+                })
+            })
+            .expect("Waterfall should contain authored water");
+        let support_position =
+            TilePos::new(water_position.coord, water_position.level.saturating_sub(1));
+        let support = map.get(support_position);
+        let dry_position = world
+            .resource::<BiomeRegions>()
+            .iter()
+            .map(|(position, _region)| position)
+            .find(|position| {
+                position.coord.y().abs() > 3
+                    && table.is_solid(map.get(*position))
+                    && table.is_diggable(map.get(*position))
+            })
+            .expect("Waterfall should contain a classified dry diggable surface");
+        (
+            water_position,
+            support_position,
+            dry_position,
+            water,
+            support,
+        )
+    };
+    assert!(!support.is_air());
+
+    let original_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("Waterfall grid should exist");
+    for protected in [water_position, support_position] {
+        app.world_mut()
+            .write_message(TerrainEdit::Clear { pos: protected });
+        app.update();
+        app.update();
+        let current_grid = app
+            .world_mut()
+            .query_filtered::<Entity, With<HexGrid>>()
+            .single(app.world())
+            .expect("ignored edit should preserve the grid");
+        assert_eq!(current_grid, original_grid);
+    }
+    assert_eq!(
+        app.world().resource::<VoxelMap>().get(water_position),
+        water
+    );
+    assert_eq!(
+        app.world().resource::<VoxelMap>().get(support_position),
+        support
+    );
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: dry_position });
+    app.update();
+    app.update();
+    let rebuilt_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("dry edit should rebuild the grid");
+    assert_ne!(rebuilt_grid, original_grid);
+    assert!(app
+        .world()
+        .resource::<VoxelMap>()
+        .get(dry_position)
+        .is_air());
+    assert!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .get(dry_position)
+            .is_none(),
+        "clearing a generated surface must remove its stale exact biome membership"
+    );
 }
 
 #[test]
@@ -1639,6 +1867,81 @@ fn v2_hills_reentry_is_deterministic() {
         .map(|(id, position)| (id.as_str().to_owned(), position))
         .collect();
     assert_eq!(second_anchors, first_anchors);
+}
+
+#[test]
+fn v3_waterfall_teardown_and_reentry_preserve_exact_generated_state() {
+    let mut app = v3_waterfall_app();
+    enter_gameplay(&mut app);
+
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let first_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    let first_tile_count = tile_count(&mut app);
+    let first_presentation_count = liquid_presentations(&mut app).len();
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(liquid_presentations(&mut app).is_empty());
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<SpecialMovementRegions>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<MapViewHint>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+
+    enter_gameplay(&mut app);
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert_eq!(
+        liquid_presentations(&mut app).len(),
+        first_presentation_count
+    );
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_biomes, first_biomes);
 }
 
 #[test]

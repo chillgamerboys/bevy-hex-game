@@ -322,9 +322,14 @@ impl GeneratedWorldPlan {
     }
 
     fn validate_biomes(&self, issues: &mut Vec<WorldValidationIssue>) {
-        let surfaces: BTreeSet<_> = self.volume.surfaces.keys().copied().collect();
-        let memberships: BTreeSet<_> = self.biome_regions.keys().copied().collect();
-        if surfaces != memberships {
+        if self.volume.surfaces.len() != self.biome_regions.len()
+            || !self
+                .volume
+                .surfaces
+                .keys()
+                .copied()
+                .eq(self.biome_regions.keys().copied())
+        {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Biome,
                 "biome membership does not exactly cover every generated surface",
@@ -336,18 +341,6 @@ impl GeneratedWorldPlan {
             .values()
             .map(|patch| patch.biome_region)
             .collect();
-        let owning_regions: BTreeMap<_, _> = self
-            .layout
-            .patches
-            .values()
-            .flat_map(|patch| {
-                patch
-                    .mask
-                    .iter()
-                    .copied()
-                    .map(|coord| (coord, patch.biome_region))
-            })
-            .collect();
         for (position, region) in &self.biome_regions {
             if !declared_regions.contains(region) {
                 issues.push(WorldValidationIssue::new(
@@ -355,8 +348,14 @@ impl GeneratedWorldPlan {
                     format!("surface {position:?} names undeclared biome region {region:?}"),
                 ));
             }
-            match owning_regions.get(&position.coord) {
-                Some(expected) if expected != region => {
+            let expected = self
+                .layout
+                .patches
+                .values()
+                .find(|patch| patch.mask.contains(&position.coord))
+                .map(|patch| patch.biome_region);
+            match expected {
+                Some(expected) if expected != *region => {
                     issues.push(WorldValidationIssue::new(
                         WorldIssueCode::Biome,
                         format!(

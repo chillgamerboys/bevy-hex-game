@@ -134,6 +134,12 @@ Reports record generator version, resolved seed, candidate, repair actions, fall
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
 before reporting or hashing.
 
+After an admitted map is edited, `hex_map` keeps its published exact consequences
+honest. Edited columns discard buried `BiomeRegions` entries and classify every
+newly exposed solid run from the closest prior exact surface in that column.
+`TraversalBlockers` remain attached only while their exact footing is still
+walker-admitted; newly exposed footing never inherits a feature blocker.
+
 ## Recipe stages
 
 Every recipe produces semantics first and voxels last. Shared traversal validation
@@ -144,14 +150,27 @@ as live movement.
 
 Plan a directed, acyclic, steady-state water graph before carving terrain. Its flow
 states are `Still`, `Current`, `Rapid`, and edge-aligned `Fall`. The graph establishes
-a calm elevated inlet, rapids, a contiguous fall, a plunge basin or lake, and an
-outlet. Terrain is then fitted to that graph.
+a calm elevated inlet, rapids, a contiguous eleven-level fall, an extended plunge
+basin, and an outlet. All three lanes reach both resolved world boundaries, so an
+upstream two-wide metal bridge is the only ordinary crossing between the riverbanks.
+Terrain is then fitted to that graph.
 
 Water remains an opaque non-solid fill. The renderer animates the authored direction
 and flow state, but water does not redistribute after terrain edits, push characters,
-slow movement, or deal damage. The critical land network includes a two-wide bypass
-around the hazard. Until topology-aware rebuilding exists, the conservative V3 edit
-policy above protects each authored liquid run and every lower voxel in its column.
+slow movement, or deal damage. The escarpment moves laterally by at most two hexes
+between neighboring rows and retains a small set of mid-height, special-movement
+shelves instead of one straight full-height wall. The critical land network includes
+a short two-wide descent and a longer, independently climbable terrace on the
+opposite bank. The second route has a broader irregular apron and remains usable if
+the critical route is excluded. Until topology-aware rebuilding exists, the
+conservative V3 edit policy above protects each authored liquid run and every lower
+voxel in its column.
+
+Waterfall candidates do not yet attempt semantic repair. Construction-valid
+candidates pass the complete recipe contract unchanged; invalid candidates are
+rejected, and the separately validated canonical fallback is the only recovery path.
+The dedicated `walks/waterfall.ron` gate captures the default and close-character
+views of the same deterministic scenario for liquid-motion and cliff-scale review.
 
 ### Forest
 

@@ -63,6 +63,7 @@ impl MapPresentationProjection {
     }
 
     /// Iterates exact liquid voxels in deterministic [`TilePos`] order.
+    #[cfg(test)]
     pub(crate) fn iter_liquids(
         &self,
     ) -> impl ExactSizeIterator<Item = (&TilePos, &MaterializedLiquidVoxel)> {
@@ -71,6 +72,7 @@ impl MapPresentationProjection {
 
     /// Returns the presentation descriptor for one exact liquid voxel.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn liquid_at(&self, position: TilePos) -> Option<&MaterializedLiquidVoxel> {
         self.liquids.get(&position)
     }
@@ -85,6 +87,16 @@ impl MapPresentationProjection {
         self.liquids.keys().any(|liquid| {
             liquid.coord == position.coord && liquid.level.saturating_add(1) >= position.level
         })
+    }
+
+    /// Whether one exact voxel is occupied by an authored liquid fill.
+    ///
+    /// Terrain-edit consequence projection uses this to retain the biome identity
+    /// of a non-standable liquid bed while still removing ordinary surfaces buried
+    /// by newly placed solid terrain.
+    #[must_use]
+    pub(crate) fn contains_liquid(&self, position: TilePos) -> bool {
+        self.liquids.contains_key(&position)
     }
 }
 

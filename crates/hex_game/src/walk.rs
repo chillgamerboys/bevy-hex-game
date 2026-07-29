@@ -204,6 +204,7 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Escape" => Ok(KeyCode::Escape),
         "Space" => Ok(KeyCode::Space),
         "Enter" => Ok(KeyCode::Enter),
+        "C" => Ok(KeyCode::KeyC),
         // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
         // `Enter` confirms an aim, and the casting walk drives that through the panel's
         // Confirm button instead: a `Click` that never finds its button stalls the walk
@@ -213,7 +214,7 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "KeyQ" => Ok(KeyCode::KeyQ),
         "KeyH" => Ok(KeyCode::KeyH),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, Tab, KeyQ, or KeyH"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, or KeyH"
         )),
     }
 }
@@ -619,7 +620,11 @@ mod tests {
 
     #[test]
     fn the_shipped_walk_scripts_parse_and_validate() {
-        for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
+        for script in [
+            "../../walks/menus.ron",
+            "../../walks/gameplay.ron",
+            "../../walks/waterfall.ron",
+        ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));

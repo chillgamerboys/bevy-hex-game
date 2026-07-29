@@ -102,6 +102,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Waterfall",
+            category: Map,
+            blurb: "An elevated river accelerates into a broad fall, with short and long dry routes around it.",
+            world: "config/worlds/procedural-waterfall.ron",
+            generation_seed: Some(771203419),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Close Quarters",
             category: Combat,
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",

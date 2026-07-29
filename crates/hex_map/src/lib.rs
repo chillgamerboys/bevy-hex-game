@@ -54,7 +54,10 @@ pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
-pub use procedural::{GenerationReport, TacticalMetrics};
+pub use procedural::{
+    GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
+};
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, EnvironmentSettings,
