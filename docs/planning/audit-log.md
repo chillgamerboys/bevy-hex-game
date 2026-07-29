@@ -7,6 +7,25 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 9 — feat(map): render animated opaque liquids (2026-07-28)
+
+- **PR**: #88 — `feat/v3-liquid-renderer`
+- **Outcome**: green — 4 ship-blockers fixed, 2 coverage limits deferred to the first runnable V3 world
+- **Lenses triggered**: 2, 3, 4, 7, 8
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, 8 | `crates/hex_game/src/review.rs`:222 | SHIP-BLOCKER | fixed in `68d18c4` — captures without an explicit liquid phase now freeze at `0.0`, while non-capture launches retain live animation; focused regression and docs added |
+| 2 | `crates/hex_map/src/liquid_render.rs`:29 | SHIP-BLOCKER | fixed in `8d44bf5` — production flow-rate constants now feed both material construction and the common-period test, and the shader source contract pins the secondary phase rate |
+| 2 | `crates/hex_map/src/liquid_render.rs`:36 | SHIP-BLOCKER | fixed in `8d44bf5` — cap and curtain geometry now derive the inradius from `hex_core::config::HEX_SMALL_DIAMETER` |
+| 3, 4 | `crates/hex_map/src/procedural_v3/materialize.rs`:84 | SHIP-BLOCKER | fixed in `8d44bf5` — edit protection now includes the voxel immediately above authored liquid, preventing topology-breaking burial |
+| 7 | `crates/hex_map/tests/spawning.rs`:950 | NON-BLOCKER | deferred to draft #89 — no runnable V3 recipe can publish `MapPresentationProjection` on this branch, so the new V3 edit/rebuild schedule path cannot yet be exercised by an App |
+| 7 | `crates/hex_map/src/liquid_render.rs`:844 | NON-BLOCKER | deferred to draft #89 — fall-curtain pixels remain unreachable until the first runnable V3 world; that landing must add `/visual-walk` plus the human motion/feel walk |
+
+**Notes**: fresh-eyes found no additional bug class. Reachable legacy/V1/V2 cap
+lifecycle remains covered by an App test. The phase default, all 13 liquid-render
+unit tests, and the projection edit-protection test pass locally before the full gate.
+
 ## Wave 8 — chore(skills): formalize the wave delivery model (2026-07-27)
 
 - **PR**: #72 — `chore/wave-model-skills`
@@ -161,4 +180,3 @@ moved; the rest against the restructure itself. Four cosmetic blank lines at the
 `sed` extraction seams were tidied in the same commit. The visual walk does not
 apply: the diff is documentation plus four Rust doc comments, with no runtime
 surface.
-

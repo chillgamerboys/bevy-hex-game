@@ -68,12 +68,15 @@ cargo run --release -p hex_game --features map-review
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
-cyclic lighting. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to an exact
-generated anchor before framing and requires a capture. `HEX_REVIEW_CUTAWAY=full`
-exposes the selected cave interior for a review overview while ordinary gameplay keeps
-its local six-hex opening; it also requires a capture. The process exits after
-persisting the PNG. A frame that fails the visual-coverage check still leaves its PNG
-at the requested path and exits with an error, so the rejected output can be inspected.
+cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
+freezes liquid presentation there; captures default to `0.0`, while launches without a
+capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
+an exact generated anchor before framing and requires a capture.
+`HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
+while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+The process exits after persisting the PNG. A frame that fails the visual-coverage
+check still leaves its PNG at the requested path and exits with an error, so the
+rejected output can be inspected.
 Map-review builds keep their console on Windows because these diagnostics are part of
 the tool.
 
