@@ -375,23 +375,23 @@ pub(crate) fn construct_patch(
         });
     }
 
-    let local_land_levels = mask
+    let local_surface_levels = mask
         .iter()
         .copied()
-        .filter(|coord| !water_by_coord.contains_key(coord))
         .map(|coord| {
-            (
-                coord,
-                land_surface_level(coord, &protected_by_coord, &escarpment, relief.as_ref()),
-            )
+            let level = water_by_coord.get(&coord).map_or_else(
+                || land_surface_level(coord, &protected_by_coord, &escarpment, relief.as_ref()),
+                |water| water.bed_level,
+            );
+            (coord, level)
         })
         .collect();
-    let mut world_land_levels = frame
-        .levels_to_world(local_land_levels)
+    let mut world_surface_levels = frame
+        .levels_to_world(local_surface_levels)
         .map_err(|error| vec![recipe_issue(error)])?;
-    let seam_shape = shape_walker_seams(&patch, &mut world_land_levels)?;
-    let land_levels = frame
-        .levels_to_local(world_land_levels)
+    let seam_shape = shape_walker_seams(&patch, &mut world_surface_levels)?;
+    let surface_levels = frame
+        .levels_to_local(world_surface_levels)
         .map_err(|error| vec![recipe_issue(error)])?;
 
     for coord in &mask {
@@ -423,7 +423,7 @@ pub(crate) fn construct_patch(
                 },
             );
         } else {
-            let surface_level = land_levels.get(coord).copied().ok_or_else(|| {
+            let surface_level = surface_levels.get(coord).copied().ok_or_else(|| {
                 vec![recipe_issue(format!(
                     "Waterfall land plan omitted coordinate {coord:?}"
                 ))]

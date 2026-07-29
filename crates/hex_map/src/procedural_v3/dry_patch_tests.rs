@@ -1,13 +1,15 @@
 use super::composition::GeneratedPatchPlan;
+use super::layout::ResolvedLiquidPort;
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::liquid::LiquidFlowState;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
-use super::{caves, fort, hills, mountains, sky};
+use super::{caves, fort, hills, mountains, sky, waterfall};
 use crate::settings::{
-    EdgeElevationSettings, EdgeLiquidSettings, PatchEdgeContractSettings, PatchEdgesSettings,
-    PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings, V3CavesSettings,
-    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
-    V3MountainsSettings, V3RecipeSettings, V3Ring7Settings, V3SkyIslandsSettings,
+    EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, PatchEdgeContractSettings,
+    PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings,
+    V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+    V3LayoutSettings, V3MountainsSettings, V3RecipeSettings, V3Ring7Settings, V3SkyIslandsSettings,
     V3WaterfallSettings, WalkerPortSettings,
 };
 
@@ -42,6 +44,92 @@ fn one_complete_candidate_index_constructs_every_dry_patch() {
     .expect("the pinned complete candidate should construct every dry patch");
     for plan in plans {
         assert_strict_patch(&layout, plan);
+    }
+}
+
+#[test]
+fn rotated_waterfall_outlet_aligns_with_the_center_hills_inlet() {
+    let (mut settings, recipes) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    ring.center.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.waterfall.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    let layout = resolve_layout(33, &settings).expect("the directed Ring7 fixture should resolve");
+    let mode = PatchBuildMode::Candidate {
+        world_seed: 17,
+        candidate: 2,
+    };
+    let hills = hills::construct_patch(
+        patch(&layout, 0).expect("center patch"),
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+    )
+    .expect("center Hills should align its river inlet");
+    let waterfall = waterfall::construct_patch(
+        patch(&layout, 2).expect("Waterfall patch"),
+        &V3WaterfallSettings,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+    )
+    .expect("Waterfall should rotate its low outlet toward the center");
+    let edge = layout
+        .shared_edges
+        .values()
+        .find(|edge| {
+            matches!(
+                edge.liquid,
+                ResolvedLiquidPort::Directed {
+                    source: PatchId(2),
+                    sink: PatchId(0),
+                    ..
+                }
+            )
+        })
+        .expect("the center/Waterfall liquid edge should be directed");
+    let ResolvedLiquidPort::Directed { port, .. } = &edge.liquid else {
+        unreachable!();
+    };
+    let hills_nodes = &hills
+        .liquids
+        .bodies
+        .values()
+        .next()
+        .expect("Hills river body")
+        .nodes;
+    let waterfall_nodes = &waterfall
+        .liquids
+        .bodies
+        .values()
+        .next()
+        .expect("Waterfall body")
+        .nodes;
+
+    for (center_coord, waterfall_coord) in &port.lanes {
+        let center = hills_nodes
+            .iter()
+            .find(|(position, _)| position.coord == *center_coord)
+            .expect("every Hills inlet lane should have one liquid node");
+        let outlet = waterfall_nodes
+            .iter()
+            .find(|(position, _)| position.coord == *waterfall_coord)
+            .expect("every Waterfall outlet lane should have one liquid node");
+        assert_eq!(outlet.0.level.saturating_sub(center.0.level), 1);
+        assert_eq!(outlet.1.state, LiquidFlowState::Still);
+        assert_eq!(outlet.1.downstream, None);
     }
 }
 
@@ -221,6 +309,10 @@ fn world_boundary_edges() -> PatchEdgesSettings {
 }
 
 fn dry_shared_edge() -> PatchEdgeContractSettings {
+    shared_edge(EdgeLiquidSettings::Dry)
+}
+
+fn shared_edge(liquid: EdgeLiquidSettings) -> PatchEdgeContractSettings {
     PatchEdgeContractSettings::Shared(SharedEdgeSettings {
         elevation: EdgeElevationSettings {
             preferred: 15,
@@ -228,7 +320,7 @@ fn dry_shared_edge() -> PatchEdgeContractSettings {
             max: 16,
         },
         walker: WalkerPortSettings { count: 1, width: 2 },
-        liquid: EdgeLiquidSettings::Dry,
+        liquid,
         approach_depth: 2,
     })
 }
