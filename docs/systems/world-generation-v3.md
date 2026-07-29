@@ -134,6 +134,13 @@ Reports record generator version, resolved seed, candidate, repair actions, fall
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
 before reporting or hashing.
 
+The public `Ring7` recipe metrics summarize the admitted whole world rather than
+concatenating seven recipe reports. They record ordinary and reachable surfaces,
+reachable elevation diversity and relief, the critical route, macro edges and
+redundant regions, directed liquid seams, and exact counts of feature instances,
+structures, gameplay lights, and interiors. These fields are deterministic semantic
+measurements; timing and presentation-only entity counts remain outside them.
+
 After an admitted map is edited, `hex_map` keeps its published exact consequences
 honest. Edited columns discard buried `BiomeRegions` entries and classify every
 newly exposed solid run from the closest prior exact surface in that column.

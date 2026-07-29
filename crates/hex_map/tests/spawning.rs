@@ -24,10 +24,12 @@
 
 use bevy::app::PluginsState;
 use bevy::asset::AssetPlugin;
+use bevy::ecs::reflect::AppTypeRegistry;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
+use std::any::TypeId;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hex_assets::GameAssets;
@@ -48,11 +50,11 @@ use hex_map::{
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
-    SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
-    V2HillsSettings, V2RecipeSettings, V3CavesSettings, V3EnvironmentSettings, V3ForestSettings,
-    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
-    VoxelMap,
+    ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring7Metrics,
+    SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
+    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
+    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
+    V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -473,6 +475,70 @@ fn v3_caves_app() -> App {
     });
     app.insert_resource(ResolvedMapSeed(736_283_041));
     app
+}
+
+#[test]
+fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
+    let recipe_metrics = ProceduralRecipeMetrics::Ring7(Ring7Metrics {
+        ordinary_surfaces: 1,
+        reachable_surfaces: 2,
+        reachable_elevation_levels: 3,
+        relief: 4,
+        critical_route_steps: 5,
+        macro_edges: 6,
+        redundant_regions: 7,
+        directed_liquid_seams: 8,
+        feature_instances: 9,
+        structures: 10,
+        gameplay_lights: 11,
+        interiors: 12,
+    });
+    let ProceduralRecipeMetrics::Ring7(Ring7Metrics {
+        ordinary_surfaces,
+        reachable_surfaces,
+        reachable_elevation_levels,
+        relief,
+        critical_route_steps,
+        macro_edges,
+        redundant_regions,
+        directed_liquid_seams,
+        feature_instances,
+        structures,
+        gameplay_lights,
+        interiors,
+    }) = recipe_metrics
+    else {
+        panic!("the Ring7 report must retain its exact aggregate metrics");
+    };
+    assert_eq!(
+        (
+            ordinary_surfaces,
+            reachable_surfaces,
+            reachable_elevation_levels,
+            relief,
+            critical_route_steps,
+            macro_edges,
+            redundant_regions,
+            directed_liquid_seams,
+            feature_instances,
+            structures,
+            gameplay_lights,
+            interiors,
+        ),
+        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+    );
+
+    let app = test_app();
+    let registry = app.world().resource::<AppTypeRegistry>().read();
+    for type_id in [
+        TypeId::of::<ProceduralRecipeMetrics>(),
+        TypeId::of::<Ring7Metrics>(),
+    ] {
+        assert!(
+            registry.get(type_id).is_some(),
+            "Ring7 report vocabulary is missing reflection registration"
+        );
+    }
 }
 
 #[test]

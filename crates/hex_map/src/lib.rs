@@ -57,8 +57,8 @@ pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, 
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
     CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, ProceduralRecipeMetrics, Ring7Metrics,
+    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
