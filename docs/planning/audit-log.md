@@ -7,6 +7,49 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 10 — feat(editor): add the Asset Workshop (2026-07-28)
+
+- **PR**: #95 — `feat/asset-workshop-editor`
+- **Outcome**: green — 4 ship-blockers and 3 non-blockers fixed; 1 path-literal duplication deferred
+- **Lenses triggered**: 1, 2, 4, 5, 7, D3, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 5, 7 | `crates/hex_editor/src/viewport.rs`:503 | SHIP-BLOCKER | fixed in `9c358ac` — style edits now use tracked `Assets::get_mut`; a headless Bevy App regression observes the resulting `AssetEvent::Modified` for the cached material |
+| 1, 3 | `crates/hex_editor/src/model.rs`:210 | SHIP-BLOCKER | fixed in `56ad5bb` — unsaved documents use an explicit absent checkpoint, so deleting the only Effect or Prop voxel cannot make new work appear clean and bypass close/document-change protection |
+| 1 | `crates/hex_editor/src/app.rs`:696 | SHIP-BLOCKER | fixed in `56ad5bb` — Save As validates and builds a cloned editor before writing, then swaps it into the live draft only after persistence succeeds; rejected writes no longer leave a rename or undo entry behind |
+| 4, fresh-eyes | `crates/hex_editor/src/ui.rs`:1968 | SHIP-BLOCKER | fixed in `56ad5bb` — object inspector forms now track the last model values field-by-field, refreshing undo/redo changes without discarding live form input |
+| 1 | `crates/hex_editor/src/workshop.rs`:151 | NON-BLOCKER | fixed in `56ad5bb` — history labels are validated before the edit closure can mutate the object |
+| 2 | `crates/hex_editor/src/workshop.rs`:13 | NON-BLOCKER | fixed in the Wave 10 follow-up — global and object snapshot histories now share `DEFAULT_HISTORY_LIMIT` |
+| D3 | `docs/systems/asset-workshop.md`:157 | NON-BLOCKER | fixed in `56ad5bb` — persistence actions include confirmed Delete, and the document now distinguishes active external-change detection from future recovery drafts |
+| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | deferred — root discovery deliberately checks the two canonical catalog sentinels while persistence owns the broader `assets/art` root; both paths are contract-tested, and consolidating them would couple separate responsibilities without removing a mutable value |
+
+**Notes**: all eight lenses and a silent-failure sweep found no remaining real
+candidate. The full gate passes with 792 tests, including the tracked-material App
+regression and four state regressions added during review. The game visual walk is
+not an applicable editor check: it drives `hex_game`, while this PR adds the
+standalone `hex_editor`; the renderer failure is covered at the Bevy asset-event
+altitude instead.
+
+## Wave 9 — feat(map): render animated opaque liquids (2026-07-28)
+
+- **PR**: #88 — `feat/v3-liquid-renderer`
+- **Outcome**: green — 4 ship-blockers fixed, 2 coverage limits deferred to the first runnable V3 world
+- **Lenses triggered**: 2, 3, 4, 7, 8
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, 8 | `crates/hex_game/src/review.rs`:222 | SHIP-BLOCKER | fixed in `68d18c4` — captures without an explicit liquid phase now freeze at `0.0`, while non-capture launches retain live animation; focused regression and docs added |
+| 2 | `crates/hex_map/src/liquid_render.rs`:29 | SHIP-BLOCKER | fixed in `8d44bf5` — production flow-rate constants now feed both material construction and the common-period test, and the shader source contract pins the secondary phase rate |
+| 2 | `crates/hex_map/src/liquid_render.rs`:36 | SHIP-BLOCKER | fixed in `8d44bf5` — cap and curtain geometry now derive the inradius from `hex_core::config::HEX_SMALL_DIAMETER` |
+| 3, 4 | `crates/hex_map/src/procedural_v3/materialize.rs`:84 | SHIP-BLOCKER | fixed in `8d44bf5` — edit protection now includes the voxel immediately above authored liquid, preventing topology-breaking burial |
+| 7 | `crates/hex_map/tests/spawning.rs`:950 | NON-BLOCKER | deferred to draft #89 — no runnable V3 recipe can publish `MapPresentationProjection` on this branch, so the new V3 edit/rebuild schedule path cannot yet be exercised by an App |
+| 7 | `crates/hex_map/src/liquid_render.rs`:844 | NON-BLOCKER | deferred to draft #89 — fall-curtain pixels remain unreachable until the first runnable V3 world; that landing must add `/visual-walk` plus the human motion/feel walk |
+
+**Notes**: fresh-eyes found no additional bug class. Reachable legacy/V1/V2 cap
+lifecycle remains covered by an App test. The phase default, all 13 liquid-render
+unit tests, and the projection edit-protection test pass locally before the full gate.
+
 ## Wave 8 — chore(skills): formalize the wave delivery model (2026-07-27)
 
 - **PR**: #72 — `chore/wave-model-skills`
@@ -161,4 +204,3 @@ moved; the rest against the restructure itself. Four cosmetic blank lines at the
 `sed` extraction seams were tidied in the same commit. The visual walk does not
 apply: the diff is documentation plus four Rust doc comments, with no runtime
 surface.
-

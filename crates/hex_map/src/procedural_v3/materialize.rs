@@ -77,16 +77,16 @@ impl MapPresentationProjection {
         self.liquids.get(&position)
     }
 
-    /// Reports whether clearing a voxel would remove or undercut authored liquid.
+    /// Reports whether editing a voxel would remove, undercut, or bury authored liquid.
     ///
     /// V3 liquid topology cannot currently be rebuilt after a terrain edit. An
-    /// edit is therefore protected when the same column contains any authored
-    /// liquid voxel at that level or above it.
+    /// edit is therefore protected when the same column contains authored liquid
+    /// at that level or above it, or immediately below it.
     #[must_use]
     pub(crate) fn protects_liquid_edit(&self, position: TilePos) -> bool {
-        self.liquids
-            .keys()
-            .any(|liquid| liquid.coord == position.coord && liquid.level >= position.level)
+        self.liquids.keys().any(|liquid| {
+            liquid.coord == position.coord && liquid.level.saturating_add(1) >= position.level
+        })
     }
 }
 
@@ -993,7 +993,8 @@ mod tests {
         assert!(projection.protects_liquid_edit(TilePos::new(coord, 5)));
         assert!(projection.protects_liquid_edit(TilePos::new(coord, 4)));
         assert!(projection.protects_liquid_edit(TilePos::new(coord, 0)));
-        assert!(!projection.protects_liquid_edit(TilePos::new(coord, 6)));
+        assert!(projection.protects_liquid_edit(TilePos::new(coord, 6)));
+        assert!(!projection.protects_liquid_edit(TilePos::new(coord, 7)));
         assert!(!projection.protects_liquid_edit(TilePos::new(HexSide::West.neighbor(coord), 0)));
     }
 

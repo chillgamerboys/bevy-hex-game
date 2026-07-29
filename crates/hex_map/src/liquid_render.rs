@@ -18,7 +18,7 @@ use bevy::{
     shader::ShaderRef,
 };
 use hex_assets::{to_color, SubstanceTable};
-use hex_core::config::HEX_CIRCUMRADIUS;
+use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 use hex_core::{HexCoord, Level, PausableSystems, Screen, SubstanceId, TilePos};
 
 use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresentationProjection};
@@ -26,12 +26,15 @@ use crate::voxel::{runs, SubstanceRun, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
 const PHASE_WRAP_SECONDS: f32 = 400.0;
+const CURRENT_FLOW_SPEED: f32 = 0.22;
+const RAPID_FLOW_SPEED: f32 = 0.55;
+const FALL_FLOW_SPEED: f32 = 0.85;
 #[cfg(test)]
-const AUTHORED_TEMPORAL_RATES: [f32; 4] = [0.22, 0.55, 0.85, 0.025];
+const SECONDARY_WAVE_PHASE_RATE: f32 = 0.025;
 const LIQUID_CAP_BIAS_RATIO: f32 = 0.02;
 const LIQUID_CAP_BIAS_MAX: f32 = 0.002 * HEX_CIRCUMRADIUS;
 const LIQUID_CURTAIN_EDGE_BIAS: f32 = 0.002 * HEX_CIRCUMRADIUS;
-const HEX_INRADIUS: f32 = 0.866_025_4 * HEX_CIRCUMRADIUS;
+const HEX_INRADIUS: f32 = 0.5 * HEX_SMALL_DIAMETER;
 
 /// Uniform shared by one visual liquid flow class.
 #[derive(Clone, Copy, Debug, Reflect, ShaderType)]
@@ -682,21 +685,21 @@ impl MaterialSet {
             )),
             current: materials.add(liquid_material(
                 color,
-                Vec2::new(0.0, 0.22),
+                Vec2::new(0.0, CURRENT_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
                 false,
             )),
             rapid: materials.add(liquid_material(
                 color,
-                Vec2::new(0.0, 0.55),
+                Vec2::new(0.0, RAPID_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
                 false,
             )),
             fall: materials.add(liquid_material(
                 color,
-                Vec2::new(0.0, 0.85),
+                Vec2::new(0.0, FALL_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
                 true,
@@ -988,7 +991,12 @@ mod tests {
 
     #[test]
     fn phase_wrap_is_a_common_period_for_every_authored_rate() {
-        for rate in AUTHORED_TEMPORAL_RATES {
+        for rate in [
+            CURRENT_FLOW_SPEED,
+            RAPID_FLOW_SPEED,
+            FALL_FLOW_SPEED,
+            SECONDARY_WAVE_PHASE_RATE,
+        ] {
             let cycles = rate * PHASE_WRAP_SECONDS;
             assert_f32_near(cycles, cycles.round());
         }
@@ -1202,6 +1210,9 @@ mod tests {
         assert!(shader.contains("main_pass_post_lighting_processing"));
         assert!(shader.contains("pbr_input.material.base_color = vec4<f32>"));
         assert!(!shader.contains("pbr_input.material.base_color.rgb ="));
+        assert!(shader.contains(&format!(
+            "liquid.flow_phase_scale.z * {SECONDARY_WAVE_PHASE_RATE}"
+        )));
         assert!(shader.contains("out.color.a = 1.0"));
     }
 }
