@@ -177,8 +177,9 @@ banks. Its headless simulation replay still compares party routes, AI observatio
 legal-action fingerprints, commands, events, turn order, positions, summary, and
 outcome. The release playtest alone owns formation editing, bridge compression,
 reformation, six-unit readability, and the interaction between terrain and combat.
-It must also exercise Renewal on a downed ally and verify next-round initiative return
-before Wave 4 may merge to `dev`.
+The Wave 4 gate passed after that walk exercised Renewal on a downed ally and verified
+next-round initiative return. Party Trial keeps the same coverage as the persistent
+human regression walk for later waves.
 
 ## Saying no out loud
 
