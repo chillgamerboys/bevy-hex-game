@@ -409,6 +409,7 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
 
@@ -419,8 +420,9 @@ mod tests {
     use bevy::MinimalPlugins;
     use hex_assets::{
         ArtPalette, CombatSettings, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
-        FormationCenter, GameAssets, LightingSettings, PerceptionSettings, PlayerSettings, Roster,
-        RosterEntry, ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
+        FormationCenter, GameAssets, LightingSettings, ObjectBlueprint, ObjectCatalogFile,
+        ObjectInstance, PerceptionSettings, PlayerSettings, Roster, RosterEntry, RuntimeArtCatalog,
+        ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
     };
     use hex_core::{
         AppSystems, CommandQueue, ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup,
@@ -447,6 +449,42 @@ mod tests {
 
     fn assets_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    }
+
+    fn runtime_art_catalog(palette: &ArtPalette) -> RuntimeArtCatalog {
+        let styles: VoxelStyleCatalog =
+            ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))
+                .expect("the shipped voxel styles should deserialize");
+        let manifest: ObjectCatalogFile =
+            ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+                .expect("the shipped object catalog should deserialize");
+        let mut objects = BTreeMap::new();
+        for id in manifest.ids() {
+            let path = assets_dir()
+                .join("art/objects")
+                .join(format!("{}.ron", id.as_str()));
+            let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "object catalog entry '{}' could not be read from {}: {error}",
+                    id.as_str(),
+                    path.display()
+                )
+            });
+            let blueprint: ObjectBlueprint = ron::from_str(&source).unwrap_or_else(|error| {
+                panic!(
+                    "object catalog entry '{}' does not deserialize: {error}",
+                    id.as_str()
+                )
+            });
+            let previous = objects.insert(blueprint.id.clone(), blueprint);
+            assert!(
+                previous.is_none(),
+                "object catalog resolved duplicate blueprint '{}'",
+                id.as_str()
+            );
+        }
+        RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
+            .expect("the shipped runtime art graph should resolve")
     }
 
     /// The encounter a scenario names, read off disk.
@@ -1457,6 +1495,7 @@ mod tests {
                 .expect("the shipped player settings should deserialize");
         let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
             .expect("the shipped art palette should deserialize");
+        let art_catalog = runtime_art_catalog(&palette);
         let seed = entry
             .generation_seed
             .map(ResolvedMapSeed)
@@ -1526,6 +1565,7 @@ mod tests {
         app.insert_resource(PerceptionSettings::default());
         app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Bright));
         app.insert_resource(player);
+        app.insert_resource(art_catalog);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
@@ -1653,6 +1693,73 @@ mod tests {
                 .count(),
             1,
             "re-entry duplicated the rendered grid"
+        );
+    }
+
+    #[test]
+    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
+        let mut app = procedural_gameplay_app("Forest");
+        let art_fingerprint = app
+            .world()
+            .resource::<RuntimeArtCatalog>()
+            .combined_fingerprint();
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let first_map_fingerprint = app.world().resource::<GenerationReport>().map_fingerprint;
+        let first_party = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("Forest should publish party_start");
+        let first_hostile = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("hostile_start"))
+            .expect("Forest should publish hostile_start");
+        let first_features = app
+            .world_mut()
+            .query_filtered::<Entity, With<ObjectInstance>>()
+            .iter(app.world())
+            .count();
+        assert!(
+            first_features > 0,
+            "Forest should publish authored object instances"
+        );
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeArtCatalog>()
+                .combined_fingerprint(),
+            art_fingerprint,
+            "gameplay teardown should retain the accepted global art graph"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<ObjectInstance>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Forest teardown left authored feature instances alive"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert_eq!(
+            app.world().resource::<GenerationReport>().map_fingerprint,
+            first_map_fingerprint
+        );
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<ObjectInstance>>()
+                .iter(app.world())
+                .count(),
+            first_features,
+            "Forest re-entry changed its authored feature instance count"
         );
     }
 
