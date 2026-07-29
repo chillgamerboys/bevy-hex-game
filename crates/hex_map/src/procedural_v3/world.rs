@@ -92,12 +92,57 @@ pub(crate) struct StructurePlan {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LightId(pub(crate) u32);
 
+/// Authored cave-crystal silhouette reserved above one gameplay-light floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CaveCrystalKind {
+    LowCluster,
+    Branched,
+    Spire,
+}
+
+impl CaveCrystalKind {
+    /// Number of visual voxel levels reserved above the authoritative floor.
+    #[must_use]
+    pub(crate) const fn height(self) -> i32 {
+        match self {
+            Self::LowCluster => 2,
+            Self::Branched => 3,
+            Self::Spire => 4,
+        }
+    }
+}
+
+/// Geometry contract used to reserve a crystal's radius-one presentation footprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CaveCrystalSiteKind {
+    /// A roofed niche carved beside the underground route.
+    InteriorAlcove,
+    /// An open landing connected beside the upper entrance ramp.
+    EntranceLanding,
+}
+
+/// Deterministic presentation intent retained without depending on authored assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CaveCrystalPresentation {
+    pub(crate) kind: CaveCrystalKind,
+    pub(crate) site: CaveCrystalSiteKind,
+    /// Preferred clockwise 60-degree turn count in `0..6`.
+    pub(crate) rotation: u8,
+}
+
+/// Optional map-owned presentation intent attached to a semantic gameplay light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlannedLightPresentation {
+    CaveCrystal(CaveCrystalPresentation),
+}
+
 /// Exact logical source used later to spawn a public `GameplayLight`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlannedGameplayLight {
     pub(crate) origin: TilePos,
     pub(crate) level: IlluminationLevel,
     pub(crate) radius: u32,
+    pub(crate) presentation: Option<PlannedLightPresentation>,
 }
 
 /// One generated interior network.
@@ -1038,6 +1083,7 @@ mod tests {
                     origin: floor,
                     level: IlluminationLevel::Bright,
                     radius: 4,
+                    presentation: None,
                 },
             )]),
             biome_regions: BTreeMap::from([
