@@ -1,0 +1,8 @@
+(
+    profiles: [
+        (
+            id: ("baseline"),
+            algorithm: ("baseline-v1"),
+        ),
+    ],
+)

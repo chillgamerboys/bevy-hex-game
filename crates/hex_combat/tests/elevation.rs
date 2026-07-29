@@ -32,15 +32,21 @@ use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
-    SwatchId,
+    ArtPalette, PaletteSwatch, PerceptionSettings, PlayerSettings, SrgbColor, Substance,
+    SubstanceFile, SubstanceTable, SwatchId,
 };
-use hex_combat::Initiative;
+use hex_combat::{AiDecisionTraces, Initiative, TurnOrder};
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Level, Mode, Screen, SubstanceId, TilePos,
-    TraversalProfile, Turn, MAX_HEADROOM,
+    Busy, ExteriorIllumination, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
+    IlluminationLevel, InteriorRegions, Level, LightDomain, Mode, PerceptionSystems, Screen,
+    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
+    MAX_HEADROOM,
 };
-use hex_units::{Body, Faction, Standing, StandsOn};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    PerceptionRuntimeStats, SurfaceSnapshot, SurfaceSnapshots,
+};
+use hex_units::{Body, Downed, Faction, MovingTo, Standing, StandsOn, UnitAllocator, UnitRegistry};
 
 /// World height of one level in this fixture.
 const LEVEL_HEIGHT: f32 = 1.0;
@@ -78,6 +84,57 @@ fn test_app() -> App {
     });
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     app.add_plugins(hex_combat::plugin);
+
+    while app.plugins_state() != PluginsState::Cleaned {
+        app.finish();
+        app.cleanup();
+    }
+    app
+}
+
+fn perception_combat_test_app() -> App {
+    let mut app = App::new();
+    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
+    app.init_state::<Screen>();
+    app.add_sub_state::<Mode>();
+    app.configure_sets(
+        Update,
+        (
+            PerceptionSystems::PublishAmbient,
+            PerceptionSystems::ResolveIllumination,
+            PerceptionSystems::ResolveObservation,
+            PerceptionSystems::PublishKnowledge,
+            PerceptionSystems::ApplyPresentation,
+        )
+            .chain(),
+    );
+    app.configure_sets(
+        OnEnter(Screen::Gameplay),
+        (
+            PerceptionSystems::PublishAmbient,
+            PerceptionSystems::ResolveIllumination,
+            PerceptionSystems::ResolveObservation,
+            PerceptionSystems::PublishKnowledge,
+            PerceptionSystems::ApplyPresentation,
+        )
+            .chain(),
+    );
+    app.insert_resource(hex_assets::CombatSettings::default());
+    app.insert_resource(substance_table());
+    app.insert_resource(PerceptionSettings::default());
+    app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Dark));
+    app.insert_resource(InteriorRegions::new());
+    app.insert_resource(TraversalBlockers::new());
+    app.insert_resource(TerrainReady);
+    app.insert_resource(PlayerSettings {
+        scale: 0.25,
+        speed: 5.0,
+    });
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        spawn_terrain.before(PerceptionSystems::ResolveIllumination),
+    );
+    app.add_plugins((hex_perception::plugin, hex_combat::plugin));
 
     while app.plugins_state() != PluginsState::Cleaned {
         app.finish();
@@ -159,12 +216,14 @@ fn spawn_unit_with_profile(
     level: Level,
     profile: TraversalProfile,
 ) -> Entity {
+    let id = app.world_mut().resource_mut::<UnitAllocator>().allocate();
     let standing = Standing {
         pos: TilePos::new(coord, level),
         span: span_at(level),
     };
     let mut unit = app.world_mut().spawn((
         faction,
+        id,
         StandsOn(standing),
         Body::new(profile),
         Initiative(10),
@@ -175,7 +234,11 @@ fn spawn_unit_with_profile(
     } else {
         unit.insert(hex_units::Player);
     }
-    unit.id()
+    let entity = unit.id();
+    app.world_mut()
+        .resource_mut::<UnitRegistry>()
+        .register(id, entity);
+    entity
 }
 
 fn spawn_surface(app: &mut App, coord: HexCoord, level: Level, headroom: Level) {
@@ -190,12 +253,68 @@ fn spawn_surface(app: &mut App, coord: HexCoord, level: Level, headroom: Level) 
 }
 
 fn enter_gameplay(app: &mut App) {
+    enter_gameplay_with_hidden_unit(app, None);
+}
+
+fn enter_gameplay_with_hidden_unit(app: &mut App, hidden: Option<Entity>) {
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
         .set(Screen::Gameplay);
     app.update();
+    publish_fixture_knowledge(app, hidden);
     app.update();
     app.update();
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid deterministic fixture projections should fail at their construction seam"
+)]
+fn publish_fixture_knowledge(app: &mut App, hidden: Option<Entity>) {
+    let surfaces = {
+        let world = app.world_mut();
+        let mut tiles =
+            world.query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
+        SurfaceSnapshots::try_from_iter(tiles.iter(world).map(
+            |(&pos, &span, &substance, &headroom)| SurfaceSnapshot {
+                pos,
+                span,
+                substance,
+                headroom,
+                is_solid: true,
+                blocked: false,
+                domain: LightDomain::Exterior,
+            },
+        ))
+        .expect("the fixture should publish unique terrain surfaces")
+    };
+    let units = {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .filter(|(entity, ..)| Some(*entity) != hidden)
+            .map(|(_, &id, &faction, standing)| ObservedUnit {
+                id,
+                faction,
+                pos: standing.0.pos,
+                provides_sight: true,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut observation = FactionObservation::new();
+    for (position, _) in surfaces.iter() {
+        observation.insert_surface(position);
+    }
+    for unit in units {
+        observation
+            .try_insert_unit(unit)
+            .expect("fixture unit identities should be unique");
+    }
+    let observations = FactionObservations::from_factions(observation.clone(), observation);
+    let mut knowledge = FactionMapKnowledge::new();
+    apply_observations(&mut knowledge, &surfaces, &observations);
+    app.insert_resource(knowledge);
 }
 
 /// An app with both units already standing, then run into gameplay.
@@ -409,6 +528,216 @@ fn an_unreachable_target_does_not_hang_the_fight() {
     assert!(
         held.is_none_or(|turn| turn.acted),
         "an enemy with nothing it can do must still finish its turn"
+    );
+}
+
+#[test]
+fn hidden_hostile_truth_never_enters_ai_observation_or_legal_actions() {
+    let mut app = test_app();
+    let enemy = spawn_unit(&mut app, Faction::Hostile, HexCoord::ORIGIN, GROUND_LEVEL);
+    app.world_mut().entity_mut(enemy).insert(Initiative(20));
+    let hidden = spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, 0, -1),
+        GROUND_LEVEL,
+    );
+    spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(3, 0, -3),
+        GROUND_LEVEL,
+    );
+    let hidden_id = *app
+        .world()
+        .get::<UnitId>(hidden)
+        .expect("fixture units carry stable ids");
+
+    enter_gameplay_with_hidden_unit(&mut app, Some(hidden));
+
+    let traces = app.world().resource::<hex_combat::AiDecisionTraces>();
+    let trace = traces
+        .entries
+        .first()
+        .expect("the hostile should make one decision");
+    assert!(trace
+        .observation
+        .hostiles
+        .iter()
+        .all(|hostile| hostile.unit != hidden_id));
+    assert!(!trace.observation.turn_order.contains(&hidden_id));
+    assert!(trace.legal_actions.actions().iter().all(|action| {
+        !matches!(
+            action.command,
+            GameCommand::Strike { target, .. } if target == hidden_id
+        )
+    }));
+}
+
+#[test]
+fn observed_downed_hostile_is_not_an_offensive_goal() {
+    let mut app = test_app();
+    let enemy = spawn_unit(&mut app, Faction::Hostile, HexCoord::ORIGIN, GROUND_LEVEL);
+    app.world_mut().entity_mut(enemy).insert(Initiative(20));
+    let downed = spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(1, 0, -1),
+        GROUND_LEVEL,
+    );
+    app.world_mut().entity_mut(downed).insert(Downed);
+    spawn_unit(
+        &mut app,
+        Faction::Player,
+        HexCoord::new_cubic(3, 0, -3),
+        GROUND_LEVEL,
+    );
+    let downed_id = *app
+        .world()
+        .get::<UnitId>(downed)
+        .expect("fixture units carry stable ids");
+
+    enter_gameplay(&mut app);
+
+    let traces = app.world().resource::<hex_combat::AiDecisionTraces>();
+    let trace = traces
+        .entries
+        .first()
+        .expect("the hostile should make one decision");
+    assert!(trace
+        .observation
+        .hostiles
+        .iter()
+        .any(|hostile| hostile.unit == downed_id && hostile.downed));
+    assert!(trace.legal_actions.actions().iter().all(|action| {
+        !matches!(
+            action.command,
+            GameCommand::Strike { target, .. } if target == downed_id
+        )
+    }));
+    assert!(
+        !matches!(
+            trace.command,
+            Some(GameCommand::Strike { target, .. }) if target == downed_id
+        ),
+        "the baseline must ignore a downed offensive target"
+    );
+}
+
+#[test]
+fn downing_the_sole_sight_provider_republishes_before_same_frame_ai_decision() {
+    let mut app = perception_combat_test_app();
+    let player_pos = HexCoord::ORIGIN;
+    let observer_pos = HexCoord::new_cubic(1, -1, 0);
+    let actor_pos = HexCoord::new_cubic(4, -4, 0);
+    let player = spawn_unit(&mut app, Faction::Player, player_pos, GROUND_LEVEL);
+    let observer = spawn_unit(&mut app, Faction::Hostile, observer_pos, GROUND_LEVEL);
+    let actor = spawn_unit(&mut app, Faction::Hostile, actor_pos, GROUND_LEVEL);
+    app.world_mut().entity_mut(player).insert(Initiative(20));
+    let actor_standing = app
+        .world()
+        .get::<StandsOn>(actor)
+        .expect("the actor should stand on the fixture")
+        .0;
+    app.world_mut().entity_mut(actor).insert((
+        Initiative(30),
+        MovingTo::new(vec![actor_standing], 1.0),
+        Busy,
+    ));
+    let player_id = *app
+        .world()
+        .get::<UnitId>(player)
+        .expect("the player should carry a stable id");
+    let actor_id = *app
+        .world()
+        .get::<UnitId>(actor)
+        .expect("the actor should carry a stable id");
+    let player_surface = TilePos::new(player_pos, GROUND_LEVEL);
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Gameplay);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Hostile)
+            .unit(player_id)
+            .is_some(),
+        "the nearby hostile observer should initially publish the player"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(actor_id),
+        "the busy high-initiative actor should hold the first turn"
+    );
+    assert!(
+        app.world()
+            .resource::<AiDecisionTraces>()
+            .entries
+            .is_empty(),
+        "Busy should hold the actor until the visibility-loss frame; traces={:?}",
+        app.world().resource::<AiDecisionTraces>().entries
+    );
+
+    let before = *app.world().resource::<PerceptionRuntimeStats>();
+    app.world_mut().entity_mut(observer).insert(Downed);
+    app.world_mut()
+        .entity_mut(actor)
+        .remove::<(Busy, MovingTo)>();
+    app.update();
+
+    let after = *app.world().resource::<PerceptionRuntimeStats>();
+    assert_eq!(
+        after.knowledge_publications,
+        before.knowledge_publications + 1,
+        "Downed should republish faction knowledge in this update"
+    );
+    let hostile_knowledge = app
+        .world()
+        .resource::<FactionMapKnowledge>()
+        .faction(Faction::Hostile);
+    assert_eq!(
+        hostile_knowledge.state(player_surface),
+        hex_core::KnowledgeState::Remembered
+    );
+    assert!(
+        hostile_knowledge.unit(player_id).is_none(),
+        "the newly hidden player identity survived the same-frame publication"
+    );
+
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let trace = traces
+        .entries
+        .last()
+        .expect("the unblocked hostile should decide in the visibility-loss frame");
+    assert_eq!(trace.actor, actor_id);
+    assert!(trace
+        .observation
+        .hostiles
+        .iter()
+        .all(|hostile| hostile.unit != player_id));
+    assert!(!trace.observation.turn_order.contains(&player_id));
+    assert!(trace.legal_actions.actions().iter().all(|action| {
+        !matches!(
+            action.command,
+            GameCommand::Strike { target, .. } if target == player_id
+        ) && !matches!(
+            action.command,
+            GameCommand::Cast { target, .. } if target == player_surface
+        )
+    }));
+    assert!(
+        matches!(
+            trace.command,
+            Some(GameCommand::EndTurn { unit }) if unit == actor_id
+        ),
+        "the actor used information that its newly published view no longer contained"
     );
 }
 
