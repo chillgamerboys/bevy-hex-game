@@ -1002,7 +1002,12 @@ mod tests {
 
     #[test]
     fn fixed_seed_corpus_selects_complete_candidates_without_fallback() {
-        let fallback_seeds = (0..32_u64)
+        // These seeds exercised the Forest, Caves, Sky, and seam failures closed
+        // while hardening the initial 0..32 audit. Keep the blocking CI corpus
+        // focused; the ignored stress test below owns broad statistical coverage.
+        const REGRESSION_SEEDS: [u64; 8] = [0, 7, 14, 17, 19, 23, 28, 31];
+        let fallback_seeds = REGRESSION_SEEDS
+            .into_iter()
             .filter(|seed| {
                 generate(RING_RADIUS, 0.4, settings(), *seed, runtime_art_catalog())
                     .expect("every Ring7 seed must produce a validated final world")
