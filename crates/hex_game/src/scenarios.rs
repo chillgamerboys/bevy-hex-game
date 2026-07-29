@@ -365,8 +365,9 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        CombatSettings, CubeCoord, GameAssets, LightingSettings, PlayerSettings, ScenarioLibrary,
-        ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile, SubstanceTable,
+        ArtPalette, CombatSettings, CubeCoord, GameAssets, LightingSettings, PlayerSettings,
+        ScenarioLibrary, ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile,
+        SubstanceTable,
     };
     use hex_core::{
         AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
@@ -1275,6 +1276,8 @@ mod tests {
         let player: PlayerSettings =
             ron::from_str(include_str!("../../../assets/config/player.ron"))
                 .expect("the shipped player settings should deserialize");
+        let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+            .expect("the shipped art palette should deserialize");
         let seed = entry
             .generation_seed
             .map(ResolvedMapSeed)
@@ -1313,8 +1316,12 @@ mod tests {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
         });
-        app.insert_resource(SubstanceTable::from_file(&substances));
+        app.insert_resource(
+            SubstanceTable::from_file(&substances, &palette)
+                .expect("the shipped substances should resolve through the shipped palette"),
+        );
         app.insert_resource(player);
+        app.insert_resource(palette);
         app.insert_resource(entry.units);
         app.insert_resource(world);
         app.insert_resource(seed);

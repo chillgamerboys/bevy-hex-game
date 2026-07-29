@@ -187,9 +187,12 @@ fn build_content_index(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use bevy::state::app::StatesPlugin;
 
     use super::*;
+    use crate::art_palette::{ArtPalette, PaletteSwatch, SrgbColor, SwatchId};
     use crate::elements::{ElementFile, FusionInput};
     use crate::spells::{
         CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellFile, TargetShape, TargetingSpec,
@@ -222,18 +225,25 @@ mod tests {
     }
 
     fn substances() -> SubstanceTable {
+        let stone_swatch = SwatchId::new("test/stone").expect("the test swatch id should be valid");
+        let palette = ArtPalette::new(BTreeMap::from([(
+            stone_swatch.clone(),
+            PaletteSwatch::new(
+                "Test Stone",
+                SrgbColor::new(0.5, 0.5, 0.5).expect("the test color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the test swatch should be valid"),
+        )]))
+        .expect("the test palette should be valid");
         let mut map = HashMap::default();
-        for name in ["air", "stone"] {
-            map.insert(
-                name.to_owned(),
-                Substance {
-                    color: (0.5, 0.5, 0.5),
-                    solid: true,
-                    diggable: true,
-                },
-            );
-        }
-        SubstanceTable::from_file(&SubstanceFile { substances: map })
+        map.insert("air".to_owned(), Substance::invisible(false, false));
+        map.insert(
+            "stone".to_owned(),
+            Substance::from_swatch(stone_swatch, true, true),
+        );
+        SubstanceTable::from_file(&SubstanceFile { substances: map }, &palette)
+            .expect("the test substances should resolve through the palette")
     }
 
     fn spell(requirements: Vec<GemRequirement>, effects: Vec<Effect>) -> Spell {
