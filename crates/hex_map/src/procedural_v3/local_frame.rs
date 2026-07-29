@@ -90,13 +90,6 @@ impl LocalPatchFrame {
 
     /// Stable world-space center selected for this patch.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the next stacked Ring7 runner reports canonical validation frames"
-        )
-    )]
     pub(crate) const fn center(self) -> HexCoord {
         self.center
     }
@@ -190,10 +183,6 @@ impl LocalPatchFrame {
     /// validators deliberately reason in the same radius-limited local frame as
     /// their approved Single output, so this projection normalizes all three before
     /// invoking those validators.
-    #[expect(
-        dead_code,
-        reason = "the next stacked Ring7 runner validates translated patch fragments"
-    )]
     pub(crate) fn canonical_local_world(
         self,
         plan: &GeneratedPatchPlan,
