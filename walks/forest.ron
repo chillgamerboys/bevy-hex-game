@@ -1,0 +1,18 @@
+// Forest presentation walk. Run with:
+//   HEX_WALK_SCRIPT=walks/forest.ron \
+//   HEX_WALK_OUT=.context/visual-walks/forest \
+//   cargo run -p hex_game --features visual-walk
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Forest", seed: 28001),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("01-forest-map"),
+    Key("C"),
+    Settle(45),
+    Capture("02-forest-character-canopy"),
+    Key("C"),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

@@ -22,6 +22,20 @@ the map with sharp frozen massifs, deliberate cliffs, and a high-pass/low-bypass
 pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
+
+V3 now has its first two complete recipe lanes. Waterfall authors deterministic
+directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
+basin, outlet, and redundant land routes; an opaque animated renderer consumes the
+same exact flow facts. Forest plans rolling terrain and clearings, places its denser
+woodland, then bends a mostly two-wide road around those exact roots with short
+one-wide constraints and a three-cell prairie taper. Most prairie surfaces carry tall
+grass, while a few renderer-private tall exemplars vary the shared low-poly tree
+silhouette without claiming future multi-voxel occupancy. Tree roots are exact map
+blockers and tall grass is presentation-only. Map validation, movement previews,
+click routing, command validation, spawning, review relocation, and enemy pathfinding
+all consume the same exact blocker projection through a separate adapter now awaiting
+gameplay-owner review.
+
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
 reachable set and the route before a click commits to either.

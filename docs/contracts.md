@@ -30,11 +30,11 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainReady` — terrain built and validated | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `MapViewHint` — generated camera framing | world | presentation | live | [systems/map.md](systems/map.md) |
 | `InteriorRegions` / `CutawayOccluder` — interior membership and roof cutaway | world | presentation | live | [systems/map.md](systems/map.md) |
-| `CanopyOccluder` — exact tree-root identity for local canopy cutaway | world | presentation | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| `CanopyOccluder` — exact tree-root identity for local canopy cutaway | world | presentation | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `ResolvedMapSeed` — the seed a session actually used | game | world | live | [development/config.md](development/config.md) |
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — biome membership by exact `TilePos` | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
-| `TraversalBlockers` — surfaces occupied by generated features | world | gameplay | reserved | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
+| `TraversalBlockers` — surfaces occupied by generated features | world | gameplay | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `RunBottom(Level)` — each run's lowest voxel; prerequisite to wave 3 terrain casting | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) C |
 | `TerrainImpact { batch, canonical_volume, ElementId, power }` — declarative voxel effect | gameplay | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `TerrainImpactOutcome` — explicit, deterministically ordered per-voxel dispositions | world | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) H |

@@ -174,14 +174,26 @@ views of the same deterministic scenario for liquid-motion and cliff-scale revie
 
 ### Forest
 
-Plan the walkable surface and protected routes before placing features. Deterministic
-Poisson-style spacing and environmental suitability produce one substantial wooded
-side, one prairie side, and irregular clearings without filling route approaches.
+Plan the walkable surface and clearings first, then place the blocking woodland before
+routing the road through it. A deterministic weighted path bends between separated
+clearings and around exact tree roots. Its mostly two-wide gravel footprint admits
+short one-wide constraints where the existing trees pinch it, then tapers for three
+cells into the prairie and stops. Tall grass can therefore reclaim the meadow instead
+of preserving a bare feature-free line across it.
 
 Trees are shared stylized low-poly features. Their root `TilePos` is a traversal
-blocker; their canopy is presentation only. Tall grass is non-blocking and has no
+blocker; their canopy is presentation only. The non-voxel prototype reuses the same
+semantic tree kind for a few renderer-private tall exemplars, without pretending that
+their future multi-voxel footprint exists yet. Tree roots cover roughly 20-24% of the
+woodland, while non-blocking tall grass covers 65-75% of the prairie. Tall grass has no
 concealment rule. Character-camera canopy cutaway composes with fog and cave cutaway.
 Trees cannot be chopped in this milestone.
+
+Forest likewise uses candidate rejection rather than semantic repair: its bounded
+repair hook returns `NoChange`, selection advances to the next deterministic
+candidate, and the canonical fallback remains the final hard-valid result.
+Recipe-specific repair actions will be added only when they can preserve the
+validated topology instead of disguising regeneration as repair.
 
 ### Fort
 
