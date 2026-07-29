@@ -51,6 +51,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — publisher live; movement adapter pending | perception | `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | Richer faction-knowledge API — publisher live; combat adapter pending | perception | `hex_combat` | **partial** | [systems/perception.md](systems/perception.md) |
+| `CanopyOccluder` — exact generated canopy cells for camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
 | `PresentationOcclusion` — live for cave/canopy; fog reason pending | shared | presentation | live | [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
 

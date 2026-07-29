@@ -63,6 +63,12 @@ impl PerceptionSettings {
         if self.downhill_levels_per_bonus <= 0 {
             return Err("perception.ron: downhill_levels_per_bonus must be positive".to_owned());
         }
+        if self.max_downhill_bonus > SightProfile::MAX_DOWNHILL_BONUS {
+            return Err(format!(
+                "perception.ron: max_downhill_bonus must not exceed {}",
+                SightProfile::MAX_DOWNHILL_BONUS
+            ));
+        }
         Ok(())
     }
 }
@@ -317,6 +323,11 @@ mod tests {
                 "downhill_levels_per_bonus: 4",
                 "downhill_levels_per_bonus: -1",
                 "downhill_levels_per_bonus",
+            ),
+            (
+                "max_downhill_bonus: 6",
+                "max_downhill_bonus: 7",
+                "max_downhill_bonus",
             ),
         ] {
             let invalid = PERCEPTION_RON.replacen(needle, replacement, 1);

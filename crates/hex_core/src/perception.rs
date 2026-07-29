@@ -89,13 +89,20 @@ pub struct SightProfile {
 }
 
 impl SightProfile {
+    /// Hard authored cap for downhill sight extension.
+    ///
+    /// Designer-facing settings must not exceed this value. Keeping the limit on
+    /// the shared contract prevents an asset loader from silently widening sight
+    /// beyond the rule used by headless tests and future adapters.
+    pub const MAX_DOWNHILL_BONUS: u32 = 6;
+
     /// Initial ordinary sight contract used by the V3 perception roadmap.
     pub const DEFAULT: Self = Self {
         bright: SightBand::new(36, 36),
         dim: SightBand::new(12, 12),
         dark: SightBand::new(1, 1),
         downhill_levels_per_bonus: 4,
-        max_downhill_bonus: 6,
+        max_downhill_bonus: Self::MAX_DOWNHILL_BONUS,
     };
 
     /// Returns the base limits for an illumination tier.

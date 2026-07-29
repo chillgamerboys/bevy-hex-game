@@ -237,11 +237,14 @@ require an Observed exact anchor, allow area spillover into hidden positions, an
 prove neither acknowledgments nor logs disclose those outcomes. Gameplay teardown
 and re-entry must clear ambient, observation, memory, contact, and presentation state.
 
-Benchmarks record faction-knowledge and fog recomputation after unit movement and
-terrain edits. Review captures use one seed and azimuth at noon, moonlight,
-Remembered fog, cave darkness, and local-light states in both map and character
-cameras. Those captures must show no hidden-change leakage, black-but-playable
-terrain, or disagreement between gameplay knowledge and picking.
+Benchmarks record faction-knowledge recomputation after unit movement and terrain
+edits. Fog recomputation benchmarks and the visual review captures are deferred
+until the fog/picking presentation adapter exists: the headless milestone has no
+renderer output capable of showing Unknown, Remembered, or Observed state. That
+presentation PR must capture one seed and azimuth at noon, moonlight, Remembered fog,
+cave darkness, and local-light states in both map and character cameras. Those
+captures must show no hidden-change leakage, black-but-playable terrain, or
+disagreement between gameplay knowledge and picking.
 
 ## Deferred deliberately
 
