@@ -21,9 +21,11 @@ use hex_core::{
     TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
+use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
 use crate::procedural_v2;
 use crate::procedural_v3;
+use crate::procedural_v3::MapPresentationProjection;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
@@ -31,6 +33,7 @@ use crate::GenerationReport;
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
+    liquid_render::plugin(app);
     app.register_type::<HexCoord>()
         .register_type::<HexGrid>()
         .register_type::<HexSpan>()
@@ -75,6 +78,8 @@ fn generate_world(
     commands.remove_resource::<TerrainReady>();
     commands.remove_resource::<VoxelMap>();
     commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<MapPresentationProjection>();
+    liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<MapAnchors>();
     commands.remove_resource::<SpecialMovementRegions>();
     commands.remove_resource::<InteriorRegions>();
@@ -212,6 +217,8 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
     commands.remove_resource::<BiomeRegions>();
     commands.remove_resource::<MapViewHint>();
     commands.remove_resource::<GenerationReport>();
+    commands.remove_resource::<MapPresentationProjection>();
+    liquid_render::clear_material_cache(&mut commands);
     commands.remove_resource::<TerrainReady>();
 }
 
@@ -225,20 +232,30 @@ fn spawn_grid(
     mut commands: Commands,
     assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut liquid_materials: ResMut<Assets<LiquidMaterial>>,
     map: Res<VoxelMap>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    liquid_visual_time: Res<LiquidVisualTime>,
     interiors: Option<Res<InteriorRegions>>,
+    presentation: Option<Res<MapPresentationProjection>>,
 ) {
-    build_grid(
+    if let Err(error) = build_grid(
         &mut commands,
         &assets,
         &mut materials,
+        &mut meshes,
+        &mut liquid_materials,
         &map,
         &table,
         &settings,
+        liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
-    );
+        presentation.as_deref(),
+    ) {
+        fail_presentation_setup(&mut commands, &error);
+    }
 }
 
 /// Spawns the grid entities. Shared by first construction and by rebuilds after an
@@ -247,15 +264,28 @@ fn build_grid(
     commands: &mut Commands,
     assets: &GameAssets,
     materials: &mut Assets<StandardMaterial>,
+    meshes: &mut Assets<Mesh>,
+    liquid_materials: &mut Assets<LiquidMaterial>,
     map: &VoxelMap,
     table: &SubstanceTable,
     settings: &MapSettings,
+    liquid_phase_seconds: f32,
     interiors: Option<&InteriorRegions>,
-) {
+    presentation: Option<&MapPresentationProjection>,
+) -> Result<(), LiquidPresentationError> {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
+    let mut children = liquid_render::spawn_presentations(
+        commands,
+        meshes,
+        liquid_materials,
+        map,
+        table,
+        settings.level_height,
+        liquid_phase_seconds,
+        presentation,
+    )?;
 
-    let mut tiles = Vec::new();
     for (coord, column) in map.columns() {
         for projected in projected_runs(coord, column, interiors) {
             let run = projected.run;
@@ -291,7 +321,7 @@ fn build_grid(
             if let Some(region) = projected.cutaway {
                 tile.insert(CutawayOccluder(region));
             }
-            tiles.push(tile.id());
+            children.push(tile.id());
         }
     }
 
@@ -302,7 +332,17 @@ fn build_grid(
             Name::new("HexGrid"),
             HexGrid,
         ))
-        .add_children(&tiles);
+        .add_children(&children);
+    Ok(())
+}
+
+fn fail_presentation_setup(commands: &mut Commands, error: &LiquidPresentationError) {
+    error!("cannot build liquid presentation: {error}");
+    commands.remove_resource::<TerrainReady>();
+    commands.insert_resource(GameplaySetupFailure::new(format!(
+        "The selected terrain cannot be presented: {error}."
+    )));
+    liquid_render::clear_material_cache(commands);
 }
 
 /// One material run split further wherever exact cutaway membership changes.
@@ -411,14 +451,22 @@ fn apply_terrain_edits(
     grids: Query<Entity, With<HexGrid>>,
     assets: Res<GameAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut liquid_materials: ResMut<Assets<LiquidMaterial>>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
+    liquid_visual_time: Res<LiquidVisualTime>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
+    presentation: Option<Res<MapPresentationProjection>>,
+    mut next_screen: ResMut<NextState<Screen>>,
 ) {
     let mut changed = false;
     for edit in edits.read() {
-        if apply_terrain_edit(&mut map, &table, edit) {
+        let liquid_protected = presentation
+            .as_deref()
+            .is_some_and(|projection| projection.protects_liquid_edit(edit.pos()));
+        if apply_terrain_edit(&mut map, &table, edit, liquid_protected) {
             changed = true;
             if let Some(interiors) = interiors.as_deref_mut() {
                 // A replacement is new material, not part of the authored roof even
@@ -454,22 +502,39 @@ fn apply_terrain_edits(
         interiors.retain_roof_voxels(|position, _| table.is_solid(map.get(position)));
     }
 
-    for entity in &grids {
-        commands.entity(entity).despawn();
-    }
-    build_grid(
+    let rebuilt = build_grid(
         &mut commands,
         &assets,
         &mut materials,
+        &mut meshes,
+        &mut liquid_materials,
         &map,
         &table,
         &settings,
+        liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
+        presentation.as_deref(),
     );
+    match rebuilt {
+        Ok(()) => {
+            for entity in &grids {
+                commands.entity(entity).despawn();
+            }
+        }
+        Err(error) => {
+            fail_presentation_setup(&mut commands, &error);
+            next_screen.set(Screen::Title);
+        }
+    }
 }
 
-/// Applies a changed edit at a nonnegative level unless it replaces a non-diggable voxel.
-fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &TerrainEdit) -> bool {
+/// Applies a changed edit unless it is below the floor, non-diggable, or liquid-protected.
+fn apply_terrain_edit(
+    map: &mut VoxelMap,
+    table: &SubstanceTable,
+    edit: &TerrainEdit,
+    liquid_protected: bool,
+) -> bool {
     let pos = edit.pos();
     if pos.level < 0 {
         return false;
@@ -481,7 +546,10 @@ fn apply_terrain_edit(map: &mut VoxelMap, table: &SubstanceTable, edit: &Terrain
         TerrainEdit::Clear { .. } => SubstanceId::AIR,
     };
 
-    if current == replacement || (!current.is_air() && !table.is_diggable(current)) {
+    if current == replacement
+        || liquid_protected
+        || (!current.is_air() && !table.is_diggable(current))
+    {
         return false;
     }
 
