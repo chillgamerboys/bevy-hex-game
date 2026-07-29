@@ -223,9 +223,12 @@ each source as an entity carrying its floor `TilePos` and `GameplayLight`;
 make their supporting columns map-owned until terrain edits can replan light-bearing
 objects.
 
-The V3 recipe does not render a crystal itself. Authored crystal blueprints, emissive
-materials, and restrained physical point lights join through the runtime-object
-renderer stack; they remain presentation and never determine gameplay illumination.
+The V3 recipe does not render a crystal itself. The later stacked object integration
+maps these ordered sources to `prop/crystal-low-cluster`,
+`prop/crystal-branched`, or `prop/crystal-spire`. Its authoritative
+`GameplayLight` and `TilePos` remain on the exact cave floor; the corresponding
+`ObjectInstance` origin is one voxel above it. Emissive materials and restrained
+physical point lights remain presentation and never determine gameplay illumination.
 The map-side light entity is intentionally valid without that optional visual layer.
 
 ### Fort
