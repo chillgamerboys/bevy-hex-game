@@ -9,7 +9,7 @@ description = "3D world presentation: sky and camera."
 # defined in hex_core; cargo is what enforces that.
 [dependencies]
 bevy = { workspace = true }
-hex_assets = { version = "0.1.0", path = "../hex_assets" }
+hex_assets = { workspace = true }
 hex_core = { workspace = true }
 
 [lints]
