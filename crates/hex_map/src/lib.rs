@@ -40,6 +40,7 @@ use bevy::prelude::*;
 pub mod generator;
 /// Turning generated terrain into tile entities.
 pub mod grid;
+mod liquid_render;
 /// Versioned semantic-first procedural map generation and diagnostics.
 mod procedural;
 mod procedural_v2;
@@ -52,6 +53,7 @@ mod terrain;
 pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
+pub use liquid_render::LiquidVisualTime;
 pub use procedural::{GenerationReport, TacticalMetrics};
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 1000 420"
+     role="img"
+     aria-labelledby="title description">
+  <title id="title">A Fireball lattice before and after one required gem is disabled</title>
+  <desc id="description">
+    Two seven-cell hexagonal lattices. On the left, a Fireball spell is surrounded
+    by six working Fire gems and is castable. On the right, one Fire gem is disabled,
+    so the otherwise identical Fireball is offline.
+  </desc>
+
+  <defs>
+    <polygon id="hex" points="0,-44 38,-22 38,22 0,44 -38,22 -38,-22"/>
+    <style>
+      .canvas { fill: #171b23; }
+      .panel { fill: #0d1117; stroke: #59606c; stroke-width: 2; }
+      .gem { fill: #297385; stroke: #11151d; stroke-width: 4; }
+      .spell { fill: #4d5466; stroke: #11151d; stroke-width: 4; }
+      .disabled { fill: #75211c; stroke: #11151d; stroke-width: 4; }
+      .offline { fill: #4d3033; stroke: #b43d34; stroke-width: 4; }
+      .heading {
+        fill: #edc975;
+        font: 700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        letter-spacing: 1.5px;
+      }
+      .label {
+        fill: #f0f0f2;
+        font: 650 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-anchor: middle;
+      }
+      .detail {
+        fill: #d0d3d9;
+        font: 500 13px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-anchor: middle;
+      }
+      .caption {
+        fill: #b8bbc2;
+        font: 500 16px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        text-anchor: middle;
+      }
+    </style>
+  </defs>
+
+  <rect class="canvas" width="1000" height="420" rx="18"/>
+  <rect class="panel" x="24" y="24" width="464" height="346" rx="14"/>
+  <rect class="panel" x="512" y="24" width="464" height="346" rx="14"/>
+
+  <text class="heading" x="48" y="60">CASTABLE</text>
+  <text class="heading" x="536" y="60">ONE BROKEN LINK</text>
+
+  <g transform="translate(256 207)">
+    <use href="#hex" class="gem" transform="translate(38 -66)"/>
+    <use href="#hex" class="gem" transform="translate(76 0)"/>
+    <use href="#hex" class="gem" transform="translate(38 66)"/>
+    <use href="#hex" class="gem" transform="translate(-38 66)"/>
+    <use href="#hex" class="gem" transform="translate(-76 0)"/>
+    <use href="#hex" class="gem" transform="translate(-38 -66)"/>
+    <use href="#hex" class="spell"/>
+
+    <text class="label" x="38" y="-61">Fire</text>
+    <text class="label" x="76" y="5">Fire</text>
+    <text class="label" x="38" y="71">Fire</text>
+    <text class="label" x="-38" y="71">Fire</text>
+    <text class="label" x="-76" y="5">Fire</text>
+    <text class="label" x="-38" y="-61">Fire</text>
+    <text class="label" x="0" y="-3">Fireball</text>
+    <text class="detail" x="0" y="16">ready</text>
+  </g>
+
+  <g transform="translate(744 207)">
+    <use href="#hex" class="disabled" transform="translate(38 -66)"/>
+    <use href="#hex" class="gem" transform="translate(76 0)"/>
+    <use href="#hex" class="gem" transform="translate(38 66)"/>
+    <use href="#hex" class="gem" transform="translate(-38 66)"/>
+    <use href="#hex" class="gem" transform="translate(-76 0)"/>
+    <use href="#hex" class="gem" transform="translate(-38 -66)"/>
+    <use href="#hex" class="offline"/>
+
+    <text class="label" x="38" y="-71">Fire</text>
+    <text class="detail" x="38" y="-52">disabled</text>
+    <text class="label" x="76" y="5">Fire</text>
+    <text class="label" x="38" y="71">Fire</text>
+    <text class="label" x="-38" y="71">Fire</text>
+    <text class="label" x="-76" y="5">Fire</text>
+    <text class="label" x="-38" y="-61">Fire</text>
+    <text class="label" x="0" y="-3">Fireball</text>
+    <text class="detail" x="0" y="16">offline</text>
+  </g>
+
+  <text class="caption" x="256" y="348">six adjacent ingredients available</text>
+  <text class="caption" x="744" y="348">a binary spell cannot cast</text>
+</svg>

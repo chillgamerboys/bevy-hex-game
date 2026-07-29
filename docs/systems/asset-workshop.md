@@ -223,9 +223,10 @@ untracked working copy under `.context/asset-workshop/` for disposable work.
 
 ## Explicit persistence
 
-Tracked assets change only through explicit Save, Save As, or Duplicate. Before a
-write, the tool validates the complete palette-style-object reference graph and shows
-the global impact of shared changes. Invalid data leaves the last valid file intact.
+Tracked assets change only through explicit persistence actions: Save, Save As,
+Duplicate, or a confirmed Delete. Before a write, the tool validates the complete
+palette-style-object reference graph and shows the global impact of shared changes.
+Invalid data leaves the last valid file intact.
 
 In **Voxel Styles**, Save writes the palette and style catalogs as one validated
 operation. In **Objects**, Save updates an already tracked object, Save As assigns a

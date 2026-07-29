@@ -468,7 +468,7 @@ pub struct WorkshopUiState {
     isolate_active_level: bool,
     show_grid: bool,
     style_subject: StyleInspectorSubject,
-    object_form_id: Option<ObjectAssetId>,
+    object_form_source: Option<ObjectFormSource>,
     object_name: String,
     object_bounds: ObjectBounds,
     object_connectivity: ConnectivityPolicy,
@@ -495,7 +495,7 @@ impl Default for WorkshopUiState {
             isolate_active_level: false,
             show_grid: true,
             style_subject: StyleInspectorSubject::Swatch,
-            object_form_id: None,
+            object_form_source: None,
             object_name: String::new(),
             object_bounds: ObjectBounds::DEFAULT,
             object_connectivity: ConnectivityPolicy::Grounded,
@@ -2300,14 +2300,40 @@ fn draw_object_inspector(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObjectFormSource {
+    id: ObjectAssetId,
+    display_name: String,
+    bounds: ObjectBounds,
+    connectivity: ConnectivityPolicy,
+}
+
 fn sync_object_form(state: &mut WorkshopUiState, editor: &ObjectEditorSnapshot) {
-    if state.object_form_id.as_ref() == Some(&editor.object.id) {
-        return;
+    let source = ObjectFormSource {
+        id: editor.object.id.clone(),
+        display_name: editor.object.display_name.clone(),
+        bounds: editor.object.bounds,
+        connectivity: editor.object.connectivity,
+    };
+    match state.object_form_source.as_ref() {
+        Some(previous) if previous.id == source.id => {
+            if previous.display_name != source.display_name {
+                state.object_name.clone_from(&source.display_name);
+            }
+            if previous.bounds != source.bounds {
+                state.object_bounds = source.bounds;
+            }
+            if previous.connectivity != source.connectivity {
+                state.object_connectivity = source.connectivity;
+            }
+        }
+        _ => {
+            state.object_name.clone_from(&source.display_name);
+            state.object_bounds = source.bounds;
+            state.object_connectivity = source.connectivity;
+        }
     }
-    state.object_form_id = Some(editor.object.id.clone());
-    state.object_name = editor.object.display_name.clone();
-    state.object_bounds = editor.object.bounds;
-    state.object_connectivity = editor.object.connectivity;
+    state.object_form_source = Some(source);
 }
 
 fn part_combo(
@@ -3195,6 +3221,29 @@ mod tests {
         assert!(matches_search("FoLi", ["plant/oak", "Oak", "foliage"]));
         assert!(!matches_search("metal", ["plant/oak", "Oak", "foliage"]));
         assert!(matches_search("", ["anything"]));
+    }
+
+    #[test]
+    fn object_form_tracks_model_changes_without_discarding_live_input() {
+        let style = VoxelStyleId::new("plant/base").expect("fixture style id should be valid");
+        let editor = EditorModel::blank(ObjectCategory::Plant, ConnectivityPolicy::Grounded, style)
+            .expect("fixture editor should be valid");
+        let mut snapshot = ObjectEditorSnapshot::from_model(&editor);
+        let mut state = WorkshopUiState::default();
+
+        sync_object_form(&mut state, &snapshot);
+        state.object_name = "Live form input".to_owned();
+        sync_object_form(&mut state, &snapshot);
+        assert_eq!(state.object_name, "Live form input");
+
+        snapshot.object.display_name = "Name restored by undo".to_owned();
+        snapshot.object.bounds = ObjectBounds {
+            radius: 4,
+            ..snapshot.object.bounds
+        };
+        sync_object_form(&mut state, &snapshot);
+        assert_eq!(state.object_name, "Name restored by undo");
+        assert_eq!(state.object_bounds, snapshot.object.bounds);
     }
 
     #[test]
