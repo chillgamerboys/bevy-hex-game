@@ -32,11 +32,11 @@ use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn,
+    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn, UnitId,
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
-use crate::units::{Faction, Player, StandsOn, TileQuery};
+use crate::units::{Faction, Party, Player, StandsOn, TileQuery, UnitRegistry};
 
 /// Thickness of an overlay cap in world units. Thin enough to read as paint on the
 /// ground rather than as a slab sitting on it.
@@ -173,7 +173,8 @@ pub fn plugin(app: &mut App) {
         .add_systems(
             Update,
             (
-                select_a_player,
+                select_party_member_from_keys,
+                reconcile_selection,
                 reconcile_camera_focus_target,
                 reconcile_rings,
                 redraw_overlays,
@@ -270,25 +271,89 @@ fn create_overlay_assets(
     });
 }
 
-/// Keeps exactly one player piece selected.
-///
-/// The agreed behaviour is that the acting unit is selected automatically and a click
-/// re-selects. With a single player piece those collapse into the same thing: there is
-/// nothing else to select, so it is simply always the selection. This is where a party
-/// of several would change, and the reason `Selected` exists as its own marker rather
-/// than being inferred from [`Player`].
-fn select_a_player(
+fn select_party_member_from_keys(
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mode: Option<Res<State<Mode>>>,
+    party: Res<Party>,
+    registry: Res<UnitRegistry>,
     mut commands: Commands,
-    unselected: Query<Entity, (With<Player>, Without<Selected>)>,
-    selected: Query<(), With<Selected>>,
+    selected: Query<Entity, With<Selected>>,
 ) {
-    if !selected.is_empty() {
-        return;
-    }
-    let Some(player) = unselected.iter().next() else {
+    let Some(keys) = keys else {
         return;
     };
-    commands.entity(player).insert(Selected);
+    if mode
+        .as_deref()
+        .is_some_and(|mode| *mode.get() == Mode::Combat)
+    {
+        return;
+    }
+    let pressed = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+    ]
+    .into_iter()
+    .position(|key| keys.just_pressed(key));
+    let Some(index) = pressed else {
+        return;
+    };
+    let Some(&member) = party.members.get(index) else {
+        return;
+    };
+    let Some(entity) = registry.entity_of(member) else {
+        return;
+    };
+    for old in &selected {
+        if old != entity {
+            commands.entity(old).remove::<Selected>();
+        }
+    }
+    commands.entity(entity).insert(Selected);
+}
+
+/// Keeps exactly one player selected and forces the acting player during combat.
+fn reconcile_selection(
+    mut commands: Commands,
+    mode: Option<Res<State<Mode>>>,
+    party: Res<Party>,
+    registry: Res<UnitRegistry>,
+    players: Query<(Entity, &UnitId, Has<Selected>, Has<Turn>), With<Player>>,
+    selected_non_players: Query<Entity, (With<Selected>, Without<Player>)>,
+) {
+    let forced = mode
+        .as_deref()
+        .filter(|mode| *mode.get() == Mode::Combat)
+        .and_then(|_| {
+            players
+                .iter()
+                .find_map(|(entity, _, _, acting)| acting.then_some(entity))
+        });
+    let existing = players
+        .iter()
+        .filter_map(|(entity, _, selected, _)| selected.then_some(entity))
+        .next();
+    let wanted = forced.or(existing).or_else(|| {
+        party
+            .members
+            .iter()
+            .find_map(|member| registry.entity_of(*member))
+    });
+    for entity in &selected_non_players {
+        commands.entity(entity).remove::<Selected>();
+    }
+    for (entity, _, selected, _) in &players {
+        if Some(entity) == wanted {
+            if !selected {
+                commands.entity(entity).insert(Selected);
+            }
+        } else if selected {
+            commands.entity(entity).remove::<Selected>();
+        }
+    }
 }
 
 /// Projects the authoritative unit selection into the shared camera vocabulary.
@@ -565,6 +630,8 @@ fn clear_overlays(
 
 #[cfg(test)]
 mod tests {
+    use bevy::{state::app::StatesPlugin, MinimalPlugins};
+
     use super::*;
     use hex_core::{HexCoord, HexSpan};
 
@@ -652,10 +719,18 @@ mod tests {
         let mut app = App::new();
         app.add_systems(
             Update,
-            (select_a_player, reconcile_camera_focus_target).chain(),
+            (reconcile_selection, reconcile_camera_focus_target).chain(),
         );
         let surface = TilePos::new(HexCoord::from_axial(1, -1), 3);
-        let player = app.world_mut().spawn((Player, standing_at(surface))).id();
+        let id = UnitId(3);
+        let player = app
+            .world_mut()
+            .spawn((Player, id, standing_at(surface)))
+            .id();
+        let mut registry = UnitRegistry::default();
+        registry.register(id, player);
+        app.insert_resource(registry);
+        app.insert_resource(Party { members: vec![id] });
 
         app.update();
 
@@ -668,5 +743,74 @@ mod tests {
             Some(surface),
             "the chained reconciliation should observe deferred selection commands"
         );
+    }
+
+    #[test]
+    fn number_keys_select_members_in_stable_party_order() {
+        let mut app = App::new();
+        app.init_resource::<ButtonInput<KeyCode>>().add_systems(
+            Update,
+            (select_party_member_from_keys, reconcile_selection).chain(),
+        );
+        let first_id = UnitId(4);
+        let second_id = UnitId(8);
+        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
+        let second = app.world_mut().spawn((Player, second_id)).id();
+        let mut registry = UnitRegistry::default();
+        registry.register(first_id, first);
+        registry.register(second_id, second);
+        app.insert_resource(registry);
+        app.insert_resource(Party {
+            members: vec![first_id, second_id],
+        });
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit2);
+
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
+    }
+
+    #[test]
+    fn combat_forces_selection_to_the_acting_player() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<Mode>()
+            .add_systems(
+                Update,
+                (select_party_member_from_keys, reconcile_selection).chain(),
+            );
+        let first_id = UnitId(4);
+        let second_id = UnitId(8);
+        let first = app.world_mut().spawn((Player, first_id, Selected)).id();
+        let second = app
+            .world_mut()
+            .spawn((
+                Player,
+                second_id,
+                Turn {
+                    movement_left: 3,
+                    acted: false,
+                },
+            ))
+            .id();
+        let mut registry = UnitRegistry::default();
+        registry.register(first_id, first);
+        registry.register(second_id, second);
+        app.insert_resource(registry);
+        app.insert_resource(Party {
+            members: vec![first_id, second_id],
+        });
+        app.world_mut()
+            .resource_mut::<NextState<Mode>>()
+            .set(Mode::Combat);
+
+        app.update();
+        app.update();
+
+        assert!(!app.world().entity(first).contains::<Selected>());
+        assert!(app.world().entity(second).contains::<Selected>());
     }
 }

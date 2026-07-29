@@ -12,10 +12,14 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
+use hex_assets::FormationCatalog;
 use hex_combat::{Turn, TurnOrder};
-use hex_core::{Mode, Pause, PendingDecision, Screen};
+use hex_core::{
+    GameplaySetup, HexCoord, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
+    Screen, UnitId,
+};
 use hex_lattice::{LatticeSpec, LatticeState};
-use hex_units::Player;
+use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 use super::{despawn_screen, DespawnOnExit};
 use crate::menus::widgets::UiAssets;
@@ -31,6 +35,12 @@ pub(super) fn plugin(app: &mut App) {
 
     app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
+    app.add_systems(
+        Update,
+        (handle_party_strip, update_party_strip)
+            .chain()
+            .run_if(in_state(Screen::Gameplay)),
+    );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
     // resource with nothing to carry it out — leaving the store holding a full reveal
@@ -45,7 +55,12 @@ pub(super) fn plugin(app: &mut App) {
     );
     app.add_systems(
         OnEnter(Screen::Gameplay),
-        (reset_pause, reset_mode, spawn_hud),
+        (
+            reset_pause,
+            reset_mode,
+            spawn_hud,
+            spawn_party_strip.in_set(GameplaySetup::View),
+        ),
     );
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
 }
@@ -53,6 +68,380 @@ pub(super) fn plugin(app: &mut App) {
 /// Marks the HUD line so it can be rewritten as the mode changes.
 #[derive(Component)]
 struct HudText;
+
+#[derive(Component)]
+struct PartyStrip;
+
+#[derive(Component)]
+struct PartyMemberButton(usize);
+
+#[derive(Component)]
+struct PartyPresetButton(String);
+
+#[derive(Component)]
+struct PartySlotButton(HexCoord);
+
+#[derive(Component)]
+struct PartyModeButton;
+
+#[derive(Component)]
+struct PartyModeText;
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "formation offsets are content-limited to a six-cell miniature"
+)]
+fn spawn_party_strip(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    formations: Res<FormationCatalog>,
+) {
+    let mut offered_slots: Vec<HexCoord> = formations
+        .presets
+        .iter()
+        .flat_map(|preset| preset.slots.iter().map(|slot| slot.offset))
+        .collect();
+    offered_slots.sort_unstable();
+    offered_slots.dedup();
+    let slot_pixels: Vec<(HexCoord, f32, f32)> = offered_slots
+        .iter()
+        .map(|offset| {
+            (
+                *offset,
+                (offset.x() * 20 + offset.y() * 10) as f32,
+                (offset.y() * 18) as f32,
+            )
+        })
+        .collect();
+    let min_slot_x = slot_pixels
+        .iter()
+        .map(|(_, x, _)| *x)
+        .fold(f32::INFINITY, f32::min);
+    let max_slot_x = slot_pixels
+        .iter()
+        .map(|(_, x, _)| *x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_slot_y = slot_pixels
+        .iter()
+        .map(|(_, _, y)| *y)
+        .fold(f32::INFINITY, f32::min);
+    let max_slot_y = slot_pixels
+        .iter()
+        .map(|(_, _, y)| *y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    commands
+        .spawn((
+            Name::new("Party Strip"),
+            PartyStrip,
+            HudElement,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(12.0),
+                left: Val::Px(190.0),
+                right: Val::Px(190.0),
+                min_height: Val::Px(112.0),
+                padding: UiRect::all(Val::Px(8.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(5.0),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.82)),
+            DespawnOnExit(Screen::Gameplay),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Text::new("PARTY"),
+                TextFont {
+                    font: assets.display.clone().into(),
+                    ..TextFont::from_font_size(15.0)
+                },
+                TextColor(Color::srgb(0.93, 0.79, 0.46)),
+            ));
+            root.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|members| {
+                for index in 0..6 {
+                    members
+                        .spawn((
+                            Button,
+                            PartyMemberButton(index),
+                            Node {
+                                width: Val::Percent(16.0),
+                                flex_grow: 1.0,
+                                padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.13)),
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
+                        ))
+                        .with_child((
+                            Text::new(format!("{}  —", index + 1)),
+                            TextFont {
+                                font: assets.body.clone().into(),
+                                ..TextFont::from_font_size(11.0)
+                            },
+                            TextColor(Color::srgb(0.94, 0.94, 0.95)),
+                        ));
+                }
+            });
+            root.spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(5.0),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|controls| {
+                controls
+                    .spawn((
+                        Button,
+                        PartyModeButton,
+                        Node {
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.93, 0.79, 0.46, 0.2)),
+                    ))
+                    .with_child((
+                        PartyModeText,
+                        Text::new("Movement: Group"),
+                        TextFont {
+                            font: assets.body.clone().into(),
+                            ..TextFont::from_font_size(11.0)
+                        },
+                    ));
+                for preset in &formations.presets {
+                    controls
+                        .spawn((
+                            Button,
+                            PartyPresetButton(preset.name.clone()),
+                            Node {
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
+                        ))
+                        .with_child((
+                            Text::new(preset.name.clone()),
+                            TextFont {
+                                font: assets.body.clone().into(),
+                                ..TextFont::from_font_size(11.0)
+                            },
+                        ));
+                }
+                controls
+                    .spawn((
+                        Name::new("Formation mini-grid"),
+                        Node {
+                            width: Val::Px(max_slot_x - min_slot_x + 24.0),
+                            height: Val::Px(max_slot_y - min_slot_y + 24.0),
+                            position_type: PositionType::Relative,
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|grid| {
+                        for (offset, x, y) in &slot_pixels {
+                            grid.spawn((
+                                Button,
+                                PartySlotButton(*offset),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    left: Val::Px(x - min_slot_x),
+                                    top: Val::Px(y - min_slot_y),
+                                    width: Val::Px(24.0),
+                                    height: Val::Px(22.0),
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::Center,
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
+                            ))
+                            .with_child((
+                                Text::new("⬡"),
+                                TextFont {
+                                    font: assets.body.clone().into(),
+                                    ..TextFont::from_font_size(12.0)
+                                },
+                            ));
+                        }
+                    });
+            });
+        });
+}
+
+fn handle_party_strip(
+    mut commands: Commands,
+    mode: Res<State<Mode>>,
+    party: Res<Party>,
+    registry: Res<UnitRegistry>,
+    formations: Res<FormationCatalog>,
+    mut formation: ResMut<PartyFormation>,
+    member_clicks: Query<(&Interaction, &PartyMemberButton), Changed<Interaction>>,
+    mode_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyModeButton>)>,
+    preset_clicks: Query<(&Interaction, &PartyPresetButton), Changed<Interaction>>,
+    slot_clicks: Query<(&Interaction, &PartySlotButton), Changed<Interaction>>,
+    selected: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+) {
+    if *mode.get() != Mode::Exploring {
+        return;
+    }
+    for (interaction, button) in &member_clicks {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        if let Some(entity) = party
+            .members
+            .get(button.0)
+            .and_then(|unit| registry.entity_of(*unit))
+        {
+            for (old, _) in &selected {
+                if old != entity {
+                    commands.entity(old).remove::<Selected>();
+                }
+            }
+            commands.entity(entity).insert(Selected);
+        }
+    }
+    if mode_clicks
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        formation.mode = match formation.mode {
+            PartyMovementMode::Group => PartyMovementMode::Solo,
+            PartyMovementMode::Solo => PartyMovementMode::Group,
+        };
+    }
+    for (interaction, button) in &preset_clicks {
+        if *interaction == Interaction::Pressed {
+            if let Some(preset) = formations.get(&button.0) {
+                formation.select_preset(preset, &party.members);
+            }
+        }
+    }
+    let selected = selected.iter().next().map(|(_, unit)| *unit);
+    for (interaction, button) in &slot_clicks {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(member) = selected else {
+            continue;
+        };
+        let Some(preset) = formations.get(&formation.preset) else {
+            continue;
+        };
+        if preset.slots.iter().any(|slot| slot.offset == button.0) {
+            let _ = formation.assign(member, button.0);
+            formation.fill_unassigned(preset, &party.members);
+        }
+    }
+}
+
+fn update_party_strip(
+    party: Res<Party>,
+    registry: Res<UnitRegistry>,
+    formations: Res<FormationCatalog>,
+    formation: Res<PartyFormation>,
+    units: Query<(
+        &UnitId,
+        &Archetype,
+        Option<&LatticeSpec>,
+        Option<&LatticeState>,
+        Has<Downed>,
+        Has<Selected>,
+    )>,
+    mut members: Query<(&PartyMemberButton, &Children, &mut BackgroundColor)>,
+    mut slots: Query<(
+        &PartySlotButton,
+        &Children,
+        &mut Visibility,
+        &mut BackgroundColor,
+    )>,
+    mut modes: Query<&mut Text, With<PartyModeText>>,
+    mut texts: Query<&mut Text, Without<PartyModeText>>,
+) {
+    let anchor = formations
+        .get(&formation.preset)
+        .and_then(|preset| formation.anchor_member(preset));
+    for (button, children, mut color) in &mut members {
+        let Some(&member) = party.members.get(button.0) else {
+            continue;
+        };
+        let Some(entity) = registry.entity_of(member) else {
+            continue;
+        };
+        let Ok((id, archetype, spec, state, downed, selected)) = units.get(entity) else {
+            continue;
+        };
+        let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
+            let total = spec.cells().count();
+            let live = spec
+                .cells()
+                .filter(|(coord, _)| !state.is_disabled(*coord))
+                .count();
+            format!(" {live}/{total}")
+        });
+        let status = format!(
+            "{}  {} #{}{}{}{}",
+            button.0 + 1,
+            archetype.0,
+            id.0,
+            condition,
+            if downed { " DOWN" } else { "" },
+            if anchor == Some(*id) { " ◆" } else { "" }
+        );
+        if let Some(child) = children.first() {
+            if let Ok(mut text) = texts.get_mut(*child) {
+                text.0 = status;
+            }
+        }
+        color.0 = if selected {
+            Color::srgba(0.93, 0.79, 0.46, 0.25)
+        } else {
+            Color::srgba(1.0, 1.0, 1.0, 0.07)
+        };
+    }
+    for mut text in &mut modes {
+        text.0 = format!("Movement: {:?}", formation.mode);
+    }
+    let active_preset = formations.get(&formation.preset);
+    for (slot, children, mut visibility, mut color) in &mut slots {
+        let authored = active_preset.and_then(|preset| {
+            preset
+                .slots
+                .iter()
+                .find(|authored| authored.offset == slot.0)
+        });
+        *visibility = if authored.is_some() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        color.0 = if authored.is_some_and(|authored| authored.anchor) {
+            Color::srgba(0.93, 0.79, 0.46, 0.45)
+        } else {
+            Color::srgba(1.0, 1.0, 1.0, 0.1)
+        };
+        if let Some(child) = children.first() {
+            if let Ok(mut text) = texts.get_mut(*child) {
+                text.0 = if authored.is_some_and(|authored| authored.anchor) {
+                    "◆".to_owned()
+                } else {
+                    "⬡".to_owned()
+                };
+            }
+        }
+    }
+}
 
 /// Controls are otherwise undiscoverable — there is no manual and no tutorial.
 fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
