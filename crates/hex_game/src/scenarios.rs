@@ -1449,6 +1449,7 @@ mod tests {
             "Sky Islands",
             "Mountains",
             "Caves",
+            "Waterfall",
         ] {
             let scenario = library()
                 .scenarios
@@ -1496,6 +1497,7 @@ mod tests {
             let recipe_anchors: &[&str] = match scenario_name {
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
+                "Waterfall" => &["fall_overlook", "basin_overlook"],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
