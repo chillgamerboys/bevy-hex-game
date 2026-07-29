@@ -27,6 +27,8 @@ jobs:
         include:
           - name: v1-hills
             filter: procedural::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
+          - name: v2-hills
+            filter: procedural_v2::hills::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
           - name: v2-caves
             filter: procedural_v2::caves::tests::ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks
           - name: v2-caves-expanded
