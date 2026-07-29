@@ -577,8 +577,13 @@ fn compatible_patch_geometry(
 ) -> Result<(u8, CaveTopology, BTreeMap<HexCoord, i32>, WalkerSeamShape), Vec<WorldValidationIssue>>
 {
     let mut last_issues = Vec::new();
-    for offset in 0..6 {
-        let orientation = requested_orientation.saturating_add(offset) % 6;
+    let orientation_offsets: &[u8] = if patch.layout().kind == super::layout::LayoutKind::Single {
+        &[0]
+    } else {
+        &[0, 1, 2, 3, 4, 5]
+    };
+    for offset in orientation_offsets {
+        let orientation = requested_orientation.saturating_add(*offset) % 6;
         let topology = match build_topology(topology_mask, frame, orientation, settings, streams) {
             Ok(topology) => topology,
             Err(issues) => {
