@@ -130,14 +130,29 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
+fn substance_table_without_swatch(omitted: &str) -> SubstanceTable {
+    substance_table_fixture(None, Some(omitted))
+}
+
 #[expect(
     clippy::expect_used,
     reason = "invalid compile-time fixture data should fail the integration test immediately"
 )]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
+    substance_table_fixture(omitted, None)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the integration test immediately"
+)]
+fn substance_table_fixture(
+    omitted_substance: Option<&str>,
+    omitted_swatch: Option<&str>,
+) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
     let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([
+    let mut swatches = BTreeMap::from([
         (
             foam,
             PaletteSwatch::new(
@@ -157,8 +172,30 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
             )
             .expect("the fixture swatch should be valid"),
         ),
-    ]))
-    .expect("the fixture palette should be valid");
+    ]);
+    for (id, display_name, (red, green, blue)) in [
+        ("plant/trunk", "Tree Trunk", (0.28, 0.15, 0.07)),
+        ("plant/foliage-dark", "Dark Foliage", (0.12, 0.34, 0.12)),
+        ("plant/foliage-mid", "Mid Foliage", (0.18, 0.42, 0.14)),
+        ("plant/foliage-light", "Light Foliage", (0.25, 0.48, 0.16)),
+        ("plant/grass-dark", "Dark Grass Blade", (0.34, 0.52, 0.14)),
+        ("plant/grass-light", "Light Grass Blade", (0.45, 0.62, 0.18)),
+    ] {
+        if omitted_swatch == Some(id) {
+            continue;
+        }
+        swatches.insert(
+            SwatchId::new(id).expect("fixture plant swatch ids should be valid"),
+            PaletteSwatch::new(
+                display_name,
+                SrgbColor::new(red, green, blue)
+                    .expect("fixture plant swatch colors should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("fixture plant swatches should be valid"),
+        );
+    }
+    let palette = ArtPalette::new(swatches).expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
         ("air", false, false),
@@ -174,7 +211,7 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
         ("basalt", true, true),
         ("lava", false, true),
     ] {
-        if omitted == Some(name) {
+        if omitted_substance == Some(name) {
             continue;
         }
         substances.insert(
@@ -621,6 +658,33 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             "missing Forest anchor {anchor}"
         );
     }
+}
+
+#[test]
+fn v3_forest_missing_required_feature_swatch_fails_presentation_setup() {
+    let mut app = v3_forest_app();
+    app.insert_resource(substance_table_without_swatch("plant/foliage-mid"));
+    enter_gameplay(&mut app);
+
+    let failure = app
+        .world()
+        .get_resource::<GameplaySetupFailure>()
+        .expect("missing Forest presentation colour should publish a setup failure");
+    assert!(
+        failure.reason.contains("plant/foliage-mid"),
+        "unexpected setup failure: {}",
+        failure.reason
+    );
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert_eq!(tile_count(&mut app), 0);
+    assert_eq!(
+        app.world_mut()
+            .query_filtered::<Entity, With<HexGrid>>()
+            .iter(app.world())
+            .count(),
+        0,
+        "failed Forest presentation spawned a partial grid"
+    );
 }
 
 #[test]
