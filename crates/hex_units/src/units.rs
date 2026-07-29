@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use hex_anim::Transformation;
 use hex_assets::{
-    to_color, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
+    ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
     GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
 };
 use hex_lattice::LatticeState;
@@ -36,6 +36,9 @@ use hex_core::{
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
 use crate::pathing::reached_step_index;
 use crate::selection::Selected;
+
+const PLAYER_SWATCH_ID: &str = "unit/player";
+const HOSTILE_SWATCH_ID: &str = "unit/hostile";
 
 /// Tiles as units see them.
 ///
@@ -607,6 +610,7 @@ fn spawn_units(
     mut materials: ResMut<Assets<StandardMaterial>>,
     tiles: TileQuery,
     table: Res<SubstanceTable>,
+    palette: Res<ArtPalette>,
     settings: Res<PlayerSettings>,
     encounter: Res<Encounter>,
     // Absent until the element and spell catalogs resolve, which the loading gate now
@@ -638,10 +642,18 @@ fn spawn_units(
         }
     };
 
-    let player_material = materials.add(StandardMaterial::from(to_color(settings.color)));
-    // Hostile pieces are a colder colour, which is the only way to tell them apart
-    // until they have their own meshes.
-    let enemy_material = materials.add(StandardMaterial::from(Color::srgb(0.25, 0.45, 0.9)));
+    // Resolve the complete authored presentation contract before allocating materials
+    // or actors. A missing second swatch must not leave a player-only session behind.
+    let (player_color, hostile_color) = match unit_colors(&palette) {
+        Ok(colors) => colors,
+        Err(reason) => {
+            error!("{reason}");
+            commands.insert_resource(GameplaySetupFailure::new(reason));
+            return;
+        }
+    };
+    let player_material = materials.add(StandardMaterial::from(player_color));
+    let enemy_material = materials.add(StandardMaterial::from(hostile_color));
 
     // Declaration order, which is what makes the dealt ids a function of the encounter
     // rather than of this run.
@@ -692,6 +704,16 @@ fn lattice_for<'a>(
         );
     }
     found
+}
+
+fn unit_colors(palette: &ArtPalette) -> Result<(Color, Color), String> {
+    let required = |id| {
+        palette
+            .get_str(id)
+            .map(|swatch| swatch.color().to_bevy_color())
+            .ok_or_else(|| format!("art/palette.ron is missing required unit swatch \"{id}\"."))
+    };
+    Ok((required(PLAYER_SWATCH_ID)?, required(HOSTILE_SWATCH_ID)?))
 }
 
 /// The identity bookkeeping a spawn threads through: deal an id, record it,

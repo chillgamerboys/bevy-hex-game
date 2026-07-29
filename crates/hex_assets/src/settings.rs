@@ -1014,8 +1014,6 @@ pub struct PlayerSettings {
     pub scale: f32,
     /// Movement speed in world units per second.
     pub speed: f32,
-    /// Colour of the player piece.
-    pub color: Rgb,
 }
 
 /// `assets/config/display.ron` — window and presentation.
@@ -1361,17 +1359,19 @@ mod tests {
             .expect("shipped player settings should parse");
         assert!(player.scale.is_finite());
 
-        let stale = PLAYER_RON.replacen("speed:", "levels_tall: 2,\n    speed:", 1);
-        assert_ne!(
-            stale, PLAYER_RON,
-            "the player fixture no longer contains the speed field"
-        );
-        let error = ron::from_str::<PlayerSettings>(&stale)
-            .expect_err("removed player fields must not be silently ignored");
-        assert!(
-            error.to_string().contains("levels_tall"),
-            "stale player setting returned an unrelated error: {error}"
-        );
+        for (field, value) in [("levels_tall", "2"), ("color", "(1.0, 0.2, 0.2)")] {
+            let stale = PLAYER_RON.replacen("speed:", &format!("{field}: {value},\n    speed:"), 1);
+            assert_ne!(
+                stale, PLAYER_RON,
+                "the player fixture no longer contains the speed field"
+            );
+            let error = ron::from_str::<PlayerSettings>(&stale)
+                .expect_err("removed player fields must not be silently ignored");
+            assert!(
+                error.to_string().contains(field),
+                "stale player setting returned an unrelated error: {error}"
+            );
+        }
     }
 
     #[test]

@@ -12,7 +12,7 @@ hex_core = { workspace = true }
 # `elements.ron`/`spells.ron` and turns authored lattices into `LatticeSpec`, so the
 # engine reads content without knowing what a file is.
 hex_lattice = { workspace = true }
-ron = "0.12.2"
+ron = { workspace = true }
 serde = { workspace = true }
 thiserror = "2.0.19"
 

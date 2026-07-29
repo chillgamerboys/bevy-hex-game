@@ -8,7 +8,7 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
+    ArtPalette, ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
     SubstanceFile, SubstanceTable,
 };
 use hex_core::Screen;
@@ -53,14 +53,17 @@ fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
 /// of which crates define what — `MapSettings` lives in `hex_map`, and naming it here
 /// would put a dependency on the map into the binary's screen code.
 ///
-/// The registry tracks the raw `SubstanceFile`; `SubstanceTable` is built from it by
-/// a separate `Update` system. This check runs in `PostUpdate`, after deferred
-/// resource insertions, and waits until the file is unchanged from its point of view.
-/// That prevents an existing table from satisfying the check during a hot reload.
+/// The registry tracks the raw `SubstanceFile` and `ArtPalette`; `SubstanceTable` is
+/// resolved from both by a separate `Update` system. This check runs in `PostUpdate`,
+/// after deferred resource insertions, and waits until both sources are unchanged and
+/// match the derived table. That prevents an existing table from satisfying the check
+/// during either kind of hot reload, while a rejected pair can settle back to the
+/// resolver's last accepted source snapshot.
 fn enter_gameplay_when_ready(
     assets: Res<GameAssets>,
     asset_server: Res<AssetServer>,
     settings: Res<SettingsRegistry>,
+    palette: Option<Res<ArtPalette>>,
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
@@ -72,8 +75,11 @@ fn enter_gameplay_when_ready(
 ) {
     let substances_are_current = substance_file
         .as_ref()
-        .is_some_and(|file| !file.is_changed())
-        && substances.is_some();
+        .zip(palette.as_ref())
+        .zip(substances.as_ref())
+        .is_some_and(|((file, palette), table)| {
+            !file.is_changed() && !palette.is_changed() && table.matches_sources(file, palette)
+        });
 
     let scenario_is_valid = scenario_contract
         .as_deref()
@@ -108,25 +114,42 @@ fn enter_gameplay_when_ready(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use bevy::asset::AssetPlugin;
     use bevy::platform::collections::HashMap;
     use bevy::state::app::StatesPlugin;
-    use hex_assets::Substance;
+    use hex_assets::{PaletteSwatch, SrgbColor, Substance, SwatchId};
 
     use super::*;
 
+    fn swatch_id(name: &str) -> SwatchId {
+        SwatchId::new(format!("test/{name}")).expect("the test swatch id should be valid")
+    }
+
+    fn test_palette(stone_red: f32) -> ArtPalette {
+        let swatches = [("stone", stone_red), ("clay", 0.6)]
+            .into_iter()
+            .map(|(name, red)| {
+                let swatch = PaletteSwatch::new(
+                    format!("Test {name}"),
+                    SrgbColor::new(red, 0.5, 0.5).expect("the test color should be valid"),
+                    BTreeSet::from(["test".to_owned()]),
+                )
+                .expect("the test swatch should be valid");
+                (swatch_id(name), swatch)
+            })
+            .collect::<BTreeMap<_, _>>();
+        ArtPalette::new(swatches).expect("the test palette should be valid")
+    }
+
     fn substance_file(name: &str) -> SubstanceFile {
         let mut substances = HashMap::default();
-        for (entry, solid, diggable) in [("air", false, false), (name, true, true)] {
-            substances.insert(
-                entry.to_owned(),
-                Substance {
-                    color: (0.5, 0.5, 0.5),
-                    solid,
-                    diggable,
-                },
-            );
-        }
+        substances.insert("air".to_owned(), Substance::invisible(false, false));
+        substances.insert(
+            name.to_owned(),
+            Substance::from_swatch(swatch_id(name), true, true),
+        );
         SubstanceFile { substances }
     }
 
@@ -134,12 +157,84 @@ mod tests {
         commands.insert_resource(substance_file("clay"));
     }
 
+    fn queue_palette_replacement(mut commands: Commands) {
+        commands.insert_resource(test_palette(0.8));
+    }
+
+    fn app_with_resolved_substances(file: SubstanceFile, palette: ArtPalette) -> App {
+        let table = SubstanceTable::from_file(&file, &palette)
+            .expect("the initial test substance sources should resolve");
+        let spells: SpellFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/spells.ron"
+        )))
+        .expect("the shipped spell fixture should parse");
+        let lattice_file: LatticeFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/lattices.ron"
+        )))
+        .expect("the shipped lattice fixture should parse");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                file_path: std::env::temp_dir()
+                    .join("hex-game-loading-test-no-assets")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..default()
+            },
+            StatesPlugin,
+        ));
+        app.insert_state(Screen::Loading);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
+        app.insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+        });
+        app.add_plugins(hex_assets::substances::plugin);
+        // This test installs the cross-file sources directly, so the fixed-file
+        // loader registered by the substances plugin has nothing to wait for.
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(ScenarioContractStatus::Invalid);
+        app.insert_resource(file);
+        app.insert_resource(palette);
+        app.insert_resource(table);
+        // These tests isolate substance/palette recovery. Satisfy the independent
+        // spell/lattice currency gate with stable fixtures so it cannot mask that seam.
+        app.insert_resource(spells);
+        app.insert_resource(lattice_file);
+        app.insert_resource(ContentIndex::default());
+        app.insert_resource(LatticeLibrary::default());
+        plugin(&mut app);
+        app
+    }
+
+    fn assert_loading_accepts_restored_sources(app: &mut App) {
+        app.world_mut()
+            .insert_resource(ScenarioContractStatus::Ready);
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<NextState<Screen>>(),
+                &NextState::Pending(Screen::Gameplay)
+            ),
+            "Loading should proceed after the accepted source pair has settled"
+        );
+    }
+
     /// A settings replacement queued in `Update` must be visible before readiness is
     /// evaluated, or gameplay can start with the previous derived table.
     #[test]
     fn hot_reload_waits_for_the_substance_table_to_catch_up() {
         let original = substance_file("stone");
-        let original_table = SubstanceTable::from_file(&original);
+        let palette = test_palette(0.5);
+        let original_table = SubstanceTable::from_file(&original, &palette)
+            .expect("the original test substances should resolve");
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
@@ -156,6 +251,7 @@ mod tests {
         });
         app.insert_resource(ScenarioContractStatus::Ready);
         app.insert_resource(original);
+        app.insert_resource(palette);
         plugin(&mut app);
 
         // Prime this system's change detection without a table, so it cannot enter
@@ -186,5 +282,111 @@ mod tests {
             matches!(world.resource::<NextState<Screen>>(), &NextState::Unchanged),
             "gameplay must wait for the derived table to catch up"
         );
+    }
+
+    /// A palette-only hot reload also invalidates the derived substance table.
+    #[test]
+    fn hot_reload_waits_for_palette_colors_to_rebuild_the_substance_table() {
+        let file = substance_file("stone");
+        let palette = test_palette(0.5);
+        let original_table = SubstanceTable::from_file(&file, &palette)
+            .expect("the original test substances should resolve");
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
+        app.insert_state(Screen::Loading);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
+        app.init_resource::<SettingsRegistry>();
+        app.insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+        });
+        app.insert_resource(ScenarioContractStatus::Ready);
+        app.insert_resource(file);
+        app.insert_resource(palette);
+        plugin(&mut app);
+
+        app.update();
+        assert!(matches!(
+            app.world().resource::<NextState<Screen>>(),
+            &NextState::Unchanged
+        ));
+
+        app.insert_resource(original_table);
+        app.add_systems(Update, queue_palette_replacement);
+        app.update();
+
+        let world = app.world();
+        let palette = world.resource::<ArtPalette>();
+        let changed_red = palette
+            .get_str("test/stone")
+            .expect("the replacement palette should contain stone")
+            .color()
+            .red();
+        assert_eq!(changed_red.to_bits(), 0.8_f32.to_bits());
+        assert!(
+            !world
+                .resource::<SubstanceTable>()
+                .matches_sources(world.resource::<SubstanceFile>(), palette),
+            "the old table should not match the replacement palette"
+        );
+        assert!(
+            matches!(world.resource::<NextState<Screen>>(), &NextState::Unchanged),
+            "gameplay must wait for palette colors to reach the derived table"
+        );
+    }
+
+    #[test]
+    fn loading_recovers_after_an_invalid_substance_reference_hot_reload() {
+        let file = substance_file("stone");
+        let palette = test_palette(0.5);
+        let mut app = app_with_resolved_substances(file, palette);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("missing"));
+        app.update();
+
+        let world = app.world();
+        assert!(
+            world.resource::<SubstanceTable>().matches_sources(
+                world.resource::<SubstanceFile>(),
+                world.resource::<ArtPalette>()
+            ),
+            "the rejected substance source should be restored before Loading retries"
+        );
+        assert_loading_accepts_restored_sources(&mut app);
+    }
+
+    #[test]
+    fn loading_recovers_after_a_palette_only_cross_file_failure() {
+        let file = substance_file("stone");
+        let palette = test_palette(0.5);
+        let mut app = app_with_resolved_substances(file, palette);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .remove(&swatch_id("stone"))
+            .expect("the test palette should permit removing stone");
+        app.update();
+
+        let world = app.world();
+        assert!(
+            world.resource::<SubstanceTable>().matches_sources(
+                world.resource::<SubstanceFile>(),
+                world.resource::<ArtPalette>()
+            ),
+            "the rejected palette should be restored before Loading retries"
+        );
+        assert_loading_accepts_restored_sources(&mut app);
     }
 }

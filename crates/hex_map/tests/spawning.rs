@@ -27,10 +27,12 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hex_assets::GameAssets;
-use hex_assets::{Substance, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+};
 use hex_core::{
     BiomeRegionId, BiomeRegions, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
@@ -126,7 +128,35 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the integration test immediately"
+)]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
+    let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
+    let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
+    let palette = ArtPalette::new(BTreeMap::from([
+        (
+            foam,
+            PaletteSwatch::new(
+                "Water Foam",
+                SrgbColor::new(0.896_243_8, 0.959_346_6, 0.991_156_4)
+                    .expect("the fixture foam color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture foam swatch should be valid"),
+        ),
+        (
+            swatch.clone(),
+            PaletteSwatch::new(
+                "Test Neutral",
+                SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture swatch should be valid"),
+        ),
+    ]))
+    .expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
         ("air", false, false),
@@ -147,14 +177,15 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
         }
         substances.insert(
             name.to_owned(),
-            Substance {
-                color: (0.5, 0.5, 0.5),
-                solid,
-                diggable,
+            if name == "air" {
+                Substance::invisible(solid, diggable)
+            } else {
+                Substance::from_swatch(swatch.clone(), solid, diggable)
             },
         );
     }
-    SubstanceTable::from_file(&SubstanceFile { substances })
+    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+        .expect("the fixture substances should resolve through the fixture palette")
 }
 
 /// Runs the app until it has entered gameplay and the world has settled.

@@ -19,7 +19,9 @@ world is addressed.
 Zero means it is buried inside a column.
 
 **A substance** — `SubstanceId` — is what a voxel is made of: stone, dirt, grass, air.
-The list lives in `assets/config/substances.ron`.
+The list and gameplay properties live in `assets/config/substances.ron`; every
+rendered substance names one exact colour in `assets/art/palette.ron`. Air is the
+only substance without a swatch because it is never drawn.
 
 > **The vertical axis is always called `level`.** Never `z`. Cube coordinates already
 > use `x`, `y` and `z`, and all three are horizontal — `HexCoord::z()` returns

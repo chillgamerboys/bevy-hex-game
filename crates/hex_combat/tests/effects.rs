@@ -695,7 +695,6 @@ fn successful_direct_spell_damage_reuses_the_target_recoil() {
     app.insert_resource(hex_assets::PlayerSettings {
         scale: 0.25,
         speed: 5.0,
-        color: (1.0, 0.2, 0.2),
     });
     let fight = two_ember_casters(&mut app);
 

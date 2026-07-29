@@ -829,6 +829,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7466095822999850fc52074c0b65e9f8b42da100bf7bbd10e5dc87415c6b3401"
 dependencies = [
  "arboard",
+ "bevy_a11y",
  "bevy_app",
  "bevy_asset",
  "bevy_camera",
@@ -3272,8 +3273,10 @@ dependencies = [
  "bevy_egui",
  "hex_assets",
  "hex_core",
+ "image",
  "ron",
  "serde",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3327,6 +3330,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_lattice",
+ "ron",
  "serde",
  "serde_json",
 ]

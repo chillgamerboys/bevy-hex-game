@@ -8,7 +8,7 @@ When invoked, follow these steps. A **release** stamps an immutable
 per-PR action — individual feature merges do not cut versions (that's
 why `/merge-pr` does not tag). The version is single-sourced:
 `[workspace.package] version` in the root `Cargo.toml` is the source
-of truth, all nine crates inherit it via `version.workspace = true`,
+of truth, all eleven crates inherit it via `version.workspace = true`,
 and the tag must agree with it.
 
 ## Invocation
@@ -100,10 +100,10 @@ If `--dry-run`, print the Step-3 changelog body too, then STOP.
    version = "<NEXT_VER>"
    ```
 
-   **One edit point.** All nine crates inherit with
+   **One edit point.** All eleven crates inherit with
    `version.workspace = true` — never edit a per-crate `Cargo.toml`.
 
-2. **Lockfile** — bumping the workspace version rewrites the nine
+2. **Lockfile** — bumping the workspace version rewrites the eleven
    crate entries in `Cargo.lock`. Refresh and commit it:
 
    ```bash

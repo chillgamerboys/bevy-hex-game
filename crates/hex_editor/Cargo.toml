@@ -8,11 +8,13 @@ description = "Standalone authoring tool for palette-backed hex-voxel objects."
 [dependencies]
 atomicwrites = { workspace = true }
 bevy = { workspace = true }
-bevy_egui = { workspace = true }
+bevy_egui = { workspace = true, features = ["accesskit", "manage_clipboard"] }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
+image = { workspace = true }
 ron = { workspace = true }
 serde = { workspace = true }
+xxhash-rust = { workspace = true }
 
 [lints]
 workspace = true

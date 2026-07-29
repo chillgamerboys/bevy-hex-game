@@ -103,9 +103,14 @@ The standalone **Asset Workshop** is available through `cargo editor`. It loads 
 canonical palette and voxel-style catalogs, starts with an unsaved calibration object,
 and provides palette/style editing plus hex-voxel object authoring with semantic
 parts, masks, level slicing, deterministic preview rigs, camera controls, grouped
-undo/redo, and explicit validated saves. Its RON schemas and fingerprints live in
-`hex_assets`; runtime object rendering, recovery drafts, and deterministic review
-exports have not landed yet.
+undo/redo, explicit validated saves, external-change guards, and untracked crash
+recovery. A clean saved object can export a deterministic ten-view review pack,
+contact sheet, and semantic report under `.context/asset-workshop/`. Its RON schemas
+and fingerprints live in `hex_assets`. Terrain substances, liquids, construction
+metal, and unit presentation now resolve exact palette swatches at runtime; temporary
+Forest vegetation remains on its existing feature-renderer literals until that branch
+is reconciled. Runtime object rendering, Forest object integration, and procedural
+plant generation have not landed yet.
 
 ## What is provisional
 

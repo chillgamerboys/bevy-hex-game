@@ -4,15 +4,16 @@
 // available to the game, but terrain generation must select it before it appears
 // in a generated world.
 //
-// `air` is special and must always be present: it means empty space, and the game
-// checks for it constantly. The terrain presets select the other entries by name;
-// changing their properties is safe, but renaming them requires updating the
-// generation code.
+// `air` is special: id 0 always means empty space. The table synthesizes the same
+// non-solid, non-diggable sentinel if this explicit entry is omitted, but keeping it
+// here makes the authored contract visible. The terrain presets select the other
+// entries by name; changing their properties is safe, but renaming them requires
+// updating the generation code.
 (
     substances: {
         "air": (
-            // Never drawn. The colour is here only so the list has one shape.
-            color: (0.0, 0.0, 0.0),
+            // Never drawn, so air is intentionally absent from the art palette.
+            swatch: None,
             // Nothing stands on air.
             solid: false,
             // There is nothing to dig out of it.
@@ -20,25 +21,25 @@
         ),
 
         "grass": (
-            color: (0.35, 0.62, 0.30),
+            swatch: Some("terrain/grass"),
             solid: true,
             diggable: true,
         ),
 
         "dirt": (
-            color: (0.45, 0.33, 0.22),
+            swatch: Some("terrain/dirt"),
             solid: true,
             diggable: true,
         ),
 
         "stone": (
-            color: (0.55, 0.55, 0.58),
+            swatch: Some("terrain/stone"),
             solid: true,
             diggable: true,
         ),
 
         "gravel": (
-            color: (0.42, 0.40, 0.36),
+            swatch: Some("terrain/gravel"),
             solid: true,
             diggable: true,
         ),
@@ -46,7 +47,7 @@
         // Rendered as a voxel but excluded from movement footing. It remains
         // clearable through the same terrain-edit rule as dirt and stone.
         "water": (
-            color: (0.08, 0.32, 0.65),
+            swatch: Some("liquid/water"),
             solid: false,
             diggable: true,
         ),
@@ -54,7 +55,7 @@
         // Durability is not modelled yet, so metal is currently just a solid,
         // diggable bridge material.
         "metal": (
-            color: (0.30, 0.34, 0.40),
+            swatch: Some("structure/metal"),
             solid: true,
             diggable: true,
         ),
@@ -62,19 +63,19 @@
         // Procedural-environment materials. Their behaviour is intentionally simple
         // until temperature, slipping, and hazards exist.
         "snow": (
-            color: (0.82, 0.88, 0.92),
+            swatch: Some("terrain/snow"),
             solid: true,
             diggable: true,
         ),
 
         "ice": (
-            color: (0.42, 0.72, 0.88),
+            swatch: Some("terrain/ice"),
             solid: true,
             diggable: true,
         ),
 
         "basalt": (
-            color: (0.20, 0.22, 0.24),
+            swatch: Some("terrain/basalt"),
             solid: true,
             diggable: true,
         ),
@@ -82,7 +83,7 @@
         // Lava is an opaque, non-solid voxel for now. Damage and emissive rendering
         // need gameplay and material contracts that do not exist yet.
         "lava": (
-            color: (0.90, 0.20, 0.04),
+            swatch: Some("liquid/lava"),
             solid: false,
             diggable: true,
         ),
@@ -90,7 +91,7 @@
         // The floor of the world. Not diggable, so nothing can tunnel out the
         // bottom of the map.
         "bedrock": (
-            color: (0.25, 0.24, 0.28),
+            swatch: Some("terrain/bedrock"),
             solid: true,
             diggable: false,
         ),

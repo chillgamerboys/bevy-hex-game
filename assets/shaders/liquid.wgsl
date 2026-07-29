@@ -12,6 +12,8 @@ struct LiquidMaterialParams {
     flow_phase_scale: vec4<f32>,
     // x: highlight, y: foam, z: roughness reduction, w: cross-wave frequency.
     modulation: vec4<f32>,
+    // Canonical palette-backed water-foam colour in linear RGB.
+    foam_color: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100)
@@ -66,7 +68,7 @@ fn fragment(
     ) * foam_strength;
     liquid_color = mix(
         liquid_color,
-        vec3<f32>(0.78, 0.91, 0.98),
+        liquid.foam_color.rgb,
         clamp(foam_mask, 0.0, 0.72),
     );
 

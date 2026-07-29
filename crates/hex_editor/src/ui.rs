@@ -16,14 +16,17 @@ use hex_assets::{
 };
 
 use crate::model::{EditorModel, EditorTool, PreviewRig, WorkshopMode};
-use crate::project::AssetProject;
-use crate::viewport::ViewportInputEnabled;
+use crate::project::{AssetProject, ExternalAssetChange};
+use crate::viewport::{
+    HoveredFaceTarget, ViewportFaceTarget, ViewportInputEnabled, ViewportPickSource,
+};
 
 const LEFT_PANEL_WIDTH: f32 = 258.0;
 const RIGHT_PANEL_WIDTH: f32 = 310.0;
 const STATUS_HEIGHT: f32 = 28.0;
 const TOOLBAR_HEIGHT: f32 = 42.0;
 const SEARCH_HEIGHT: f32 = 28.0;
+const STATUS_SUMMARY_ID: &str = "workshop_status_summary";
 
 const PANEL_FILL: egui::Color32 = egui::Color32::from_rgb(31, 34, 38);
 const TOOLBAR_FILL: egui::Color32 = egui::Color32::from_rgb(25, 28, 31);
@@ -144,6 +147,26 @@ pub struct WorkshopUiSnapshot {
     pub undo_label: Option<String>,
     /// Label of the next globally redoable edit.
     pub redo_label: Option<String>,
+    /// Persistence state of the open object document.
+    pub document_state: WorkshopDocumentState,
+    /// Tracked files changed by another process since load.
+    pub external_changes: Vec<ExternalAssetChange>,
+    /// Startup recovery decision that must be resolved before authoring continues.
+    pub recovery_prompt: Option<RecoveryPrompt>,
+    /// Whether restored work was based on an older tracked art revision.
+    pub recovery_conflict: bool,
+    /// Whether recovered catalogs were safely rebased while object rescue remains.
+    pub recovery_catalogs_reconciled: bool,
+    /// Whether any tracked replacement is currently blocked.
+    pub tracked_writes_blocked: bool,
+    /// Whether the open object draft currently passes save validation.
+    pub object_save_ready: bool,
+    /// Whether the current document satisfies every one-click review precondition.
+    pub review_ready: bool,
+    /// Whether the deterministic renderer is currently producing a review pack.
+    pub review_in_progress: bool,
+    /// Whether the native close button requested a dirty-document decision.
+    pub close_confirmation: bool,
     /// Open object document.
     pub editor: Option<ObjectEditorSnapshot>,
     /// Most recent operation status.
@@ -169,6 +192,14 @@ impl WorkshopUiSnapshot {
         editor: &EditorModel,
         undo_label: Option<&str>,
         redo_label: Option<&str>,
+        document_state: WorkshopDocumentState,
+        external_changes: &[ExternalAssetChange],
+        recovery_prompt: Option<RecoveryPrompt>,
+        recovery_conflict: bool,
+        recovery_catalogs_reconciled: bool,
+        review_ready: bool,
+        review_in_progress: bool,
+        close_confirmation: bool,
         status: Option<WorkshopStatus>,
     ) {
         self.palette = Some(palette_draft.clone());
@@ -180,6 +211,16 @@ impl WorkshopUiSnapshot {
         self.styles_dirty = style_draft != project.styles();
         self.undo_label = undo_label.map(str::to_owned);
         self.redo_label = redo_label.map(str::to_owned);
+        self.document_state = document_state;
+        self.external_changes = external_changes.to_vec();
+        self.recovery_prompt = recovery_prompt;
+        self.recovery_conflict = recovery_conflict;
+        self.recovery_catalogs_reconciled = recovery_catalogs_reconciled;
+        self.tracked_writes_blocked = recovery_conflict || !external_changes.is_empty();
+        self.object_save_ready = editor.blueprint_for_save(style_draft).is_ok();
+        self.review_ready = review_ready;
+        self.review_in_progress = review_in_progress;
+        self.close_confirmation = close_confirmation;
         self.editor = Some(ObjectEditorSnapshot::from_model(editor));
         self.status = status;
     }
@@ -192,6 +233,16 @@ impl WorkshopUiSnapshot {
         self.styles_dirty = false;
         self.undo_label = None;
         self.redo_label = None;
+        self.document_state = WorkshopDocumentState::Calibration;
+        self.external_changes.clear();
+        self.recovery_prompt = None;
+        self.recovery_conflict = false;
+        self.recovery_catalogs_reconciled = false;
+        self.tracked_writes_blocked = true;
+        self.object_save_ready = false;
+        self.review_ready = false;
+        self.review_in_progress = false;
+        self.close_confirmation = false;
         self.objects.clear();
         self.editor = None;
         self.status = Some(WorkshopStatus {
@@ -199,6 +250,37 @@ impl WorkshopUiSnapshot {
             message: message.into(),
         });
     }
+}
+
+/// Whether the current object is only calibration data, new, or already tracked.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum WorkshopDocumentState {
+    /// Built-in unsaved calibration content.
+    #[default]
+    Calibration,
+    /// New authored content without a tracked identity.
+    Unsaved,
+    /// Existing tracked object eligible for ordinary Save and Delete.
+    Saved,
+}
+
+/// Recovery condition presented before the editor may overwrite its recovery file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecoveryPrompt {
+    /// A valid previous-session draft is available.
+    Available {
+        /// Unix timestamp in milliseconds from the last atomic recovery write.
+        written_unix_ms: u64,
+        /// Human-readable document identity.
+        document: String,
+        /// Whether tracked art changed after the draft's baseline.
+        baseline_conflict: bool,
+    },
+    /// The recovery file could not be decoded or validated and remains untouched.
+    Invalid {
+        /// Actionable decode, schema, validation, or I/O failure.
+        message: String,
+    },
 }
 
 /// Commands emitted by the editor UI and executed by the application session.
@@ -214,6 +296,28 @@ pub enum WorkshopUiAction {
     SaveObject,
     /// Validate and explicitly save the palette and voxel-style drafts.
     SaveCatalogs,
+    /// Discard local drafts and reload the complete tracked art graph.
+    ReloadProject,
+    /// Render and atomically publish the deterministic review pack.
+    ExportReview,
+    /// Restore the validated startup recovery draft.
+    RestoreRecovery,
+    /// Explicitly delete the pending startup recovery file.
+    DiscardRecovery,
+    /// Three-way merge recovered catalog drafts onto the current tracked catalogs.
+    ReconcileRecoveryCatalogs,
+    /// Reconcile catalogs, resolving same-id conflicts with the recovered value.
+    ReconcileRecoveryCatalogsPreferRecovered,
+    /// Reconcile catalogs, resolving same-id conflicts with the tracked value.
+    ReconcileRecoveryCatalogsPreferTracked,
+    /// Validate, save every dirty tracked document, and close the Workshop.
+    SaveAllAndClose,
+    /// Keep the crash-recovery draft and close without writing tracked files.
+    KeepRecoveryAndClose,
+    /// Explicitly discard local changes and their recovery file, then close.
+    DiscardAndClose,
+    /// Cancel a native close request.
+    CancelClose,
     /// Save the current draft as a new object.
     SaveObjectAs {
         /// Immutable destination id.
@@ -374,6 +478,7 @@ pub struct WorkshopUiState {
     style_form: StyleForm,
     object_dialog: Option<ObjectDialog>,
     pending_delete: Option<DeleteTarget>,
+    pending_reload: bool,
     show_blockers: bool,
     show_canopy: bool,
     show_semantics: bool,
@@ -400,6 +505,7 @@ impl Default for WorkshopUiState {
             style_form: StyleForm::new(),
             object_dialog: None,
             pending_delete: None,
+            pending_reload: false,
             show_blockers: false,
             show_canopy: false,
             show_semantics: false,
@@ -615,6 +721,7 @@ fn draw_workshop_ui(
     mut state: ResMut<WorkshopUiState>,
     mut suppression: ResMut<ViewportInputSuppression>,
     viewport_input: Option<ResMut<ViewportInputEnabled>>,
+    hovered: Option<Res<HoveredFaceTarget>>,
     mut messages: MessageWriter<WorkshopUiAction>,
 ) -> Result {
     let context = contexts.ctx_mut()?;
@@ -632,7 +739,12 @@ fn draw_workshop_ui(
             .max_rect(context.viewport_rect()),
     );
     draw_top_toolbar(&mut root_ui, &snapshot, &mut state, &mut actions);
-    draw_status_bar(&mut root_ui, &snapshot, &mut actions);
+    draw_status_bar(
+        &mut root_ui,
+        &snapshot,
+        hovered.as_ref().and_then(|hovered| hovered.0),
+        &mut actions,
+    );
     draw_left_browser(&mut root_ui, &snapshot, &mut state, &mut actions);
     draw_right_inspector(&mut root_ui, &snapshot, &mut state, &mut actions);
 
@@ -643,18 +755,28 @@ fn draw_workshop_ui(
         });
     draw_object_dialog(context, &snapshot, &mut state, &mut actions);
     draw_delete_confirmation(context, &mut state, &mut actions);
+    draw_reload_confirmation(context, &snapshot, &mut state, &mut actions);
+    draw_recovery_prompt(context, &snapshot, &mut actions);
+    draw_close_confirmation(context, &snapshot, &mut actions);
+    draw_review_progress(context, &snapshot);
+    collect_keyboard_shortcuts(context, &snapshot, &mut state, &mut actions);
 
     suppression.viewport_rect = central.inner.rect;
     let pointer_position = context.input(|input| input.pointer.hover_pos());
-    let overlay_open =
-        state.object_dialog.is_some() || state.pending_delete.is_some() || context.any_popup_open();
+    let overlay_open = state.object_dialog.is_some()
+        || state.pending_delete.is_some()
+        || state.pending_reload
+        || snapshot.recovery_prompt.is_some()
+        || snapshot.close_confirmation
+        || snapshot.review_in_progress
+        || context.any_popup_open();
     suppression.pointer = viewport_pointer_is_suppressed(
         suppression.viewport_rect,
         pointer_position,
         context.egui_is_using_pointer(),
         overlay_open,
     );
-    suppression.keyboard = context.egui_wants_keyboard_input();
+    suppression.keyboard = context.egui_wants_keyboard_input() || overlay_open;
     if let Some(mut viewport_input) = viewport_input {
         viewport_input.0 = !suppression.pointer;
     }
@@ -674,6 +796,117 @@ fn viewport_pointer_is_suppressed(
     overlay_open
         || egui_is_using_pointer
         || pointer_position.is_none_or(|position| !viewport_rect.contains(position))
+}
+
+fn collect_keyboard_shortcuts(
+    context: &egui::Context,
+    snapshot: &WorkshopUiSnapshot,
+    state: &mut WorkshopUiState,
+    actions: &mut Vec<WorkshopUiAction>,
+) {
+    if context.egui_wants_keyboard_input()
+        || state.object_dialog.is_some()
+        || state.pending_delete.is_some()
+        || state.pending_reload
+        || snapshot.recovery_prompt.is_some()
+        || snapshot.close_confirmation
+        || snapshot.review_in_progress
+    {
+        return;
+    }
+    context.input(|input| {
+        let command = input.modifiers.command;
+        if command && input.key_pressed(egui::Key::Z) {
+            actions.push(if input.modifiers.shift {
+                WorkshopUiAction::Redo
+            } else {
+                WorkshopUiAction::Undo
+            });
+        } else if input.modifiers.ctrl && input.key_pressed(egui::Key::Y) {
+            actions.push(WorkshopUiAction::Redo);
+        }
+
+        if command && input.key_pressed(egui::Key::S) {
+            if input.modifiers.shift && snapshot.mode == Some(WorkshopMode::Objects) {
+                open_save_as_dialog(snapshot, state);
+            } else {
+                match snapshot.mode {
+                    Some(WorkshopMode::VoxelStyles)
+                        if snapshot.palette.is_some() && snapshot.styles.is_some() =>
+                    {
+                        actions.push(WorkshopUiAction::SaveCatalogs);
+                    }
+                    Some(WorkshopMode::Objects)
+                        if snapshot.document_state == WorkshopDocumentState::Saved =>
+                    {
+                        actions.push(WorkshopUiAction::SaveObject);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if snapshot.mode != Some(WorkshopMode::Objects) {
+            if input.key_pressed(egui::Key::F) {
+                actions.push(WorkshopUiAction::FrameCamera);
+            }
+            return;
+        }
+        if command && input.key_pressed(egui::Key::C) {
+            actions.push(WorkshopUiAction::CopySelection);
+        }
+        if command && input.key_pressed(egui::Key::V) {
+            actions.push(WorkshopUiAction::PasteSelection);
+        }
+        if input.key_pressed(egui::Key::Delete) || input.key_pressed(egui::Key::Backspace) {
+            actions.push(WorkshopUiAction::DeleteSelection);
+        }
+        if input.key_pressed(egui::Key::F) {
+            actions.push(WorkshopUiAction::FrameCamera);
+        }
+        if input.modifiers.alt && input.key_pressed(egui::Key::ArrowUp) {
+            if let Some(editor) = &snapshot.editor {
+                actions.push(WorkshopUiAction::SetActiveLevel(
+                    editor.active_level.saturating_add(1),
+                ));
+            }
+        }
+        if input.modifiers.alt && input.key_pressed(egui::Key::ArrowDown) {
+            if let Some(editor) = &snapshot.editor {
+                actions.push(WorkshopUiAction::SetActiveLevel(
+                    editor.active_level.saturating_sub(1),
+                ));
+            }
+        }
+        if command || input.modifiers.alt {
+            return;
+        }
+        for (key, tool) in [
+            (egui::Key::P, EditorTool::Place),
+            (egui::Key::E, EditorTool::Erase),
+            (egui::Key::R, EditorTool::Repaint),
+            (egui::Key::I, EditorTool::Eyedropper),
+            (egui::Key::V, EditorTool::Select),
+        ] {
+            if input.key_pressed(key) {
+                actions.push(WorkshopUiAction::SetTool(tool));
+            }
+        }
+    });
+}
+
+fn open_save_as_dialog(snapshot: &WorkshopUiSnapshot, state: &mut WorkshopUiState) {
+    let Some(editor) = &snapshot.editor else {
+        return;
+    };
+    state.object_dialog = Some(ObjectDialog {
+        kind: ObjectDialogKind::SaveAs,
+        id: String::new(),
+        display_name: editor.object.display_name.clone(),
+        category: editor.object.category,
+        prop_connectivity: editor.object.connectivity,
+        error: None,
+    });
 }
 
 fn install_theme(context: &egui::Context) {
@@ -716,12 +949,15 @@ fn draw_top_toolbar(
         )
         .show_inside(root_ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("ASSET WORKSHOP")
-                        .strong()
-                        .color(egui::Color32::WHITE),
-                );
-                ui.separator();
+                let compact = ui.available_width() < 1_180.0;
+                if !compact {
+                    ui.label(
+                        egui::RichText::new("ASSET WORKSHOP")
+                            .strong()
+                            .color(egui::Color32::WHITE),
+                    );
+                    ui.separator();
+                }
 
                 let mode = snapshot.mode.unwrap_or(WorkshopMode::VoxelStyles);
                 if ui
@@ -743,6 +979,7 @@ fn draw_top_toolbar(
 
                 ui.separator();
                 let document_ready = snapshot.editor.is_some();
+                let saved_document = snapshot.document_state == WorkshopDocumentState::Saved;
                 let project_ready = snapshot.palette.is_some() && snapshot.styles.is_some();
                 if ui
                     .add_enabled(snapshot.undo_label.is_some(), egui::Button::new("Undo"))
@@ -774,8 +1011,16 @@ fn draw_top_toolbar(
                 }
 
                 let save_ready = match mode {
-                    WorkshopMode::VoxelStyles => project_ready,
-                    WorkshopMode::Objects => document_ready,
+                    WorkshopMode::VoxelStyles => {
+                        project_ready
+                            && (!snapshot.tracked_writes_blocked
+                                || snapshot.recovery_catalogs_reconciled)
+                    }
+                    WorkshopMode::Objects => {
+                        saved_document
+                            && snapshot.object_save_ready
+                            && !snapshot.tracked_writes_blocked
+                    }
                 };
                 if ui
                     .add_enabled(save_ready, egui::Button::new("Save"))
@@ -786,6 +1031,35 @@ fn draw_top_toolbar(
                         WorkshopMode::VoxelStyles => WorkshopUiAction::SaveCatalogs,
                         WorkshopMode::Objects => WorkshopUiAction::SaveObject,
                     });
+                }
+                if snapshot.recovery_conflict && !snapshot.recovery_catalogs_reconciled {
+                    if ui
+                        .button("Reconcile")
+                        .on_hover_text(
+                            "Safely merge independent catalog edits and report any same-id conflicts",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogs);
+                    }
+                    if ui
+                        .button("Recovered Wins")
+                        .on_hover_text(
+                            "Merge independent edits and choose recovered values for every same-id conflict",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogsPreferRecovered);
+                    }
+                    if ui
+                        .button("Tracked Wins")
+                        .on_hover_text(
+                            "Merge independent edits and choose current tracked values for every same-id conflict",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogsPreferTracked);
+                    }
                 }
                 if mode == WorkshopMode::Objects {
                     if ui
@@ -805,7 +1079,7 @@ fn draw_top_toolbar(
                         }
                     }
                     if ui
-                        .add_enabled(document_ready, egui::Button::new("Duplicate"))
+                        .add_enabled(saved_document, egui::Button::new("Duplicate"))
                         .on_hover_text("Duplicate the saved object into a new asset")
                         .clicked()
                     {
@@ -821,6 +1095,26 @@ fn draw_top_toolbar(
                                 error: None,
                             });
                         }
+                    }
+                    if ui
+                        .add_enabled(snapshot.review_ready, egui::Button::new("Review"))
+                        .on_hover_text(
+                            "Export perspective, top, six turns, semantic and mask views",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ExportReview);
+                    }
+                }
+                if ui
+                    .add_enabled(project_ready, egui::Button::new("Reload"))
+                    .on_hover_text("Reload tracked art files and discard local drafts")
+                    .clicked()
+                {
+                    if snapshot_is_dirty(snapshot) {
+                        state.pending_reload = true;
+                    } else {
+                        actions.push(WorkshopUiAction::ReloadProject);
                     }
                 }
 
@@ -844,26 +1138,48 @@ fn draw_top_toolbar(
                     .on_hover_text("Choose deterministic preview lighting");
 
                 ui.separator();
-                for (label, snap, tooltip) in [
-                    (
-                        "3D",
-                        EditorCameraSnap::Perspective,
-                        "Snap to perspective view",
-                    ),
-                    ("Top", EditorCameraSnap::Top, "Snap to top view"),
-                    ("Front", EditorCameraSnap::Front, "Snap to front view"),
-                    ("Side", EditorCameraSnap::Side, "Snap to side view"),
-                ] {
-                    if ui.button(label).on_hover_text(tooltip).clicked() {
-                        actions.push(WorkshopUiAction::SnapCamera(snap));
+                if compact {
+                    ui.menu_button("View", |ui| {
+                        for (label, snap) in [
+                            ("Perspective", EditorCameraSnap::Perspective),
+                            ("Top", EditorCameraSnap::Top),
+                            ("Front", EditorCameraSnap::Front),
+                            ("Side", EditorCameraSnap::Side),
+                        ] {
+                            if ui.button(label).clicked() {
+                                actions.push(WorkshopUiAction::SnapCamera(snap));
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Frame All").clicked() {
+                            actions.push(WorkshopUiAction::FrameCamera);
+                            ui.close();
+                        }
+                    })
+                    .response
+                    .on_hover_text("Camera snaps and framing");
+                } else {
+                    for (label, snap, tooltip) in [
+                        (
+                            "3D",
+                            EditorCameraSnap::Perspective,
+                            "Snap to perspective view",
+                        ),
+                        ("Top", EditorCameraSnap::Top, "Snap to top view"),
+                        ("Front", EditorCameraSnap::Front, "Snap to front view"),
+                        ("Side", EditorCameraSnap::Side, "Snap to side view"),
+                    ] {
+                        if ui.button(label).on_hover_text(tooltip).clicked() {
+                            actions.push(WorkshopUiAction::SnapCamera(snap));
+                        }
                     }
-                }
-                if ui
-                    .button("Frame")
-                    .on_hover_text("Frame all visible authored voxels")
-                    .clicked()
-                {
-                    actions.push(WorkshopUiAction::FrameCamera);
+                    if ui
+                        .button("Frame")
+                        .on_hover_text("Frame all visible authored voxels")
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::FrameCamera);
+                    }
                 }
 
                 let dirty = match mode {
@@ -872,9 +1188,27 @@ fn draw_top_toolbar(
                         snapshot.editor.as_ref().is_some_and(|editor| editor.dirty)
                     }
                 };
-                if dirty {
+                if dirty || snapshot.recovery_conflict || !snapshot.external_changes.is_empty() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("Unsaved").color(WARNING));
+                        if !snapshot.external_changes.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "External {}",
+                                    snapshot.external_changes.len()
+                                ))
+                                .color(WARNING),
+                            )
+                            .on_hover_text("Tracked art files changed outside this editor");
+                        }
+                        if snapshot.recovery_conflict {
+                            ui.label(egui::RichText::new("Recovery conflict").color(ERROR))
+                                .on_hover_text(
+                                    "Reconcile recovered catalogs, then use Save As for changed tracked objects",
+                                );
+                        }
+                        if dirty {
+                            ui.label(egui::RichText::new("Unsaved").color(WARNING));
+                        }
                     });
                 }
             });
@@ -884,6 +1218,7 @@ fn draw_top_toolbar(
 fn draw_status_bar(
     root_ui: &mut egui::Ui,
     snapshot: &WorkshopUiSnapshot,
+    hovered: Option<ViewportFaceTarget>,
     actions: &mut Vec<WorkshopUiAction>,
 ) {
     egui::Panel::bottom("workshop_status")
@@ -895,18 +1230,40 @@ fn draw_status_bar(
                 .stroke(egui::Stroke::new(1.0_f32, BORDER)),
         )
         .show_inside(root_ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(status) = &snapshot.status {
-                    ui.colored_label(status_color(status.kind), &status.message);
-                } else {
-                    ui.label(egui::RichText::new("Ready").color(MUTED));
-                }
-
-                if snapshot.mode == Some(WorkshopMode::Objects) {
-                    let Some(editor) = &snapshot.editor else {
-                        return;
+            status_bar_sides_ui(
+                ui,
+                |ui| {
+                    let add_status = |ui: &mut egui::Ui| {
+                        let text = if let Some(status) = &snapshot.status {
+                            egui::RichText::new(format!(
+                                "{}: {}",
+                                status_kind_label(status.kind),
+                                status.message
+                            ))
+                            .color(status_color(status.kind))
+                        } else {
+                            egui::RichText::new("Ready").color(MUTED)
+                        };
+                        ui.add(egui::Label::new(text).truncate())
                     };
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+
+                    if let Some(readout) = hover_readout(snapshot, hovered) {
+                        egui::containers::Sides::new()
+                            .height(ui.available_height())
+                            .shrink_left()
+                            .truncate()
+                            .show(ui, add_status, |ui| {
+                                ui.label(egui::RichText::new(readout).monospace().color(MUTED));
+                            });
+                    } else {
+                        add_status(ui);
+                    }
+                },
+                |ui| {
+                    if snapshot.mode == Some(WorkshopMode::Objects) {
+                        let Some(editor) = &snapshot.editor else {
+                            return;
+                        };
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} voxels  |  {} selected",
@@ -933,10 +1290,9 @@ fn draw_status_bar(
                         {
                             actions.push(WorkshopUiAction::SetActiveLevel(level));
                         }
-                    });
-                } else if let (Some(palette), Some(styles)) = (&snapshot.palette, &snapshot.styles)
-                {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    } else if let (Some(palette), Some(styles)) =
+                        (&snapshot.palette, &snapshot.styles)
+                    {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{} swatches  |  {} styles",
@@ -945,10 +1301,34 @@ fn draw_status_bar(
                             ))
                             .color(MUTED),
                         );
-                    });
-                }
-            });
+                    }
+                },
+            );
         });
+}
+
+fn status_bar_sides_ui<Left, Right>(
+    ui: &mut egui::Ui,
+    add_left: impl FnOnce(&mut egui::Ui) -> Left,
+    add_right: impl FnOnce(&mut egui::Ui) -> Right,
+) -> (Left, egui::InnerResponse<Right>) {
+    egui::containers::Sides::new()
+        .height(ui.available_height())
+        .shrink_left()
+        .truncate()
+        .show(ui, add_left, |ui| status_summary_ui(ui, add_right))
+}
+
+fn status_summary_ui<R>(
+    ui: &mut egui::Ui,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .id(egui::Id::new(STATUS_SUMMARY_ID))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        add_contents,
+    )
 }
 
 fn draw_left_browser(
@@ -1577,27 +1957,32 @@ fn draw_voxel_style_inspector(
                         surface_mode_label(mode),
                     );
                 }
-            });
+            })
+            .response
+            .on_hover_text("Choose opaque, alpha-to-coverage, blended, or additive rendering");
     });
     if state.style_form.surface_mode == VoxelSurfaceMode::Opaque {
         state.style_form.opacity = 1.0;
         ui.add_enabled(
             false,
             egui::Slider::new(&mut state.style_form.opacity, 0.01..=1.0).text("Opacity"),
-        );
+        )
+        .on_hover_text("Opaque styles always use full opacity");
     } else {
         ui.add(
             egui::Slider::new(&mut state.style_form.opacity, 0.01..=1.0)
                 .text("Opacity")
                 .clamping(egui::SliderClamping::Always),
-        );
+        )
+        .on_hover_text("Surface opacity stored by this reusable style");
     }
 
     ui.separator();
     ui.checkbox(
         &mut state.style_form.emission_enabled,
         "Independent emission",
-    );
+    )
+    .on_hover_text("Use a separate palette swatch and strength for emitted light colour");
     ui.add_enabled_ui(state.style_form.emission_enabled, |ui| {
         swatch_combo(
             ui,
@@ -1669,15 +2054,17 @@ fn draw_object_inspector(
 
     ui.horizontal(|ui| {
         ui.heading(&editor.object.display_name);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .small_button("Delete")
-                .on_hover_text("Delete this saved object after confirmation")
-                .clicked()
-            {
-                state.pending_delete = Some(DeleteTarget::Object(editor.object.id.clone()));
-            }
-        });
+        if snapshot.document_state == WorkshopDocumentState::Saved {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("Delete")
+                    .on_hover_text("Delete this saved object after confirmation")
+                    .clicked()
+                {
+                    state.pending_delete = Some(DeleteTarget::Object(editor.object.id.clone()));
+                }
+            });
+        }
     });
     ui.label(
         egui::RichText::new(editor.object.id.as_str())
@@ -1836,13 +2223,17 @@ fn draw_object_inspector(
     }
     let slice_changed = ui
         .checkbox(&mut state.isolate_active_level, "Isolate active level")
+        .on_hover_text("Hide occupied voxels outside the active integer level")
         .changed();
     if slice_changed {
         actions.push(WorkshopUiAction::IsolateActiveLevel(
             state.isolate_active_level,
         ));
     }
-    let grid_changed = ui.checkbox(&mut state.show_grid, "Hex guide").changed();
+    let grid_changed = ui
+        .checkbox(&mut state.show_grid, "Hex guide")
+        .on_hover_text("Show empty placement cells on the active level")
+        .changed();
     if grid_changed {
         actions.push(WorkshopUiAction::ShowGrid(state.show_grid));
     }
@@ -1880,6 +2271,7 @@ fn draw_object_inspector(
         }
         if ui
             .add_enabled(editor.selection_count > 0, egui::Button::new("Clear"))
+            .on_hover_text("Keep voxels unchanged and clear only the current selection")
             .clicked()
         {
             actions.push(WorkshopUiAction::ClearSelection);
@@ -1898,6 +2290,7 @@ fn draw_object_inspector(
         ] {
             if ui
                 .add_enabled(editor.selection_count > 0, egui::Button::new(label))
+                .on_hover_text("Move every selected voxel and its exact mask annotations")
                 .clicked()
             {
                 actions.push(WorkshopUiAction::NudgeSelection { q, r, level });
@@ -1917,7 +2310,11 @@ fn draw_object_inspector(
 
     if editor.selection_count > 0 {
         ui.add_space(5.0);
-        if ui.button("Apply Active Role").clicked() {
+        if ui
+            .button("Apply Active Role")
+            .on_hover_text("Assign the selected semantic role to every selected voxel")
+            .clicked()
+        {
             actions.push(WorkshopUiAction::RepaintSelectionPart(editor.active_part));
         }
         match editor.object.category {
@@ -2082,6 +2479,10 @@ fn draw_object_dialog(
         let duplicate_id = parsed_id
             .as_ref()
             .is_ok_and(|id| snapshot.objects.iter().any(|object| object.id == *id));
+        let category_error = parsed_id
+            .as_ref()
+            .ok()
+            .and_then(|id| validate_object_id_for_category(id, dialog.category).err());
         let name_valid = !dialog.display_name.trim().is_empty();
         if duplicate_id {
             dialog.error = Some("that object id already exists".to_owned());
@@ -2089,6 +2490,8 @@ fn draw_object_dialog(
             dialog.error = Some("display name cannot be empty".to_owned());
         } else if let Err(error) = &parsed_id {
             dialog.error = Some(error.clone());
+        } else if let Some(error) = category_error {
+            dialog.error = Some(error);
         } else {
             dialog.error = None;
         }
@@ -2105,7 +2508,9 @@ fn draw_object_dialog(
             };
             let submit_clicked = ui
                 .add_enabled(dialog.error.is_none(), egui::Button::new(submit_label))
-                .clicked();
+                .clicked()
+                || (dialog.error.is_none()
+                    && ui.input(|input| input.key_pressed(egui::Key::Enter)));
             if submit_clicked {
                 if let Ok(id) = parsed_id {
                     let display_name = dialog.display_name.trim().to_owned();
@@ -2137,6 +2542,9 @@ fn draw_object_dialog(
             }
         });
     });
+    if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+        close = true;
+    }
     if !close {
         state.object_dialog = Some(dialog);
     }
@@ -2173,9 +2581,209 @@ fn draw_delete_confirmation(
             }
         });
     });
+    if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+        close = true;
+    }
     if !close {
         state.pending_delete = Some(target);
     }
+}
+
+fn draw_reload_confirmation(
+    context: &egui::Context,
+    snapshot: &WorkshopUiSnapshot,
+    state: &mut WorkshopUiState,
+    actions: &mut Vec<WorkshopUiAction>,
+) {
+    if !state.pending_reload {
+        return;
+    }
+    let mut close = false;
+    egui::Modal::new(egui::Id::new("reload_project_dialog")).show(context, |ui| {
+        ui.set_min_width(360.0);
+        ui.heading("Reload Project");
+        ui.label("Discard unsaved palette, style, and object changes, then reload tracked files?");
+        if !snapshot.external_changes.is_empty() {
+            ui.add_space(6.0);
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} external file change(s) will become the new baseline.",
+                    snapshot.external_changes.len()
+                ))
+                .color(WARNING),
+            );
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Reload").clicked() {
+                actions.push(WorkshopUiAction::ReloadProject);
+                close = true;
+            }
+            if ui.button("Cancel").clicked() {
+                close = true;
+            }
+        });
+    });
+    if context.input(|input| input.key_pressed(egui::Key::Escape)) {
+        close = true;
+    }
+    if close {
+        state.pending_reload = false;
+    }
+}
+
+fn draw_recovery_prompt(
+    context: &egui::Context,
+    snapshot: &WorkshopUiSnapshot,
+    actions: &mut Vec<WorkshopUiAction>,
+) {
+    let Some(prompt) = &snapshot.recovery_prompt else {
+        return;
+    };
+    egui::Modal::new(egui::Id::new("recovery_prompt")).show(context, |ui| {
+        ui.set_min_width(430.0);
+        match prompt {
+            RecoveryPrompt::Available {
+                written_unix_ms,
+                document,
+                baseline_conflict,
+            } => {
+                ui.heading("Recover Previous Work");
+                ui.label(format!(
+                    "An untracked recovery draft for {document} was saved at Unix time {written_unix_ms} ms."
+                ));
+                if *baseline_conflict {
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Tracked art changed after this draft. Restore is safe; reconcile catalogs and use Save As for a changed tracked object before overwriting.",
+                        )
+                        .color(WARNING),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button("Restore")
+                        .on_hover_text("Restore the recovered palette, styles, object, and editor state")
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::RestoreRecovery);
+                    }
+                    if ui
+                        .button("Discard Recovery")
+                        .on_hover_text("Permanently delete this untracked recovery file")
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::DiscardRecovery);
+                    }
+                });
+            }
+            RecoveryPrompt::Invalid { message } => {
+                ui.heading("Recovery File Needs Attention");
+                ui.label(
+                    "The existing recovery file is invalid or incompatible. It has not been modified, and autosave is paused.",
+                );
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(message).monospace().color(ERROR));
+                ui.add_space(8.0);
+                if ui
+                    .button("Discard Invalid Recovery")
+                    .on_hover_text("Permanently delete the invalid untracked recovery file")
+                    .clicked()
+                {
+                    actions.push(WorkshopUiAction::DiscardRecovery);
+                }
+                ui.label(
+                    egui::RichText::new(
+                        "Closing the Workshop leaves the recovery file untouched.",
+                    )
+                    .small()
+                    .color(MUTED),
+                );
+            }
+        }
+    });
+}
+
+fn draw_close_confirmation(
+    context: &egui::Context,
+    snapshot: &WorkshopUiSnapshot,
+    actions: &mut Vec<WorkshopUiAction>,
+) {
+    if !snapshot.close_confirmation {
+        return;
+    }
+    let can_save = !snapshot.tracked_writes_blocked
+        && match snapshot.document_state {
+            WorkshopDocumentState::Saved => snapshot
+                .editor
+                .as_ref()
+                .is_none_or(|editor| !editor.dirty || snapshot.object_save_ready),
+            WorkshopDocumentState::Calibration | WorkshopDocumentState::Unsaved => {
+                snapshot.editor.as_ref().is_none_or(|editor| !editor.dirty)
+            }
+        };
+    egui::Modal::new(egui::Id::new("close_workshop_confirmation")).show(context, |ui| {
+        ui.set_min_width(410.0);
+        ui.heading("Unsaved Workshop Changes");
+        ui.label(
+            "Save every tracked draft before quitting, or explicitly discard the local changes.",
+        );
+        if !can_save {
+            ui.add_space(6.0);
+            let guidance = if snapshot.tracked_writes_blocked {
+                "Save All is unavailable while tracked files or the recovery baseline conflict. Reload or reconcile recovered catalogs first; Save As can then preserve the object draft."
+            } else {
+                "Save All is unavailable for a new or invalid object draft. Correct the draft, or use Save As after it passes validation."
+            };
+            ui.label(egui::RichText::new(guidance).color(WARNING));
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(can_save, egui::Button::new("Save All & Quit"))
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::SaveAllAndClose);
+            }
+            if ui
+                .button("Discard & Quit")
+                .on_hover_text("Delete the recovery draft and discard all local changes")
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::DiscardAndClose);
+            }
+            if ui
+                .button("Keep Recovery & Quit")
+                .on_hover_text("Keep the crash-recovery draft without changing tracked files")
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::KeepRecoveryAndClose);
+            }
+            if ui.button("Cancel").clicked() {
+                actions.push(WorkshopUiAction::CancelClose);
+            }
+        });
+    });
+}
+
+fn draw_review_progress(context: &egui::Context, snapshot: &WorkshopUiSnapshot) {
+    if !snapshot.review_in_progress {
+        return;
+    }
+    egui::Modal::new(egui::Id::new("review_export_progress")).show(context, |ui| {
+        ui.set_min_width(360.0);
+        ui.heading("Exporting Review Pack");
+        ui.label("Rendering ten deterministic views and validating the complete artifact...");
+        ui.add(egui::Spinner::new());
+    });
+}
+
+fn snapshot_is_dirty(snapshot: &WorkshopUiSnapshot) -> bool {
+    snapshot.palette_dirty
+        || snapshot.styles_dirty
+        || snapshot.editor.as_ref().is_some_and(|editor| editor.dirty)
 }
 
 fn draw_swatch_impact(ui: &mut egui::Ui, snapshot: &WorkshopUiSnapshot, id: &SwatchId) {
@@ -2466,6 +3074,49 @@ fn status_color(kind: WorkshopStatusKind) -> egui::Color32 {
     }
 }
 
+const fn status_kind_label(kind: WorkshopStatusKind) -> &'static str {
+    match kind {
+        WorkshopStatusKind::Info => "Info",
+        WorkshopStatusKind::Success => "Success",
+        WorkshopStatusKind::Warning => "Warning",
+        WorkshopStatusKind::Error => "Error",
+    }
+}
+
+fn hover_readout(
+    snapshot: &WorkshopUiSnapshot,
+    hovered: Option<ViewportFaceTarget>,
+) -> Option<String> {
+    let target = hovered?;
+    let editor = snapshot.editor.as_ref()?;
+    let mut fields = vec![format!(
+        "q {}  r {}  level {}",
+        target.cell.q, target.cell.r, target.cell.level
+    )];
+    if target.source == ViewportPickSource::Grid {
+        fields.push("empty".to_owned());
+    } else if let Some(placement) = editor
+        .object
+        .placements
+        .iter()
+        .find(|placement| placement.position == target.cell)
+    {
+        fields.push(placement.style.as_str().to_owned());
+        fields.push(part_label(placement.part).to_owned());
+    }
+    if editor
+        .object
+        .blocker_footprint
+        .contains(&target.cell.axial())
+    {
+        fields.push("blocker".to_owned());
+    }
+    if editor.object.canopy_occluders.contains(&target.cell) {
+        fields.push("canopy".to_owned());
+    }
+    Some(fields.join("  |  "))
+}
+
 fn rig_label(rig: PreviewRig) -> &'static str {
     match rig {
         PreviewRig::Neutral => "Neutral",
@@ -2489,6 +3140,29 @@ fn category_label(category: ObjectCategory) -> &'static str {
         ObjectCategory::Effect => "Effect",
         ObjectCategory::Prop => "Prop",
     }
+}
+
+fn validate_object_id_for_category(
+    id: &ObjectAssetId,
+    category: ObjectCategory,
+) -> Result<(), String> {
+    let prefix = match category {
+        ObjectCategory::Plant => "plant/",
+        ObjectCategory::Effect => "effect/",
+        ObjectCategory::Prop => "prop/",
+    };
+    let Some(filename) = id.as_str().strip_prefix(prefix) else {
+        return Err(format!(
+            "{} keys must begin with '{prefix}'",
+            category_label(category)
+        ));
+    };
+    if filename.is_empty() || filename.contains('/') {
+        return Err(format!(
+            "use exactly '{prefix}<filename>'; nested object paths are not supported"
+        ));
+    }
+    Ok(())
 }
 
 fn connectivity_label(connectivity: ConnectivityPolicy) -> &'static str {
@@ -2675,5 +3349,63 @@ mod tests {
             true,
         ));
         assert!(viewport_pointer_is_suppressed(viewport, None, false, false));
+    }
+
+    #[test]
+    fn status_summary_stays_stable_and_separate_from_long_status_text() {
+        let context = egui::Context::default();
+
+        let run_pass = |status: &str, include_hover: bool| {
+            let mut responses = None;
+            drop(context.run_ui(egui::RawInput::default(), |ui| {
+                ui.set_width(420.0);
+                ui.set_height(24.0);
+                let (left, right) = status_bar_sides_ui(
+                    ui,
+                    |ui| {
+                        if include_hover {
+                            egui::containers::Sides::new()
+                                .shrink_left()
+                                .truncate()
+                                .show(
+                                    ui,
+                                    |ui| ui.add(egui::Label::new(status).truncate()),
+                                    |ui| ui.label("q 0  r 0  level 0"),
+                                )
+                                .0
+                        } else {
+                            ui.add(egui::Label::new(status).truncate())
+                        }
+                    },
+                    |ui| {
+                        let mut level = 0;
+                        ui.add(egui::DragValue::new(&mut level).prefix("Level "))
+                    },
+                );
+                responses = Some((left, right));
+            }));
+            let (left, right) = responses.expect("pass should produce responses");
+            (left, right.inner.id, right.response.rect)
+        };
+
+        let first = run_pass("Ready", false);
+        let second = run_pass(
+            "Success: Review pack published under a/very/long/path/that/must/not/overlap",
+            true,
+        );
+
+        assert_eq!(first.1, second.1);
+        assert_eq!(first.2, second.2);
+        assert!(second.0.rect.max.x <= second.2.min.x);
+    }
+
+    #[test]
+    fn object_dialog_identity_matches_the_tracked_category_path() {
+        let plant = ObjectAssetId::new("plant/oak").expect("fixture id should be valid");
+        let nested =
+            ObjectAssetId::new("plant/temperate/oak").expect("generic stable id should be valid");
+        assert!(validate_object_id_for_category(&plant, ObjectCategory::Plant).is_ok());
+        assert!(validate_object_id_for_category(&plant, ObjectCategory::Prop).is_err());
+        assert!(validate_object_id_for_category(&nested, ObjectCategory::Plant).is_err());
     }
 }

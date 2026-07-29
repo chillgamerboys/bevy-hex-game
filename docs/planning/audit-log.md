@@ -7,6 +7,84 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 15 — fix(assets): abandon reverted reload candidates (2026-07-28)
+
+- **PR**: #105 — `fix/promotion-hot-reload-latch`
+- **Outcome**: green — 3 ship-blocker variants and 4 non-blockers fixed
+- **Lenses triggered**: 2, 4, 7, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, fresh-eyes | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed in-branch — an internal restoration marker distinguishes builder writes from authored reloads; reversion attribution rebases only changed rejected halves before candidate selection, so repeated failures, opposite-half no-op reloads, and same-frame reversion-plus-edit events preserve the exact authored pair |
+| 7 | `crates/hex_assets/src/substances.rs`:1147 | NON-BLOCKER | fixed in-branch — both sequential and same-frame revert-then-edit directions, opposite-half no-op reloads, and the repeated-rejection/idle-frame/repair sequence are covered at Bevy resource-change altitude |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed in-branch — all four remaining crate-local `ron` declarations now inherit the workspace dependency |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed in-branch — all test-count skills describe the current eleven-crate workspace consistently |
+
+**Notes**: all eight code lenses, all four documentation lenses, and the fresh-eyes
+pass found no remaining blocker. Exact verification counted 881 passing tests.
+
+## Wave 14 — promote: dev → main (2026-07-28)
+
+- **PR**: #104 — `dev`
+- **Outcome**: green — 1 promotion blocker fixed in PR #105
+- **Lenses triggered**: 2, 4, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed by PR #105 — reverting one rejected cross-file reload half now abandons the stale candidate before a later edit to the other source |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed by PR #105 — all `ron` consumers inherit the workspace source of truth |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed by PR #105 — stale nine-crate and fixed-suite-count claims were removed from the test skills |
+| 7 | `crates/hex_map/src/procedural_v3/mod.rs`:36 | NON-BLOCKER | deferred to draft #89 — V3 publication, rebuild scheduling, and fall-curtain pixels remain unreachable until the first runnable V3 recipe lands; Wave 9 already owns that coverage boundary |
+
+**Notes**: the human promotion gate covered both `cargo dev` gameplay and the
+standalone `cargo editor`. The updated `dev` head is re-audited after PR #105
+lands, before PR #104 may merge.
+
+## Wave 13 — test(walk): cover Volcanic Hills lava (2026-07-28)
+
+- **PR**: #103 — `fix/volcanic-visual-walk`
+- **Outcome**: green — 1 ship-blocker fixed
+- **Lenses triggered**: D1
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D1 | `walks/gameplay.ron`:47 | SHIP-BLOCKER | fixed in-branch — the optional scenario seed now uses RON's `Some(444211238)` representation, so the shipped walk parses and reaches its lava capture |
+
+**Notes**: the corrected 40-step gameplay walk completed and all six frames passed
+mechanical and review inspection. The scenario name and pinned seed match
+`assets/config/scenarios.ron`; fresh-eyes found no additional bug class.
+
+## Wave 12 — feat(assets): migrate runtime colours to the art palette (2026-07-28)
+
+- **PR**: #99 — `feat/art-palette-migration`
+- **Outcome**: green — 2 ship-blockers fixed
+- **Lenses triggered**: 4, 7
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_assets/src/substances.rs`:359 | SHIP-BLOCKER | fixed in `54467a8` — failed cross-file reloads retain the complete rejected palette/substance candidate pair, so repairing either file retries the real on-disk pair instead of accepting a stale fallback half |
+| 7 | `crates/hex_units/tests/movement.rs`:220 | SHIP-BLOCKER | fixed in `54467a8` — unit material tests parse the shipped palette and pin the exact `unit/player` and `unit/hostile` swatches |
+
+**Notes**: exact-head verification passed with 879 tests and five clean gameplay
+captures. The audit also incorporated the exact palette-backed liquid-foam
+round-trip pin.
+
+## Wave 11 — feat(editor): add recovery and exact-render review (2026-07-28)
+
+- **PR**: #96 — `feat/asset-workshop-review`
+- **Outcome**: green — recovery, review-identity, and publication blockers fixed
+- **Lenses triggered**: 1, 3, 4, 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 1, 4 | `crates/hex_editor/src/app.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — recovery conflicts now require an informed winner choice, tracked writes refresh the disk baseline, and recovery can be kept safely while quitting |
+| 4, 8 | `crates/hex_editor/src/review.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — capture and publication stay tied to the exact content-addressed GLB rendered by the viewport, with duplicate and concurrent-publication races rejected |
+| 3, 7 | `crates/hex_editor/src/ui.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — recovery choices, unavailable previews, selection failures, and report/camera validation are surfaced and regression-tested |
+
+**Notes**: exact-head verification passed with 859 tests. The game walk does not
+drive the standalone editor, so the combined editor interaction remains part of
+the human release gate.
+
 ## Wave 10 — feat(editor): add the Asset Workshop (2026-07-28)
 
 - **PR**: #95 — `feat/asset-workshop-editor`
