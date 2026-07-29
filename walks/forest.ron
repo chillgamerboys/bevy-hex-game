@@ -4,7 +4,7 @@
 //   cargo run -p hex_game --features visual-walk
 [
     AwaitScreen("Title"),
-    StartScenario(name: "Forest", seed: 28001),
+    StartScenario(name: "Forest", seed: Some(28001)),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Settle(120),
