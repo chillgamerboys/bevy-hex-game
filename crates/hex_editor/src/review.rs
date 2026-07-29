@@ -1419,6 +1419,7 @@ fn publish_review_pack_with_hook(
                     )
                 },
             )?;
+            hook(PublishCheckpoint::BeforeRename)?;
             Ok(ReviewPublishOutcome::AlreadyPublished(final_path))
         }
         Err(error) => Err(ReviewError::at("publish review pack", &final_path, error)),
@@ -2314,18 +2315,23 @@ mod tests {
             .expect("report should build");
         let frames = frame_set();
         let mut nested_published = false;
+        let mut final_checks = 0_u8;
         let outcome =
             publish_review_pack_with_hook(&directory.path, &report, &frames, |checkpoint| {
-                if checkpoint == PublishCheckpoint::BeforeRename && !nested_published {
-                    let nested = publish_review_pack(&directory.path, &report, &frames)?;
-                    assert!(matches!(nested, ReviewPublishOutcome::Published(_)));
-                    nested_published = true;
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    final_checks = final_checks.saturating_add(1);
+                    if !nested_published {
+                        let nested = publish_review_pack(&directory.path, &report, &frames)?;
+                        assert!(matches!(nested, ReviewPublishOutcome::Published(_)));
+                        nested_published = true;
+                    }
                 }
                 Ok(())
             })
             .expect("outer publication should accept the identical winner");
         assert!(matches!(outcome, ReviewPublishOutcome::AlreadyPublished(_)));
         assert!(nested_published);
+        assert_eq!(final_checks, 2);
     }
 
     #[test]

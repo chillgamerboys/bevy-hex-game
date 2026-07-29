@@ -6,7 +6,7 @@
 //! snapshot.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bevy::camera::{ClearColorConfig, RenderTarget};
@@ -60,6 +60,8 @@ pub struct ReviewCaptureRequest {
     pub expected_revisions: ProjectRevisionSet,
     /// Deterministic semantic report for the exact saved asset snapshot.
     pub report: ReviewReport,
+    /// Repository-relative mesh path actually loaded by the viewport renderer.
+    pub renderer_mesh_path: PathBuf,
     /// Ordered authored and diagnostic viewport presentations.
     pub contents: Vec<ViewportContent>,
 }
@@ -72,10 +74,28 @@ impl ReviewCaptureRequest {
         report: ReviewReport,
         contents: Vec<ViewportContent>,
     ) -> Result<Self, String> {
+        Self::new_with_renderer_mesh_path(
+            repository_root,
+            expected_revisions,
+            report,
+            Path::new("assets").join(HEX_MESH_ASSET_PATH),
+            contents,
+        )
+    }
+
+    /// Creates a request tied to the exact repository-relative mesh loaded by the viewport.
+    pub fn new_with_renderer_mesh_path(
+        repository_root: PathBuf,
+        expected_revisions: ProjectRevisionSet,
+        report: ReviewReport,
+        renderer_mesh_path: PathBuf,
+        contents: Vec<ViewportContent>,
+    ) -> Result<Self, String> {
         let request = Self {
             repository_root,
             expected_revisions,
             report,
+            renderer_mesh_path,
             contents,
         };
         request.validate()?;
@@ -89,6 +109,7 @@ impl ReviewCaptureRequest {
             &self.repository_root,
             &self.expected_revisions,
             self.report.renderer_mesh_revision(),
+            &self.renderer_mesh_path,
             RevisionCheckPoint::RequestCreation,
         )
     }
@@ -101,6 +122,17 @@ impl ReviewCaptureRequest {
             return Err(format!(
                 "review repository root '{}' is not a directory",
                 self.repository_root.display()
+            ));
+        }
+        let mut mesh_components = self.renderer_mesh_path.components();
+        if !matches!(
+            mesh_components.next(),
+            Some(Component::Normal(component)) if component == "assets"
+        ) || mesh_components.any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(format!(
+                "review renderer mesh path '{}' must be a normalized repository-relative path below assets",
+                self.renderer_mesh_path.display()
             ));
         }
         self.report
@@ -125,6 +157,7 @@ fn verify_project_revisions(
     repository_root: &Path,
     expected: &ProjectRevisionSet,
     expected_renderer_mesh: ByteRevision,
+    rendered_mesh_path: &Path,
     checkpoint: RevisionCheckPoint,
 ) -> Result<(), String> {
     let current = current_project_revisions(repository_root).map_err(|error| {
@@ -178,25 +211,30 @@ fn verify_project_revisions(
         ));
     }
 
-    let renderer_mesh_path = Path::new("assets").join(HEX_MESH_ASSET_PATH);
-    let current_renderer_mesh = current_file_revision(repository_root, &renderer_mesh_path)
-        .map_err(|error| {
-            format!(
-                "could not verify renderer mesh while {}: {error}; \
-                 restore the renderer asset and retry the review export",
-                match checkpoint {
-                    RevisionCheckPoint::RequestCreation => "creating the review request",
-                    RevisionCheckPoint::CaptureStart => "starting the review capture",
-                    RevisionCheckPoint::Publication => "publishing the review capture",
-                }
-            )
-        })?;
-    if current_renderer_mesh != expected_renderer_mesh {
-        return Err(format!(
-            "renderer source changed {timing}: {} (modified); \
-             no review pack was published, so retry the review export",
-            renderer_mesh_path.display()
-        ));
+    let tracked_mesh_path = Path::new("assets").join(HEX_MESH_ASSET_PATH);
+    for renderer_mesh_path in [tracked_mesh_path.as_path(), rendered_mesh_path] {
+        let current_renderer_mesh = current_file_revision(repository_root, renderer_mesh_path)
+            .map_err(|error| {
+                format!(
+                    "could not verify renderer mesh while {}: {error}; \
+                     restore the renderer asset and retry the review export",
+                    match checkpoint {
+                        RevisionCheckPoint::RequestCreation => "creating the review request",
+                        RevisionCheckPoint::CaptureStart => "starting the review capture",
+                        RevisionCheckPoint::Publication => "publishing the review capture",
+                    }
+                )
+            })?;
+        if current_renderer_mesh != expected_renderer_mesh {
+            return Err(format!(
+                "renderer source changed {timing}: {} (modified); \
+                 no review pack was published, so retry the review export",
+                renderer_mesh_path.display()
+            ));
+        }
+        if renderer_mesh_path == rendered_mesh_path {
+            break;
+        }
     }
     Ok(())
 }
@@ -205,12 +243,14 @@ fn publish_review_pack_if_sources_current(
     repository_root: &Path,
     expected_revisions: &ProjectRevisionSet,
     report: &ReviewReport,
+    renderer_mesh_path: &Path,
     frames: &[RgbaImage],
 ) -> Result<ReviewPublishOutcome, String> {
     publish_review_pack_if_sources_current_with_hook(
         repository_root,
         expected_revisions,
         report,
+        renderer_mesh_path,
         frames,
         || Ok(()),
     )
@@ -220,6 +260,7 @@ fn publish_review_pack_if_sources_current_with_hook(
     repository_root: &Path,
     expected_revisions: &ProjectRevisionSet,
     report: &ReviewReport,
+    renderer_mesh_path: &Path,
     frames: &[RgbaImage],
     mut before_final_revision_check: impl FnMut() -> Result<(), String>,
 ) -> Result<ReviewPublishOutcome, String> {
@@ -227,6 +268,7 @@ fn publish_review_pack_if_sources_current_with_hook(
         repository_root,
         expected_revisions,
         report.renderer_mesh_revision(),
+        renderer_mesh_path,
         RevisionCheckPoint::Publication,
     )?;
     publish_review_pack_with_pre_rename_check(repository_root, report, frames, || {
@@ -235,6 +277,7 @@ fn publish_review_pack_if_sources_current_with_hook(
             repository_root,
             expected_revisions,
             report.renderer_mesh_revision(),
+            renderer_mesh_path,
             RevisionCheckPoint::Publication,
         )
     })
@@ -292,6 +335,7 @@ struct ActiveCapture {
     repository_root: PathBuf,
     expected_revisions: ProjectRevisionSet,
     report: ReviewReport,
+    renderer_mesh_path: PathBuf,
     contents: Vec<ViewportContent>,
     frames: Vec<RgbaImage>,
     frame_index: usize,
@@ -477,12 +521,14 @@ fn drive_review_capture(
                             let repository_root = active.repository_root.clone();
                             let expected_revisions = active.expected_revisions.clone();
                             let report = active.report.clone();
+                            let renderer_mesh_path = active.renderer_mesh_path.clone();
                             let frames = std::mem::take(&mut active.frames);
                             let task = AsyncComputeTaskPool::get().spawn(async move {
                                 publish_review_pack_if_sources_current(
                                     &repository_root,
                                     &expected_revisions,
                                     &report,
+                                    &renderer_mesh_path,
                                     &frames,
                                 )
                             });
@@ -554,6 +600,7 @@ fn begin_capture(
         &request.repository_root,
         &request.expected_revisions,
         request.report.renderer_mesh_revision(),
+        &request.renderer_mesh_path,
         RevisionCheckPoint::CaptureStart,
     )?;
     let first_content = request
@@ -613,6 +660,7 @@ fn begin_capture(
         repository_root: request.repository_root,
         expected_revisions: request.expected_revisions,
         report: request.report,
+        renderer_mesh_path: request.renderer_mesh_path,
         contents: request.contents,
         frames: Vec::with_capacity(REVIEW_FRAME_COUNT),
         frame_index: 0,
@@ -1420,6 +1468,40 @@ mod tests {
     }
 
     #[test]
+    fn rendered_mesh_cache_change_after_request_blocks_capture() {
+        let (root, report, contents, _style_id) = fixture();
+        let tracked_mesh_path = root.join("assets").join(HEX_MESH_ASSET_PATH);
+        let rendered_mesh_path = Path::new("assets/.asset-workshop-cache/renderer-fixture.glb");
+        let absolute_rendered_mesh_path = root.join(rendered_mesh_path);
+        fs::create_dir_all(
+            absolute_rendered_mesh_path
+                .parent()
+                .expect("cached mesh should have a parent"),
+        )
+        .expect("cache directory should be created");
+        fs::copy(&tracked_mesh_path, &absolute_rendered_mesh_path)
+            .expect("tracked mesh should be cached");
+        let request = ReviewCaptureRequest::new_with_renderer_mesh_path(
+            root.clone(),
+            ProjectRevisionSet::default(),
+            report,
+            rendered_mesh_path.to_path_buf(),
+            contents,
+        )
+        .expect("matching rendered mesh should allow request creation");
+
+        fs::write(&absolute_rendered_mesh_path, b"mutated cached mesh")
+            .expect("cached mesh should be mutable for the adversarial fixture");
+        let error = request
+            .validate()
+            .expect_err("a changed rendered mesh must block capture");
+
+        assert!(error.contains(".asset-workshop-cache/renderer-fixture.glb (modified)"));
+        assert!(error.contains("no review pack was published"));
+        fs::remove_dir_all(root).expect("fixture repository should be removable");
+    }
+
+    #[test]
     fn tracked_source_change_during_capture_blocks_publication() {
         let (root, report, contents, _style_id) = fixture();
         let art_root = root.join("assets/art");
@@ -1436,6 +1518,7 @@ mod tests {
             &root,
             &request.expected_revisions,
             &request.report,
+            &request.renderer_mesh_path,
             &[],
         )
         .expect_err("a source change during capture must block publication");
@@ -1464,6 +1547,7 @@ mod tests {
             &root,
             &request.expected_revisions,
             &request.report,
+            &request.renderer_mesh_path,
             &frames,
             || {
                 fs::write(&palette_path, b"version-b").map_err(|error| {

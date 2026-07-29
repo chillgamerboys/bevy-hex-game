@@ -281,6 +281,7 @@ impl Default for ProjectChangePoll {
 #[derive(Resource, Debug, Clone)]
 struct RendererMeshIdentity {
     revision: Option<ByteRevision>,
+    repository_relative_path: PathBuf,
     error: Option<String>,
 }
 
@@ -307,9 +308,10 @@ pub fn run() {
             &Path::new("assets").join(HEX_MESH_ASSET_PATH),
         ) {
             Ok((asset_path, revision)) => (
-                ViewportMeshAssetPath(asset_path),
+                ViewportMeshAssetPath(asset_path.clone()),
                 RendererMeshIdentity {
                     revision: Some(revision),
+                    repository_relative_path: Path::new("assets").join(&asset_path),
                     error: None,
                 },
             ),
@@ -322,6 +324,7 @@ pub fn run() {
                     ViewportMeshAssetPath::default(),
                     RendererMeshIdentity {
                         revision: None,
+                        repository_relative_path: Path::new("assets").join(HEX_MESH_ASSET_PATH),
                         error: Some(message),
                     },
                 )
@@ -331,6 +334,7 @@ pub fn run() {
             ViewportMeshAssetPath::default(),
             RendererMeshIdentity {
                 revision: None,
+                repository_relative_path: Path::new("assets").join(HEX_MESH_ASSET_PATH),
                 error: Some(
                     "Review export is unavailable because the project did not load".to_owned(),
                 ),
@@ -546,6 +550,11 @@ fn apply_ui_action(
             Ok(Some("Discarded local Workshop changes".to_owned()))
         }
         WorkshopUiAction::KeepRecoveryAndClose => {
+            if !write_recovery_now(runtime)? {
+                return Err(
+                    "there are no unsaved Workshop changes to preserve in recovery".to_owned(),
+                );
+            }
             runtime.close_confirmation = false;
             runtime.exit_requested = true;
             Ok(Some(
@@ -1098,6 +1107,35 @@ fn reconcile_recovered_catalogs(
         })?;
     let current_palette = current_project.palette().clone();
     let current_styles = current_project.styles().clone();
+    let recovered_object_source_changed =
+        match (&runtime.document, runtime.recovery_base_revisions.as_ref()) {
+            (OpenDocument::Saved(id), Some(recovered)) => {
+                saved_object_revision_changed(id, recovered, &current_project.revision_snapshot())
+            }
+            (OpenDocument::Calibration | OpenDocument::Unsaved(_), _) | (_, None) => false,
+        };
+    if recovered_object_source_changed {
+        let editor_is_dirty = runtime
+            .draft
+            .as_ref()
+            .is_some_and(|draft| draft.editor().is_dirty());
+        if editor_is_dirty {
+            runtime.recovery_object_requires_save_as = true;
+        } else if let OpenDocument::Saved(id) = &runtime.document {
+            let id = id.clone();
+            if let Some(current_object) = current_project.object(&id).cloned() {
+                let editor = EditorModel::from_blueprint(current_object)
+                    .map_err(|error| error.to_string())?;
+                runtime.draft_mut()?.open_object(editor);
+                runtime.document = OpenDocument::Saved(id);
+            } else {
+                let (editor, preview) = calibration_for_project(&current_project)?;
+                runtime.draft_mut()?.open_object(editor);
+                runtime.document = OpenDocument::Calibration;
+                runtime.preview = preview;
+            }
+        }
+    }
 
     runtime
         .draft_mut()?
@@ -1108,6 +1146,11 @@ fn reconcile_recovered_catalogs(
             merged_styles,
         )
         .map_err(|error| error.to_string())?;
+    runtime.preview = runtime
+        .draft
+        .as_ref()
+        .map(preview_for_draft)
+        .unwrap_or(PreviewSubject::ActiveStyle);
     runtime.project = Some(current_project);
     runtime.external_changes.clear();
     runtime.recovery_catalogs_reconciled = true;
@@ -2284,15 +2327,27 @@ fn build_review_capture_request(
                 .to_owned(),
         );
     }
+    let rendered_mesh_revision = current_file_revision(
+        project.repository_root(),
+        &mesh_identity.repository_relative_path,
+    )
+    .map_err(|error| error.to_string())?;
+    if rendered_mesh_revision != mesh_revision {
+        return Err(
+            "the viewport mesh cache changed after the Workshop loaded; restart before exporting a review"
+                .to_owned(),
+        );
+    }
     let report = ReviewReport::new(&object, draft.styles(), draft.palette(), mesh_revision)
         .map_err(|error| error.to_string())?;
 
     let contents = build_review_viewport_contents(draft);
 
-    ReviewCaptureRequest::new(
+    ReviewCaptureRequest::new_with_renderer_mesh_path(
         project.repository_root().to_path_buf(),
         project.revision_snapshot(),
         report,
+        mesh_identity.repository_relative_path.clone(),
         contents,
     )
 }
@@ -3355,6 +3410,79 @@ mod tests {
     }
 
     #[test]
+    fn reconciliation_rechecks_a_dirty_recovered_objects_source_revision() {
+        let palette = fixture_palette();
+        let styles = fixture_styles();
+        let directory = TestProject::new(&palette, &styles);
+        let mut project = AssetProject::load(&directory.root).expect("fixture project should load");
+        let id = ObjectAssetId::new("plant/reconcile-race").expect("fixture id should be valid");
+        let mut initial_editor = fixture_editor();
+        initial_editor
+            .set_unsaved_identity(id.clone(), "Original".to_owned())
+            .expect("fixture identity should be valid");
+        let initial_object = initial_editor
+            .blueprint_for_save(&styles)
+            .expect("fixture object should be valid");
+        project
+            .save_object_as(initial_object.clone(), id.clone())
+            .expect("fixture object should save");
+        let recovery_baseline = project.revision_snapshot();
+
+        let mut recovered_editor =
+            EditorModel::from_blueprint(initial_object).expect("saved object should reopen");
+        recovered_editor
+            .set_display_name("Recovered Edit".to_owned())
+            .expect("recovered edit should be valid");
+        let recovered_draft = WorkshopDraft::new(palette.clone(), styles.clone(), recovered_editor);
+        let mut runtime = fixture_runtime(
+            project,
+            recovered_draft,
+            OpenDocument::Saved(id.clone()),
+            RecoveryStore::new(&directory.root),
+        );
+        runtime.recovery_base_revisions = Some(recovery_baseline);
+        runtime.recovery_conflict = true;
+
+        let mut external_project =
+            AssetProject::load(&directory.root).expect("external fixture project should load");
+        let mut tracked_editor = EditorModel::from_blueprint(
+            external_project
+                .object(&id)
+                .expect("saved object should exist")
+                .clone(),
+        )
+        .expect("saved object should reopen");
+        tracked_editor
+            .set_display_name("Tracked Edit".to_owned())
+            .expect("tracked edit should be valid");
+        external_project
+            .save_object(
+                &id,
+                tracked_editor
+                    .blueprint_for_save(&styles)
+                    .expect("tracked object should be valid"),
+            )
+            .expect("external tracked edit should save");
+
+        reconcile_recovered_catalogs(&mut runtime, CatalogConflictChoice::Reject)
+            .expect("unchanged catalogs should reconcile");
+
+        assert!(runtime.recovery_conflict);
+        assert!(runtime.recovery_catalogs_reconciled);
+        assert!(runtime.recovery_object_requires_save_as);
+        assert_eq!(
+            runtime
+                .draft
+                .as_ref()
+                .expect("recovered draft should remain")
+                .editor()
+                .object()
+                .display_name,
+            "Recovered Edit"
+        );
+    }
+
+    #[test]
     fn clean_session_discards_obsolete_recovery_state() {
         let palette = fixture_palette();
         let styles = fixture_styles();
@@ -3479,6 +3607,7 @@ mod tests {
         store
             .write(&envelope)
             .expect("fixture recovery should write");
+        runtime.recovery_conflict = true;
         runtime.close_confirmation = true;
 
         apply_ui_action(WorkshopUiAction::KeepRecoveryAndClose, &mut runtime, None)
@@ -3487,6 +3616,33 @@ mod tests {
         assert!(store.path().exists());
         assert!(!runtime.close_confirmation);
         assert!(runtime.exit_requested);
+    }
+
+    #[test]
+    fn keep_recovery_and_close_stays_open_when_the_recovery_write_fails() {
+        let palette = fixture_palette();
+        let styles = fixture_styles();
+        let directory = TestProject::new(&palette, &styles);
+        let project = AssetProject::load(&directory.root).expect("fixture project should load");
+        let (editor, _) =
+            calibration_for_project(&project).expect("calibration fixture should be valid");
+        let draft = WorkshopDraft::new(palette, styles, editor);
+        let mut runtime = fixture_runtime(
+            project,
+            draft,
+            OpenDocument::Calibration,
+            RecoveryStore::new(&directory.root),
+        );
+        runtime.recovery_store = None;
+        runtime.recovery_conflict = true;
+        runtime.close_confirmation = true;
+
+        let error = apply_ui_action(WorkshopUiAction::KeepRecoveryAndClose, &mut runtime, None)
+            .expect_err("a failed recovery write must keep the Workshop open");
+
+        assert!(error.contains("recovery storage is unavailable"));
+        assert!(runtime.close_confirmation);
+        assert!(!runtime.exit_requested);
     }
 
     #[test]
