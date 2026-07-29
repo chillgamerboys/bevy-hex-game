@@ -247,7 +247,7 @@ impl ResolvedLayoutPlan {
             if actual != expected {
                 issues.push(LayoutIssue::SharedReferenceMismatch(*edge_id));
             }
-            validate_resolved_edge(*edge_id, edge, &self.patches, &mut issues);
+            validate_resolved_edge(*edge_id, edge, &self.patches, &self.footprint, &mut issues);
         }
         validate_liquid_graph(&self.patches, &self.shared_edges, &mut issues);
         for edge_id in references.into_keys() {
@@ -485,6 +485,10 @@ fn resolve_shared_edge(
     }
     let first_mask = masks.get(&first_id).cloned().unwrap_or_default();
     let second_mask = masks.get(&second_id).cloned().unwrap_or_default();
+    let footprint = masks
+        .values()
+        .flat_map(|mask| mask.iter().copied())
+        .collect::<BTreeSet<_>>();
     let boundary_pairs = boundary_pairs(&first_mask, &second_mask);
     if boundary_pairs.is_empty() {
         return Err(LayoutValidationError::one(
@@ -535,6 +539,7 @@ fn resolve_shared_edge(
         first_side,
         second_side,
         first.approach_depth,
+        &footprint,
     )
     .ok_or_else(|| {
         LayoutValidationError::one(LayoutIssue::InsufficientPortCapacity(first_id, second_id))
@@ -664,6 +669,7 @@ fn select_ports(
     first_side: HexSide,
     second_side: HexSide,
     approach_depth: u32,
+    footprint: &BTreeSet<HexCoord>,
 ) -> Option<Vec<ResolvedPort>> {
     if requests.is_empty() {
         return Some(Vec::new());
@@ -699,6 +705,7 @@ fn select_ports(
                 second_side,
                 width,
                 approach_depth,
+                footprint,
             )
         });
     }
@@ -882,6 +889,7 @@ fn port_candidates(
     second_side: HexSide,
     width: u32,
     approach_depth: u32,
+    footprint: &BTreeSet<HexCoord>,
 ) -> Vec<PortCandidate> {
     let Ok(width) = usize::try_from(width) else {
         return Vec::new();
@@ -893,30 +901,86 @@ fn port_candidates(
         .windows(width)
         .enumerate()
         .filter_map(|(start, window)| {
+            let end = start.saturating_add(width).saturating_sub(1);
             let lanes: BTreeSet<_> = window.iter().copied().collect();
-            let first_boundary = lanes.iter().map(|(coord, _)| *coord).collect();
-            let second_boundary = lanes.iter().map(|(_, coord)| *coord).collect();
+            let first_boundary = lanes
+                .iter()
+                .map(|(coord, _)| *coord)
+                .collect::<BTreeSet<_>>();
+            let second_boundary = lanes
+                .iter()
+                .map(|(_, coord)| *coord)
+                .collect::<BTreeSet<_>>();
+            if first_boundary
+                .iter()
+                .any(|coord| lane_touches_third_patch(*coord, first_mask, second_mask, footprint))
+                || second_boundary.iter().any(|coord| {
+                    lane_touches_third_patch(*coord, second_mask, first_mask, footprint)
+                })
+            {
+                return None;
+            }
+            let first_approach = approach_corridor(
+                &first_boundary,
+                first_mask,
+                first_side.opposite(),
+                approach_depth,
+            )?;
+            let second_approach = approach_corridor(
+                &second_boundary,
+                second_mask,
+                second_side.opposite(),
+                approach_depth,
+            )?;
+            if approach_touches_other_patch(&first_approach, &first_boundary, first_mask, footprint)
+                || approach_touches_other_patch(
+                    &second_approach,
+                    &second_boundary,
+                    second_mask,
+                    footprint,
+                )
+            {
+                return None;
+            }
             Some(PortCandidate {
                 start,
-                end: start + width - 1,
+                end,
                 port: ResolvedPort {
                     lanes,
-                    first_approach: approach_corridor(
-                        &first_boundary,
-                        first_mask,
-                        first_side.opposite(),
-                        approach_depth,
-                    )?,
-                    second_approach: approach_corridor(
-                        &second_boundary,
-                        second_mask,
-                        second_side.opposite(),
-                        approach_depth,
-                    )?,
+                    first_approach,
+                    second_approach,
                 },
             })
         })
         .collect()
+}
+
+fn lane_touches_third_patch(
+    coord: HexCoord,
+    local_mask: &BTreeSet<HexCoord>,
+    counterpart_mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+) -> bool {
+    coord.neighbors().into_iter().any(|neighbor| {
+        footprint.contains(&neighbor)
+            && !local_mask.contains(&neighbor)
+            && !counterpart_mask.contains(&neighbor)
+    })
+}
+
+fn approach_touches_other_patch(
+    approach: &BTreeSet<HexCoord>,
+    declared_lane: &BTreeSet<HexCoord>,
+    local_mask: &BTreeSet<HexCoord>,
+    footprint: &BTreeSet<HexCoord>,
+) -> bool {
+    approach.iter().any(|coord| {
+        !declared_lane.contains(coord)
+            && coord
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| footprint.contains(&neighbor) && !local_mask.contains(&neighbor))
+    })
 }
 
 fn generated_ring_masks(footprint: &BTreeSet<HexCoord>) -> BTreeMap<PatchId, BTreeSet<HexCoord>> {
@@ -1158,6 +1222,7 @@ fn validate_resolved_edge(
     id: ResolvedEdgeId,
     edge: &ResolvedEdgeContract,
     patches: &BTreeMap<PatchId, ResolvedPatch>,
+    footprint: &BTreeSet<HexCoord>,
     issues: &mut Vec<LayoutIssue>,
 ) {
     let Some(first) = patches.get(&edge.first.0) else {
@@ -1197,15 +1262,21 @@ fn validate_resolved_edge(
         .iter()
         .chain(liquid_port_ref(&edge.liquid))
         .collect();
-    let ports_valid = all_ports
-        .iter()
-        .all(|port| valid_resolved_port(port, edge, &first.mask, &second.mask, &expected_pairs))
-        && all_ports.iter().enumerate().all(|(index, port)| {
-            all_ports
-                .iter()
-                .skip(index + 1)
-                .all(|other| ports_are_disjoint(port, other))
-        });
+    let ports_valid = all_ports.iter().all(|port| {
+        valid_resolved_port(
+            port,
+            edge,
+            &first.mask,
+            &second.mask,
+            &expected_pairs,
+            footprint,
+        )
+    }) && all_ports.iter().enumerate().all(|(index, port)| {
+        all_ports
+            .iter()
+            .skip(index + 1)
+            .all(|other| ports_are_disjoint(port, other))
+    });
     let expected_first_approach = all_ports
         .iter()
         .flat_map(|port| port.first_approach.iter().copied())
@@ -1324,6 +1395,7 @@ fn valid_resolved_port(
     first_mask: &BTreeSet<HexCoord>,
     second_mask: &BTreeSet<HexCoord>,
     boundary_pairs: &BTreeSet<(HexCoord, HexCoord)>,
+    footprint: &BTreeSet<HexCoord>,
 ) -> bool {
     if port.lanes.is_empty()
         || !port.lanes.is_subset(boundary_pairs)
@@ -1338,6 +1410,12 @@ fn valid_resolved_port(
     let second_boundary: BTreeSet<_> = port.lanes.iter().map(|(_, coord)| *coord).collect();
     first_boundary.len() == port.lanes.len()
         && second_boundary.len() == port.lanes.len()
+        && first_boundary
+            .iter()
+            .all(|coord| !lane_touches_third_patch(*coord, first_mask, second_mask, footprint))
+        && second_boundary
+            .iter()
+            .all(|coord| !lane_touches_third_patch(*coord, second_mask, first_mask, footprint))
         && ordered_simple_seam_lanes(&port.lanes).is_some()
         && approach_corridor(
             &first_boundary,
@@ -1345,14 +1423,25 @@ fn valid_resolved_port(
             edge.first.1.opposite(),
             edge.approach_depth,
         )
-        .is_some_and(|expected| port.first_approach == expected)
+        .is_some_and(|expected| {
+            port.first_approach == expected
+                && !approach_touches_other_patch(&expected, &first_boundary, first_mask, footprint)
+        })
         && approach_corridor(
             &second_boundary,
             second_mask,
             edge.second.1.opposite(),
             edge.approach_depth,
         )
-        .is_some_and(|expected| port.second_approach == expected)
+        .is_some_and(|expected| {
+            port.second_approach == expected
+                && !approach_touches_other_patch(
+                    &expected,
+                    &second_boundary,
+                    second_mask,
+                    footprint,
+                )
+        })
 }
 
 /// One deterministic resolved-layout contract failure.
@@ -1864,6 +1953,7 @@ mod tests {
             edge.second.1,
             MAX_SEAM_PORT_WIDTH + 1,
             edge.approach_depth,
+            &resolved.footprint,
         )
         .into_iter()
         .map(|candidate| candidate.port)
@@ -1983,8 +2073,15 @@ mod tests {
                 (first, HexSide::East.neighbor(first))
             })
             .collect();
-        let first_mask = lanes.iter().map(|(first, _)| *first).collect();
-        let second_mask = lanes.iter().map(|(_, second)| *second).collect();
+        let first_mask = lanes
+            .iter()
+            .map(|(first, _)| *first)
+            .collect::<BTreeSet<_>>();
+        let second_mask = lanes
+            .iter()
+            .map(|(_, second)| *second)
+            .collect::<BTreeSet<_>>();
+        let footprint = first_mask.union(&second_mask).copied().collect();
         let requests =
             vec![PortRequest::Walker(MAX_SEAM_PORT_WIDTH); usize::from(MAX_WALKER_PORT_COUNT)];
 
@@ -1996,6 +2093,7 @@ mod tests {
             HexSide::East,
             HexSide::West,
             1,
+            &footprint,
         )
         .expect("four width-four ports exactly fit nineteen lanes with required gaps");
         assert_eq!(selected.len(), usize::from(MAX_WALKER_PORT_COUNT));

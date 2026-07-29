@@ -1149,11 +1149,45 @@ fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColu
     }
 }
 
-fn validate_hills(
+pub(crate) fn validate_hills(
     plan: &GeneratedWorldPlan,
     settings: &V3HillsSettings,
 ) -> WorldValidation<HillsMetrics> {
-    let mut issues = plan.validate();
+    validate_hills_inner(plan, settings, true)
+}
+
+pub(crate) fn validate_patch(
+    patch: PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    settings: &V3HillsSettings,
+) -> WorldValidation<HillsMetrics> {
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return WorldValidation::Invalid(vec![recipe_issue(format!(
+                    "Hills validation frame failed: {error}"
+                ))]);
+            }
+        };
+    match frame.canonical_local_world(fragment) {
+        Ok(plan) => validate_hills_inner(&plan, settings, false),
+        Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
+            "Hills validation projection failed: {error}"
+        ))]),
+    }
+}
+
+fn validate_hills_inner(
+    plan: &GeneratedWorldPlan,
+    settings: &V3HillsSettings,
+    validate_common: bool,
+) -> WorldValidation<HillsMetrics> {
+    let mut issues = if validate_common {
+        plan.validate()
+    } else {
+        Vec::new()
+    };
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let Some(party) = plan.anchors.get(PARTY_START).copied() else {
         issues.push(recipe_issue("Hills is missing party_start"));

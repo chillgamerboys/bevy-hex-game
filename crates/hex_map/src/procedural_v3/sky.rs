@@ -6,7 +6,7 @@ use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::hills;
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
 use super::seed::SeedStream;
@@ -17,7 +17,10 @@ use super::selection::{
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement,
 };
-use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
+use super::world::{
+    GeneratedWorldPlan, PlannedStructure, StructureId, StructureKind, WorldIssueCode,
+    WorldValidationIssue,
+};
 use super::V3GenerationError;
 use crate::settings::{
     ProceduralV3Settings, V3EnvironmentSettings, V3LayoutSettings, V3RecipeSettings,
@@ -245,6 +248,14 @@ pub(crate) fn construct_patch(
     )?;
     let mask = patch.mask().clone();
     let excluded = patch.protected_approaches();
+    let shared_boundary = patch
+        .shared_edges()
+        .flat_map(|edge| edge.boundary_pairs().into_iter().map(|(local, _)| local))
+        .collect::<BTreeSet<_>>();
+    let upper_mask = mask
+        .difference(&shared_boundary)
+        .copied()
+        .collect::<BTreeSet<_>>();
     let mut ground_levels = BTreeMap::<HexCoord, Level>::new();
     for surface in plan.volume.surfaces.keys() {
         ground_levels
@@ -259,11 +270,11 @@ pub(crate) fn construct_patch(
     let upper_base = upper_bottom.saturating_add(5);
 
     let centres = select_centres(
-        &mask,
+        &upper_mask,
         &excluded,
         streams.map(|streams| streams.island_centres),
     )?;
-    let bridge_rows = bridge_rows(&centres, &mask);
+    let bridge_rows = bridge_rows(&centres, &upper_mask);
     let bridge_estimate = bridge_rows
         .iter()
         .flat_map(|row| row.iter().copied())
@@ -277,9 +288,9 @@ pub(crate) fn construct_patch(
         .saturating_sub(bridge_estimate)
         .saturating_sub(7)
         .max(PRIMARY_ISLANDS);
-    let primary_cells = grow_primary_islands(&mask, &excluded, &centres, primary_target);
+    let primary_cells = grow_primary_islands(&upper_mask, &excluded, &centres, primary_target);
     let satellite_cells = select_satellite(
-        &mask,
+        &upper_mask,
         &excluded,
         &primary_cells,
         &bridge_rows,
@@ -307,8 +318,15 @@ pub(crate) fn construct_patch(
             },
         );
     }
-    let mut bridge_surfaces = BTreeSet::new();
-    for row in &bridge_rows {
+    let ring_layout = patch.layout().kind == LayoutKind::Ring7;
+    let first_sky_bridge_id = plan
+        .structures
+        .by_id
+        .keys()
+        .next_back()
+        .map_or(0, |id| id.0.saturating_add(1));
+    let mut reserved_ring_bridge_surfaces = BTreeSet::new();
+    for (bridge_index, row) in bridge_rows.iter().enumerate() {
         let Some(start) = row.first().copied() else {
             continue;
         };
@@ -318,17 +336,55 @@ pub(crate) fn construct_patch(
         let start_level = upper.get(&start).map_or(upper_base, |cell| cell.level);
         let end_level = upper.get(&end).map_or(start_level, |cell| cell.level);
         let denominator = row.len().saturating_sub(1).max(1);
+        let ring_route = ring_layout
+            .then(|| ring_bridge_route(row, &upper_mask, &reserved_ring_bridge_surfaces))
+            .transpose()?;
+        if let Some(route) = &ring_route {
+            reserved_ring_bridge_surfaces.extend(route.surfaces.iter().copied());
+        }
         for (index, coord) in row.iter().copied().enumerate() {
             let level = interpolated_level(start_level, end_level, index, denominator);
-            for lane_coord in two_wide_cells(coord, &mask) {
-                bridge_surfaces.insert(lane_coord);
-                upper.entry(lane_coord).or_insert(UpperCell {
+            let lane_cells = ring_route.as_ref().map_or_else(
+                || two_wide_cells(coord, &upper_mask),
+                |route| route.cells_at(index),
+            );
+            for lane_coord in lane_cells {
+                let bridge = UpperCell {
                     level,
                     material: SolidMaterialRole::Metal,
                     region: primary_region,
                     bridge: true,
-                });
+                };
+                if ring_layout {
+                    if ring_bridge_corridor_index(index, row.len()) {
+                        upper.insert(lane_coord, bridge);
+                    }
+                } else {
+                    upper.entry(lane_coord).or_insert(bridge);
+                }
             }
+        }
+        if let Some(route) = ring_route {
+            let surfaces = route
+                .surfaces
+                .into_iter()
+                .filter_map(|coord| {
+                    upper
+                        .get(&coord)
+                        .filter(|cell| cell.bridge)
+                        .map(|cell| TilePos::new(coord, cell.level))
+                })
+                .collect();
+            plan.structures.by_id.insert(
+                StructureId(
+                    first_sky_bridge_id
+                        .saturating_add(u32::try_from(bridge_index).unwrap_or(u32::MAX)),
+                ),
+                PlannedStructure {
+                    kind: StructureKind::Bridge,
+                    voxels: surfaces,
+                },
+            );
         }
     }
     for coord in &satellite_cells {
@@ -549,6 +605,107 @@ fn two_wide_cells(coord: HexCoord, mask: &BTreeSet<HexCoord>) -> BTreeSet<HexCoo
     cells
 }
 
+#[derive(Debug, Clone)]
+struct RingBridgeRoute {
+    lanes: Vec<[HexCoord; 2]>,
+    surfaces: BTreeSet<HexCoord>,
+}
+
+impl RingBridgeRoute {
+    fn cells_at(&self, index: usize) -> BTreeSet<HexCoord> {
+        self.lanes
+            .get(index)
+            .copied()
+            .map_or_else(BTreeSet::new, BTreeSet::from)
+    }
+}
+
+fn ring_bridge_route(
+    row: &[HexCoord],
+    mask: &BTreeSet<HexCoord>,
+    reserved: &BTreeSet<HexCoord>,
+) -> Result<RingBridgeRoute, Vec<WorldValidationIssue>> {
+    if row.len() < 4 {
+        return Err(vec![recipe_issue(format!(
+            "SkyIslands bridge row has {} cells; at least four are required",
+            row.len()
+        ))]);
+    }
+    let row_cells = row.iter().copied().collect::<BTreeSet<_>>();
+    let lane_candidates = row
+        .iter()
+        .enumerate()
+        .map(|(index, coord)| {
+            let mut candidates = coord
+                .neighbors()
+                .into_iter()
+                .filter(|neighbor| mask.contains(neighbor) && !row_cells.contains(neighbor))
+                .filter(|neighbor| {
+                    index == 0 || index + 1 == row.len() || !reserved.contains(neighbor)
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_unstable();
+            candidates
+        })
+        .collect::<Vec<_>>();
+    let mut paths = lane_candidates
+        .first()
+        .into_iter()
+        .flatten()
+        .copied()
+        .map(|coord| (coord, vec![coord]))
+        .collect::<BTreeMap<_, _>>();
+    for candidates in lane_candidates.iter().skip(1) {
+        let mut next_paths = BTreeMap::<HexCoord, Vec<HexCoord>>::new();
+        for candidate in candidates {
+            for path in paths.values() {
+                if path.last().is_some_and(|previous| {
+                    previous.distance(*candidate) == 1 && !path.contains(candidate)
+                }) {
+                    let mut extended = path.clone();
+                    extended.push(*candidate);
+                    next_paths
+                        .entry(*candidate)
+                        .and_modify(|existing| {
+                            if extended < *existing {
+                                *existing = extended.clone();
+                            }
+                        })
+                        .or_insert(extended);
+                }
+            }
+        }
+        paths = next_paths;
+    }
+    let shifted = paths.into_values().min().ok_or_else(|| {
+        vec![recipe_issue(
+            "SkyIslands could not fit a distinct parallel two-wide upper bridge",
+        )]
+    })?;
+    let lanes = row
+        .iter()
+        .copied()
+        .zip(shifted)
+        .map(|(first, second)| [first, second])
+        .collect::<Vec<_>>();
+    let surfaces = lanes
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| ring_bridge_corridor_index(*index, lanes.len()))
+        .flat_map(|(_, lane)| lane.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if !surfaces.is_disjoint(reserved) {
+        return Err(vec![recipe_issue(
+            "SkyIslands upper bridge overlaps another retained bridge span",
+        )]);
+    }
+    Ok(RingBridgeRoute { lanes, surfaces })
+}
+
+fn ring_bridge_corridor_index(index: usize, row_len: usize) -> bool {
+    index > 1 && index.saturating_add(2) < row_len
+}
+
 fn interpolated_level(start: Level, end: Level, index: usize, denominator: usize) -> Level {
     let delta = end.saturating_sub(start);
     let index = i32::try_from(index).unwrap_or(i32::MAX);
@@ -565,7 +722,7 @@ const fn surface_material(environment: V3EnvironmentSettings) -> SolidMaterialRo
     }
 }
 
-fn validate_sky(
+pub(crate) fn validate_sky(
     plan: &GeneratedWorldPlan,
     settings: &V3SkyIslandsSettings,
 ) -> WorldValidation<SkyMetrics> {
@@ -573,7 +730,7 @@ fn validate_sky(
     let mut ground = BTreeMap::<HexCoord, TilePos>::new();
     let mut primary = BTreeSet::new();
     let mut satellites = BTreeSet::new();
-    let mut bridge_surfaces = 0_u32;
+    let mut metal_primary_surfaces = BTreeSet::new();
     let primary_region = SpecialMovementRegion(0);
     let satellite_region = SpecialMovementRegion(1);
     for (position, metadata) in &plan.volume.surfaces {
@@ -591,7 +748,7 @@ fn validate_sky(
             SurfaceAccess::SpecialMovement(region) if region == primary_region => {
                 primary.insert(*position);
                 if upper_surface_material(plan, *position) == Some(SolidMaterialRole::Metal) {
-                    bridge_surfaces = bridge_surfaces.saturating_add(1);
+                    metal_primary_surfaces.insert(*position);
                 }
             }
             SurfaceAccess::SpecialMovement(region) if region == satellite_region => {
@@ -631,11 +788,17 @@ fn validate_sky(
             settings.min_clearance
         )));
     }
-    if bridge_surfaces < 4 {
-        issues.push(recipe_issue(
-            "SkyIslands primary network lacks two-wide upper bridges",
-        ));
-    }
+    let bridge_surfaces = if plan.layout.kind == LayoutKind::Ring7 {
+        validate_ring_upper_bridges(plan, &primary, &metal_primary_surfaces, &mut issues)
+    } else {
+        let count = count_u32(metal_primary_surfaces.len());
+        if count < 4 {
+            issues.push(recipe_issue(
+                "SkyIslands primary network lacks two-wide upper bridges",
+            ));
+        }
+        count
+    };
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
     }
@@ -708,6 +871,214 @@ fn surface_network_connected(surfaces: &BTreeSet<TilePos>) -> bool {
         }
     }
     visited.len() == surfaces.len()
+}
+
+fn validate_ring_upper_bridges(
+    plan: &GeneratedWorldPlan,
+    primary: &BTreeSet<TilePos>,
+    metal_primary: &BTreeSet<TilePos>,
+    issues: &mut Vec<WorldValidationIssue>,
+) -> u32 {
+    let bridges = plan
+        .structures
+        .by_id
+        .values()
+        .filter(|structure| {
+            structure.kind == StructureKind::Bridge
+                && !structure.voxels.is_empty()
+                && structure.voxels.iter().all(|voxel| primary.contains(voxel))
+        })
+        .collect::<Vec<_>>();
+    if bridges.len() != 2 {
+        issues.push(recipe_issue(format!(
+            "SkyIslands requires exactly two upper bridge structures, found {}",
+            bridges.len()
+        )));
+        return count_u32(metal_primary.len());
+    }
+    let [first_bridge, second_bridge] = bridges.as_slice() else {
+        return count_u32(metal_primary.len());
+    };
+
+    let bridge_union = bridges
+        .iter()
+        .flat_map(|bridge| bridge.voxels.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if bridge_union != *metal_primary {
+        issues.push(recipe_issue(
+            "SkyIslands upper bridge structures do not exactly cover the metal primary surfaces",
+        ));
+    }
+    if !first_bridge.voxels.is_disjoint(&second_bridge.voxels) {
+        issues.push(recipe_issue(
+            "SkyIslands upper bridge structures overlap instead of naming distinct spans",
+        ));
+    }
+
+    let island_surfaces = primary
+        .difference(&bridge_union)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let island_components = surface_components(&island_surfaces);
+    if island_components.len() != PRIMARY_ISLANDS {
+        issues.push(recipe_issue(format!(
+            "SkyIslands has {} non-bridge primary components; expected {PRIMARY_ISLANDS}",
+            island_components.len()
+        )));
+        return count_u32(bridge_union.len());
+    }
+
+    let mut links = BTreeSet::new();
+    for (index, bridge) in bridges.iter().enumerate() {
+        if bridge.voxels.len() < 4 || bridge.voxels.len() % 2 != 0 {
+            issues.push(recipe_issue(format!(
+                "SkyIslands upper bridge {index} has {} voxels and is not a two-wide span",
+                bridge.voxels.len()
+            )));
+            continue;
+        }
+        if !surface_network_connected(&bridge.voxels) {
+            issues.push(recipe_issue(format!(
+                "SkyIslands upper bridge {index} is not internally connected"
+            )));
+        }
+        let contacts = island_components
+            .iter()
+            .enumerate()
+            .filter_map(|(component, island)| {
+                let bridge_contacts = bridge
+                    .voxels
+                    .iter()
+                    .copied()
+                    .filter(|voxel| {
+                        island
+                            .iter()
+                            .any(|surface| surfaces_adjoin(*voxel, *surface))
+                    })
+                    .collect::<BTreeSet<_>>();
+                (!bridge_contacts.is_empty()).then_some((component, bridge_contacts))
+            })
+            .collect::<Vec<_>>();
+        if contacts.len() != 2 {
+            issues.push(recipe_issue(format!(
+                "SkyIslands upper bridge {index} touches {} primary islands; expected two",
+                contacts.len()
+            )));
+            continue;
+        }
+        if contacts.iter().any(|(_, contacts)| contacts.len() < 2) {
+            issues.push(recipe_issue(format!(
+                "SkyIslands upper bridge {index} does not have two independent landing contacts"
+            )));
+            continue;
+        }
+        let [(first_component, first_contacts), (second_component, second_contacts)] =
+            contacts.as_slice()
+        else {
+            continue;
+        };
+        for removed in &bridge.voxels {
+            if !bridge_connects_contacts(
+                &bridge.voxels,
+                first_contacts,
+                second_contacts,
+                Some(*removed),
+            ) {
+                issues.push(recipe_issue(format!(
+                    "SkyIslands upper bridge {index} narrows to a one-voxel choke at {removed:?}"
+                )));
+                break;
+            }
+        }
+        links.insert((
+            *first_component.min(second_component),
+            *first_component.max(second_component),
+        ));
+    }
+    if links.len() != 2 || !component_links_connected(PRIMARY_ISLANDS, &links) {
+        issues.push(recipe_issue(
+            "SkyIslands upper bridges do not form two distinct links across all three primary islands",
+        ));
+    }
+    count_u32(bridge_union.len())
+}
+
+fn surface_components(surfaces: &BTreeSet<TilePos>) -> Vec<BTreeSet<TilePos>> {
+    let mut remaining = surfaces.clone();
+    let mut components = Vec::new();
+    while let Some(start) = remaining.first().copied() {
+        remaining.remove(&start);
+        let mut component = BTreeSet::from([start]);
+        let mut frontier = VecDeque::from([start]);
+        while let Some(position) = frontier.pop_front() {
+            let neighbors = remaining
+                .iter()
+                .copied()
+                .filter(|neighbor| surfaces_adjoin(position, *neighbor))
+                .collect::<Vec<_>>();
+            for neighbor in neighbors {
+                remaining.remove(&neighbor);
+                component.insert(neighbor);
+                frontier.push_back(neighbor);
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
+fn surfaces_adjoin(first: TilePos, second: TilePos) -> bool {
+    first.coord.distance(second.coord) == 1 && first.level.abs_diff(second.level) <= 1
+}
+
+fn bridge_connects_contacts(
+    bridge: &BTreeSet<TilePos>,
+    starts: &BTreeSet<TilePos>,
+    goals: &BTreeSet<TilePos>,
+    removed: Option<TilePos>,
+) -> bool {
+    let mut visited = starts
+        .iter()
+        .copied()
+        .filter(|start| Some(*start) != removed)
+        .collect::<BTreeSet<_>>();
+    let mut frontier = VecDeque::from_iter(visited.iter().copied());
+    while let Some(position) = frontier.pop_front() {
+        if goals.contains(&position) {
+            return true;
+        }
+        for neighbor in bridge {
+            if Some(*neighbor) != removed
+                && surfaces_adjoin(position, *neighbor)
+                && visited.insert(*neighbor)
+            {
+                frontier.push_back(*neighbor);
+            }
+        }
+    }
+    false
+}
+
+fn component_links_connected(count: usize, links: &BTreeSet<(usize, usize)>) -> bool {
+    let mut visited = BTreeSet::from([0]);
+    let mut frontier = VecDeque::from([0]);
+    while let Some(component) = frontier.pop_front() {
+        for (first, second) in links {
+            let neighbor = if *first == component {
+                Some(*second)
+            } else if *second == component {
+                Some(*first)
+            } else {
+                None
+            };
+            if let Some(neighbor) = neighbor {
+                if visited.insert(neighbor) {
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+    }
+    visited.len() == count
 }
 
 fn sky_view_hint(

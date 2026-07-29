@@ -101,24 +101,6 @@ impl GeneratedPatchPlan {
         issues
     }
 
-    pub(crate) fn isolated_world(
-        &self,
-        layout: &ResolvedLayoutPlan,
-    ) -> Result<GeneratedWorldPlan, Vec<PatchValidationIssue>> {
-        let issues = self.validate_against(layout);
-        if !issues.is_empty() {
-            return Err(issues);
-        }
-        let Some(resolved_patch) = layout.patches.get(&self.patch_id) else {
-            return Err(vec![PatchValidationIssue::new(
-                self.patch_id,
-                PatchIssueCode::MissingPatch,
-                format!("resolved layout does not contain patch {}", self.patch_id.0),
-            )]);
-        };
-        Ok(self.isolated_world_unchecked(layout, resolved_patch))
-    }
-
     fn isolated_world_unchecked(
         &self,
         layout: &ResolvedLayoutPlan,

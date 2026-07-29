@@ -276,8 +276,7 @@ fn validate_footprint_capacity(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
     let patch = layout.patches.get(&PatchId(0)).ok_or_else(|| {
         V3GenerationError::RecipeContract("Single Fort layout has no patch zero".to_owned())
     })?;
-    let protected = protected_approaches(layout, PatchId(0));
-    if choose_site_center(&patch.mask, &protected).is_none() {
+    if choose_site_center(&patch.mask).is_none() {
         return Err(V3GenerationError::RecipeContract(format!(
             "Fort requires a connected patch containing one unobstructed radius-{SITE_RADIUS} site"
         )));
@@ -310,7 +309,7 @@ fn construct_patch_with_streams(
     let mask = patch.mask().clone();
     let biome_region = patch.biome_region();
     let protected = patch.protected_approaches();
-    let center = choose_site_center(&mask, &protected).ok_or_else(|| {
+    let preferred_center = choose_site_center(&mask).ok_or_else(|| {
         vec![recipe_issue(format!(
             "Fort footprint cannot fit an unobstructed radius-{SITE_RADIUS} site"
         ))]
@@ -322,14 +321,45 @@ fn construct_patch_with_streams(
     let keep_variant = streams.map_or(0, |streams| {
         u8::try_from(streams.keep.sample(0) % 3).unwrap_or_default()
     });
-    let template = FortTemplate::new(
-        &mask,
-        center,
-        ground_level,
-        rotation,
-        keep_variant,
-        &protected,
-    )?;
+    let template = if patch.layout().kind == super::layout::LayoutKind::Single {
+        FortTemplate::new(
+            &mask,
+            preferred_center,
+            ground_level,
+            rotation,
+            keep_variant,
+            &protected,
+        )?
+    } else {
+        site_centers(&mask)
+            .into_iter()
+            .find_map(|center| {
+                (0..6_u8)
+                    .map(|offset| rotation.saturating_add(offset) % 6)
+                    .flat_map(|rotation| {
+                        (0..3_u8).map(move |offset| {
+                            (rotation, keep_variant.saturating_add(offset) % 3)
+                        })
+                    })
+                    .find_map(|(rotation, keep_variant)| {
+                        FortTemplate::new(
+                            &mask,
+                            center,
+                            ground_level,
+                            rotation,
+                            keep_variant,
+                            &protected,
+                        )
+                        .ok()
+                    })
+            })
+            .ok_or_else(|| {
+                vec![recipe_issue(
+                    "Fort cannot orient its exact structure footprint around protected seam approaches",
+                )]
+            })?
+    };
+    let center = template.center;
 
     let mut surface_by_coord = mask
         .iter()
@@ -733,7 +763,7 @@ impl FortTemplate {
     }
 }
 
-fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMetrics> {
+pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMetrics> {
     let mut issues = Vec::new();
     if !plan.liquids.bodies.is_empty()
         || !plan.features.by_id.is_empty()
@@ -981,25 +1011,26 @@ fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMetrics> {
 fn detect_template(plan: &GeneratedWorldPlan) -> Option<FortTemplate> {
     let patch = plan.layout.patches.get(&PatchId(0))?;
     let protected = protected_approaches(&plan.layout, PatchId(0));
-    let center = choose_site_center(&patch.mask, &protected)?;
     let ground_level = patch_ground_level(&plan.layout, PatchId(0));
-    for rotation in 0..6 {
-        for keep_variant in 0..3 {
-            let Ok(template) = FortTemplate::new(
-                &patch.mask,
-                center,
-                ground_level,
-                rotation,
-                keep_variant,
-                &protected,
-            ) else {
-                continue;
-            };
-            if plan.anchors.get(PARTY_START) == Some(&template.party_start())
-                && plan.anchors.get(HOSTILE_START) == Some(&template.hostile_start())
-                && plan.structures == template.structure_plan()
-            {
-                return Some(template);
+    for center in site_centers(&patch.mask) {
+        for rotation in 0..6 {
+            for keep_variant in 0..3 {
+                let Ok(template) = FortTemplate::new(
+                    &patch.mask,
+                    center,
+                    ground_level,
+                    rotation,
+                    keep_variant,
+                    &protected,
+                ) else {
+                    continue;
+                };
+                if plan.anchors.get(PARTY_START) == Some(&template.party_start())
+                    && plan.anchors.get(HOSTILE_START) == Some(&template.hostile_start())
+                    && plan.structures == template.structure_plan()
+                {
+                    return Some(template);
+                }
             }
         }
     }
@@ -1067,10 +1098,11 @@ fn surface_material(plan: &GeneratedWorldPlan, surface: TilePos) -> Option<Solid
         })
 }
 
-fn choose_site_center(
-    mask: &BTreeSet<HexCoord>,
-    protected: &BTreeSet<HexCoord>,
-) -> Option<HexCoord> {
+fn choose_site_center(mask: &BTreeSet<HexCoord>) -> Option<HexCoord> {
+    site_centers(mask).into_iter().next()
+}
+
+fn site_centers(mask: &BTreeSet<HexCoord>) -> Vec<HexCoord> {
     let boundary: Vec<_> = mask
         .iter()
         .copied()
@@ -1081,30 +1113,29 @@ fn choose_site_center(
                 .any(|neighbor| !mask.contains(&neighbor))
         })
         .collect();
-    mask.iter()
+    let mut candidates = mask
+        .iter()
         .copied()
         .filter(|center| {
             center
                 .within_radius(SITE_RADIUS)
                 .into_iter()
-                .all(|coord| mask.contains(&coord) && !protected.contains(&coord))
+                .all(|coord| mask.contains(&coord))
         })
-        .max_by_key(|center| {
-            let clearance = boundary
-                .iter()
-                .map(|boundary| center.distance(*boundary))
-                .min()
-                .unwrap_or_default();
-            let centrality = mask
-                .iter()
-                .map(|coord| u64::from(center.distance(*coord)))
-                .sum::<u64>();
-            (
-                clearance,
-                std::cmp::Reverse(centrality),
-                std::cmp::Reverse(*center),
-            )
-        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|center| {
+        let clearance = boundary
+            .iter()
+            .map(|boundary| center.distance(*boundary))
+            .min()
+            .unwrap_or_default();
+        let centrality = mask
+            .iter()
+            .map(|coord| u64::from(center.distance(*coord)))
+            .sum::<u64>();
+        (std::cmp::Reverse(clearance), centrality, *center)
+    });
+    candidates
 }
 
 fn protected_approaches(layout: &ResolvedLayoutPlan, patch: PatchId) -> BTreeSet<HexCoord> {

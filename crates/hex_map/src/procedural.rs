@@ -316,6 +316,8 @@ pub struct Ring7Metrics {
     pub redundant_regions: u32,
     /// Exact directed liquid crossings installed across patch seams.
     pub directed_liquid_seams: u32,
+    /// Unique horizontal coordinates occupied by liquid anywhere in the world.
+    pub liquid_cells: u32,
     /// Authored surface-feature instances across the complete world.
     pub feature_instances: u32,
     /// Authored semantic structures across the complete world.

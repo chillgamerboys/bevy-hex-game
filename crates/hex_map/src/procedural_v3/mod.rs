@@ -28,10 +28,6 @@ use world::WorldValidationIssue;
 
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
-#[expect(
-    dead_code,
-    reason = "Ring7 recipe integration consumes checked patch composition in the next PR"
-)]
 mod composition;
 #[cfg(test)]
 mod dry_patch_tests;
@@ -56,6 +52,7 @@ mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
 mod patch;
+mod ring7;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -75,10 +72,6 @@ mod traversal;
 mod volume;
 pub(crate) use volume::FillMaterialRole;
 mod waterfall;
-#[expect(
-    dead_code,
-    reason = "the complete semantic plan is consumed by the V3 selection runner"
-)]
 mod world;
 #[cfg(test)]
 pub(crate) use world::PlannedFeature;
@@ -199,7 +192,7 @@ pub(crate) fn ensure_recipe_available(
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
             &patch.recipe,
         ))),
-        V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+        V3LayoutSettings::Ring7(_) => Ok(()),
     }
 }
 
@@ -348,8 +341,42 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
             &patch.recipe,
         ))),
-        V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+        V3LayoutSettings::Ring7(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Ring7 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                ring7::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                ring7_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Ring7(ring7_recipe_metrics(metrics)),
+            )
+        }
     }
+}
+
+fn ring7_report_metrics(metrics: &ring7::Ring7Metrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn ring7_recipe_metrics(metrics: &ring7::Ring7Metrics) -> crate::procedural::Ring7Metrics {
+    metrics.report
 }
 
 fn hills_report_metrics(metrics: &hills::HillsMetrics) -> TacticalMetrics {

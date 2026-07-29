@@ -128,6 +128,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Seven Regions",
+            category: Map,
+            blurb: "One connected V3 world joining hills, mountains, waterfall, forest, fort, caves, and sky islands.",
+            world: "config/worlds/procedural-ring7.ron",
+            generation_seed: Some(703700113),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Party Trial",
             category: Demo,
             blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",
