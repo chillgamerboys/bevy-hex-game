@@ -113,9 +113,6 @@ fn take_enemy_turn(
         // Not an enemy's turn, or it is still mid-presentation.
         return;
     };
-    if turn.acted {
-        return;
-    }
     let Some(my_id) = unit.copied() else {
         // `begin_combat` deals ids before any turn is taken, so this is a
         // wiring bug — and it must be loud, or the fight stalls silently on a
@@ -124,6 +121,19 @@ fn take_enemy_turn(
         return;
     };
     let seat = owner.copied().unwrap_or_default().0;
+    // A strike may have opened a defender decision on the previous frame. Once
+    // that answer and the attack presentation are both finished, the action-spent
+    // turn still needs an explicit end command; prequeueing it beside the strike
+    // would make the modal gate reject it before the defender could answer.
+    if turn.acted {
+        if !queue.holds_command_for(my_id) {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
+        }
+        return;
+    }
 
     let footing = Footing::from_tiles(tiles.iter(), &table, *body);
     let plan = best_foe(&others, *faction, standing.0, &footing, turn.movement_left);
@@ -137,6 +147,9 @@ fn take_enemy_turn(
                     target,
                 },
             });
+            // Do not prequeue EndTurn. Applying this strike can open a defender
+            // decision, making every later command in the same drain correctly
+            // illegal. The `turn.acted` branch above ends the turn after resolution.
         }
         Some(FoeAction::Move(approach)) => {
             queue.push(IssuedCommand {
@@ -146,16 +159,23 @@ fn take_enemy_turn(
                     path: approach.steps.iter().map(|step| step.pos).collect(),
                 },
             });
+            // Movement opens no mid-resolution decision, and EndTurn is deliberately
+            // legal while its presentation is still running.
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
         }
         // Nothing to fight, no way to reach it, or a target no spawn path
         // identified. Ending the turn regardless keeps the order moving
         // rather than stalling on a unit with nothing it can do.
-        Some(FoeAction::Wait) | None => {}
+        Some(FoeAction::Wait) | None => {
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::EndTurn { unit: my_id },
+            });
+        }
     }
-    queue.push(IssuedCommand {
-        seat,
-        command: GameCommand::EndTurn { unit: my_id },
-    });
 }
 
 /// What the enemy can do about one foe this turn.

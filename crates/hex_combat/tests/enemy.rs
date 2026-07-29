@@ -18,9 +18,11 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn, UnitId,
+    CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand,
+    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId,
     MAX_HEADROOM,
 };
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn};
 
 const GROUND: f32 = 2.0;
@@ -404,6 +406,88 @@ fn an_adjacent_enemy_attacks_without_moving() {
         coord_of(&app, enemy),
         Some(adjacent),
         "an attack should not change which surface the enemy stands on"
+    );
+}
+
+/// A hostile strike can park resolution on a human defender choice. The AI must not
+/// prequeue its end-turn beside that strike — the modal gate correctly refuses every
+/// command except the matching answer — but it must still end the spent turn once the
+/// answer and presentation have both finished.
+#[test]
+fn a_player_defence_choice_does_not_strand_the_enemy_turn() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(100),
+    ));
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+    );
+    let spec = LatticeSpec::default()
+        .with(LatticeCoord::ORIGIN, CellKind::Blank)
+        .with(LatticeCoord::new(1, 0), CellKind::Blank);
+    let stats = LatticeStats::default();
+    let state = LatticeState::new(&spec, &stats);
+    app.world_mut()
+        .entity_mut(player)
+        .insert((ControlOwner::default(), spec, state, stats));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert(ControlOwner::default());
+    enter_gameplay(&mut app);
+
+    let player_id = unit_id(&app, player);
+    let enemy_id = unit_id(&app, enemy);
+    end_turn(&mut app);
+
+    assert_eq!(
+        *app.world().resource::<PendingDecision>(),
+        PendingDecision::ChooseDisables {
+            decider: player_id,
+            count: 1,
+            source: enemy_id,
+        },
+        "the adjacent strike should wait for the player to name its disabled cell"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(enemy_id),
+        "the attacker owns the turn while its damage is unresolved"
+    );
+
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseDisables {
+                unit: player_id,
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        });
+    app.update();
+
+    for _ in 0..20 {
+        app.update();
+        if app.world().resource::<TurnOrder>().current() == Some(player_id) {
+            break;
+        }
+    }
+
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the matching player answer should resolve the parked damage"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(player_id),
+        "the AI should end its already-spent turn after the decision and lunge resolve"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_some(),
+        "the player should receive the next turn"
     );
 }
 
