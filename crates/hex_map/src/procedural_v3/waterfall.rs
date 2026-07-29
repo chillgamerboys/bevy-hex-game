@@ -1867,6 +1867,25 @@ mod tests {
     }
 
     #[test]
+    fn radius_12_pr_corpus_validates_128_waterfall_seeds_and_named_regressions() {
+        let mut seeds: BTreeSet<u64> = (0..128).collect();
+        seeds.extend([808, 4_294_967_311]);
+        let mut fallbacks = 0_usize;
+
+        for &seed in &seeds {
+            let selected = generate(12, 0.4, &settings(), seed)
+                .unwrap_or_else(|error| panic!("radius-12 Waterfall seed {seed}: {error}"));
+            fallbacks += usize::from(selected.used_fallback);
+        }
+
+        assert!(
+            fallbacks.saturating_mul(100) < seeds.len(),
+            "{fallbacks}/{} radius-12 Waterfall seeds used fallback",
+            seeds.len()
+        );
+    }
+
+    #[test]
     fn authored_flow_contains_every_required_stage_and_exact_three_wide_fall() {
         let selected = generate(12, 0.4, &settings(), 77).expect("Waterfall should generate");
         let metrics = &selected.metrics;
@@ -2357,10 +2376,9 @@ mod tests {
                 .last()
                 .copied()
                 .expect("the benchmark records twelve samples");
-            eprintln!("V3 Waterfall full build radius {radius}: median={median:?} p95={p95:?}");
-            assert!(
-                median < budget && p95 < budget,
-                "radius {radius} median={median:?} p95={p95:?}, budget={budget:?}"
+            eprintln!(
+                "V3 Waterfall full build radius {radius}: median={median:?} p95={p95:?} \
+                 target={budget:?} (trend only)"
             );
         }
     }

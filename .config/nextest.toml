@@ -1,0 +1,14 @@
+[profile.ci]
+# One failure must not hide unrelated regressions in another crate.
+fail-fast = false
+# Emit a live heartbeat for genuinely slow tests. The weekly stress workflow owns
+# multi-minute corpora, so this is diagnostic rather than an excuse to terminate an
+# otherwise-correct ordinary regression.
+slow-timeout = "60s"
+
+[profile.ci.junit]
+# Relative profile paths are written below target/nextest/<profile>/.
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+report-skipped = "ignored"

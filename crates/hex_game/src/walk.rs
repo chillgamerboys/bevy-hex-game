@@ -47,7 +47,7 @@ use hex_units::{Body, Downed, Enemy, Footing, Player, Reach, StandsOn};
 use serde::Deserialize;
 
 use crate::capture::write_png;
-use crate::casting::Aiming;
+use crate::casting::{Aiming, AnchorMarker};
 use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
@@ -163,7 +163,7 @@ enum WalkStep {
     AimAtPlayer(u64),
     /// Point an in-flight spell at the first hostile by stable id.
     AimAtHostile,
-    /// Move an in-flight aim to an unoccupied surface, retaining its prior target.
+    /// Move an in-flight aim to a legal unoccupied anchor, retaining its prior target.
     AimAtEmpty,
     /// Press and release a supported gameplay or menu key.
     Key(String),
@@ -332,6 +332,7 @@ struct WalkCombat<'w, 's> {
     traces: Option<Res<'w, AiDecisionTraces>>,
     aiming: Option<ResMut<'w, Aiming>>,
     enemies: Query<'w, 's, (&'static UnitId, &'static StandsOn), (With<Enemy>, Without<Downed>)>,
+    anchors: Query<'w, 's, &'static TilePos, With<AnchorMarker>>,
     terrain: WalkTerrain<'w, 's>,
 }
 
@@ -726,31 +727,37 @@ fn run_walk(
             }
         }
         WalkStep::AimAtEmpty => {
-            let Some(aim) = combat
-                .aiming
-                .as_deref_mut()
-                .and_then(|aiming| aiming.0.as_mut())
-            else {
-                return;
-            };
             let occupied = players
                 .iter()
                 .map(|(_, _, standing, ..)| standing.0.pos)
                 .chain(combat.enemies.iter().map(|(_, standing)| standing.0.pos))
                 .collect::<Vec<_>>();
-            let mut surfaces = tiles
+            let Some(current_anchor) = combat
+                .aiming
+                .as_deref()
+                .and_then(|aiming| aiming.0.as_ref())
+                .map(|aim| aim.anchor)
+            else {
+                return;
+            };
+            let mut surfaces = combat
+                .anchors
                 .iter()
-                .map(|(_, position)| *position)
-                .filter(|position| !occupied.contains(position))
+                .copied()
+                .filter(|anchor| !occupied.contains(anchor))
                 .collect::<Vec<_>>();
             surfaces.sort_by_key(|position| {
                 (
-                    aim.anchor.coord.distance(position.coord),
-                    (aim.anchor.level - position.level).abs(),
+                    current_anchor.coord.distance(position.coord),
+                    (current_anchor.level - position.level).abs(),
                     *position,
                 )
             });
-            if let Some(position) = surfaces.first().copied() {
+            let aim = combat
+                .aiming
+                .as_deref_mut()
+                .and_then(|aiming| aiming.0.as_mut());
+            if let (Some(position), Some(aim)) = (surfaces.first().copied(), aim) {
                 info!("visual walk moving aim over empty surface {position:?}");
                 aim.anchor = position;
                 state.advance();

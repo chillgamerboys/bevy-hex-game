@@ -1,0 +1,84 @@
+name: Deep checks
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - crates/hex_core/**
+      - crates/hex_ai/**
+      - crates/hex_lattice/**
+      - .github/workflows/deep-checks.yaml
+  workflow_dispatch:
+  schedule:
+    - cron: "43 8 * * 4"
+
+concurrency:
+  group: deep-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  DEEP_TOOLCHAIN: nightly-2026-07-29
+
+jobs:
+  miri:
+    name: Pure rules under Miri
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: ${{ env.DEEP_TOOLCHAIN }}
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: miri
+      - name: Record the interpreted toolchain
+        run: rustc +${DEEP_TOOLCHAIN} --version --verbose
+      - name: Prepare Miri
+        run: cargo +${DEEP_TOOLCHAIN} miri setup
+      - name: Interpret pure domain suites
+        run: >-
+          cargo +${DEEP_TOOLCHAIN} miri test
+          --lib
+          --tests
+          --package hex_core
+          --package hex_lattice
+          --package hex_ai
+
+  address-sanitizer:
+    name: Headless AddressSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          toolchain: ${{ env.DEEP_TOOLCHAIN }}
+          components: rust-src
+          targets: x86_64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: address-sanitizer
+      - name: Record the instrumented toolchain
+        run: rustc +${DEEP_TOOLCHAIN} --version --verbose
+      - name: Run instrumented headless suites
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=1
+        run: >-
+          cargo +${DEEP_TOOLCHAIN} test
+          -Zbuild-std
+          --target x86_64-unknown-linux-gnu
+          --lib
+          --tests
+          --package hex_core
+          --package hex_lattice
+          --package hex_ai

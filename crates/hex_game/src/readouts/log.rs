@@ -11,6 +11,7 @@ use hex_assets::{ElementCatalog, SpellBook};
 use hex_combat::{CombatEvent, CombatSystems, CommandRefusal, FactionLatticeKnowledge};
 use hex_core::{AppSystems, GameCommand, LatticeCoord, Screen, TilePos, UnitId};
 use hex_lattice::{CellKind, LatticeSpec};
+use hex_perception::FactionMapKnowledge;
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
 
 use super::lattice::{set_pulse_color, RetainedTarget, TargetPanel};
@@ -33,6 +34,11 @@ struct CombatLog {
     /// Damage outcomes follow a typed cause event. This freezes that stable cause by
     /// source/target pair until the resulting defender answer resolves.
     causes: BTreeMap<(UnitId, UnitId), DamageCause>,
+    /// A cause whose authoritative source is not disclosed to the player.
+    ///
+    /// Keying only by the visible target preserves qualitative Burn de-duplication
+    /// without retaining the hidden source identity inside presentation state.
+    anonymous_causes: BTreeMap<UnitId, DamageCause>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,21 +206,41 @@ fn ingest(
     mut pulse: ResMut<DamagePulse>,
     registry: Res<UnitRegistry>,
     identities: IdentityQuery,
+    spatial: Option<Res<FactionMapKnowledge>>,
     own_lattices: Query<(&UnitId, &LatticeSpec), With<Player>>,
     knowledge: Res<FactionLatticeKnowledge>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
 ) {
     for event in events.read() {
-        remember_cause(event, &mut log, &registry, &identities);
+        if !event_is_disclosed(
+            Faction::Player,
+            event,
+            &registry,
+            &identities,
+            spatial.as_deref(),
+        ) {
+            clear_resolved_cause(event, &mut log);
+            continue;
+        }
+        remember_cause(
+            Faction::Player,
+            event,
+            &mut log,
+            &registry,
+            &identities,
+            spatial.as_deref(),
+        );
         if let Some(target) = pulse_target(event) {
             pulse.start(target);
         }
         if let Some(line) = format_event(
+            Faction::Player,
             event,
             &log,
             &registry,
             &identities,
+            spatial.as_deref(),
             &own_lattices,
             &knowledge,
             elements.as_deref(),
@@ -222,17 +248,88 @@ fn ingest(
         ) {
             log.push(line);
         }
-        if let CombatEvent::HexesDisabled { source, target, .. } = event {
-            log.causes.remove(&(*source, *target));
-        }
+        clear_resolved_cause(event, &mut log);
     }
 }
 
+fn clear_resolved_cause(event: &CombatEvent, log: &mut CombatLog) {
+    if let CombatEvent::HexesDisabled { source, target, .. } = event {
+        log.causes.remove(&(*source, *target));
+        log.anonymous_causes.remove(target);
+    }
+}
+
+/// Whether the subject exposed by this presentation event is currently authorized.
+///
+/// Own identities are durable knowledge and do not depend on the current sight map.
+/// Every other subject must be in the viewer's current unit projection. Hidden sources
+/// do not suppress outcomes on an authorized subject; source formatting redacts them
+/// separately. Missing perception or identity data therefore hides a hostile outcome
+/// instead of falling back to authoritative registry truth.
+fn event_is_disclosed(
+    viewer: Faction,
+    event: &CombatEvent,
+    registry: &UnitRegistry,
+    identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
+) -> bool {
+    let unit = |id| unit_is_disclosed(viewer, id, registry, identities, spatial);
+    match event {
+        CombatEvent::Cast { caster, .. } => unit(*caster),
+        CombatEvent::Strike { target, .. } => unit(*target),
+        CombatEvent::DecisionOpened { decider, .. } => unit(*decider),
+        CombatEvent::DamagePrevented { target, .. }
+        | CombatEvent::HexesDisabled { target, .. }
+        | CombatEvent::BurnApplied { target, .. }
+        | CombatEvent::BurnTicked { target, .. } => unit(*target),
+        CombatEvent::EnchantmentBroken { unit: target, .. }
+        | CombatEvent::Downed { unit: target }
+        | CombatEvent::Revived { unit: target, .. }
+        | CombatEvent::Rested { unit: target, .. } => unit(*target),
+        CombatEvent::Revealed {
+            viewer: recipient,
+            subject,
+            ..
+        } => *recipient == viewer && unit(*subject),
+        CombatEvent::PartyMoved { anchor, paths } => {
+            unit(*anchor) && paths.iter().all(|path| unit(path.member))
+        }
+        CombatEvent::HexesRestored { target, .. } => unit(*target),
+        CombatEvent::EncounterResolved { .. } => true,
+        CombatEvent::CommandRefused { command, .. } => unit(command.unit()),
+    }
+}
+
+fn unit_is_disclosed(
+    viewer: Faction,
+    unit: UnitId,
+    registry: &UnitRegistry,
+    identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
+) -> bool {
+    let Some(faction) = registry
+        .entity_of(unit)
+        .and_then(|entity| identities.get(entity).ok())
+        .and_then(|(_, faction, _)| faction.copied())
+    else {
+        return false;
+    };
+    faction == viewer
+        || spatial.is_some_and(|knowledge| {
+            knowledge
+                .faction(viewer)
+                .unit(unit)
+                .is_some_and(|observed| observed.faction == faction)
+        })
+}
+
 fn remember_cause(
+    viewer: Faction,
     event: &CombatEvent,
     log: &mut CombatLog,
     registry: &UnitRegistry,
     identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
 ) {
     match event {
         CombatEvent::Cast {
@@ -240,16 +337,25 @@ fn remember_cause(
             spell,
             target,
         } => {
-            if let Some(subject) = unit_at(*target, registry, identities) {
+            if let Some(subject) = unit_at(*target, registry, identities).filter(|subject| {
+                unit_is_disclosed(viewer, *subject, registry, identities, spatial)
+            }) {
+                log.anonymous_causes.remove(&subject);
                 log.causes
                     .insert((*caster, subject), DamageCause::Spell(spell.clone()));
             }
         }
         CombatEvent::Strike { attacker, target } => {
             log.causes.remove(&(*attacker, *target));
+            log.anonymous_causes.remove(target);
         }
         CombatEvent::BurnTicked { source, target, .. } => {
-            log.causes.insert((*source, *target), DamageCause::Burn);
+            if unit_is_disclosed(viewer, *source, registry, identities, spatial) {
+                log.anonymous_causes.remove(target);
+                log.causes.insert((*source, *target), DamageCause::Burn);
+            } else {
+                log.anonymous_causes.insert(*target, DamageCause::Burn);
+            }
         }
         _ => {}
     }
@@ -280,10 +386,12 @@ fn pulse_target(event: &CombatEvent) -> Option<UnitId> {
     reason = "a frozen disclosure snapshot needs every legal presentation source"
 )]
 fn format_event(
+    viewer: Faction,
     event: &CombatEvent,
     log: &CombatLog,
     registry: &UnitRegistry,
     identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
     own_lattices: &Query<(&UnitId, &LatticeSpec), With<Player>>,
     knowledge: &FactionLatticeKnowledge,
     elements: Option<&ElementCatalog>,
@@ -297,7 +405,7 @@ fn format_event(
         CombatEvent::Strike { attacker, target } => LogLine {
             text: format!(
                 "{} struck {}",
-                unit_name(*attacker, registry, identities),
+                source_name(viewer, *attacker, registry, identities, spatial),
                 unit_name(*target, registry, identities)
             ),
             danger: false,
@@ -309,7 +417,7 @@ fn format_event(
             text: format!(
                 "{}'s defence absorbed the hit from {}",
                 unit_name(*target, registry, identities),
-                cause_name(*source, *target, log, registry, identities)
+                cause_name(viewer, *source, *target, log, registry, identities, spatial)
             ),
             danger: false,
         },
@@ -328,12 +436,12 @@ fn format_event(
                 elements,
                 spells,
             );
-            let actor = cause_name(*source, *target, log, registry, identities);
+            let actor = cause_name(viewer, *source, *target, log, registry, identities, spatial);
             let subject = unit_name(*target, registry, identities);
             let text = if known.is_empty() {
                 // `BurnTicked` already emitted the legally safe qualitative line. An
                 // opaque exact answer has no further information to add.
-                if matches!(log.causes.get(&(*source, *target)), Some(DamageCause::Burn)) {
+                if matches!(damage_cause(log, *source, *target), Some(DamageCause::Burn)) {
                     return None;
                 }
                 format!("{actor} damaged {subject}")
@@ -379,7 +487,7 @@ fn format_event(
         CombatEvent::BurnApplied { source, target, .. } => LogLine {
             text: format!(
                 "{} ignited {}",
-                cause_name(*source, *target, log, registry, identities),
+                cause_name(viewer, *source, *target, log, registry, identities, spatial),
                 unit_name(*target, registry, identities)
             ),
             danger: false,
@@ -389,9 +497,11 @@ fn format_event(
             danger: true,
         },
         CombatEvent::Revealed {
-            viewer, subject, ..
+            viewer: recipient,
+            subject,
+            ..
         } => {
-            if *viewer != Faction::Player {
+            if *recipient != viewer {
                 return None;
             }
             LogLine {
@@ -447,16 +557,38 @@ fn format_event(
 }
 
 fn cause_name(
+    viewer: Faction,
     source: UnitId,
     target: UnitId,
     log: &CombatLog,
     registry: &UnitRegistry,
     identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
 ) -> String {
-    match log.causes.get(&(source, target)) {
+    match damage_cause(log, source, target) {
         Some(DamageCause::Spell(spell)) => spell.clone(),
         Some(DamageCause::Burn) => "Burn".to_owned(),
-        None => unit_name(source, registry, identities),
+        None => source_name(viewer, source, registry, identities, spatial),
+    }
+}
+
+fn damage_cause(log: &CombatLog, source: UnitId, target: UnitId) -> Option<&DamageCause> {
+    log.causes
+        .get(&(source, target))
+        .or_else(|| log.anonymous_causes.get(&target))
+}
+
+fn source_name(
+    viewer: Faction,
+    source: UnitId,
+    registry: &UnitRegistry,
+    identities: &IdentityQuery,
+    spatial: Option<&FactionMapKnowledge>,
+) -> String {
+    if unit_is_disclosed(viewer, source, registry, identities, spatial) {
+        unit_name(source, registry, identities)
+    } else {
+        "Unknown source".to_owned()
     }
 }
 
@@ -647,9 +779,44 @@ fn pulse_panel(
 mod tests {
     use bevy::MinimalPlugins;
     use hex_combat::{BaseVisibility, KnownCell};
-    use hex_core::{ElementId, KnowledgeExpiry, KnowledgeSource};
+    use hex_core::{
+        ElementId, Headroom, HexCoord, HexSpan, KnowledgeExpiry, KnowledgeSource, LightDomain,
+        SubstanceId,
+    };
+    use hex_perception::{
+        apply_observations, FactionObservation, FactionObservations, ObservedUnit, SurfaceSnapshot,
+        SurfaceSnapshots,
+    };
 
     use super::*;
+
+    fn knowledge_observing(viewer: Faction, unit: UnitId, faction: Faction) -> FactionMapKnowledge {
+        let pos = TilePos::new(HexCoord::ORIGIN, 1);
+        let current = SurfaceSnapshots::try_from_iter([SurfaceSnapshot {
+            pos,
+            span: HexSpan::new(0.0, 1.0),
+            substance: SubstanceId(0),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }])
+        .expect("the fixture has one unique surface");
+        let mut observation = FactionObservation::new();
+        observation.insert_surface(pos);
+        observation
+            .try_insert_unit(ObservedUnit {
+                id: unit,
+                faction,
+                pos,
+                provides_sight: true,
+            })
+            .expect("the fixture has one unique unit");
+        let observations = FactionObservations::with_faction(viewer, observation);
+        let mut knowledge = FactionMapKnowledge::new();
+        apply_observations(&mut knowledge, &current, &observations);
+        knowledge
+    }
 
     #[test]
     fn the_log_keeps_sixty_four_entries() {
@@ -740,6 +907,11 @@ mod tests {
                     faction: Faction::Hostile,
                 },
             );
+        app.insert_resource(knowledge_observing(
+            Faction::Player,
+            target,
+            Faction::Hostile,
+        ));
 
         let known = LatticeCoord::new(0, 0);
         let hidden = LatticeCoord::new(1, 0);
@@ -833,6 +1005,11 @@ mod tests {
                     faction: Faction::Hostile,
                 },
             );
+        app.insert_resource(knowledge_observing(
+            Faction::Player,
+            target,
+            Faction::Hostile,
+        ));
         app.world_mut().resource_mut::<CombatLog>().causes.insert(
             (source, target),
             DamageCause::Spell("Scrying Eye".to_owned()),
@@ -858,5 +1035,189 @@ mod tests {
             !log.causes.contains_key(&(source, target)),
             "the resolved pair must not leak into a later unrelated hit"
         );
+        assert!(log.anonymous_causes.is_empty());
+    }
+
+    #[test]
+    fn hidden_hostile_outcomes_create_neither_log_lines_nor_pulses() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<CombatEvent>()
+            .init_resource::<CombatLog>()
+            .init_resource::<DamagePulse>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<FactionLatticeKnowledge>()
+            .insert_resource(FactionMapKnowledge::new())
+            .add_systems(Update, ingest);
+
+        let source = UnitId(1);
+        let target = UnitId(9);
+        let source_entity = app
+            .world_mut()
+            .spawn((source, Name::new("hedge-mage #1"), Faction::Player, Player))
+            .id();
+        let target_entity = app
+            .world_mut()
+            .spawn((target, Name::new("wolf #9"), Faction::Hostile))
+            .id();
+        {
+            let mut registry = app.world_mut().resource_mut::<UnitRegistry>();
+            registry.register(source, source_entity);
+            registry.register(target, target_entity);
+        }
+
+        let outcomes = || {
+            [
+                CombatEvent::BurnApplied {
+                    source,
+                    target,
+                    turns: 2,
+                },
+                CombatEvent::HexesDisabled {
+                    source,
+                    target,
+                    cells: vec![LatticeCoord::ORIGIN],
+                },
+                CombatEvent::BurnTicked {
+                    source,
+                    target,
+                    count: 1,
+                },
+                CombatEvent::Downed { unit: target },
+            ]
+        };
+        for event in outcomes() {
+            app.world_mut()
+                .resource_mut::<Messages<CombatEvent>>()
+                .write(event);
+        }
+        app.update();
+
+        assert!(
+            app.world().resource::<CombatLog>().lines.is_empty(),
+            "authoritative hidden spillover outcomes must not enter player history"
+        );
+        let pulse = app.world().resource::<DamagePulse>();
+        assert_eq!(pulse.target, None);
+        assert_eq!(pulse.timer, None);
+        assert!(
+            app.world().resource::<CombatLog>().causes.is_empty()
+                && app
+                    .world()
+                    .resource::<CombatLog>()
+                    .anonymous_causes
+                    .is_empty(),
+            "presentation bookkeeping must not retain hidden identities either"
+        );
+
+        app.insert_resource(knowledge_observing(
+            Faction::Player,
+            target,
+            Faction::Hostile,
+        ));
+        for event in outcomes() {
+            app.world_mut()
+                .resource_mut::<Messages<CombatEvent>>()
+                .write(event);
+        }
+        app.update();
+
+        let log = app.world().resource::<CombatLog>();
+        let lines: Vec<_> = log.lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "hedge-mage #1 ignited wolf #9",
+                "hedge-mage #1 damaged wolf #9",
+                "Burn damaged wolf #9",
+                "wolf #9 went down",
+            ],
+            "the same outcomes become presentable while the hostile is observed"
+        );
+        let pulse = app.world().resource::<DamagePulse>();
+        assert_eq!(pulse.target, Some(target));
+        assert!(pulse.timer.is_some());
+    }
+
+    #[test]
+    fn a_hidden_source_is_redacted_without_hiding_player_owned_outcomes() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<CombatEvent>()
+            .init_resource::<CombatLog>()
+            .init_resource::<DamagePulse>()
+            .init_resource::<UnitRegistry>()
+            .init_resource::<FactionLatticeKnowledge>()
+            .insert_resource(FactionMapKnowledge::new())
+            .add_systems(Update, ingest);
+
+        let source = UnitId(9);
+        let target = UnitId(1);
+        let source_entity = app
+            .world_mut()
+            .spawn((source, Name::new("hidden pyromancer #9"), Faction::Hostile))
+            .id();
+        let target_entity = app
+            .world_mut()
+            .spawn((target, Name::new("hero #1"), Faction::Player, Player))
+            .id();
+        {
+            let mut registry = app.world_mut().resource_mut::<UnitRegistry>();
+            registry.register(source, source_entity);
+            registry.register(target, target_entity);
+        }
+
+        let events = [
+            CombatEvent::Cast {
+                caster: source,
+                spell: "Wildfire".to_owned(),
+                target: TilePos::new(HexCoord::ORIGIN, 1),
+            },
+            CombatEvent::BurnApplied {
+                source,
+                target,
+                turns: 2,
+            },
+            CombatEvent::BurnTicked {
+                source,
+                target,
+                count: 1,
+            },
+            CombatEvent::HexesDisabled {
+                source,
+                target,
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+            CombatEvent::Downed { unit: target },
+        ];
+        for event in events {
+            app.world_mut()
+                .resource_mut::<Messages<CombatEvent>>()
+                .write(event);
+        }
+        app.update();
+
+        let log = app.world().resource::<CombatLog>();
+        let lines: Vec<_> = log.lines.iter().map(|line| line.text.as_str()).collect();
+        assert_eq!(
+            lines,
+            [
+                "Unknown source ignited hero #1",
+                "Burn damaged hero #1",
+                "hero #1 went down",
+            ],
+            "own outcomes stay visible but neither the hidden cast nor source identity leaks"
+        );
+        assert!(
+            lines.iter().all(|line| !line.contains("pyromancer")),
+            "{lines:?}"
+        );
+        assert!(
+            log.causes.is_empty() && log.anonymous_causes.is_empty(),
+            "the disable resolution must clear both disclosed and anonymous attribution"
+        );
+        let pulse = app.world().resource::<DamagePulse>();
+        assert_eq!(pulse.target, Some(target));
+        assert!(pulse.timer.is_some());
     }
 }

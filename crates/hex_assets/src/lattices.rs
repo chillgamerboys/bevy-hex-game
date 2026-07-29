@@ -23,7 +23,7 @@
 //! Resolution therefore cannot happen in `Deserialize`: it needs the element and spell
 //! catalogs, which are resources. It happens in a system, once they exist.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use hex_core::{ElementId, LatticeCoord, Screen, SpellId};
@@ -32,6 +32,7 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use crate::elements::ElementCatalog;
+use crate::fingerprint::FingerprintEncoder;
 use crate::spells::{Effect, SpellBook, TargetShape};
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
@@ -81,6 +82,15 @@ pub enum LatticeError {
     /// An archetype with no cells at all.
     #[error("archetype '{archetype}' has no cells, so nothing could stand for it")]
     Empty {
+        /// Which archetype.
+        archetype: String,
+    },
+    /// Cells form more than one disconnected island.
+    #[error(
+        "archetype '{archetype}' has a disconnected lattice: all authored cells must \
+         join one contiguous hex arrangement"
+    )]
+    Disconnected {
         /// Which archetype.
         archetype: String,
     },
@@ -174,6 +184,12 @@ pub struct LatticeLibrary {
     // `ContentIndex`, which ignores its own map for the same reason.
     #[reflect(ignore)]
     archetypes: BTreeMap<String, Archetype>,
+    #[reflect(ignore)]
+    source_file: u64,
+    #[reflect(ignore)]
+    source_elements: u64,
+    #[reflect(ignore)]
+    source_spells: u64,
 }
 
 impl LatticeLibrary {
@@ -207,7 +223,12 @@ impl LatticeLibrary {
         }
 
         if errors.is_empty() {
-            Ok(Self { archetypes })
+            Ok(Self {
+                archetypes,
+                source_file: lattice_file_fingerprint(file),
+                source_elements: elements.source_fingerprint(),
+                source_spells: spells.source_fingerprint(),
+            })
         } else {
             Err(errors)
         }
@@ -245,6 +266,27 @@ impl LatticeLibrary {
     pub fn is_empty(&self) -> bool {
         self.archetypes.is_empty()
     }
+
+    /// Whether this library was resolved from these exact source semantics.
+    #[must_use]
+    pub fn matches_sources(
+        &self,
+        file: &LatticeFile,
+        elements: &ElementCatalog,
+        spells: &SpellBook,
+    ) -> bool {
+        self.source_file == lattice_file_fingerprint(file)
+            && self.source_elements == elements.source_fingerprint()
+            && self.source_spells == spells.source_fingerprint()
+    }
+
+    pub(crate) fn source_revision(&self) -> u64 {
+        let mut encoder = FingerprintEncoder::new(b"hex-lattice-library-sources-v1");
+        encoder.u64(self.source_file);
+        encoder.u64(self.source_elements);
+        encoder.u64(self.source_spells);
+        encoder.finish()
+    }
 }
 
 fn resolve_archetype(
@@ -260,6 +302,17 @@ fn resolve_archetype(
         return Err(vec![LatticeError::Empty {
             archetype: name.to_owned(),
         }]);
+    }
+
+    let coordinates: BTreeSet<_> = raw
+        .cells
+        .iter()
+        .map(|entry| LatticeCoord::new(entry.at.q, entry.at.r))
+        .collect();
+    if coordinates.len() == raw.cells.len() && !lattice_is_connected(&coordinates) {
+        errors.push(LatticeError::Disconnected {
+            archetype: name.to_owned(),
+        });
     }
 
     for entry in &raw.cells {
@@ -339,6 +392,71 @@ fn resolve_archetype(
     } else {
         Err(errors)
     }
+}
+
+fn lattice_is_connected(cells: &BTreeSet<LatticeCoord>) -> bool {
+    let Some(&first) = cells.first() else {
+        return false;
+    };
+    let mut reached = BTreeSet::from([first]);
+    let mut frontier = vec![first];
+    while let Some(current) = frontier.pop() {
+        for neighbor in current.neighbors() {
+            if cells.contains(&neighbor) && reached.insert(neighbor) {
+                frontier.push(neighbor);
+            }
+        }
+    }
+    reached.len() == cells.len()
+}
+
+fn lattice_file_fingerprint(file: &LatticeFile) -> u64 {
+    let mut encoder = FingerprintEncoder::new(b"hex-lattice-file-v1");
+    encoder.usize(file.archetypes.len());
+    for (name, archetype) in &file.archetypes {
+        encoder.string(name);
+
+        let mut cells: Vec<_> = archetype.cells.iter().collect();
+        cells.sort_by_key(|entry| (entry.at.q, entry.at.r));
+        encoder.usize(cells.len());
+        for entry in cells {
+            encoder.i32(entry.at.q);
+            encoder.i32(entry.at.r);
+            match &entry.kind {
+                UnvalidatedCell::Gem(element) => {
+                    encoder.u8(0);
+                    encoder.string(element);
+                }
+                UnvalidatedCell::Fusion(element) => {
+                    encoder.u8(1);
+                    encoder.string(element);
+                }
+                UnvalidatedCell::Spell(spell) => {
+                    encoder.u8(2);
+                    encoder.string(spell);
+                }
+                UnvalidatedCell::Blank => encoder.u8(3),
+            }
+        }
+
+        encoder.usize(archetype.attunement.len());
+        for (element, amount) in &archetype.attunement {
+            encoder.string(element);
+            encoder.u16(*amount);
+        }
+        encoder.usize(archetype.channelling.len());
+        for (element, amount) in &archetype.channelling {
+            encoder.string(element);
+            encoder.u16(*amount);
+        }
+        if let Some(profile) = &archetype.ai_profile {
+            encoder.u8(1);
+            encoder.string(profile);
+        } else {
+            encoder.u8(0);
+        }
+    }
+    encoder.finish()
 }
 
 /// Whether `spell` would have the interface promise more than the applier delivers.
@@ -552,6 +670,59 @@ mod tests {
             coord: HexCoord::from_axial(q, r),
             level,
         }
+    }
+
+    fn blank(q: i32, r: i32) -> UnvalidatedEntry {
+        UnvalidatedEntry {
+            at: AxialPair { q, r },
+            kind: UnvalidatedCell::Blank,
+        }
+    }
+
+    fn file_with_cells(cells: Vec<UnvalidatedEntry>) -> LatticeFile {
+        LatticeFile {
+            archetypes: BTreeMap::from([(
+                "Tester".to_owned(),
+                UnvalidatedArchetype {
+                    cells,
+                    attunement: BTreeMap::new(),
+                    channelling: BTreeMap::new(),
+                    ai_profile: None,
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn disconnected_authored_lattice_names_its_archetype() {
+        let errors = LatticeLibrary::build(
+            &file_with_cells(vec![blank(0, 0), blank(2, 0)]),
+            &ElementCatalog::default(),
+            &SpellBook::default(),
+        )
+        .expect_err("separate lattice islands must be rejected");
+
+        assert!(errors.iter().any(|error| matches!(
+            error,
+            LatticeError::Disconnected { archetype } if archetype == "Tester"
+        )));
+        assert!(errors
+            .iter()
+            .find_map(|error| matches!(error, LatticeError::Disconnected { .. })
+                .then(|| error.to_string()))
+            .is_some_and(|message| message.contains("Tester")));
+    }
+
+    #[test]
+    fn contiguous_lattice_and_cell_reordering_share_one_semantic_source() {
+        let elements = ElementCatalog::default();
+        let spells = SpellBook::default();
+        let first = file_with_cells(vec![blank(0, 0), blank(1, 0), blank(1, -1)]);
+        let reordered = file_with_cells(vec![blank(1, -1), blank(0, 0), blank(1, 0)]);
+
+        let library = LatticeLibrary::build(&first, &elements, &spells)
+            .expect("one connected hex arrangement should resolve");
+        assert!(library.matches_sources(&reordered, &elements, &spells));
     }
 
     #[test]

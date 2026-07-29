@@ -21,6 +21,8 @@ pub enum CombatData {
     ContentTables,
     /// Terrain substance properties used to validate movement and reach.
     SubstanceTable,
+    /// Faction-scoped current and remembered spatial knowledge.
+    SpatialKnowledge,
 }
 
 /// One per-unit fact required to apply a command.
@@ -485,6 +487,9 @@ mod tests {
             },
             CommandRefusal::MissingCombatData {
                 data: CombatData::SubstanceTable,
+            },
+            CommandRefusal::MissingCombatData {
+                data: CombatData::SpatialKnowledge,
             },
             CommandRefusal::MissingUnitData {
                 unit: UnitId(1),

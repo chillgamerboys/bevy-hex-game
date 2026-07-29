@@ -1427,6 +1427,44 @@ fn hovering_a_tile_draws_the_way_to_it() {
     );
 }
 
+#[test]
+fn one_hundred_idle_frames_retain_the_exact_selection_overlays() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+    take_a_turn(&mut app, 2).expect("a player should exist during gameplay");
+    hover(&mut app, HexCoord::new_cubic(2, -2, 0)).expect("the fixture covers this coordinate");
+
+    let before: BTreeSet<_> = {
+        let mut overlays = app.world_mut().query_filtered::<Entity, Or<(
+            With<RangeOverlay>,
+            With<PathOverlay>,
+            With<UnitRing>,
+        )>>();
+        overlays.iter(app.world()).collect()
+    };
+    assert!(
+        !before.is_empty(),
+        "setup failed to draw selection overlays"
+    );
+
+    for _ in 0..100 {
+        app.update();
+    }
+
+    let after: BTreeSet<_> = {
+        let mut overlays = app.world_mut().query_filtered::<Entity, Or<(
+            With<RangeOverlay>,
+            With<PathOverlay>,
+            With<UnitRing>,
+        )>>();
+        overlays.iter(app.world()).collect()
+    };
+    assert_eq!(
+        after, before,
+        "idle selection reconciliation despawned and rebuilt unchanged overlays"
+    );
+}
+
 /// Exploring has no movement budget, so every connected surface is reachable and a
 /// range tint would cover the entire map — which says nothing at all.
 ///

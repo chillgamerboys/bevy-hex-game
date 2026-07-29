@@ -137,7 +137,12 @@ fn publish_spatial_knowledge(app: &mut App, player_visible: Option<&[UnitId]>) {
             if visible.is_none_or(|ids| ids.contains(&id)) {
                 observation.insert_surface(pos);
                 observation
-                    .try_insert_unit(ObservedUnit { id, faction, pos })
+                    .try_insert_unit(ObservedUnit {
+                        id,
+                        faction,
+                        pos,
+                        provides_sight: true,
+                    })
                     .expect("test unit ids are unique");
             }
         }
