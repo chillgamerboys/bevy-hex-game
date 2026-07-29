@@ -1303,7 +1303,13 @@ fn validate_caves(
             )));
         }
     }
-    let critical = critical_targets_from_plan(plan, settings, party);
+    let (critical, optional) = match cave_target_sets(plan, settings, party) {
+        Ok(targets) => targets,
+        Err(issue) => {
+            issues.push(issue);
+            (BTreeSet::new(), BTreeSet::new())
+        }
+    };
     let uncovered: Vec<_> = critical
         .iter()
         .filter(|target| {
@@ -1320,10 +1326,8 @@ fn validate_caves(
             uncovered.len()
         )));
     }
-    let optional_dark_floors = interior
-        .floors
+    let optional_dark_floors = optional
         .iter()
-        .filter(|floor| !critical.contains(floor))
         .filter(|floor| {
             !plan
                 .lights
@@ -1398,48 +1402,41 @@ fn validate_caves(
     WorldValidation::Valid(metrics)
 }
 
-fn critical_targets_from_plan(
+fn cave_target_sets(
     plan: &GeneratedWorldPlan,
-    _settings: &V3CavesSettings,
+    settings: &V3CavesSettings,
     party: TilePos,
-) -> BTreeSet<TilePos> {
-    let graph = OrdinaryGraph::from_volume(&plan.volume, None);
-    let hostile = plan.anchors.get(HOSTILE_START).copied().unwrap_or(party);
-    shortest_path(&graph, party, hostile)
-        .into_iter()
-        .chain(
-            plan.interiors
-                .by_id
-                .values()
-                .flat_map(|interior| interior.entrances.iter().copied()),
-        )
-        .collect()
-}
-
-fn shortest_path(graph: &OrdinaryGraph, start: TilePos, goal: TilePos) -> Vec<TilePos> {
-    let mut parent = BTreeMap::from([(start, start)]);
-    let mut frontier = VecDeque::from([start]);
-    while let Some(position) = frontier.pop_front() {
-        if position == goal {
-            break;
-        }
-        for neighbor in graph.neighbors(position) {
-            if !parent.contains_key(neighbor) {
-                parent.insert(*neighbor, position);
-                frontier.push_back(*neighbor);
-            }
-        }
-    }
-    if !parent.contains_key(&goal) {
-        return Vec::new();
-    }
-    let mut path = vec![goal];
-    while path.last().copied() != Some(start) {
-        let current = path.last().copied().unwrap_or(start);
-        path.push(parent.get(&current).copied().unwrap_or(start));
-    }
-    path.reverse();
-    path
+) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>), WorldValidationIssue> {
+    let patch_id = PatchId(0);
+    let patch = plan
+        .layout
+        .patches
+        .get(&patch_id)
+        .ok_or_else(|| recipe_issue("Caves validation cannot find patch zero"))?;
+    let frame = patch_frame(&patch.mask).map_err(|issues| {
+        issues
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| recipe_issue("Caves validation cannot resolve its patch frame"))
+    })?;
+    let topology = (0..6)
+        .filter_map(|orientation| {
+            build_topology(&patch.mask, frame, orientation, settings, None, patch_id).ok()
+        })
+        .find(|topology| {
+            topology
+                .entrance
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .copied()
+                == Some(party)
+        })
+        .ok_or_else(|| recipe_issue("Caves validation cannot recover its entrance orientation"))?;
+    Ok((
+        exact_interior_positions(&plan.volume, &topology.critical_coords),
+        exact_interior_positions(&plan.volume, &topology.optional_coords),
+    ))
 }
 
 fn exact_interior_positions(volume: &VolumePlan, coords: &BTreeSet<HexCoord>) -> BTreeSet<TilePos> {
@@ -1696,6 +1693,20 @@ mod tests {
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     };
+    use crate::terrain::TerrainPalette;
+    use hex_core::SubstanceId;
+
+    const BEDROCK: SubstanceId = SubstanceId(1);
+    const STONE: SubstanceId = SubstanceId(2);
+    const DIRT: SubstanceId = SubstanceId(3);
+    const GRASS: SubstanceId = SubstanceId(4);
+    const GRAVEL: SubstanceId = SubstanceId(5);
+    const WATER: SubstanceId = SubstanceId(6);
+    const METAL: SubstanceId = SubstanceId(7);
+    const SNOW: SubstanceId = SubstanceId(8);
+    const ICE: SubstanceId = SubstanceId(9);
+    const BASALT: SubstanceId = SubstanceId(10);
+    const LAVA: SubstanceId = SubstanceId(11);
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -1722,6 +1733,26 @@ mod tests {
                 edges: world_edges(),
             }),
         }
+    }
+
+    fn palette() -> TerrainPalette {
+        TerrainPalette {
+            bedrock: BEDROCK,
+            stone: STONE,
+            dirt: DIRT,
+            grass: GRASS,
+            gravel: GRAVEL,
+            water: WATER,
+            metal: METAL,
+            snow: SNOW,
+            ice: ICE,
+            basalt: BASALT,
+            lava: LAVA,
+        }
+    }
+
+    fn is_solid(substance: SubstanceId) -> bool {
+        !matches!(substance, SubstanceId::AIR | WATER | LAVA)
     }
 
     #[test]
@@ -1782,8 +1813,12 @@ mod tests {
     fn every_critical_floor_is_bright_but_optional_darkness_remains() {
         let selected = generate(12, 0.4, &settings(), 17).expect("Caves should generate");
         let plan = &selected.validated.plan;
-        let party = plan.anchors[PARTY_START];
-        let critical = critical_targets_from_plan(
+        let party = plan
+            .anchors
+            .get(PARTY_START)
+            .copied()
+            .expect("Caves should publish party_start");
+        let (critical, optional) = cave_target_sets(
             plan,
             &match &settings().layout {
                 V3LayoutSettings::Single(patch) => match &patch.recipe {
@@ -1793,12 +1828,108 @@ mod tests {
                 _ => unreachable!(),
             },
             party,
-        );
+        )
+        .expect("Caves should recover its exact light target sets");
         assert!(critical.iter().all(|target| {
             plan.lights
                 .values()
                 .any(|light| illuminated(light.origin, light.radius, *target))
         }));
+        assert!(optional.iter().any(|target| {
+            !plan
+                .lights
+                .values()
+                .any(|light| illuminated(light.origin, light.radius, *target))
+        }));
         assert!(selected.metrics.optional_dark_floors > 0);
+    }
+
+    #[test]
+    fn validator_rejects_a_missing_critical_light_network() {
+        let selected = generate(12, 0.4, &settings(), 17).expect("Caves should generate");
+        let mut plan = selected.validated.plan;
+        plan.lights.clear();
+
+        let WorldValidation::Invalid(issues) = validate_caves(
+            &plan,
+            match &settings().layout {
+                V3LayoutSettings::Single(patch) => match &patch.recipe {
+                    V3RecipeSettings::Caves(caves) => caves,
+                    _ => unreachable!(),
+                },
+                _ => unreachable!(),
+            },
+        ) else {
+            panic!("a Caves plan without critical lights must fail");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("critical floors dark")));
+    }
+
+    #[test]
+    fn fixed_seed_corpus_remains_valid_without_fallbacks() {
+        for seed in [0, 1, 17, 41, 42, 808, 2_026, 736_283_041] {
+            let selected =
+                generate(12, 0.4, &settings(), seed).expect("fixed Caves seed should generate");
+            assert!(!selected.used_fallback, "seed {seed} used fallback");
+            assert!(selected.metrics.minimum_clearance >= CORRIDOR_CLEARANCE);
+            assert!(selected.metrics.maximum_clearance >= CHAMBER_CLEARANCE);
+            assert!(selected.metrics.optional_dark_floors > 0);
+        }
+    }
+
+    #[test]
+    #[ignore = "10,000 seeds are a manual V3 Caves stress corpus"]
+    fn ten_thousand_seed_corpus_has_less_than_one_percent_fallbacks() {
+        let mut fallbacks = 0_u32;
+        for seed in 0..10_000 {
+            let selected = generate(12, 0.4, &settings(), seed)
+                .expect("every final Caves map should be valid");
+            fallbacks = fallbacks.saturating_add(u32::from(selected.used_fallback));
+        }
+        assert!(fallbacks < 100, "fallbacks: {fallbacks}/10000");
+    }
+
+    #[test]
+    #[ignore = "manual release/debug V3 Caves full-build benchmark"]
+    fn caves_full_build_benchmark_tracks_median_and_p95() {
+        let budget = if cfg!(debug_assertions) {
+            std::time::Duration::from_millis(250)
+        } else {
+            std::time::Duration::from_millis(50)
+        };
+        let palette = palette();
+        for radius in [12, 20, 40] {
+            let warmup =
+                super::super::build(radius, 0.4, &settings(), u64::MAX, &palette, &is_solid)
+                    .expect("warm-up Caves should build");
+            std::hint::black_box(warmup);
+
+            let mut samples = Vec::new();
+            for seed in 0..12 {
+                let started = std::time::Instant::now();
+                let build =
+                    super::super::build(radius, 0.4, &settings(), seed, &palette, &is_solid)
+                        .expect("benchmark Caves should build");
+                assert!(!build.report.used_fallback);
+                samples.push(started.elapsed());
+                std::hint::black_box(build);
+            }
+            samples.sort_unstable();
+            let median = samples
+                .get(samples.len() / 2)
+                .copied()
+                .expect("the benchmark records twelve samples");
+            let p95 = samples
+                .last()
+                .copied()
+                .expect("the benchmark records twelve samples");
+            eprintln!("V3 Caves full build radius {radius}: median={median:?} p95={p95:?}");
+            assert!(
+                median < budget && p95 < budget,
+                "radius {radius} median={median:?} p95={p95:?}, budget={budget:?}"
+            );
+        }
     }
 }

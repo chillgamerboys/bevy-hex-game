@@ -7,9 +7,10 @@ compile against one boundary without reaching into one another's crates.
 
 > **Status:** authoritative headless illumination, pooled faction sight, and
 > Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
-> Fog/picking presentation, generated cave lights, unknown-frontier movement, and
-> combat/AI adapters remain later isolated PRs; movement and combat behavior is
-> unchanged by the headless milestone.
+> V3 Caves publishes fixed local gameplay lights into that live pipeline.
+> Fog/picking presentation, visible crystal and physical-light presentation,
+> unknown-frontier movement, and combat/AI adapters remain later isolated PRs;
+> movement and combat behavior is unchanged by the headless milestone.
 
 ## Four facts, not one
 
@@ -69,10 +70,11 @@ Gameplay lights are public world facts. The same lamp, crystal, or future carrie
 light illuminates a place for every faction; there are no faction-private light
 volumes. Overlapping sources take the maximum level rather than adding brightness.
 
-The cave-light retrofit will place fixed crystals or lamps with radii from four
-through seven. They will cover the entrance, the required route, and critical
-chambers. Optional branches may remain dark. Their emissive meshes and optional
-physical lights communicate the rule but do not implement it.
+V3 Caves places fixed Bright sources with radii from four through seven. They cover
+the entrance, required route, and critical chambers while preserving dark optional
+branches. Authored emissive crystal meshes and restrained physical lights will
+communicate the rule after the object-renderer stack lands, but they never implement
+gameplay illumination.
 
 ## Sight
 
