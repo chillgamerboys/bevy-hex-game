@@ -21,8 +21,9 @@ use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
-use hex_assets::DisplaySettings;
-use hex_core::{AppSystems, GameplaySetup, PausableSystems, Pause, PerceptionSystems, Screen};
+use hex_core::{
+    AppSystems, GameplaySetup, InputBindings, PausableSystems, Pause, PerceptionSystems, Screen,
+};
 
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
@@ -30,11 +31,14 @@ mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod menus;
+mod preferences;
 mod readouts;
 #[cfg(feature = "map-review")]
 mod review;
+mod save;
 mod scenarios;
 mod screens;
+mod storage;
 #[cfg(feature = "visual-walk")]
 mod walk;
 
@@ -93,6 +97,7 @@ pub struct AppPlugin;
 
 impl Plugin for AppPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<InputBindings>();
         // Linux/WSL2 only, inert everywhere else (notably macOS/Metal, which has
         // no non-conformant adapters to filter). Allowing non-conformant Vulkan
         // adapters is what lets wgpu pick Mesa Dozen — the D3D12 translation layer
@@ -102,6 +107,13 @@ impl Plugin for AppPlugin {
         // NVIDIA card. Don't remove it; it costs nothing on other platforms.
         app.add_plugins(
             DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: storage::APP_NAME.to_owned(),
+                        ..default()
+                    }),
+                    ..default()
+                })
                 .set(RenderPlugin {
                     render_creation: WgpuSettings {
                         instance_flags: InstanceFlags::default()
@@ -118,6 +130,7 @@ impl Plugin for AppPlugin {
         );
 
         app.add_plugins(MeshPickingPlugin);
+        app.add_systems(Startup, log_app_identity);
 
         // Frame-time + entity-count collectors are cheap and stay on in every
         // build: dev tooling reads them. The once-per-second printout belongs
@@ -173,6 +186,7 @@ impl Plugin for AppPlugin {
                 GameplaySetup::Resources,
                 GameplaySetup::Terrain,
                 GameplaySetup::Actors,
+                GameplaySetup::Restore,
                 GameplaySetup::Perception,
                 GameplaySetup::View,
                 GameplaySetup::Finalize,
@@ -194,6 +208,7 @@ impl Plugin for AppPlugin {
 
         app.add_plugins((
             hex_assets::plugin,
+            preferences::plugin,
             hex_objects::plugin,
             hex_map::plugin,
             hex_world::plugin,
@@ -201,6 +216,7 @@ impl Plugin for AppPlugin {
             hex_perception::plugin,
             hex_combat::plugin,
             scenarios::plugin,
+            save::plugin,
             screens::plugin,
             menus::plugin,
             // After `screens`, which owns the sub-states the casting systems are gated
@@ -215,27 +231,11 @@ impl Plugin for AppPlugin {
         #[cfg(feature = "visual-walk")]
         app.add_plugins(walk::plugin);
 
-        app.add_systems(Update, apply_display_settings);
-
         #[cfg(feature = "dev")]
         app.add_plugins((hex_dev::plugin, content_debug::plugin));
     }
 }
 
-/// Applies presentation settings to the window.
-///
-/// Runs continuously rather than once because the file can be edited while the
-/// game is running; `is_changed` keeps it to actual changes. Vsync is left as the
-/// default: it caps the frame rate to the display without capping it *below* the
-/// display, and on an adaptive-refresh panel the driver already drops the rate
-/// when nothing is moving. A fixed cap would cost input latency to save power the
-/// hardware is already saving.
-fn apply_display_settings(settings: Option<Res<DisplaySettings>>, mut windows: Query<&mut Window>) {
-    let Some(settings) = settings else { return };
-    if !settings.is_changed() {
-        return;
-    }
-    for mut window in &mut windows {
-        window.present_mode = settings.present_mode.into();
-    }
+fn log_app_identity() {
+    info!("starting {} ({})", storage::APP_NAME, storage::APP_ID);
 }

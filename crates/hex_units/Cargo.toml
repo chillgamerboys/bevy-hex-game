@@ -10,6 +10,7 @@ description = "The things that stand on the map: bodies, positions, and where th
 [dependencies]
 bevy = { workspace = true }
 hex_anim = { workspace = true }
+hex_ai = { workspace = true }
 hex_assets = { workspace = true }
 hex_core = { workspace = true }
 # A unit carries its lattice. `LatticeSpec`/`LatticeState`/`LatticeStats` go on at spawn,

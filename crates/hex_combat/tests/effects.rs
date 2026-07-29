@@ -795,10 +795,15 @@ fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
     assert!(!app.world().resource::<PendingDecision>().is_open());
     assert_eq!(
         take_events(&mut app),
-        vec![CombatEvent::CommandRefused {
-            command,
-            refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
-        }]
+        vec![
+            CombatEvent::CommandRefused {
+                command,
+                refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
+            },
+            CombatEvent::EncounterResolved {
+                outcome: hex_combat::EncounterOutcome::Victory,
+            },
+        ]
     );
 }
 
@@ -921,7 +926,8 @@ fn a_burn_comes_due_at_the_start_of_its_targets_turn() {
     );
 }
 
-/// The burn's damage goes through `ChooseDisables`, so it lands in the replay log.
+/// The burn's damage goes through `ChooseDisables`, so a future replay can preserve
+/// the choice.
 ///
 /// Burn ignoring armour is **not** burn ignoring the defender's choice. A runtime that
 /// disabled hexes itself would satisfy every other test in this file — the hex would

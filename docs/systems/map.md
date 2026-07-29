@@ -255,7 +255,8 @@ dependency on the map back into movement.
 hex_core     HexTile, HexCoord, TilePos, HexSpan, SubstanceId, Headroom,
              TraversalEndpoint, TraversalProfile, SpecialMovementRegion,
              SpecialMovementRegions, InteriorRegionId, InteriorRegions,
-             CutawayOccluder, MapViewHint, TerrainEdit
+             CutawayOccluder, MapViewHint, BiomeRegions, TraversalBlockers,
+             TerrainEdit, and the agreed TerrainImpact vocabulary
              — the shared vocabulary
 hex_assets   the substance table
 hex_map      voxel storage, generation, rendering — nothing else can see this
@@ -284,7 +285,9 @@ TerrainEdit::Clear { pos }
 ```
 
 Gameplay cannot call into `hex_map`, so a spell that digs or builds writes one of these
-and the map applies it. That is the whole write path.
+and the map applies it. That is the only live write path. Elemental destruction will
+use the separate agreed `TerrainImpact` announcement so the world, rather than the
+spell, decides how each material responds.
 
 ## Things that are true and easy to forget
 

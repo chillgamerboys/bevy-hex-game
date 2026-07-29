@@ -43,9 +43,9 @@ use hex_assets::{
 };
 use hex_combat::TurnOrder;
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, HexCoord, IssuedCommand,
-    LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen, Sextant, SpellId,
-    TilePos, Turn, UnitId,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord,
+    InputAction, InputBindings, IssuedCommand, LatticeCoord, Mode, PausableSystems,
+    PendingDecision, PlayerSeat, Screen, Sextant, SpellId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
@@ -55,18 +55,6 @@ use crate::menus::widgets::element_color;
 
 mod panel;
 mod preview;
-
-/// Steps to the next unit worth aiming at.
-const NEXT_TARGET_KEY: KeyCode = KeyCode::Tab;
-
-/// Commits the aimed cast.
-const CONFIRM_KEY: KeyCode = KeyCode::Enter;
-
-/// Puts the aimed spell down again.
-///
-/// Not `Escape`, which pauses, and not `Backspace`, which quits to the title — both of
-/// those already mean something louder, and a mis-hit would cost more than the aim.
-const CANCEL_KEY: KeyCode = KeyCode::KeyQ;
 
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
@@ -78,8 +66,10 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 
 /// Registers the spell panel, the shape preview, and the cast emitter.
 pub fn plugin(app: &mut App) {
+    app.init_resource::<InputBindings>();
     app.init_resource::<CastReadout>();
     app.init_resource::<Aiming>();
+    app.init_resource::<AimExit>();
     app.init_resource::<preview::AimVolume>();
     app.init_resource::<preview::DrawnPreviewKey>();
     // Global, like every picking observer in this codebase. It is written for that —
@@ -87,14 +77,21 @@ pub fn plugin(app: &mut App) {
     // observer instead of one for each of the hundred surfaces an aim can light.
     app.add_observer(preview::on_anchor_clicked);
 
-    app.add_systems(OnEnter(Screen::Gameplay), panel::spawn_panel);
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        panel::spawn_panel.in_set(crate::readouts::HudSetup::Panels),
+    );
     app.add_systems(
         OnExit(Screen::Gameplay),
         (forget_aim, preview::clear_preview),
     );
     app.add_systems(
         Update,
-        (refresh_readout, resolve_aim_input)
+        (
+            refresh_readout,
+            resolve_aim_input,
+            panel::end_turn_from_button,
+        )
             .chain()
             .in_set(AppSystems::RecordInput)
             .in_set(PausableSystems)
@@ -108,6 +105,14 @@ pub fn plugin(app: &mut App) {
         (preview::redraw_preview, panel::rebuild_panel)
             .chain()
             .after(resolve_aim_input)
+            .after(GameplaySystems::UiContext)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    app.add_systems(
+        Update,
+        refresh_readout
+            .in_set(GameplaySystems::Casting)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -171,6 +176,22 @@ pub struct SpellRow {
 /// The spell currently being aimed, if any.
 #[derive(Resource, Default, Debug)]
 pub struct Aiming(pub Option<Aim>);
+
+/// How the most recent aim ended.
+///
+/// A confirmed aim leaves its target available for inspection, while an explicit
+/// cancellation clears it. This pulse is consumed by the lattice readout later in the
+/// same frame.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AimExit {
+    /// No aim ended this frame.
+    #[default]
+    None,
+    /// The cast was emitted and its target should remain pinned.
+    Confirmed,
+    /// The player explicitly put the aim down.
+    Cancelled,
+}
 
 /// A spell chosen, and the anchor it is pointed at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,9 +607,11 @@ fn shape_label(shape: &TargetShape) -> String {
 fn resolve_aim_input(
     readout: Res<CastReadout>,
     mut aiming: ResMut<Aiming>,
+    mut exit: ResMut<AimExit>,
     mut queue: ResMut<CommandQueue>,
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
     units: Query<(&Faction, &StandsOn), Without<Downed>>,
@@ -596,7 +619,7 @@ fn resolve_aim_input(
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &chooses, &controls) else {
+    let Some(request) = requested(&keys, &bindings, &chooses, &controls) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -604,8 +627,12 @@ fn resolve_aim_input(
     };
 
     let next = match request {
-        AimRequest::Cancel => None,
+        AimRequest::Cancel => {
+            *exit = AimExit::Cancelled;
+            None
+        }
         AimRequest::Choose(spell) => {
+            *exit = AimExit::None;
             let Some(row) = readout.row(&spell) else {
                 return;
             };
@@ -622,6 +649,7 @@ fn resolve_aim_input(
             })
         }
         AimRequest::Next => {
+            *exit = AimExit::None;
             let Some(aim) = aiming.0.clone() else { return };
             let Some(row) = readout.row(&aim.spell) else {
                 return;
@@ -637,6 +665,7 @@ fn resolve_aim_input(
             if !emit_cast(&mut queue, &readout, &caster, &aim) {
                 return;
             }
+            *exit = AimExit::Confirmed;
             // The intent is spent whether or not the applier likes it. Leaving the aim
             // up would invite a second confirm against a lattice that is about to
             // change, and the applier's own answer arrives a schedule later.
@@ -667,6 +696,7 @@ enum AimRequest {
 /// keyboard shortcut in the same frame must still be one cast.
 fn requested(
     keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
     chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
 ) -> Option<AimRequest> {
@@ -684,13 +714,13 @@ fn requested(
             });
         }
     }
-    if keys.just_pressed(CONFIRM_KEY) {
+    if bindings.just_pressed(keys, InputAction::Confirm) {
         return Some(AimRequest::Confirm);
     }
-    if keys.just_pressed(NEXT_TARGET_KEY) {
+    if bindings.just_pressed(keys, InputAction::NextTarget) {
         return Some(AimRequest::Next);
     }
-    if keys.just_pressed(CANCEL_KEY) {
+    if bindings.just_pressed(keys, InputAction::CancelCast) {
         return Some(AimRequest::Cancel);
     }
     None
@@ -725,8 +755,8 @@ fn emit_cast(queue: &mut CommandQueue, readout: &CastReadout, caster: &Caster, a
             spell: aim.spell.clone(),
             target: aim.anchor,
             // Only the shapes that point somewhere carry a facing. Sending one anyway
-            // would put a direction nobody chose into the replay log, where every field
-            // is a permanent save commitment.
+            // would put a direction nobody chose into the future recorded command
+            // stream, whose wire fields are save/replay commitments.
             facing: volumes::needs_facing(&row.shape)
                 .then(|| facing_toward(caster.standing.coord, aim.anchor.coord)),
             // Variable mana has no chooser yet; see `spell_row`.
@@ -1077,8 +1107,8 @@ mod tests {
     /// A confirmed cast carries the exact anchor, and a facing only when the shape
     /// points somewhere.
     ///
-    /// The facing is a permanent save commitment — the command log is the replay log —
-    /// so an anchored shape must not acquire a direction nobody chose.
+    /// The facing is a future save/replay commitment, so an anchored shape must not
+    /// acquire a direction nobody chose.
     #[test]
     fn a_confirmed_cast_names_its_anchor_and_only_the_facing_it_needs() {
         let (readout, caster) = readout_of(&["Ember", "Flamethrower"]);
@@ -1245,7 +1275,7 @@ mod tests {
     #[test]
     fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Renewal", "Earthen Wall", "Stone Shaper", "Daylight"];
+        let undeliverable = ["Earthen Wall", "Stone Shaper", "Daylight"];
         for name in undeliverable {
             let id = spells.id(name).expect("the test names a shipped spell");
             let definition = spells.spell(id).expect("a shipped spell has a definition");
@@ -1256,7 +1286,7 @@ mod tests {
         }
         // The control, and the reason this is not just a ban on everything: the spells
         // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle", "Metal Shield", "Scrying Eye"] {
+        for name in ["Ember", "Kindle", "Metal Shield", "Renewal", "Scrying Eye"] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");
             assert!(

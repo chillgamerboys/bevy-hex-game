@@ -26,9 +26,9 @@
 //! - **No rewards, loot, or victory conditions.** Nothing yet knows what a fight should
 //!   yield, and a field invented now would be wrong in a way content would then depend
 //!   on.
-//! - **No lattices.** An entry names its archetype as a string and nothing resolves it.
-//!   That is the seam: when `lattices.ron` lands, one archetype-to-lattice lookup goes
-//!   inside the spawn loop rather than into per-unit spawn code.
+//! - **No embedded lattices.** An entry names its archetype as a stable string. The unit
+//!   spawn path resolves that key through `lattices.ron`, keeping combat structure out
+//!   of encounter placement content.
 //! - **No triggers, quests, or dialogue.** Those are fields added to this schema later,
 //!   not gaps in it today.
 
@@ -69,14 +69,17 @@ pub struct Roster {
 pub struct RosterEntry {
     /// What kind of unit this is, by name.
     ///
-    /// Resolved to nothing today. It is the key an archetype's lattice will be
-    /// looked up by, which is why it is named now rather than when lattices land.
+    /// The stable key used to resolve the archetype's lattice and default AI profile.
     pub archetype: String,
     /// This unit's own placement, overriding its roster's.
     ///
     /// For the unit that has to be somewhere exact — the sentry on the bridge — while
     /// the rest of its side comes in as a formation.
     pub placement: Option<EncounterPlacement>,
+    /// Optional AI profile overriding the archetype default.
+    pub ai_profile: Option<String>,
+    /// Optional deterministic coordination-group tag.
+    pub ai_group: Option<String>,
 }
 
 /// Which side a rostered unit is on.
@@ -220,6 +223,8 @@ impl Encounter {
                 faction: roster.faction,
                 archetype: entry.archetype.as_str(),
                 placement: entry.placement.as_ref().unwrap_or(&roster.placement),
+                ai_profile: entry.ai_profile.as_deref(),
+                ai_group: entry.ai_group.as_deref(),
             })
         })
     }
@@ -284,6 +289,26 @@ impl Encounter {
                     return Err(format!(
                         "encounter {:?}: a {side} unit has no archetype",
                         self.name
+                    ));
+                }
+                if entry
+                    .ai_profile
+                    .as_deref()
+                    .is_some_and(|profile| profile.trim().is_empty())
+                {
+                    return Err(format!(
+                        "encounter {:?}: {side} unit {:?} names an empty AI profile",
+                        self.name, entry.archetype
+                    ));
+                }
+                if entry
+                    .ai_group
+                    .as_deref()
+                    .is_some_and(|group| group.trim().is_empty())
+                {
+                    return Err(format!(
+                        "encounter {:?}: {side} unit {:?} names an empty AI group",
+                        self.name, entry.archetype
                     ));
                 }
                 let placement = entry.placement.as_ref().unwrap_or(&roster.placement);
@@ -365,6 +390,10 @@ pub struct RosteredUnit<'a> {
     pub archetype: &'a str,
     /// Where it starts: its own placement, or its roster's.
     pub placement: &'a EncounterPlacement,
+    /// Encounter-level profile override.
+    pub ai_profile: Option<&'a str>,
+    /// Encounter-level coordination group.
+    pub ai_group: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -388,6 +417,10 @@ struct UnvalidatedEntry {
     archetype: String,
     #[serde(default)]
     placement: Option<EncounterPlacement>,
+    #[serde(default)]
+    ai_profile: Option<String>,
+    #[serde(default)]
+    ai_group: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for Encounter {
@@ -410,6 +443,8 @@ impl<'de> Deserialize<'de> for Encounter {
                         .map(|entry| RosterEntry {
                             archetype: entry.archetype,
                             placement: entry.placement,
+                            ai_profile: entry.ai_profile,
+                            ai_group: entry.ai_group,
                         })
                         .collect(),
                 })

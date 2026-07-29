@@ -1,14 +1,15 @@
 // What the title screen offers.
 //
-// A scenario is a world plus the units standing on it. Add one here and it appears on
-// the menu — no Rust, no restart beyond the one you were going to do anyway.
+// A scenario is a world plus the units standing on it. `default_game` names the entry
+// launched by New Game; every other entry appears in its development lane.
 //
 // Order is the order they are listed, so it is your decision rather than an accident.
 //
 // FIELDS
 //
 //   name      what the button says
-//   category  REQUIRED title-screen column: Map, Combat, or Demo
+//   category  REQUIRED development lane: Map or Demo. The default keeps a category
+//             for schema uniformity but is hidden from both lanes.
 //   blurb     one line underneath, saying what is interesting about this one
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
@@ -35,6 +36,7 @@
 // require rewriting coordinates. Either way, a unit that cannot be placed returns to the
 // title screen with the reason — it never silently moves to the centre of the map.
 (
+    default_game: "Party Trial",
     scenarios: [
         (
             name: "The Crossing",
@@ -134,11 +136,25 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
-            name: "Close Quarters",
-            category: Combat,
-            blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
+            name: "Party Trial",
+            category: Demo,
+            blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",
             world: "config/world.ron",
-            encounter: "config/encounters/close-quarters.ron",
+            encounter: "config/encounters/party-trial.ron",
+        ),
+        (
+            name: "Ability Lab",
+            category: Demo,
+            blurb: "A flat 2v1 fixture for aiming, reveal, damage choices, Renewal, and revival.",
+            world: "config/worlds/flat-combat.ron",
+            encounter: "config/encounters/ability-lab.ron",
+        ),
+        (
+            name: "Raider Mirror",
+            category: Demo,
+            blurb: "A flat 1v1 identity check: one allied raider, one hostile raider.",
+            world: "config/worlds/flat-combat.ron",
+            encounter: "config/encounters/raider-mirror.ron",
         ),
     ],
 )

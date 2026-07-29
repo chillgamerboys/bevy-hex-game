@@ -1,0 +1,25 @@
+// The smallest honest cross-unit ability fixture.
+//
+// A hedge-mage needs one ally to exercise friendly damage, damage choices, downing,
+// Renewal, and round-boundary revival. The hostile raider opens with Metal Shield,
+// giving the player two deterministic rounds to drive that flow.
+(
+    name: "Ability Lab",
+    rosters: [
+        (
+            faction: Player,
+            placement: Formation(center: Fixed((x: -2, y: 0, z: 2)), spread: 1),
+            units: [
+                (archetype: "hedge-mage"),
+                (archetype: "wolf"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Fixed((x: 2, y: 0, z: -2)),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)

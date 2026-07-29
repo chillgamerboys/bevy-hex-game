@@ -37,9 +37,10 @@
 //! identity is beating defences by ignoring them rather than overpowering them, and the
 //! design says so outright. It *does* go through the defender-chooses seam, exactly as a
 //! spell's damage does: the count is named, `PendingDecision::ChooseDisables` is
-//! parked, and something answers with a `ChooseDisables` command that lands in the
-//! replay log. Bypassing the subtraction is not the same as bypassing the choice, and
-//! conflating the two would make burn the one damage source a fight could not replay.
+//! parked, and something answers with a replayable `ChooseDisables` command. The live
+//! queue is not persisted yet. Bypassing the subtraction is not the same as bypassing
+//! the choice, and conflating the two would make burn the one damage source a future
+//! recorded fight could not reproduce.
 
 use std::collections::{BTreeMap, VecDeque};
 
@@ -113,6 +114,17 @@ impl PersistentEffects {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.effects.is_empty()
+    }
+
+    /// Removes every persistent effect carried by `target`.
+    ///
+    /// Exploration rest uses this to clear injuries and hazards from party
+    /// members without touching effects on the retained encounter world.
+    pub fn remove_on(&mut self, target: UnitId) -> usize {
+        let before = self.effects.len();
+        self.effects.retain(|_, effect| effect.target != target);
+        self.due.retain(|hit| hit.target != target);
+        before.saturating_sub(self.effects.len())
     }
 
     /// Advances every live personal effect on `target` and returns how many hexes they
@@ -685,5 +697,16 @@ mod tests {
             Some(EffectId(0)),
             "a new session starts at the first handle"
         );
+    }
+
+    #[test]
+    fn removing_one_targets_effects_preserves_the_rest_of_the_world() {
+        let mut effects = PersistentEffects::default();
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(2), 2);
+        apply_burn(&mut effects, 0, UnitId(1), UnitId(3), 2);
+
+        assert_eq!(effects.remove_on(UnitId(2)), 1);
+        assert!(effects.on(UnitId(2)).next().is_none());
+        assert_eq!(effects.on(UnitId(3)).count(), 1);
     }
 }

@@ -1,7 +1,8 @@
-//! Main menu: pick a scenario and start it.
+//! Main menu: start or continue the default game, or launch a development fixture.
 //!
-//! One button per scenario in `assets/config/scenarios.ron`, so adding a map to the
-//! menu is a content change rather than a code one.
+//! `assets/config/scenarios.ron` names one default game and categorizes every
+//! development scenario. The default is launched through New Game and never appears
+//! beside focused fixtures.
 //!
 //! # The list is rebuilt, not spawned once
 //!
@@ -21,7 +22,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{Scenario, ScenarioCategory, ScenarioLibrary};
-use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
+use hex_core::{GameplaySetupFailure, InputAction, InputBindings, ResolvedMapSeed, Screen};
 
 use crate::menus::widgets::{
     blurb, button, display, fine, heading, label, small_button, UiAssets, ACCENT_EDGE, BLURB_SIZE,
@@ -37,6 +38,7 @@ const CATEGORY_DECK_MAX_WIDTH: f32 = 1_500.0;
 const CATEGORY_GAP: f32 = 16.0;
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<InputBindings>();
     app.init_resource::<SessionSeeds>();
     app.add_systems(OnEnter(Screen::Title), spawn_title);
     app.add_systems(
@@ -45,7 +47,10 @@ pub(super) fn plugin(app: &mut App) {
             rebuild_scenario_list,
             reroll_scenario_seed,
             start_chosen_scenario,
+            start_new_game,
             open_lattice_demo,
+            open_settings,
+            quit_game,
             handle_input,
         )
             .chain()
@@ -61,6 +66,10 @@ struct CategoryDeck;
 /// One framed title-screen lane.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct ScenarioColumn(ScenarioCategory);
+
+/// The stable application-action lane beside development scenarios.
+#[derive(Component)]
+struct ActionColumn;
 
 /// The independently scrollable list inside a category lane.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,6 +94,26 @@ struct RerollsScenario {
 /// The button that opens the lattice ruleset demo.
 #[derive(Component)]
 struct OpensLatticeDemo;
+
+/// Starts the library's independently resolved default scenario.
+#[derive(Component)]
+struct StartsNewGame;
+
+/// Opens the pre-alpha settings surface.
+#[derive(Component)]
+struct OpensSettings;
+
+/// Exits the application from the Actions lane.
+#[derive(Component)]
+struct QuitsGame;
+
+/// Stable Continue hook, activated by the resume scaffold.
+#[derive(Component)]
+pub(crate) struct ContinuesGame;
+
+/// Supporting text updated by the resume scaffold.
+#[derive(Component)]
+pub(crate) struct ContinueStatusText;
 
 /// The static mechanics demo card, which is not reconciled from scenario content.
 #[derive(Component)]
@@ -204,20 +233,20 @@ fn spawn_title(
                     },
                 ))
                 .with_children(|deck| {
-                    for category in [
-                        ScenarioCategory::Map,
-                        ScenarioCategory::Combat,
-                        ScenarioCategory::Demo,
-                    ] {
+                    for category in [ScenarioCategory::Map, ScenarioCategory::Demo] {
                         spawn_category_column(deck, category, &assets);
                     }
+                    spawn_action_column(deck, &assets);
                 });
             parent.spawn((
                 Node {
                     margin: UiRect::bottom(Val::Px(4.0)),
                     ..default()
                 },
-                children![blurb(&assets, "click a scenario to play   ·   ESC to quit")],
+                children![blurb(
+                    &assets,
+                    "New Game starts Party Trial   ·   development fixtures stay available",
+                )],
             ));
             // The version a bug report needs, where a screenshot catches it.
             // Absolute so it rides the corner instead of the menu column.
@@ -238,9 +267,82 @@ fn spawn_title(
 fn category_label(category: ScenarioCategory) -> &'static str {
     match category {
         ScenarioCategory::Map => "maps",
-        ScenarioCategory::Combat => "combat",
         ScenarioCategory::Demo => "demos",
     }
+}
+
+fn spawn_action_column(deck: &mut ChildSpawnerCommands, assets: &UiAssets) {
+    deck.spawn((
+        Name::new("Actions Column"),
+        ActionColumn,
+        crate::menus::widgets::panel(),
+    ))
+    .insert(Node {
+        min_width: Val::Px(0.0),
+        height: Val::Percent(100.0),
+        flex_basis: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(10.0),
+        padding: UiRect::all(Val::Px(14.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    })
+    .with_children(|column| {
+        column.spawn(heading(assets, "actions"));
+        for (name, blurb_text, action) in [
+            (
+                "Continue",
+                "Resume the last explicitly saved exploration state.",
+                0_u8,
+            ),
+            (
+                "New Game",
+                "Begin the integrated Party Trial scenario.",
+                1_u8,
+            ),
+            (
+                "Settings",
+                "Display, presentation, and volume scaffolding.",
+                2_u8,
+            ),
+            ("Quit", "Exit the pre-alpha build.", 3_u8),
+        ] {
+            let mut entity = column.spawn(button(name));
+            entity
+                .insert(scenario_card_node())
+                .insert(BorderColor::all(ACCENT_EDGE))
+                .with_children(|button| {
+                    button.spawn(label(assets, name));
+                    let mut supporting = button.spawn((
+                        blurb(assets, blurb_text),
+                        Node {
+                            width: Val::Percent(100.0),
+                            ..default()
+                        },
+                    ));
+                    if action == 0 {
+                        supporting.insert(ContinueStatusText);
+                    }
+                });
+            match action {
+                0 => {
+                    entity.insert(ContinuesGame);
+                }
+                1 => {
+                    entity.insert(StartsNewGame);
+                }
+                2 => {
+                    entity.insert(OpensSettings);
+                }
+                _ => {
+                    entity.insert(QuitsGame);
+                }
+            }
+        }
+    });
 }
 
 fn spawn_category_column(
@@ -337,7 +439,7 @@ fn spawn_lattice_demo_card(list: &mut ChildSpawnerCommands, assets: &UiAssets) {
     });
 }
 
-/// Fills all three category lists once the library is known, and again if it changes.
+/// Fills both development lists once the library is known, and again if it changes.
 fn rebuild_scenario_list(
     mut commands: Commands,
     library: Option<Res<ScenarioLibrary>>,
@@ -350,7 +452,7 @@ fn rebuild_scenario_list(
     assets: Res<UiAssets>,
 ) {
     let Some(library) = library else { return };
-    if lists.iter().count() != 3 {
+    if lists.iter().count() != 2 {
         return;
     }
 
@@ -383,7 +485,7 @@ fn rebuild_scenario_list(
         commands.entity(stale).despawn();
     }
 
-    for scenario in &library.scenarios {
+    for scenario in library.visible_scenarios() {
         let Some(list) = lists
             .iter()
             .find_map(|(entity, list)| (list.0 == scenario.category).then_some(entity))
@@ -479,6 +581,7 @@ fn start_chosen_scenario(
 ) {
     for (interaction, starts) in &clicked {
         if *interaction == Interaction::Pressed {
+            commands.remove_resource::<crate::save::PendingResume>();
             commands.insert_resource(ScenarioToLoad {
                 scenario: starts.scenario.clone(),
                 resolved_seed: seeds.resolved(&starts.scenario).map(ResolvedMapSeed),
@@ -486,6 +589,43 @@ fn start_chosen_scenario(
             next.set(Screen::Loading);
         }
     }
+}
+
+/// Starts the one integrated scenario independently from the development lanes.
+fn start_new_game(
+    mut commands: Commands,
+    clicked: Query<&Interaction, (Changed<Interaction>, With<StartsNewGame>)>,
+    library: Option<Res<ScenarioLibrary>>,
+    seeds: Res<SessionSeeds>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if !clicked
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        return;
+    }
+    let Some(library) = library else {
+        warn!("New Game was pressed before the scenario library loaded");
+        return;
+    };
+    let Some(scenario) = library.default_scenario() else {
+        error!(
+            "default_game {:?} does not resolve to a scenario",
+            library.default_game
+        );
+        commands.insert_resource(GameplaySetupFailure::new(format!(
+            "The configured default game {:?} does not exist.",
+            library.default_game
+        )));
+        return;
+    };
+    commands.remove_resource::<crate::save::PendingResume>();
+    commands.insert_resource(ScenarioToLoad {
+        scenario: scenario.clone(),
+        resolved_seed: seeds.resolved(scenario).map(ResolvedMapSeed),
+    });
+    next.set(Screen::Loading);
 }
 
 /// Opens the lattice ruleset demo when its button is pressed.
@@ -500,8 +640,36 @@ fn open_lattice_demo(
     }
 }
 
-fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
-    if keys.just_pressed(KeyCode::Escape) {
+fn open_settings(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensSettings>)>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    if clicked
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        next.set(Screen::Settings);
+    }
+}
+
+fn quit_game(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<QuitsGame>)>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if clicked
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        exit.write(AppExit::Success);
+    }
+}
+
+fn handle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if bindings.just_pressed(&keys, InputAction::Cancel) {
         exit.write(AppExit::Success);
     }
 }
@@ -544,13 +712,22 @@ mod tests {
 
     fn library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![scenario("First")],
+            default_game: "Default".to_owned(),
+            scenarios: vec![
+                in_category("Default", ScenarioCategory::Demo),
+                scenario("First"),
+            ],
         }
     }
 
     fn two_scenario_library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![scenario("First"), scenario("Second")],
+            default_game: "Default".to_owned(),
+            scenarios: vec![
+                in_category("Default", ScenarioCategory::Demo),
+                scenario("First"),
+                scenario("Second"),
+            ],
         }
     }
 
@@ -626,16 +803,11 @@ mod tests {
         }
         categories.sort_by_key(|category| match category {
             ScenarioCategory::Map => 0,
-            ScenarioCategory::Combat => 1,
-            ScenarioCategory::Demo => 2,
+            ScenarioCategory::Demo => 1,
         });
         assert_eq!(
             categories,
-            vec![
-                ScenarioCategory::Map,
-                ScenarioCategory::Combat,
-                ScenarioCategory::Demo
-            ],
+            vec![ScenarioCategory::Map, ScenarioCategory::Demo],
             "every closed category needs one independently scrollable lane"
         );
     }
@@ -701,6 +873,36 @@ mod tests {
         query.iter(world).any(|text| text.0.contains(wanted))
     }
 
+    #[test]
+    fn new_game_resolves_the_hidden_default_independently() {
+        let mut app = test_app();
+        go_to(&mut app, Screen::Title);
+
+        assert_eq!(
+            rendered_names(&mut app, ScenarioCategory::Demo),
+            Vec::<String>::new(),
+            "the default leaked into the visible demo lane"
+        );
+        let new_game = {
+            let world = app.world_mut();
+            let mut query = world.query_filtered::<Entity, With<StartsNewGame>>();
+            query
+                .single(world)
+                .expect("the Actions lane should have one New Game button")
+        };
+        app.world_mut()
+            .entity_mut(new_game)
+            .insert(Interaction::Pressed);
+        app.update();
+
+        let pending = app.world().resource::<ScenarioToLoad>();
+        assert_eq!(pending.scenario.name, "Default");
+        assert!(matches!(
+            app.world().resource::<NextState<Screen>>(),
+            NextState::Pending(Screen::Loading)
+        ));
+    }
+
     /// The demo button is part of the static title layout and switches screens.
     #[test]
     fn the_lattice_demo_button_opens_the_demo_screen() {
@@ -726,11 +928,12 @@ mod tests {
     }
 
     #[test]
-    fn every_category_renders_scenarios_and_demo_keeps_its_static_card() {
+    fn every_development_category_renders_scenarios_and_demo_keeps_its_static_card() {
         let mut app = test_app_with(ScenarioLibrary {
+            default_game: "Default".to_owned(),
             scenarios: vec![
+                in_category("Default", ScenarioCategory::Demo),
                 in_category("Map One", ScenarioCategory::Map),
-                in_category("Combat One", ScenarioCategory::Combat),
                 in_category("Demo One", ScenarioCategory::Demo),
                 in_category("Map Two", ScenarioCategory::Map),
             ],
@@ -739,7 +942,6 @@ mod tests {
 
         for (name, category) in [
             ("Map One", ScenarioCategory::Map),
-            ("Combat One", ScenarioCategory::Combat),
             ("Demo One", ScenarioCategory::Demo),
             ("Map Two", ScenarioCategory::Map),
         ] {
@@ -817,12 +1019,7 @@ mod tests {
     #[test]
     fn shipped_scenarios_build_all_rows_inside_a_scroll_area() {
         let library = shipped_library();
-        assert_eq!(
-            library.scenarios.len(),
-            13,
-            "update the title-screen coverage when the shipped scenario count changes"
-        );
-        let expected_rows = library.scenarios.len();
+        let expected_rows = library.visible_scenarios().count();
         let mut app = test_app_with(library);
 
         go_to(&mut app, Screen::Title);
@@ -830,20 +1027,20 @@ mod tests {
         assert_eq!(scenario_entries(&mut app), expected_rows);
         assert_eq!(buttons(&mut app), expected_rows);
         assert_scrollable_scenario_lists(&mut app);
-        let mut by_category = (0_usize, 0_usize, 0_usize);
-        for scenario in &app.world().resource::<ScenarioLibrary>().scenarios {
-            let count = match scenario.category {
-                ScenarioCategory::Map => &mut by_category.0,
-                ScenarioCategory::Combat => &mut by_category.1,
-                ScenarioCategory::Demo => &mut by_category.2,
-            };
-            *count += 1;
+        for category in [ScenarioCategory::Map, ScenarioCategory::Demo] {
+            let expected: Vec<String> = app
+                .world()
+                .resource::<ScenarioLibrary>()
+                .visible_scenarios()
+                .filter(|scenario| scenario.category == category)
+                .map(|scenario| scenario.name.clone())
+                .collect();
+            assert_eq!(
+                rendered_names(&mut app, category),
+                expected,
+                "every non-default shipped entry should appear exactly once in its authored lane"
+            );
         }
-        assert_eq!(
-            by_category,
-            (12, 1, 0),
-            "the thirteen shipped entries should retain their deliberate lanes"
-        );
     }
 
     /// The menu still has its scenarios when you come back to it.
@@ -957,7 +1154,12 @@ mod tests {
     #[test]
     fn only_seeded_scenarios_offer_rerolls_and_capture_the_seed() {
         let mut app = test_app_with(ScenarioLibrary {
-            scenarios: vec![scenario("Authored"), seeded_scenario("Generated", 42)],
+            default_game: "Default".to_owned(),
+            scenarios: vec![
+                in_category("Default", ScenarioCategory::Demo),
+                scenario("Authored"),
+                seeded_scenario("Generated", 42),
+            ],
         });
         go_to(&mut app, Screen::Title);
 
@@ -989,7 +1191,11 @@ mod tests {
         let configured = 42;
         let scenario = seeded_scenario("Generated", configured);
         let mut app = test_app_with(ScenarioLibrary {
-            scenarios: vec![scenario.clone()],
+            default_game: "Default".to_owned(),
+            scenarios: vec![
+                in_category("Default", ScenarioCategory::Demo),
+                scenario.clone(),
+            ],
         });
         // Stable entropy makes the assertion deterministic without changing production
         // behaviour, where the resource is initialized from wall-clock time.
@@ -1020,7 +1226,8 @@ mod tests {
             app.world()
                 .resource::<ScenarioLibrary>()
                 .scenarios
-                .first()
+                .iter()
+                .find(|entry| entry.name == "Generated")
                 .and_then(|entry| entry.generation_seed),
             Some(configured),
             "rerolling modified the loaded scenario configuration"
