@@ -55,8 +55,9 @@ How quickly you *see* the change depends on which file:
 | `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
-the scenario you want to start again. It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the title screen, then use
+New Game for Party Trial or relaunch the visible development fixture you are tuning.
+It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either
@@ -861,13 +862,30 @@ the game logs exactly which one and keeps the last content that was valid — th
 way a broken `lighting.ron` keeps the last good sky. A test also opens every shipped
 file and fails if any reference dangles, so the shipped game never carries a broken one.
 
-## One thing that will not do anything on a Mac
+## Local Settings are not authored config
 
-`display.ron` controls vsync. On macOS it has no visible effect: the system
-composites every window and syncs it to the display regardless of what the game
-asks for, so the frame rate stays pinned to your screen's refresh rate either way.
-On a MacBook with a ProMotion display that means it moves between 60 and 120 on
-its own, depending on whether anything is animating.
+The in-game Settings screen writes `preferences.ron` beside the disposable
+`resume.ron`; it never edits `assets/config/display.ron`. Set `HEX_GAME_DATA_DIR` to
+an explicit directory when a test or review needs isolated local state. Otherwise the
+files live under:
+
+- macOS: `~/Library/Application Support/Hex Game/`
+- Windows: `%APPDATA%/Hex Game/`
+- Linux: `$XDG_DATA_HOME/hex-game/`, or `~/.local/share/hex-game/`
+
+A missing preferences file uses the authored display default and built-in volume
+defaults. A corrupt or incompatible file is reported on the Settings screen and those
+defaults are restored. The file is version-bound pre-alpha state, not a durable
+configuration format.
+
+## Frame presentation on macOS
+
+`display.ron` provides the authored presentation default until Settings saves a local
+choice. On macOS neither path has a visible effect: the system composites every
+window and syncs it to the display regardless of what the game asks for, so the frame
+rate stays pinned to your screen's refresh rate either way. On a MacBook with a
+ProMotion display that means it moves between 60 and 120 on its own, depending on
+whether anything is animating.
 
 This was measured rather than assumed. The setting does work on Windows and Linux,
 which is why it is still there.

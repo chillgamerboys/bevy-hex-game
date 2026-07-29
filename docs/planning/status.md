@@ -122,6 +122,18 @@ selected ally, decision owner, aimed target, and retained target as explicit rol
 Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
 Mirror remain its focused automated companions.
 
+The **Wave 5 pre-alpha app shell is live**. The title deck exposes Maps, focused
+Demos, and Actions; New Game resolves the hidden Party Trial default, while Continue
+restores one explicit save made from paused exploration. That atomic, build-bound
+resume captures scenario/content identity, generator identity, party lattices, and
+exploration positions, rejects corrupt or incompatible files visibly, and cannot be
+written during combat. Settings atomically persists window, presentation, and volume
+preferences, with fixed centralized input actions and audio buses as replaceable
+seams. Builds also carry the Hex Game app identity/icon, normalized package layout,
+and retained crash symbols. These are disposable continuity and artifact scaffolds,
+not a durable save contract, rebinding UI, audio content, signing, storefront, crash
+reporting, or telemetry.
+
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;

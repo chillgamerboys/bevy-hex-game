@@ -44,7 +44,7 @@ doc or the code, not drift.
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
 | [systems/asset-workshop.md](systems/asset-workshop.md) | Artists and tooling contributors | Voxel-style and object schemas, editing behavior, persistence, review output, and the isolated editor boundary | Both, jointly |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | Gameplay owner |
-| [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and session lifetime | Gameplay owner |
+| [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and pre-alpha resume lifetime | Gameplay owner |
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
 | [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | World owner (gameplay adapters: gameplay owner) |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | World owner |

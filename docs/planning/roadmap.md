@@ -134,35 +134,36 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-Keep the development-friendly three-column title deck, but make its lanes Maps,
-focused Demos, and Actions. Party Trial is the one integrated default game and is
-launched by New Game rather than listed beside diagnostic fixtures. Ability Lab and
-Raider Mirror remain visible focused combat demos; Close Quarters and the Combat
-category retire. Continue and Settings begin as stable actions and are activated by
-their Wave 5 scaffolds. Starting a New Game never overwrites the resume slot.
+The development-friendly three-column title deck now has Maps, focused Demos, and
+Actions lanes. Party Trial is the one integrated default game and launches through
+New Game rather than appearing beside diagnostic fixtures. Ability Lab and Raider
+Mirror remain visible focused combat demos; Close Quarters and the Combat category
+are retired. Continue and Settings are active, while starting a New Game never reads
+or overwrites the resume slot.
 
 ### Save and load
 
-Wave 5 owns one hand-shaped, versioned, atomic resume file in `hex_game/src/save/` —
-domain state, not ECS reflection. It is written only from a quiescent Exploring state
-and records the scenario reference, explicit resolved seed and generator version,
-settings/content digests, and the party's exploration state. Restore rides the
-existing Loading flow. Corrupt or incompatible data is refused visibly rather than
-partially loaded. Combat state, migrations, durable compatibility, and a terrain edit
-log are outside this scaffold; the resume slot can be discarded between builds.
+Wave 5 ships one hand-shaped, versioned, atomic resume file through
+`crates/hex_game/src/save.rs` — domain state, not ECS reflection. It is written only
+from paused, quiescent exploration and records the scenario reference, explicit
+resolved seed and generator version, coarse scenario/content digests, and the party's
+exploration state. Restore rides the existing Loading flow. Corrupt or incompatible
+data is refused visibly rather than partially loaded. Combat state, migrations,
+durable compatibility, and a terrain edit log are outside this scaffold; the resume
+slot can be discarded between builds.
 
 ### Settings menu, persistence, and audio
 
-The pre-alpha options surface persists display/window, presentation, and volume values
-across sessions. Input actions are centralized so systems stop owning raw keys, but
-there is no rebinding UI. Audio sits behind music/SFX/UI buses ready for later content;
-Wave 5 does not need to ship any audio. The frozen production audit remains the
-research record, not a requirement to adopt every integration now.
+The pre-alpha options surface persists display/window presentation and music, SFX,
+and UI volume values across sessions. Input actions are centralized so systems stop
+owning raw keys, but there is no rebinding UI. Audio sits behind music/SFX/UI buses
+ready for later content; Wave 5 does not ship audio. The frozen production audit
+remains the research record, not a requirement to adopt every integration now.
 
 ### Steam packaging and crash reporting
 
-Wave 5 gives builds an app identity and icon, normalizes release artifact names and
-layout, and retains debug symbols. Release documentation reserves the future
+Wave 5 builds use an app identity and icon, normalized release artifact names and
+layout, and retained debug symbols. Release documentation reserves the future
 credential and configuration slots for signing, Steam upload, and crash reporting.
 Live integrations, codesigning, notarization, upload, consent UI, and telemetry remain
 later productization work.

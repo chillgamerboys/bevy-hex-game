@@ -265,10 +265,11 @@ sets make the ordering that crosses crate boundaries explicit:
   state transitions and self-contained UI/presentation systems may run outside them.
 - **`PausableSystems`** — gates gameplay work such as movement animation behind
   `Pause(false)`.
-- **`GameplaySetup`** — `Resources → Terrain → Actors → Perception → View →
-  Finalize`, for `OnEnter(Screen::Gameplay)`. `Perception` derives initial knowledge
-  only after terrain and actors are queryable; `View` applies generated framing and
-  presentation only after that projection exists.
+- **`GameplaySetup`** — `Resources → Terrain → Actors → Restore → Perception →
+  View → Finalize`, for `OnEnter(Screen::Gameplay)`. `Restore` applies a validated
+  pre-alpha resume after the scenario terrain and roster exist; `Perception` then
+  derives initial knowledge from the restored actors, and `View` applies generated
+  framing and presentation only after that projection exists.
 - **`PerceptionSystems`** — `PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`, nested inside
   `GameplaySetup::Perception` on entry and `AppSystems::Update` thereafter. The first
@@ -288,9 +289,10 @@ them, and **entities spawned via `Commands` are not queryable until the queue is
 applied**. Ordering alone would not have fixed it — a set boundary also supplies a
 sync point, which is what makes the tiles *visible* rather than merely earlier.
 
-The names carry that: `Terrain` is the map, `Actors` are the things standing on it.
-The old `Resources → Entities` gave nowhere to say "entities that depend on other
-entities", which is why the mistake was easy to make.
+The names carry that: `Terrain` is the map, `Actors` are the things standing on it,
+and `Restore` may replace those actors' session state before any observer derives
+knowledge from them. The old `Resources → Entities` gave nowhere to say "entities
+that depend on other entities", which is why the mistake was easy to make.
 
 **Ordering that spans a crate boundary has to go through a shared set in
 `hex_core`.**
@@ -308,10 +310,14 @@ forgets to update.
 ## States
 
 ```
-Splash ──► Title ──► Loading ──► Gameplay
-              ▲                     │
-              └──── BACKSPACE ──────┘
-                                      └── Pause (sub-state of Gameplay)
+Splash ──► Title ◄──────────────► Settings
+              │
+              │ New Game / valid Continue / development fixture
+              ▼
+           Loading ──► Gameplay
+                          │
+                          ├── BACKSPACE ──► Title
+                          └── Pause (sub-state of Gameplay)
 ```
 
 `Pause` is a **sub-state** of `Gameplay`, so "paused on the title screen" is
@@ -322,6 +328,12 @@ unrepresentable rather than merely unlikely.
 settings file has parsed, the derived `SubstanceTable` exists, and every asset handle
 has reached a terminal state. Gameplay systems can therefore take resources such as
 `Res<MapSettings>` rather than `Option<Res<…>>`.
+
+New Game and Continue deliberately share that path. New Game resolves the hidden
+Party Trial default and neither reads nor overwrites the resume slot. Continue first
+validates the one pre-alpha resume file, stages it as `PendingResume`, and then lets
+`GameplaySetup::Restore` consume it. An absent, corrupt, or incompatible file stays
+on the title screen with a visible reason instead of constructing a partial session.
 
 An asset failure is terminal too. The asset server already reports it, and treating
 failure as "still loading" would turn a visible missing-asset problem into a permanent
@@ -338,7 +350,7 @@ the chance to reject it.
 
 **An observer that touches state-scoped resources must take them as `Option`.**
 
-## Settings
+## Authored settings and local preferences
 
 Tunable values live in `assets/config/*.ron` and are editable without Rust. See
 [development/config.md](development/config.md).
@@ -347,6 +359,16 @@ On initial load, settings resources are **absent** until their file parses rathe
 than falling back to a default. A default that silently diverges from what someone
 wrote is worse than a stall. After a valid resource exists, a failed hot reload keeps
 that last valid value active while the asset server reports the error.
+
+The Settings screen writes a separate, atomic local-preferences file outside
+`assets/`. A valid local preference overrides the authored display default; a missing
+file leaves the authored value in force, and corrupt preferences are rejected visibly
+before falling back. Local preferences are user state, not hot-reloaded project
+content.
+
+`InputBindings` centralizes the current fixed action-to-key map without promising
+rebinding UI. `AudioBusVolumes` and the audio facade similarly reserve music, SFX, and
+UI seams without requiring Wave 5 to ship audio content.
 
 **Hex geometry constants deliberately stayed in Rust.** `HEX_INNER_RADIUS` and its
 derivations in `hex_core::config` describe the dimensions of `hex.glb`. Editing
@@ -361,7 +383,8 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 
 | Read | Files | Effect |
 |---|---|---|
-| Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
+| Every frame | `camera.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
+| Until a local preference is saved | `display.ron` | Immediate; afterward the user's persisted presentation choice wins |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
 | On coherent art-graph reload | `palette.ron`, `voxel_styles.ron`, `object_catalog.ron`, `objects/*.ron` | Existing authored object instances rebuild; a bad graph retains the last valid revision |
 | At spawn | `world.ron`, `substances.ron`, `palette.ron` substance/unit swatches, `player.ron` scale | Next `OnEnter(Screen::Gameplay)` |
@@ -377,12 +400,12 @@ Returning to the title and re-entering rebuilds the world in under a second, so
 this is a mild inconvenience rather than a gap. Regenerating terrain in place on
 change would be a real improvement for anyone tuning it, and is a fair follow-up.
 
-### `present_mode` does nothing on macOS
+### Frame presentation appears unchanged on macOS
 
-Measured, not assumed. Editing `display.ron` reloads the file and re-applies the
-setting — confirmed by instrumenting the system that writes it — but the frame rate
-stays pinned to the display refresh either way. macOS composites every windowed app
-and vsyncs it.
+Measured, not assumed. Editing the active value through Settings, or editing
+`display.ron` before a local preference exists, re-applies the setting — confirmed by
+instrumenting the system that writes it — but the frame rate stays pinned to the
+display refresh either way. macOS composites every windowed app and vsyncs it.
 
 This also explains frame rates varying between 60 and 120 across runs with no code
 change: ProMotion adapts on its own, and none of it was ours to control. The

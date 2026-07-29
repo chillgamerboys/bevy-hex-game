@@ -20,11 +20,9 @@ keep its important relationships intact.
 
 <!--
 Regenerate readme_assets/procedural-hills.png with:
-HEX_WALK_SCRIPT=walks/gameplay.ron \
-HEX_WALK_OUT=.context/readme-captures/gameplay \
-cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/gameplay/11-hills.png \
-  readme_assets/procedural-hills.png
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_CAPTURE="readme_assets/procedural-hills.png" \
+cargo run --release -p hex_game --features map-review
 -->
 ![The current Procedural Hills scenario: an elevated hex-prism landscape divided by a river and bridge, with player and enemy pieces visible](readme_assets/procedural-hills.png)
 
@@ -84,20 +82,27 @@ still an early skeleton, not the complete game described above: deterministic
 procedural terrain, stacked-surface movement and path preview lead into combat on the
 same map, where live lattices power spells and absorb wounds.
 
-The combat HUD shows both the stable initiative order and the acting unit, keeps the
-player's lattice in view, retains a valid hostile target, and records a bounded
-knowledge-safe event log. A hostile starts as only a known presence—its formation and
-capacity stay hidden. Scrying Eye reveals the complete live lattice for a bounded
-number of rounds, including current mana and disabled cells, without exposing earlier
-hidden choices retroactively.
+The combat HUD shows the stable initiative order, acting unit, selected ally, aimed or
+retained hostile, and decision owner without conflating those roles. It keeps the
+relevant lattices visible and records a bounded, knowledge-safe event log. A hostile
+starts as only a known presence—its formation and capacity stay hidden. Scrying Eye
+reveals the complete live lattice for a bounded number of rounds, including current
+mana and disabled cells, without exposing earlier hidden choices retroactively.
 
 Ember deals direct damage and applies Burn for two of the target's actual turns.
 Incoming damage is command-modal: movement, casting, and ending the turn wait while
 the player chooses and confirms which live cells to disable. A unit with no live cells
-is downed and retained for future restoration rather than erased. Terrain-changing
-spells, obstruction, rout and surrender, durable saves, and much of the larger design
-remain ahead. Complete-party controls now provide Group/Solo exploration, formation
-editing, recovery, and the integrated 3v3 Party Trial. The exact, regularly updated boundary is recorded in the
+is downed and retained for restoration rather than erased. Complete-party controls
+provide a stable ally rail, Group/Solo exploration, formation editing and bottleneck
+compression, recovery, deterministic AI, retained outcomes, and the integrated 3v3
+Party Trial.
+
+The surrounding application is still deliberately pre-alpha, but it now has a real
+shell: New Game, one disposable exploration resume, persistent display and volume
+preferences, fixed centralized input actions, and normalized unsigned release
+artifacts. Terrain-changing spells, obstruction, rout and surrender, durable saves,
+audio content, input rebinding, signing, storefront integration, telemetry, and much
+of the larger design remain ahead. The exact boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
@@ -105,8 +110,15 @@ editing, recovery, and the integrated 3v3 Party Trial. The exact, regularly upda
 The title screen separates development **Maps** and focused **Demos** from application
 **Actions**. **New Game** launches Party Trial as the one integrated default scenario;
 Ability Lab, Raider Mirror, and Lattice Demo keep narrow mechanics checks available.
-**Continue** restores one explicitly saved, build-bound exploration slot. It is
-pre-alpha convenience data, not a compatibility promise.
+**Continue** restores one explicitly saved exploration slot through the ordinary
+loading flow. Saving is available only while paused in a safe exploration state;
+combat, movement, and open decisions refuse it. The slot is bound to its build,
+scenario content, generator contract, roster, and terrain, so incompatible or corrupt
+data is reported instead of partially loaded. New Game never overwrites it.
+
+**Settings** persists fullscreen/window size, presentation mode, and master,
+music, effects, and UI volume values. The volume buses and fixed action map are seams
+for later audio and rebinding work; Wave 5 does not pretend those products exist yet.
 
 | Input | Action |
 |---|---|
@@ -118,8 +130,9 @@ pre-alpha convenience data, not a compatibility promise.
 | `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
 | `SPACE` | End the current player turn; hostile turns cannot be skipped |
 | `1`–`6` | Select a party member while exploring |
+| Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
 | `R` | Recover the whole party while exploring |
-| `F5` while paused | Atomically save a quiescent exploration resume |
+| `F5` while paused in exploration | Atomically replace the one resume slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
@@ -148,7 +161,8 @@ cp .context/readme-captures/lattice/07-demo-shield-broken.png \
 
 ## Build or contribute
 
-Hex is written in Rust with [Bevy](https://bevy.org/) 0.19. Start with the
+Hex is written in Rust with [Bevy](https://bevy.org/) 0.19. Packaged pre-alpha builds
+use the **Hex Game** application identity while Hex remains the working title. Start with the
 [setup guide](docs/development/setup.md), read [CONTRIBUTING.md](CONTRIBUTING.md)
 before changing code, or use the [documentation index](docs/README.md) to find the
 design, system, and development reference for a specific area.
