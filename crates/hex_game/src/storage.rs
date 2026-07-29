@@ -60,6 +60,7 @@ fn data_root() -> PathBuf {
         .join(".hex-game")
 }
 
+#[cfg(unix)]
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .filter(|value| !value.is_empty())
