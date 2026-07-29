@@ -1464,15 +1464,19 @@ fn handle_pointer_editing(
             EditorTool::Select => {
                 let additive =
                     keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-                if target.source == ViewportPickSource::Voxel {
-                    if let Ok(draft) = runtime.draft_mut() {
+                let result = runtime.draft_mut();
+                match result {
+                    Ok(draft) if target.source == ViewportPickSource::Voxel => {
                         draft.editor_mut_untracked().select(target.cell, additive);
                         runtime.needs_sync = true;
                     }
-                } else if !additive {
-                    if let Ok(draft) = runtime.draft_mut() {
+                    Ok(draft) if !additive => {
                         draft.editor_mut_untracked().clear_selection();
                         runtime.needs_sync = true;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        runtime.set_status(WorkshopStatusKind::Error, error);
                     }
                 }
                 return;
@@ -2020,21 +2024,23 @@ fn build_viewport_content(
     match preview {
         PreviewSubject::Swatch(id) => {
             if let Some(swatch) = draft.palette().get(id) {
-                if let Ok(preview_id) = VoxelStyleId::new("editor/swatch-preview") {
-                    content.styles.insert(
-                        preview_id.clone(),
-                        ViewportStyle {
-                            color: swatch.color(),
-                            surface_mode: hex_assets::VoxelSurfaceMode::Opaque,
-                            opacity: 1.0,
-                            emission: None,
-                        },
-                    );
-                    content.set_voxels(vec![RenderedVoxel {
-                        position: LocalVoxelCoord::new(0, 0, 0),
-                        style: preview_id,
-                    }]);
-                }
+                let Ok(preview_id) = VoxelStyleId::new("editor/swatch-preview") else {
+                    bevy::log::error!("static swatch preview style id violates the asset contract");
+                    return content;
+                };
+                content.styles.insert(
+                    preview_id.clone(),
+                    ViewportStyle {
+                        color: swatch.color(),
+                        surface_mode: hex_assets::VoxelSurfaceMode::Opaque,
+                        opacity: 1.0,
+                        emission: None,
+                    },
+                );
+                content.set_voxels(vec![RenderedVoxel {
+                    position: LocalVoxelCoord::new(0, 0, 0),
+                    style: preview_id,
+                }]);
             }
         }
         PreviewSubject::Style(id) => {
