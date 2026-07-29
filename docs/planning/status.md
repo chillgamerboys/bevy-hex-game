@@ -137,12 +137,12 @@ review pack, contact sheet, and semantic report under `.context/asset-workshop/`
 
 The runtime resolves that complete art graph atomically and retains its last valid
 revision across a bad hot reload. `hex_objects` renders static instances from cached
-mesh chunks using the game prism and exact palette-backed material modes. The first
-production exemplar is the six-level `plant/small-broadleaf`. Terrain substances,
-liquids, construction metal, and unit presentation also resolve exact palette
-swatches. Forest still presents its generated temporary vegetation directly; adapting
-those placements to authored object instances and procedural plant synthesis have not
-landed yet.
+mesh chunks using the game prism and exact palette-backed material modes. Production
+review exemplars cover six-, twelve-, and eighteen-level trees, a nonblocking grass
+tuft, and three nonblocking emissive crystal silhouettes. Terrain substances, liquids,
+construction metal, and unit presentation resolve exact palette swatches. Forest still
+presents its generated temporary vegetation directly; authored-object integration,
+cave-light placement, and procedural plant synthesis have not landed yet.
 
 ## What is provisional
 
