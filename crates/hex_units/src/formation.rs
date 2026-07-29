@@ -5,19 +5,25 @@
 //! every path atomically against the live world before presentation starts.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use hex_core::{FormationPreset, HexCoord, PartyFormation, PartyPath, Sextant, TilePos, UnitId};
 
-use crate::{route, Footing, Standing};
+use crate::{Footing, Reach, Standing};
 
 /// One party member's live movement facts for a formation plan.
+#[derive(Debug, Clone)]
 pub struct FormationMember {
     /// Stable member identity.
     pub unit: UnitId,
     /// Current exact surface.
     pub standing: Standing,
     /// Surfaces and transitions admitted by this member's body.
-    pub footing: Footing,
+    ///
+    /// Members with the same traversal profile should share this index. A party
+    /// move reads it many times but never mutates it, so rebuilding the same map
+    /// projection once per member only adds allocation and query work.
+    pub footing: Arc<Footing>,
 }
 
 /// A complete formation plan and the direction it finishes facing.
@@ -119,7 +125,10 @@ pub fn plan_formation_move(
 
             let chosen = if unit == anchor {
                 member.footing.at(anchor_step.pos).and_then(|destination| {
-                    route(from, destination, &member.footing).map(|path| (destination, path))
+                    let reach = Reach::until(from, &member.footing, destination.pos);
+                    reach
+                        .path_to(destination.pos)
+                        .map(|path| (destination, path))
                 })
             } else {
                 choose_destination(
@@ -170,44 +179,67 @@ fn choose_destination(
 ) -> Option<(Standing, Vec<Standing>)> {
     let mut ideals = footing.at_coord(ideal).to_vec();
     ideals.sort_by_key(|standing| (standing.pos.level.abs_diff(ideal_level), standing.pos));
-    for candidate in ideals {
-        if let Some(found) = usable_route(from, candidate, used, footing) {
-            return Some(found);
-        }
-    }
+    let mut candidates = ideals;
 
     for &position in recent {
         if let Some(candidate) = footing.at(position) {
-            if let Some(found) = usable_route(from, candidate, used, footing) {
-                return Some(found);
-            }
+            candidates.push(candidate);
         }
     }
 
-    let mut nearby = footing.standings();
-    nearby.retain(|standing| standing.pos.coord.distance(anchor) <= max_spread);
-    nearby.sort_by_key(|standing| {
-        (
-            standing.pos.coord.distance(ideal),
-            standing.pos.level.abs_diff(ideal_level),
-            standing.pos,
-        )
-    });
-    nearby
+    let fallback_candidates = || {
+        let mut nearby = footing.standings();
+        nearby.retain(|standing| standing.pos.coord.distance(anchor) <= max_spread);
+        nearby.sort_by_key(|standing| {
+            (
+                standing.pos.coord.distance(ideal),
+                standing.pos.level.abs_diff(ideal_level),
+                standing.pos,
+            )
+        });
+        nearby
+    };
+
+    // Candidate priority is a gameplay contract: ideal slot, recent anchor trail,
+    // then nearest compression fallback. Search toward the first admissible
+    // candidate. If it is reachable, breadth-first discovery gives the exact path a
+    // full projection would; if it is not, the search necessarily exhausts the
+    // connected component and therefore answers every lower-priority candidate too.
+    if let Some(first) = candidates
+        .iter()
+        .find(|candidate| !used.contains(&candidate.pos))
+    {
+        let reach = Reach::until(from, footing, first.pos);
+        if let Some(chosen) = candidates
+            .into_iter()
+            .find_map(|candidate| usable_route(candidate, used, &reach))
+        {
+            return Some(chosen);
+        }
+        return fallback_candidates()
+            .into_iter()
+            .find_map(|candidate| usable_route(candidate, used, &reach));
+    }
+
+    let candidates = fallback_candidates();
+    let first = candidates
+        .iter()
+        .find(|candidate| !used.contains(&candidate.pos))?;
+    let reach = Reach::until(from, footing, first.pos);
+    candidates
         .into_iter()
-        .find_map(|candidate| usable_route(from, candidate, used, footing))
+        .find_map(|candidate| usable_route(candidate, used, &reach))
 }
 
 fn usable_route(
-    from: Standing,
     candidate: Standing,
     used: &BTreeSet<TilePos>,
-    footing: &Footing,
+    reach: &Reach,
 ) -> Option<(Standing, Vec<Standing>)> {
     if used.contains(&candidate.pos) {
         return None;
     }
-    route(from, candidate, footing).map(|path| (candidate, path))
+    reach.path_to(candidate.pos).map(|path| (candidate, path))
 }
 
 fn translated(origin: HexCoord, offset: HexCoord) -> HexCoord {
@@ -237,6 +269,8 @@ fn sextant_between(from: HexCoord, to: HexCoord) -> Option<Sextant> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use bevy::platform::collections::HashMap;
     use hex_assets::{
         ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
@@ -244,6 +278,7 @@ mod tests {
     use hex_core::{FormationSlot, Headroom, HexSpan, SubstanceId, TraversalProfile, MAX_HEADROOM};
 
     use super::*;
+    use crate::route;
 
     const STONE: SubstanceId = SubstanceId(1);
     const BODY: crate::Body = crate::Body::new(TraversalProfile::WALKER);
@@ -274,6 +309,15 @@ mod tests {
         (
             TilePos::new(coord, 0),
             HexSpan::new(0.0, 1.0),
+            STONE,
+            Headroom(MAX_HEADROOM),
+        )
+    }
+
+    fn upper_tile(coord: HexCoord) -> (TilePos, HexSpan, SubstanceId, Headroom) {
+        (
+            TilePos::new(coord, 1),
+            HexSpan::new(1.0, 2.0),
             STONE,
             Headroom(MAX_HEADROOM),
         )
@@ -311,6 +355,109 @@ mod tests {
                 },
             ],
         }
+    }
+
+    fn six_member_wedge() -> FormationPreset {
+        FormationPreset {
+            name: "Six Member Wedge".to_owned(),
+            slots: [
+                (HexCoord::ORIGIN, true),
+                (HexCoord::from_axial(-1, 1), false),
+                (HexCoord::from_axial(0, -1), false),
+                (HexCoord::from_axial(-1, 0), false),
+                (HexCoord::from_axial(0, 1), false),
+                (HexCoord::from_axial(1, -1), false),
+            ]
+            .into_iter()
+            .map(|(offset, anchor)| FormationSlot { offset, anchor })
+            .collect(),
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum FormationTerrain {
+        Open,
+        Stacked,
+        Narrow,
+        Blocked,
+    }
+
+    fn six_member_case(
+        terrain: FormationTerrain,
+        distance: i32,
+    ) -> (
+        FormationPreset,
+        PartyFormation,
+        Vec<Standing>,
+        Vec<FormationMember>,
+    ) {
+        let table = table();
+        let preset = six_member_wedge();
+        let coords: Vec<_> = match terrain {
+            FormationTerrain::Open | FormationTerrain::Stacked => (-3..=distance + 3)
+                .flat_map(|q| (-3..=3).map(move |r| HexCoord::from_axial(q, r)))
+                .collect(),
+            FormationTerrain::Narrow => {
+                let mut coords: BTreeSet<_> =
+                    (0..=distance).map(|q| HexCoord::from_axial(q, 0)).collect();
+                for slot in &preset.slots {
+                    let _inserted = coords.insert(slot.offset);
+                    let _inserted =
+                        coords.insert(translated(HexCoord::from_axial(distance, 0), slot.offset));
+                }
+                coords.into_iter().collect()
+            }
+            FormationTerrain::Blocked => {
+                let wall = distance / 2;
+                (-3..=distance + 3)
+                    .flat_map(|q| (-4..=4).map(move |r| HexCoord::from_axial(q, r)))
+                    .filter(|coord| coord.x() != wall || coord.y().abs() > 3)
+                    .collect()
+            }
+        };
+        let mut tiles = Vec::with_capacity(coords.len().saturating_mul(
+            if matches!(terrain, FormationTerrain::Stacked) {
+                2
+            } else {
+                1
+            },
+        ));
+        for coord in coords {
+            tiles.push(tile(coord));
+            if matches!(terrain, FormationTerrain::Stacked) {
+                tiles.push(upper_tile(coord));
+            }
+        }
+        let shared_footing = Arc::new(footing(&tiles, &table));
+        let ids: Vec<_> = (0..6).map(UnitId).collect();
+        let mut formation = PartyFormation::default();
+        formation.select_preset(&preset, &ids);
+        let level = if matches!(terrain, FormationTerrain::Stacked) {
+            1
+        } else {
+            0
+        };
+        let from = shared_footing
+            .at(TilePos::new(HexCoord::ORIGIN, level))
+            .expect("the formation case should contain its origin");
+        let to = shared_footing
+            .at(TilePos::new(HexCoord::from_axial(distance, 0), level))
+            .expect("the formation case should contain its destination");
+        let anchor_path =
+            route(from, to, &shared_footing).expect("the formation terrain should connect");
+        let members = preset
+            .slots
+            .iter()
+            .zip(ids)
+            .map(|(slot, unit)| FormationMember {
+                unit,
+                standing: shared_footing
+                    .at(TilePos::new(slot.offset, level))
+                    .expect("every authored starting slot should be standable"),
+                footing: Arc::clone(&shared_footing),
+            })
+            .collect();
+        (preset, formation, anchor_path, members)
     }
 
     #[test]
@@ -361,15 +508,15 @@ mod tests {
         let ids = [UnitId(0), UnitId(1), UnitId(2)];
         let mut formation = PartyFormation::default();
         formation.select_preset(&preset, &ids);
-        let anchor_footing = footing(&tiles, &table);
-        let anchor_from = anchor_footing
+        let shared_footing = Arc::new(footing(&tiles, &table));
+        let anchor_from = shared_footing
             .at(TilePos::new(HexCoord::ORIGIN, 0))
             .expect("anchor start should be standable");
-        let anchor_to = anchor_footing
+        let anchor_to = shared_footing
             .at(TilePos::new(HexCoord::from_axial(4, 0), 0))
             .expect("anchor finish should be standable");
         let anchor_path =
-            route(anchor_from, anchor_to, &anchor_footing).expect("the bridge should connect");
+            route(anchor_from, anchor_to, &shared_footing).expect("the bridge should connect");
         let members = [
             (ids[0], HexCoord::ORIGIN),
             (ids[1], HexCoord::from_axial(-1, 1)),
@@ -378,10 +525,10 @@ mod tests {
         .into_iter()
         .map(|(unit, coord)| FormationMember {
             unit,
-            standing: footing(&tiles, &table)
+            standing: shared_footing
                 .at(TilePos::new(coord, 0))
                 .expect("member start should be standable"),
-            footing: footing(&tiles, &table),
+            footing: Arc::clone(&shared_footing),
         })
         .collect();
 
@@ -407,6 +554,87 @@ mod tests {
     }
 
     #[test]
+    fn six_member_open_routes_are_deterministic_at_scale() {
+        for distance in [10, 50, 100] {
+            let (preset, formation, anchor_path, members) =
+                six_member_case(FormationTerrain::Open, distance);
+            let expected = plan_formation_move(&preset, &formation, &anchor_path, members.clone())
+                .expect("six members should traverse open terrain");
+
+            assert_eq!(expected.paths.len(), 6);
+            assert_eq!(
+                expected
+                    .paths
+                    .iter()
+                    .filter_map(|path| path.path.last())
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                6,
+                "a {distance}-step plan ended with overlapping members"
+            );
+            for _ in 0..4 {
+                assert_eq!(
+                    plan_formation_move(&preset, &formation, &anchor_path, members.clone()),
+                    Ok(expected.clone()),
+                    "the {distance}-step route was not deterministic"
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode six-member formation acceptance matrix"]
+    fn six_member_formation_benchmark_matrix() {
+        for terrain in [
+            FormationTerrain::Open,
+            FormationTerrain::Stacked,
+            FormationTerrain::Narrow,
+            FormationTerrain::Blocked,
+        ] {
+            for distance in [10, 50, 100] {
+                let (preset, formation, anchor_path, members) = six_member_case(terrain, distance);
+                let expected =
+                    plan_formation_move(&preset, &formation, &anchor_path, members.clone())
+                        .expect("benchmark terrain should admit a complete plan");
+                let mut samples = Vec::with_capacity(100);
+                for _ in 0..100 {
+                    let started = Instant::now();
+                    let actual =
+                        plan_formation_move(&preset, &formation, &anchor_path, members.clone())
+                            .expect("the repeated benchmark plan should remain valid");
+                    samples.push(started.elapsed());
+                    assert_eq!(actual, expected);
+                }
+                samples.sort_unstable();
+                let p95 = samples
+                    .get(94)
+                    .copied()
+                    .expect("the benchmark records exactly 100 samples");
+                let worst = samples
+                    .get(99)
+                    .copied()
+                    .expect("the benchmark records exactly 100 samples");
+                eprintln!(
+                    "six-member {terrain:?} formation distance={distance}: \
+                     p95={p95:?}, worst={worst:?}"
+                );
+
+                let (p95_budget, worst_budget) = if cfg!(debug_assertions) {
+                    (Duration::from_millis(100), Duration::from_millis(250))
+                } else {
+                    (Duration::from_micros(16_700), Duration::from_millis(50))
+                };
+                assert!(
+                    p95 < p95_budget && worst < worst_budget,
+                    "{terrain:?} distance {distance} exceeded formation budgets: \
+                     p95={p95:?}, worst={worst:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn one_stranded_member_rejects_the_complete_plan() {
         let table = table();
         let full_tiles: Vec<_> = [
@@ -428,7 +656,8 @@ mod tests {
         let ids = [UnitId(0), UnitId(1), UnitId(2)];
         let mut formation = PartyFormation::default();
         formation.select_preset(&preset, &ids);
-        let anchor_footing = footing(&full_tiles, &table);
+        let anchor_footing = Arc::new(footing(&full_tiles, &table));
+        let stranded_footing = Arc::new(footing(&stranded_tiles, &table));
         let anchor_path = route(
             anchor_footing
                 .at(TilePos::new(HexCoord::ORIGIN, 0))
@@ -442,24 +671,24 @@ mod tests {
         let members = vec![
             FormationMember {
                 unit: ids[0],
-                standing: footing(&full_tiles, &table)
+                standing: anchor_footing
                     .at(TilePos::new(HexCoord::ORIGIN, 0))
                     .expect("anchor starts"),
-                footing: footing(&full_tiles, &table),
+                footing: Arc::clone(&anchor_footing),
             },
             FormationMember {
                 unit: ids[1],
-                standing: footing(&full_tiles, &table)
+                standing: anchor_footing
                     .at(TilePos::new(HexCoord::from_axial(-1, 1), 0))
                     .expect("rear starts"),
-                footing: footing(&full_tiles, &table),
+                footing: Arc::clone(&anchor_footing),
             },
             FormationMember {
                 unit: ids[2],
-                standing: footing(&stranded_tiles, &table)
+                standing: stranded_footing
                     .at(TilePos::new(HexCoord::from_axial(0, -1), 0))
                     .expect("stranded member starts"),
-                footing: footing(&stranded_tiles, &table),
+                footing: Arc::clone(&stranded_footing),
             },
         ];
 
