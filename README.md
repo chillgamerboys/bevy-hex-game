@@ -97,6 +97,21 @@ provide a stable ally rail, Group/Solo exploration, formation editing and bottle
 compression, recovery, deterministic AI, retained outcomes, and the integrated 3v3
 Party Trial.
 
+<!--
+Regenerate readme_assets/party-trial-combat.png with:
+HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
+HEX_WALK_OUT=.context/readme-captures/party-trial \
+HEX_WALK_SIZE=1280x720 \
+HEX_GAME_DATA_DIR=.context/readme-captures/party-trial-data \
+cargo run --release -p hex_game --features visual-walk
+cp .context/readme-captures/party-trial/party-trial-combat.png \
+  readme_assets/party-trial-combat.png
+-->
+![Party Trial entering three-versus-three combat on the Crossing, with the full party rail, initiative order, active lattice, combat history, and action bar visible](readme_assets/party-trial-combat.png)
+
+*New Game's Party Trial entering combat. Exploration, formation traversal, and the
+turn-based fight share one battlefield.*
+
 The surrounding application is still deliberately pre-alpha, but it now has a real
 shell: New Game, one disposable exploration resume, persistent display and volume
 preferences, fixed centralized input actions, and normalized unsigned release
@@ -115,6 +130,21 @@ loading flow. Saving is available only while paused in a safe exploration state;
 combat, movement, and open decisions refuse it. The slot is bound to its build,
 scenario content, generator contract, roster, and terrain, so incompatible or corrupt
 data is reported instead of partially loaded. New Game never overwrites it.
+
+<!--
+Regenerate readme_assets/prealpha-app-shell.png with:
+HEX_WALK_SCRIPT=walks/gameplay.ron \
+HEX_WALK_OUT=.context/readme-captures/shell \
+HEX_WALK_SIZE=1280x720 \
+HEX_GAME_DATA_DIR=.context/readme-captures/shell-data \
+cargo run --release -p hex_game --features visual-walk
+cp .context/readme-captures/shell/10-app-shell.png \
+  readme_assets/prealpha-app-shell.png
+-->
+![The Wave 5 Hex Game title screen, organized into Maps, focused Demos, and Actions with Continue unavailable until an exploration resume exists](readme_assets/prealpha-app-shell.png)
+
+*The pre-alpha app shell keeps development fixtures available without presenting
+them as separate ways to start the game.*
 
 **Settings** persists fullscreen/window size, presentation mode, and master,
 music, effects, and UI volume values. The volume buses and fixed action map are seams
