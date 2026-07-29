@@ -15,23 +15,30 @@
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
 //! `HEX_REVIEW_CUTAWAY=full` exposes the complete active interior for cave overview
 //! captures while leaving the normal local cutaway unchanged.
+//! `HEX_REVIEW_ILLUMINATION=overlay` draws the authoritative Dark, Dim, and Bright
+//! gameplay tiers over exact interior surfaces for diagnostic cave captures.
 
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use bevy::camera::RenderTarget;
+use bevy::light::NotShadowCaster;
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::transform::TransformSystems;
-use hex_assets::{CameraSettings, Scenario, ScenarioLibrary, SubstanceTable};
+use hex_assets::{CameraSettings, GameAssets, Scenario, ScenarioLibrary, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetupFailure, Headroom, HexSpan, HexTile, MapAnchorId, MapAnchors,
-    MapViewHint, ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    CameraFocusTarget, CutawayOccluder, GameplaySetupFailure, Headroom, HexSpan, HexTile,
+    IlluminationLevel, LightDomain, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
+    ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
 };
 use hex_map::LiquidVisualTime;
+use hex_perception::ResolvedIllumination;
 use hex_units::{Body, Footing, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, PanOrbitCamera};
 
@@ -47,6 +54,7 @@ const LIQUID_PHASE_ENV: &str = "HEX_REVIEW_LIQUID_PHASE";
 const CAMERA_ENV: &str = "HEX_REVIEW_CAMERA";
 const FOCUS_ANCHOR_ENV: &str = "HEX_REVIEW_FOCUS_ANCHOR";
 const CUTAWAY_ENV: &str = "HEX_REVIEW_CUTAWAY";
+const ILLUMINATION_ENV: &str = "HEX_REVIEW_ILLUMINATION";
 const SETTLE_FRAMES: u32 = 90;
 const CAPTURE_WIDTH: u32 = 1920;
 const CAPTURE_HEIGHT: u32 = 1080;
@@ -54,6 +62,9 @@ const CAPTURE_PHASE_TIMEOUT: Duration = Duration::from_secs(60);
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_VISIBLE_TILES: usize = 32;
 const MIN_VISIBLE_TILE_PERCENT: usize = 5;
+const ILLUMINATION_CAP_THICKNESS: f32 = 0.02;
+const ILLUMINATION_CAP_INSET: f32 = 0.84;
+const ILLUMINATION_CAP_LIFT: f32 = 0.08;
 
 /// Installs review automation only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -95,6 +106,7 @@ fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
             (
                 relocate_review_focus,
                 apply_review_view,
+                apply_review_illumination_overlay,
                 capture_settled_frame,
             )
                 .chain()
@@ -136,6 +148,7 @@ impl ReviewRequest {
             environment_value(CAMERA_ENV)?,
             environment_value(FOCUS_ANCHOR_ENV)?,
             environment_value(CUTAWAY_ENV)?,
+            environment_value(ILLUMINATION_ENV)?,
         )
     }
 
@@ -149,6 +162,7 @@ impl ReviewRequest {
         camera: Option<String>,
         focus_anchor: Option<String>,
         cutaway: Option<String>,
+        illumination: Option<String>,
     ) -> Result<Option<Self>, String> {
         let any_value = scenario.is_some()
             || seed.is_some()
@@ -158,7 +172,8 @@ impl ReviewRequest {
             || liquid_phase.is_some()
             || camera.is_some()
             || focus_anchor.is_some()
-            || cutaway.is_some();
+            || cutaway.is_some()
+            || illumination.is_some();
         if !any_value {
             return Ok(None);
         }
@@ -201,12 +216,14 @@ impl ReviewRequest {
                     camera: ReviewCamera::parse(camera.as_deref().unwrap_or("map"))?,
                     focus_anchor,
                     full_cutaway: parse_review_cutaway(cutaway.as_deref())?,
+                    illumination_overlay: parse_review_illumination(illumination.as_deref())?,
                 })
             }
             None if view.is_some()
                 || camera.is_some()
                 || focus_anchor.is_some()
-                || cutaway.is_some() =>
+                || cutaway.is_some()
+                || illumination.is_some() =>
             {
                 let dependent = if view.is_some() {
                     VIEW_ENV
@@ -214,8 +231,10 @@ impl ReviewRequest {
                     CAMERA_ENV
                 } else if focus_anchor.is_some() {
                     FOCUS_ANCHOR_ENV
-                } else {
+                } else if cutaway.is_some() {
                     CUTAWAY_ENV
+                } else {
+                    ILLUMINATION_ENV
                 };
                 return Err(format!("{dependent} requires {CAPTURE_ENV}"));
             }
@@ -244,6 +263,14 @@ fn parse_review_cutaway(value: Option<&str>) -> Result<bool, String> {
         None => Ok(false),
         Some("full") => Ok(true),
         Some(value) => Err(format!("{CUTAWAY_ENV} must be full; got {value:?}")),
+    }
+}
+
+fn parse_review_illumination(value: Option<&str>) -> Result<bool, String> {
+    match value {
+        None => Ok(false),
+        Some("overlay") => Ok(true),
+        Some(value) => Err(format!("{ILLUMINATION_ENV} must be overlay; got {value:?}")),
     }
 }
 
@@ -392,6 +419,35 @@ struct ReviewCapture {
     camera: ReviewCamera,
     focus_anchor: Option<String>,
     full_cutaway: bool,
+    illumination_overlay: bool,
+}
+
+/// Marks deterministic gameplay-illumination caps owned by capture tooling.
+#[derive(Component)]
+struct ReviewIlluminationOverlay;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ReviewIlluminationSurface {
+    position: TilePos,
+    span: HexSpan,
+    level: IlluminationLevel,
+    cutaway: Option<CutawayOccluder>,
+}
+
+struct ReviewIlluminationMaterials {
+    dark: Handle<StandardMaterial>,
+    dim: Handle<StandardMaterial>,
+    bright: Handle<StandardMaterial>,
+}
+
+impl ReviewIlluminationMaterials {
+    fn for_level(&self, level: IlluminationLevel) -> Handle<StandardMaterial> {
+        match level {
+            IlluminationLevel::Dark => self.dark.clone(),
+            IlluminationLevel::Dim => self.dim.clone(),
+            IlluminationLevel::Bright => self.bright.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,6 +494,7 @@ struct ReviewCaptureState {
     target: Option<Handle<Image>>,
     focus_relocated: bool,
     view_applied: bool,
+    illumination_overlay_applied: bool,
     settled_frames: u32,
     requested: bool,
     phase: CapturePhase,
@@ -451,11 +508,13 @@ struct ReviewCaptureState {
 impl ReviewCaptureState {
     fn new(capture: ReviewCapture) -> Self {
         let focus_relocated = capture.focus_anchor.is_none();
+        let illumination_overlay_applied = !capture.illumination_overlay;
         Self {
             capture,
             target: None,
             focus_relocated,
             view_applied: false,
+            illumination_overlay_applied,
             settled_frames: 0,
             requested: false,
             phase: CapturePhase::AwaitingScenario,
@@ -763,6 +822,149 @@ fn apply_character_camera_view(
     orbit.radius = settings.character_radius;
 }
 
+type ReviewIlluminationTileQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TilePos,
+        &'static HexSpan,
+        Option<&'static CutawayOccluder>,
+    ),
+    With<HexTile>,
+>;
+
+/// Draws one unlit cap per authoritative exact-interior illumination result.
+///
+/// This is deliberately a review-only projection. It reads the headless gameplay
+/// result and never feeds a renderer value back into perception. Copying a roof
+/// run's cutaway marker lets the existing composable cutaway system hide the cap
+/// together with its source geometry.
+fn apply_review_illumination_overlay(
+    mut commands: Commands,
+    ready: Option<Res<TerrainReady>>,
+    illumination: Option<Res<ResolvedIllumination>>,
+    game_assets: Option<Res<GameAssets>>,
+    mut materials: Option<ResMut<Assets<StandardMaterial>>>,
+    tiles: ReviewIlluminationTileQuery,
+    mut state: ResMut<ReviewCaptureState>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if state.failed || state.illumination_overlay_applied || !state.view_applied || ready.is_none()
+    {
+        return;
+    }
+    let (Some(illumination), Some(game_assets), Some(materials)) =
+        (illumination, game_assets, materials.as_mut())
+    else {
+        return;
+    };
+
+    let surfaces = match collect_review_illumination_surfaces(&illumination, tiles.iter()) {
+        Ok(surfaces) => surfaces,
+        Err(error) => {
+            error!("review illumination overlay failed: {error}");
+            state.failed = true;
+            exit.write(AppExit::error());
+            return;
+        }
+    };
+    let overlay_materials = ReviewIlluminationMaterials {
+        dark: materials.add(review_illumination_material(IlluminationLevel::Dark)),
+        dim: materials.add(review_illumination_material(IlluminationLevel::Dim)),
+        bright: materials.add(review_illumination_material(IlluminationLevel::Bright)),
+    };
+    let mut counts = [0usize; 3];
+    for surface in surfaces {
+        match surface.level {
+            IlluminationLevel::Dark => counts[0] += 1,
+            IlluminationLevel::Dim => counts[1] += 1,
+            IlluminationLevel::Bright => counts[2] += 1,
+        }
+        let mut overlay = commands.spawn((
+            Mesh3d(game_assets.hex_tile.clone()),
+            MeshMaterial3d(overlay_materials.for_level(surface.level)),
+            Transform {
+                translation: surface.position.coord.to_world(
+                    surface.span.top + ILLUMINATION_CAP_LIFT + ILLUMINATION_CAP_THICKNESS * 0.5,
+                ),
+                scale: Vec3::new(
+                    ILLUMINATION_CAP_INSET,
+                    ILLUMINATION_CAP_THICKNESS,
+                    ILLUMINATION_CAP_INSET,
+                ),
+                ..default()
+            },
+            Pickable::IGNORE,
+            NotShadowCaster,
+            ReviewIlluminationOverlay,
+            surface.position,
+            Name::new("ReviewIlluminationOverlay"),
+        ));
+        if let Some(cutaway) = surface.cutaway {
+            overlay.insert((cutaway, PresentationOcclusion::default()));
+        }
+    }
+    state.illumination_overlay_applied = true;
+    info!(
+        "applied review illumination overlay: dark={}, dim={}, bright={}",
+        counts[0], counts[1], counts[2]
+    );
+}
+
+fn collect_review_illumination_surfaces<'a>(
+    illumination: &ResolvedIllumination,
+    tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, Option<&'a CutawayOccluder>)>,
+) -> Result<Vec<ReviewIlluminationSurface>, String> {
+    let mut by_position = BTreeMap::new();
+    for (position, span, cutaway) in tiles {
+        if by_position
+            .insert(*position, (*span, cutaway.copied()))
+            .is_some()
+        {
+            return Err(format!(
+                "multiple rendered HexTile entities project the exact surface {position:?}"
+            ));
+        }
+    }
+
+    let mut surfaces = Vec::with_capacity(illumination.len());
+    for (position, resolved) in illumination.iter() {
+        if !matches!(resolved.domain, LightDomain::Interior(_)) {
+            continue;
+        }
+        let Some((span, cutaway)) = by_position.get(&position).copied() else {
+            return Err(format!(
+                "authoritative illumination names {position:?}, but no rendered HexTile projects it"
+            ));
+        };
+        surfaces.push(ReviewIlluminationSurface {
+            position,
+            span,
+            level: resolved.level,
+            cutaway,
+        });
+    }
+    if surfaces.is_empty() {
+        return Err("authoritative illumination contains no interior exact surfaces".to_owned());
+    }
+    Ok(surfaces)
+}
+
+fn review_illumination_material(level: IlluminationLevel) -> StandardMaterial {
+    let color = match level {
+        IlluminationLevel::Dark => Color::srgba(0.03, 0.04, 0.10, 0.72),
+        IlluminationLevel::Dim => Color::srgba(0.24, 0.38, 0.88, 0.58),
+        IlluminationLevel::Bright => Color::srgba(0.22, 0.96, 0.78, 0.48),
+    };
+    StandardMaterial {
+        base_color: color,
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        depth_bias: 8.0,
+        ..default()
+    }
+}
+
 fn apply_camera_view(
     view: ReviewView,
     eye: Vec3,
@@ -811,7 +1013,12 @@ fn capture_settled_frame(
     tiles: Query<&ViewVisibility, With<HexTile>>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if state.failed || state.requested || !state.view_applied || ready.is_none() {
+    if state.failed
+        || state.requested
+        || !state.view_applied
+        || !state.illumination_overlay_applied
+        || ready.is_none()
+    {
         return;
     }
     state.settled_frames += 1;
@@ -903,7 +1110,10 @@ mod tests {
 
     use bevy::state::app::StatesPlugin;
     use hex_assets::{ArtPalette, ScenarioCategory, Substance, SubstanceFile, SwatchId};
-    use hex_core::{HexCoord, TraversalProfile};
+    use hex_core::{
+        ExteriorIllumination, GameplayLight, HexCoord, InteriorRegionId, TraversalProfile,
+    };
+    use hex_perception::LightSourceSnapshot;
 
     use crate::capture::{has_visual_coverage, temporary_capture_path};
 
@@ -924,15 +1134,15 @@ mod tests {
 
     #[test]
     fn review_automation_is_dormant_without_environment_values() {
-        assert!(
-            ReviewRequest::from_values(None, None, None, None, None, None, None, None, None)
-                .expect("empty review configuration should be valid")
-                .is_none()
-        );
+        assert!(ReviewRequest::from_values(
+            None, None, None, None, None, None, None, None, None, None,
+        )
+        .expect("empty review configuration should be valid")
+        .is_none());
     }
 
     #[test]
-    fn capture_configuration_parses_seed_time_view_camera_and_cutaway() {
+    fn capture_configuration_parses_all_deterministic_overrides() {
         let request = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
             Some("42".to_owned()),
@@ -943,6 +1153,7 @@ mod tests {
             Some("character".to_owned()),
             Some("deep_chamber".to_owned()),
             Some("full".to_owned()),
+            Some("overlay".to_owned()),
         )
         .expect("valid review configuration should parse")
         .expect("review configuration should be enabled");
@@ -957,6 +1168,7 @@ mod tests {
         assert_eq!(capture.camera, ReviewCamera::Character);
         assert_eq!(capture.focus_anchor.as_deref(), Some("deep_chamber"));
         assert!(capture.full_cutaway);
+        assert!(capture.illumination_overlay);
     }
 
     #[test]
@@ -971,6 +1183,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("capture configuration should parse")
         .expect("capture configuration should be enabled");
@@ -978,6 +1191,7 @@ mod tests {
 
         let launch = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1004,6 +1218,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect_err("a camera view without an output should be invalid");
 
@@ -1020,6 +1235,7 @@ mod tests {
             None,
             None,
             Some("character".to_owned()),
+            None,
             None,
             None,
         )
@@ -1041,6 +1257,7 @@ mod tests {
             None,
             Some("deep_chamber".to_owned()),
             None,
+            None,
         )
         .expect_err("a focus override without an output should be invalid");
         assert!(without_capture.contains(FOCUS_ANCHOR_ENV));
@@ -1055,6 +1272,7 @@ mod tests {
             None,
             None,
             Some("  ".to_owned()),
+            None,
             None,
         )
         .expect_err("an empty focus anchor should be invalid");
@@ -1074,6 +1292,7 @@ mod tests {
             None,
             None,
             Some("full".to_owned()),
+            None,
         )
         .expect_err("a cutaway override without an output should be invalid");
         assert!(without_capture.contains(CUTAWAY_ENV));
@@ -1089,10 +1308,150 @@ mod tests {
             None,
             None,
             Some("wide".to_owned()),
+            None,
         )
         .expect_err("an unknown cutaway mode should be invalid");
         assert!(unknown.contains(CUTAWAY_ENV));
         assert!(unknown.contains("must be full"));
+    }
+
+    #[test]
+    fn illumination_overlay_requires_capture_and_rejects_unknown_modes() {
+        let without_capture = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("overlay".to_owned()),
+        )
+        .expect_err("an illumination override without an output should be invalid");
+        assert!(without_capture.contains(ILLUMINATION_ENV));
+        assert!(without_capture.contains(CAPTURE_ENV));
+
+        let unknown = ReviewRequest::from_values(
+            Some("Caves".to_owned()),
+            None,
+            Some(".context/cave.png".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("physical".to_owned()),
+        )
+        .expect_err("an unknown illumination mode should be invalid");
+        assert!(unknown.contains(ILLUMINATION_ENV));
+        assert!(unknown.contains("must be overlay"));
+    }
+
+    #[test]
+    fn illumination_overlay_projects_exact_stacked_surfaces_and_cutaway_markers() {
+        let coord = HexCoord::from_axial(2, -1);
+        let cave_floor = TilePos::new(coord, 6);
+        let cave_landing = TilePos::new(HexCoord::from_axial(3, -1), 7);
+        let cave_chamber = TilePos::new(HexCoord::from_axial(4, -2), 7);
+        let exterior = TilePos::new(coord, 15);
+        let cave = LightDomain::Interior(InteriorRegionId(4));
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (cave_floor, cave),
+                (cave_landing, cave),
+                (cave_chamber, cave),
+                (exterior, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[
+                LightSourceSnapshot {
+                    pos: cave_landing,
+                    domain: cave,
+                    light: GameplayLight::new(IlluminationLevel::Dim, 0),
+                },
+                LightSourceSnapshot {
+                    pos: cave_chamber,
+                    domain: cave,
+                    light: GameplayLight::new(IlluminationLevel::Bright, 0),
+                },
+            ],
+        )
+        .expect("the exact illumination fixture should resolve");
+        let cave_span = HexSpan::new(2.0, 2.8);
+        let landing_span = HexSpan::new(2.4, 3.2);
+        let chamber_span = HexSpan::new(2.4, 3.2);
+        let exterior_span = HexSpan::new(5.6, 6.4);
+        let roof = CutawayOccluder(InteriorRegionId(4));
+
+        let surfaces = collect_review_illumination_surfaces(
+            &illumination,
+            [
+                (&exterior, &exterior_span, Some(&roof)),
+                (&cave_landing, &landing_span, None),
+                (&cave_chamber, &chamber_span, None),
+                (&cave_floor, &cave_span, Some(&roof)),
+            ]
+            .into_iter(),
+        )
+        .expect("each exact illumination result has one rendered source tile");
+        let by_position = surfaces
+            .into_iter()
+            .map(|surface| (surface.position, surface))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(by_position.len(), 3);
+        assert!(!by_position.contains_key(&exterior));
+        assert_eq!(
+            by_position.get(&cave_floor).map(|surface| surface.level),
+            Some(IlluminationLevel::Dark)
+        );
+        assert_eq!(
+            by_position.get(&cave_landing).map(|surface| surface.level),
+            Some(IlluminationLevel::Dim)
+        );
+        assert_eq!(
+            by_position.get(&cave_chamber).map(|surface| surface.level),
+            Some(IlluminationLevel::Bright)
+        );
+        assert_eq!(
+            by_position
+                .get(&cave_floor)
+                .and_then(|surface| surface.cutaway),
+            Some(roof)
+        );
+        assert_eq!(
+            by_position.get(&cave_floor).map(|surface| surface.span),
+            Some(cave_span)
+        );
+    }
+
+    #[test]
+    fn illumination_overlay_rejects_missing_and_duplicate_rendered_surfaces() {
+        let position = TilePos::new(HexCoord::ORIGIN, 6);
+        let illumination = ResolvedIllumination::try_resolve(
+            [(position, LightDomain::Interior(InteriorRegionId(1)))],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("the one-surface fixture should resolve");
+        let span = HexSpan::new(2.0, 2.8);
+
+        let missing = collect_review_illumination_surfaces(
+            &illumination,
+            std::iter::empty::<(&TilePos, &HexSpan, Option<&CutawayOccluder>)>(),
+        )
+        .expect_err("an authoritative surface without a rendered tile must fail");
+        assert!(missing.contains("no rendered HexTile"));
+
+        let duplicate = collect_review_illumination_surfaces(
+            &illumination,
+            [(&position, &span, None), (&position, &span, None)].into_iter(),
+        )
+        .expect_err("duplicate rendered exact surfaces must fail");
+        assert!(duplicate.contains("multiple rendered HexTile"));
     }
 
     #[test]
@@ -1229,6 +1588,7 @@ mod tests {
             Some("first-person".to_owned()),
             None,
             None,
+            None,
         )
         .expect_err("an unknown review camera should be rejected");
 
@@ -1245,6 +1605,7 @@ mod tests {
                 None,
                 None,
                 Some(invalid.to_owned()),
+                None,
                 None,
                 None,
                 None,
@@ -1473,6 +1834,7 @@ mod tests {
                 camera: ReviewCamera::Map,
                 focus_anchor: None,
                 full_cutaway: false,
+                illumination_overlay: false,
             });
             state.view_applied = phase != CapturePhase::AwaitingCamera;
             state.requested = requested;
@@ -1506,6 +1868,7 @@ mod tests {
                 camera: ReviewCamera::Map,
                 focus_anchor: None,
                 full_cutaway: false,
+                illumination_overlay: false,
             },
         );
         let camera = app
@@ -1588,6 +1951,7 @@ mod tests {
                 camera: ReviewCamera::Character,
                 focus_anchor: None,
                 full_cutaway: false,
+                illumination_overlay: false,
             },
         );
         app.world_mut().spawn((
@@ -1669,6 +2033,7 @@ mod tests {
             camera: ReviewCamera::Map,
             focus_anchor: Some(anchor.to_owned()),
             full_cutaway: false,
+            illumination_overlay: false,
         }
     }
 
