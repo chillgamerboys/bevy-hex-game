@@ -22,11 +22,13 @@ mod fingerprint;
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
 )]
 mod layout;
+pub(crate) use layout::HexSide;
 #[expect(
     dead_code,
     reason = "liquid topology is consumed by the sequential V3 Waterfall recipe"
 )]
 mod liquid;
+pub(crate) use liquid::LiquidFlowState;
 #[cfg_attr(
     not(test),
     expect(
@@ -35,6 +37,7 @@ mod liquid;
     )
 )]
 mod materialize;
+pub(crate) use materialize::MapPresentationProjection;
 #[cfg_attr(
     not(test),
     expect(
@@ -56,6 +59,7 @@ mod selection;
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"
 )]
 mod volume;
+pub(crate) use volume::FillMaterialRole;
 #[expect(
     dead_code,
     reason = "the complete semantic plan is consumed by the V3 selection runner"

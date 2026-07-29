@@ -8,10 +8,9 @@ use hex_assets::{
     ArtPalette, ObjectAssetId, PaletteSwatch, SwatchId, VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 
+use crate::history::DEFAULT_HISTORY_LIMIT;
 use crate::model::{EditorModel, EditorModelError};
 use crate::recovery::{RecoveryError, RecoverySanitization, RecoveryWorkshopDraft};
-
-const GLOBAL_HISTORY_LIMIT: usize = 128;
 
 /// A recoverable workshop draft operation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,10 +202,11 @@ impl WorkshopDraft {
                 "use the active object transaction for grouped edits",
             ));
         }
+        let label = validated_label(label)?;
         let changed = operation(&mut self.editor)?;
         if changed {
             self.push_undo(GlobalHistoryEntry {
-                label: validated_label(label)?,
+                label,
                 kind: GlobalHistoryKind::Object,
             });
             self.redo.clear();
@@ -507,7 +507,7 @@ fn validated_label(label: impl Into<String>) -> Result<String, WorkshopDraftErro
 }
 
 fn trim_history(history: &mut VecDeque<GlobalHistoryEntry>) {
-    while history.len() > GLOBAL_HISTORY_LIMIT {
+    while history.len() > DEFAULT_HISTORY_LIMIT {
         drop(history.pop_front());
     }
 }
@@ -589,6 +589,20 @@ mod tests {
         assert!(draft.palette().contains(&accent_id));
         assert_eq!(draft.redo(), Ok(true));
         assert_eq!(draft.editor().object().display_name, "History Plant");
+    }
+
+    #[test]
+    fn invalid_object_history_labels_are_rejected_before_mutation() {
+        let mut draft = fixture();
+        let before = draft.editor().clone();
+
+        let result = draft.edit_object("  ", |editor| {
+            editor.set_display_name("Must not be applied")
+        });
+
+        assert!(result.is_err());
+        assert_eq!(draft.editor(), &before);
+        assert_eq!(draft.undo_label(), None);
     }
 
     #[test]
