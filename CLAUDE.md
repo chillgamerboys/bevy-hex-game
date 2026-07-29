@@ -75,6 +75,9 @@ capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected ac
 an exact generated anchor before framing and requires a capture.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
 while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+`HEX_REVIEW_ILLUMINATION=overlay` adds exact Dark, Dim, and Bright cave-interior
+gameplay-tier caps to a capture without changing physical lighting, perception, fog,
+or picking.
 The process exits after persisting the PNG. A frame that fails the visual-coverage
 check still leaves its PNG at the requested path and exits with an error, so the
 rejected output can be inspected.
