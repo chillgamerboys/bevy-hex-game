@@ -141,6 +141,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      # Package isolation catches missing direct-dependency features that workspace
+      # feature unification can otherwise hide.
+      - run: cargo check --package hex_core --profile ci
+        if: needs.changes.outputs.code == 'true'
       # --all-features so hex_dev is linted too; it is excluded from a default build.
       - run: cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
         if: needs.changes.outputs.code == 'true'
