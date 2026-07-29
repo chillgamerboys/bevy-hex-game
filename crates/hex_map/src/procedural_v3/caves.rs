@@ -11,6 +11,7 @@ use hex_core::{HexCoord, IlluminationLevel, InteriorRegionId, MapViewHint, TileP
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
+use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams, WalkerSeamShape};
 use super::seed::SeedStream;
@@ -24,9 +25,10 @@ use super::volume::{
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeaturePlan, GeneratedWorldPlan,
-    InteriorPlan, LightId, PlannedGameplayLight, PlannedInterior, PlannedLightPresentation,
-    StructurePlan, WorldIssueCode, WorldValidationIssue,
+    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeatureClearing, FeaturePlan,
+    GeneratedWorldPlan, InteriorPlan, LightId, PlannedGameplayLight, PlannedInterior,
+    PlannedLightPresentation, ProtectedFeatureRoute, StructurePlan, WorldIssueCode,
+    WorldValidationIssue,
 };
 use super::V3GenerationError;
 use crate::settings::{
@@ -43,6 +45,8 @@ const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
 const CAVE_ENTRANCE: &str = "cave_entrance";
 const DEEP_CHAMBER: &str = "deep_chamber";
+const REQUIRED_LIGHT_ROUTE: &str = "cave_required_light_route";
+const OPTIONAL_DARK_BRANCHES: &str = "cave_optional_dark_branches";
 
 /// Recipe metrics retained by selection and the public generation report.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +113,13 @@ struct CaveTopology {
     critical_coords: BTreeSet<HexCoord>,
     optional_coords: BTreeSet<HexCoord>,
     deepest_critical: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DerivedCaveTargets {
+    critical: BTreeSet<TilePos>,
+    optional: BTreeSet<TilePos>,
+    centerline: Vec<TilePos>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -530,9 +541,24 @@ fn construct_patch_with_streams(
         (DEEP_CHAMBER.to_owned(), hostile),
     ]);
 
-    let critical_targets = exact_interior_positions(&volume, &topology.critical_coords);
-    let optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
+    let mut critical_targets = exact_interior_positions(&volume, &topology.critical_coords);
+    let mut optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
+    let mut critical_centerline =
+        shortest_ordinary_route(&volume, party, hostile).ok_or_else(|| {
+            vec![recipe_issue(
+                "Caves cannot recover an ordinary route between its required actors",
+            )]
+        })?;
+    critical_targets.extend(critical_centerline.iter().copied());
+    optional_targets.retain(|position| !critical_targets.contains(position));
     let mut protected_positions = anchors.values().copied().collect::<BTreeSet<_>>();
+    protected_positions.extend(
+        volume
+            .surfaces
+            .keys()
+            .copied()
+            .filter(|position| seam_shape.is_boundary(position.coord)),
+    );
     protected_positions.extend(
         patch
             .protected_approaches()
@@ -554,6 +580,16 @@ fn construct_patch_with_streams(
         interior,
         &lights,
     )?;
+    seam_shape.apply(&mut volume)?;
+    critical_centerline = shortest_ordinary_route(&volume, party, hostile).ok_or_else(|| {
+        vec![recipe_issue(
+            "Caves crystal alcoves break the ordinary route between its required actors",
+        )]
+    })?;
+    critical_targets = exact_interior_positions(&volume, &topology.critical_coords);
+    critical_targets.extend(critical_centerline.iter().copied());
+    optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
+    optional_targets.retain(|position| !critical_targets.contains(position));
     let biome_regions = volume
         .surfaces
         .keys()
@@ -598,7 +634,22 @@ fn construct_patch_with_streams(
                 })
                 .collect(),
         },
-        features: FeaturePlan::default(),
+        features: FeaturePlan {
+            by_id: BTreeMap::new(),
+            protected_routes: BTreeMap::from([(
+                REQUIRED_LIGHT_ROUTE.to_owned(),
+                ProtectedFeatureRoute {
+                    centerline: critical_centerline,
+                    surfaces: critical_targets,
+                },
+            )]),
+            clearings: BTreeMap::from([(
+                OPTIONAL_DARK_BRANCHES.to_owned(),
+                FeatureClearing {
+                    surfaces: optional_targets,
+                },
+            )]),
+        },
         structures: StructurePlan::default(),
         blockers: BTreeSet::new(),
         lights,
@@ -654,13 +705,14 @@ fn compatible_patch_geometry(
     };
     for offset in orientation_offsets {
         let orientation = requested_orientation.saturating_add(*offset) % 6;
-        let topology = match build_topology(topology_mask, frame, orientation, settings, streams) {
-            Ok(topology) => topology,
-            Err(issues) => {
-                last_issues = issues;
-                continue;
-            }
-        };
+        let mut topology =
+            match build_topology(topology_mask, frame, orientation, settings, streams) {
+                Ok(topology) => topology,
+                Err(issues) => {
+                    last_issues = issues;
+                    continue;
+                }
+            };
         let mut surface_heights =
             match build_surface_heights(patch.mask(), settings, &topology, streams) {
                 Ok(heights) => heights,
@@ -676,6 +728,16 @@ fn compatible_patch_geometry(
                 continue;
             }
         };
+        if let Err(issue) = fit_cave_clearances_below_surface(&mut topology, &surface_heights) {
+            last_issues = vec![issue];
+            continue;
+        }
+        if let Err(issue) =
+            project_minimum_roof_surfaces(&mut surface_heights, &topology, &seam_shape)
+        {
+            last_issues = vec![issue];
+            continue;
+        }
         let ramp_conflicts = topology.entrance.rows.iter().flatten().any(|position| {
             seam_shape.is_boundary(position.coord)
                 || seam_shape
@@ -698,9 +760,29 @@ fn compatible_patch_geometry(
                     .map(|position| &position.coord),
             )
             .any(|coord| liquid_coordinates.contains(coord));
-        if ramp_conflicts || underground_seam_crossing || underground_liquid_overlap {
+        let ramp_coords = topology.entrance.coords();
+        let insufficient_roof = topology
+            .floor_levels
+            .iter()
+            .filter(|(coord, _floor)| !ramp_coords.contains(coord))
+            .find_map(|(coord, floor)| {
+                let surface = surface_heights.get(coord).copied()?;
+                let clearance = topology.clearances.get(coord).copied()?;
+                let roof_bottom = floor.saturating_add(1).saturating_add(clearance);
+                let thickness = surface.saturating_sub(roof_bottom).saturating_add(1);
+                (thickness < MIN_ROOF_THICKNESS)
+                    .then_some((*coord, *floor, clearance, surface, thickness))
+            });
+        if ramp_conflicts
+            || underground_seam_crossing
+            || underground_liquid_overlap
+            || insufficient_roof.is_some()
+        {
             last_issues = vec![recipe_issue(format!(
-                "Caves orientation {orientation} overlaps a protected shared seam or liquid sink"
+                "Caves orientation {orientation} conflicts with a shared seam, liquid sink, or \
+                 minimum roof thickness (ramp={ramp_conflicts}, underground_seam=\
+                 {underground_seam_crossing}, liquid={underground_liquid_overlap}, roof=\
+                 {insufficient_roof:?})"
             ))];
             continue;
         }
@@ -712,6 +794,97 @@ fn compatible_patch_geometry(
         ));
     }
     Err(last_issues)
+}
+
+fn fit_cave_clearances_below_surface(
+    topology: &mut CaveTopology,
+    surface_heights: &BTreeMap<HexCoord, i32>,
+) -> Result<(), WorldValidationIssue> {
+    for (coord, clearance) in &mut topology.clearances {
+        let Some(floor) = topology.floor_levels.get(coord).copied() else {
+            return Err(recipe_issue(format!(
+                "Caves clearance projection cannot find floor at {coord:?}"
+            )));
+        };
+        let Some(surface) = surface_heights.get(coord).copied() else {
+            return Err(recipe_issue(format!(
+                "Caves clearance projection cannot find surface at {coord:?}"
+            )));
+        };
+        let maximum = surface
+            .saturating_sub(floor)
+            .saturating_sub(MIN_ROOF_THICKNESS);
+        if maximum < CORRIDOR_CLEARANCE {
+            return Err(recipe_issue(format!(
+                "Caves floor at {coord:?} cannot retain walker clearance and minimum roof \
+                 thickness below surface level {surface}"
+            )));
+        }
+        *clearance = (*clearance).min(maximum);
+    }
+    Ok(())
+}
+
+fn project_minimum_roof_surfaces(
+    surface_heights: &mut BTreeMap<HexCoord, i32>,
+    topology: &CaveTopology,
+    seam_shape: &WalkerSeamShape,
+) -> Result<(), WorldValidationIssue> {
+    let mut frontier = VecDeque::new();
+    for (coord, clearance) in &topology.clearances {
+        let Some(floor) = topology.floor_levels.get(coord).copied() else {
+            return Err(recipe_issue(format!(
+                "Caves roof projection cannot find floor at {coord:?}"
+            )));
+        };
+        let required = floor
+            .saturating_add(*clearance)
+            .saturating_add(MIN_ROOF_THICKNESS);
+        let Some(surface) = surface_heights.get_mut(coord) else {
+            return Err(recipe_issue(format!(
+                "Caves roof projection cannot find surface at {coord:?}"
+            )));
+        };
+        if *surface < required {
+            if seam_shape
+                .required_surface(*coord)
+                .is_some_and(|position| position.level < required)
+            {
+                return Err(recipe_issue(format!(
+                    "Caves roof at {coord:?} conflicts with an exact seam aperture"
+                )));
+            }
+            *surface = required;
+            frontier.push_back(*coord);
+        }
+    }
+
+    while let Some(coord) = frontier.pop_front() {
+        let Some(height) = surface_heights.get(&coord).copied() else {
+            continue;
+        };
+        let needed = height.saturating_sub(1);
+        for neighbor in coord.neighbors() {
+            let Some(neighbor_height) = surface_heights.get_mut(&neighbor) else {
+                continue;
+            };
+            if *neighbor_height >= needed {
+                continue;
+            }
+            if seam_shape
+                .required_surface(neighbor)
+                .is_some_and(|position| position.level < needed)
+            {
+                return Err(recipe_issue(format!(
+                    "Caves roof slope from {coord:?} conflicts with an exact seam aperture at \
+                     {neighbor:?}"
+                )));
+            }
+            *neighbor_height = needed;
+            frontier.push_back(neighbor);
+        }
+    }
+    Ok(())
 }
 
 fn cave_liquid_sinks(
@@ -916,37 +1089,7 @@ fn build_topology(
         chamber_centres.len(),
         streams.map(|streams| streams.floors),
     );
-    let chamber_footprints = chamber_centres
-        .iter()
-        .enumerate()
-        .map(|(index, center)| {
-            let radius = if index == 0 || index + 1 == chamber_centres.len() {
-                2
-            } else {
-                1 + u32::from(index % 4 == 0)
-            };
-            center
-                .within_radius(radius)
-                .into_iter()
-                .filter(|coord| mask.contains(coord))
-                .collect::<BTreeSet<_>>()
-        })
-        .collect::<Vec<_>>();
-    if chamber_footprints
-        .iter()
-        .enumerate()
-        .any(|(index, footprint)| {
-            footprint.is_empty()
-                || chamber_footprints
-                    .iter()
-                    .skip(index.saturating_add(1))
-                    .any(|other| !footprint.is_disjoint(other))
-        })
-    {
-        return Err(vec![recipe_issue(
-            "Caves chamber footprints overlap or escaped the patch mask",
-        )]);
-    }
+    let chamber_footprints = chamber_footprints(mask, &chamber_centres)?;
 
     let ramp_end = entrance
         .rows
@@ -1055,6 +1198,107 @@ fn build_topology(
         optional_coords,
         deepest_critical,
     })
+}
+
+fn chamber_footprints(
+    mask: &BTreeSet<HexCoord>,
+    chamber_centres: &[HexCoord],
+) -> Result<Vec<BTreeSet<HexCoord>>, Vec<WorldValidationIssue>> {
+    let footprints = chamber_centres
+        .iter()
+        .enumerate()
+        .map(|(index, center)| {
+            let radius = if index == 0 || index + 1 == chamber_centres.len() {
+                2
+            } else {
+                1 + u32::from(index % 4 == 0)
+            };
+            center
+                .within_radius(radius)
+                .into_iter()
+                .filter(|coord| mask.contains(coord))
+                .collect::<BTreeSet<_>>()
+        })
+        .collect::<Vec<_>>();
+    if footprints.iter().enumerate().any(|(index, footprint)| {
+        footprint.is_empty()
+            || footprints
+                .iter()
+                .skip(index.saturating_add(1))
+                .any(|other| !footprint.is_disjoint(other))
+    }) {
+        return Err(vec![recipe_issue(
+            "Caves chamber footprints overlap or escaped the patch mask",
+        )]);
+    }
+    Ok(footprints)
+}
+
+fn cave_target_coordinates(
+    mask: &BTreeSet<HexCoord>,
+    frame: PatchFrame,
+    orientation: u8,
+    settings: &V3CavesSettings,
+    entrance: &CaveRoute,
+) -> Result<(BTreeSet<HexCoord>, BTreeSet<HexCoord>), Vec<WorldValidationIssue>> {
+    let chamber_centres = chamber_centres(mask, frame, orientation, settings.chamber_count)?;
+    let footprints = chamber_footprints(mask, &chamber_centres)?;
+    let ramp_end = entrance
+        .rows
+        .last()
+        .and_then(|row| row.first())
+        .copied()
+        .ok_or_else(|| vec![recipe_issue("Caves target geometry has no ramp endpoint")])?;
+    let root = chamber_centres
+        .first()
+        .copied()
+        .ok_or_else(|| vec![recipe_issue("Caves target geometry has no root chamber")])?;
+    let mut routes = vec![paired_route(
+        mask,
+        ramp_end.coord,
+        root,
+        settings.cave_floor_level,
+        settings.cave_floor_level,
+    )?];
+    for (parent, child) in chamber_tree_edges(chamber_centres.len()) {
+        let Some((parent, child)) = chamber_centres
+            .get(parent)
+            .copied()
+            .zip(chamber_centres.get(child).copied())
+        else {
+            return Err(vec![recipe_issue(
+                "Caves target geometry references a missing chamber",
+            )]);
+        };
+        routes.push(paired_route(
+            mask,
+            parent,
+            child,
+            settings.cave_floor_level,
+            settings.cave_floor_level,
+        )?);
+    }
+    let optional_count = usize::from(settings.chamber_count >= 9).saturating_add(1);
+    let critical_count = chamber_centres.len().saturating_sub(optional_count).max(1);
+    let critical = routes
+        .iter()
+        .take(critical_count)
+        .flat_map(CaveRoute::coords)
+        .chain(
+            footprints
+                .iter()
+                .take(critical_count)
+                .flat_map(|footprint| footprint.iter().copied()),
+        )
+        .chain(entrance.coords())
+        .collect::<BTreeSet<_>>();
+    let optional = footprints
+        .iter()
+        .skip(critical_count)
+        .flat_map(|footprint| footprint.iter().copied())
+        .filter(|coord| !critical.contains(coord))
+        .collect();
+    Ok((critical, optional))
 }
 
 fn patch_frame(mask: &BTreeSet<HexCoord>) -> Result<PatchFrame, Vec<WorldValidationIssue>> {
@@ -1523,6 +1767,69 @@ fn plan_lights(
     protected: &BTreeSet<TilePos>,
     streams: Option<CaveStreams<'_>>,
 ) -> Result<BTreeMap<LightId, PlannedGameplayLight>, Vec<WorldValidationIssue>> {
+    if let Ok(lights) =
+        plan_lights_with_reserved_dark_floor(volume, critical, optional, protected, streams, None)
+    {
+        if optional.iter().any(|target| {
+            lights
+                .values()
+                .all(|light| !illuminated(light.origin, light.radius, *target))
+        }) {
+            return Ok(lights);
+        }
+    }
+
+    let mut reserves = optional.iter().copied().collect::<Vec<_>>();
+    reserves.sort_unstable_by_key(|target| {
+        let distance_from_required = critical
+            .iter()
+            .map(|required| {
+                required
+                    .coord
+                    .distance(target.coord)
+                    .saturating_add(required.level.abs_diff(target.level))
+            })
+            .min()
+            .unwrap_or_default();
+        (
+            std::cmp::Reverse(distance_from_required),
+            streams.map_or_else(
+                || fallback_light_priority(*target),
+                |streams| {
+                    streams.lights.sample_coord(
+                        target.coord,
+                        u64::try_from(target.level).unwrap_or(u64::MAX),
+                    )
+                },
+            ),
+            *target,
+        )
+    });
+    for reserve in reserves {
+        if let Ok(lights) = plan_lights_with_reserved_dark_floor(
+            volume,
+            critical,
+            optional,
+            protected,
+            streams,
+            Some(reserve),
+        ) {
+            return Ok(lights);
+        }
+    }
+    Err(vec![recipe_issue(
+        "Caves cannot cover its required route while retaining an optional dark branch floor",
+    )])
+}
+
+fn plan_lights_with_reserved_dark_floor(
+    volume: &VolumePlan,
+    critical: &BTreeSet<TilePos>,
+    optional: &BTreeSet<TilePos>,
+    protected: &BTreeSet<TilePos>,
+    streams: Option<CaveStreams<'_>>,
+    reserved_dark_floor: Option<TilePos>,
+) -> Result<BTreeMap<LightId, PlannedGameplayLight>, Vec<WorldValidationIssue>> {
     let mut candidates = crystal_light_candidates(volume, critical, protected);
     candidates.sort_by_key(|site| {
         (
@@ -1564,6 +1871,11 @@ fn plan_lights(
                         .unwrap_or_default()
                     },
                 ));
+                if reserved_dark_floor
+                    .is_some_and(|target| illuminated(site.origin, radius, target))
+                {
+                    return None;
+                }
                 let coverage = uncovered
                     .iter()
                     .filter(|target| illuminated(site.origin, radius, **target))
@@ -1631,15 +1943,6 @@ fn plan_lights(
                 "Caves light planner exceeded its bounded source count",
             )]);
         }
-    }
-    if optional.iter().all(|target| {
-        lights
-            .values()
-            .any(|light| illuminated(light.origin, light.radius, *target))
-    }) {
-        return Err(vec![recipe_issue(
-            "Caves lights illuminate every optional branch floor",
-        )]);
     }
     Ok(lights)
 }
@@ -1928,12 +2231,119 @@ fn carve_crystal_alcove_column(
     Ok(VolumeColumn { elements })
 }
 
+pub(crate) fn validate_caves_with_surface_sink(
+    patch: PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    settings: &V3CavesSettings,
+) -> WorldValidation<CavesMetrics> {
+    let expected = match cave_liquid_sinks(&patch) {
+        Ok(expected) => expected,
+        Err(issues) => return WorldValidation::Invalid(issues),
+    };
+    let mut sink_issues = validate_cave_liquid_sinks(&patch, fragment, &expected);
+    let expected_targets =
+        match derive_patch_cave_targets(&patch, &fragment.volume, &fragment.anchors, settings) {
+            Ok(targets) => targets,
+            Err(issue) => {
+                sink_issues.push(issue);
+                return WorldValidation::Invalid(sink_issues);
+            }
+        };
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                sink_issues.push(recipe_issue(format!(
+                    "Caves validation frame failed: {error}"
+                )));
+                return WorldValidation::Invalid(sink_issues);
+            }
+        };
+    let mut local = match frame.canonical_local_world(fragment) {
+        Ok(plan) => plan,
+        Err(error) => {
+            sink_issues.push(recipe_issue(format!(
+                "Caves validation projection failed: {error}"
+            )));
+            return WorldValidation::Invalid(sink_issues);
+        }
+    };
+    local.layout.grid_radius = local
+        .layout
+        .footprint
+        .iter()
+        .map(|coord| HexCoord::ORIGIN.distance(*coord))
+        .max()
+        .unwrap_or_default();
+    let project_set = |positions: BTreeSet<TilePos>| {
+        positions
+            .into_iter()
+            .map(|position| frame.position_to_local(position))
+            .collect::<Result<BTreeSet<_>, _>>()
+    };
+    let expected_targets = match (
+        project_set(expected_targets.critical),
+        project_set(expected_targets.optional),
+        expected_targets
+            .centerline
+            .into_iter()
+            .map(|position| frame.position_to_local(position))
+            .collect::<Result<Vec<_>, _>>(),
+    ) {
+        (Ok(critical), Ok(optional), Ok(centerline)) => DerivedCaveTargets {
+            critical,
+            optional,
+            centerline,
+        },
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            sink_issues.push(recipe_issue(format!(
+                "Caves validation target projection failed: {error}"
+            )));
+            return WorldValidation::Invalid(sink_issues);
+        }
+    };
+    match validate_caves_inner(&local, settings, true, expected_targets) {
+        WorldValidation::Valid(metrics) if sink_issues.is_empty() => {
+            WorldValidation::Valid(metrics)
+        }
+        WorldValidation::Valid(_) => WorldValidation::Invalid(sink_issues),
+        WorldValidation::Invalid(mut issues) => {
+            issues.extend(sink_issues);
+            WorldValidation::Invalid(issues)
+        }
+    }
+}
+
 pub(crate) fn validate_caves(
     plan: &GeneratedWorldPlan,
     settings: &V3CavesSettings,
 ) -> WorldValidation<CavesMetrics> {
+    let patch = match PatchRecipeContext::resolve(&plan.layout, PatchId(0)) {
+        Ok(patch) => patch,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(error.to_string())]);
+        }
+    };
+    let targets = match derive_patch_cave_targets(&patch, &plan.volume, &plan.anchors, settings) {
+        Ok(targets) => targets,
+        Err(issue) => return WorldValidation::Invalid(vec![issue]),
+    };
+    validate_caves_inner(
+        plan,
+        settings,
+        plan.layout.kind != super::layout::LayoutKind::Single,
+        targets,
+    )
+}
+
+fn validate_caves_inner(
+    plan: &GeneratedWorldPlan,
+    settings: &V3CavesSettings,
+    allow_surface_liquid: bool,
+    expected_targets: DerivedCaveTargets,
+) -> WorldValidation<CavesMetrics> {
     let mut issues = plan.validate();
-    if plan.layout.kind == super::layout::LayoutKind::Single && !plan.liquids.bodies.is_empty() {
+    if !allow_surface_liquid && !plan.liquids.bodies.is_empty() {
         issues.push(recipe_issue("Single Caves must not contain liquids"));
     }
     if !plan.features.by_id.is_empty()
@@ -2033,13 +2443,23 @@ pub(crate) fn validate_caves(
                 })
                 .map(|(surface, _metadata)| surface.level)
                 .max()?;
-            Some(surface.saturating_sub(roof_bottom).saturating_add(1))
+            Some((
+                floor.coord,
+                floor.level,
+                roof_bottom,
+                surface,
+                surface.saturating_sub(roof_bottom).saturating_add(1),
+            ))
         })
         .collect();
-    let minimum_roof_thickness = roof_thicknesses.iter().copied().min().unwrap_or_default();
+    let thinnest_roof = roof_thicknesses
+        .iter()
+        .copied()
+        .min_by_key(|(_, _, _, _, thickness)| *thickness);
+    let minimum_roof_thickness = thinnest_roof.map_or(0, |(_, _, _, _, thickness)| thickness);
     if minimum_roof_thickness < MIN_ROOF_THICKNESS {
         issues.push(recipe_issue(format!(
-            "Caves minimum roof thickness is {minimum_roof_thickness}"
+            "Caves minimum roof thickness is {minimum_roof_thickness} at {thinnest_roof:?}"
         )));
     }
 
@@ -2217,13 +2637,40 @@ pub(crate) fn validate_caves(
             )));
         }
     }
-    let (critical, optional) = match cave_target_sets(plan, settings, party) {
-        Ok(targets) => targets,
-        Err(issue) => {
-            issues.push(issue);
-            (BTreeSet::new(), BTreeSet::new())
-        }
-    };
+    let published_targets = exact_cave_target_sets(&plan.features).unwrap_or_else(|issue| {
+        issues.push(issue);
+        (BTreeSet::new(), BTreeSet::new())
+    });
+    let DerivedCaveTargets {
+        critical,
+        optional,
+        centerline: expected_centerline,
+    } = expected_targets;
+    let published_centerline = plan
+        .features
+        .protected_routes
+        .get(REQUIRED_LIGHT_ROUTE)
+        .map(|route| route.centerline.as_slice())
+        .unwrap_or_default();
+    if published_centerline != expected_centerline.as_slice()
+        || published_targets.0 != critical
+        || published_targets.1 != optional
+    {
+        issues.push(recipe_issue(
+            "Caves exact light-target metadata does not match independently derived chamber and \
+             party-to-hostile route geometry",
+        ));
+    }
+    if critical.iter().chain(&optional).any(|target| {
+        plan.volume
+            .surfaces
+            .get(target)
+            .is_none_or(|metadata| metadata.interior != Some(*region))
+    }) {
+        issues.push(recipe_issue(
+            "Caves exact light-target metadata leaves its interior floor domain",
+        ));
+    }
     let uncovered: Vec<_> = critical
         .iter()
         .filter(|target| {
@@ -2316,42 +2763,142 @@ pub(crate) fn validate_caves(
     WorldValidation::Valid(metrics)
 }
 
+#[cfg(test)]
 fn cave_target_sets(
     plan: &GeneratedWorldPlan,
     settings: &V3CavesSettings,
-    party: TilePos,
+    _party: TilePos,
 ) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>), WorldValidationIssue> {
-    let patch = plan
-        .layout
-        .patches
-        .iter()
-        .next()
-        .map(|(_patch_id, patch)| patch)
-        .ok_or_else(|| recipe_issue("Caves validation cannot find its isolated patch"))?;
-    let frame = patch_frame(&patch.mask).map_err(|issues| {
-        issues
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| recipe_issue("Caves validation cannot resolve its patch frame"))
+    let patch = PatchRecipeContext::resolve(&plan.layout, PatchId(0))
+        .map_err(|error| recipe_issue(error.to_string()))?;
+    derive_patch_cave_targets(&patch, &plan.volume, &plan.anchors, settings)
+        .map(|targets| (targets.critical, targets.optional))
+}
+
+fn exact_cave_target_sets(
+    features: &FeaturePlan,
+) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>), WorldValidationIssue> {
+    if features.protected_routes.len() != 1
+        || features.clearings.len() != 1
+        || !features.protected_routes.contains_key(REQUIRED_LIGHT_ROUTE)
+        || !features.clearings.contains_key(OPTIONAL_DARK_BRANCHES)
+    {
+        return Err(recipe_issue(
+            "Caves must retain exactly its named required-light route and optional-dark branch \
+             metadata",
+        ));
+    }
+    let critical = features
+        .protected_routes
+        .get(REQUIRED_LIGHT_ROUTE)
+        .map(|route| route.surfaces.clone())
+        .ok_or_else(|| recipe_issue("Caves is missing its exact required-light route metadata"))?;
+    let optional = features
+        .clearings
+        .get(OPTIONAL_DARK_BRANCHES)
+        .map(|branch| branch.surfaces.clone())
+        .ok_or_else(|| recipe_issue("Caves is missing its exact optional-dark-branch metadata"))?;
+    if critical.is_empty() || optional.is_empty() {
+        return Err(recipe_issue(
+            "Caves exact light-target metadata must contain required and optional floors",
+        ));
+    }
+    if !critical.is_disjoint(&optional) {
+        return Err(recipe_issue(
+            "Caves exact required-light and optional-dark target sets overlap",
+        ));
+    }
+    Ok((critical, optional))
+}
+
+fn derive_patch_cave_targets(
+    patch: &PatchRecipeContext<'_>,
+    volume: &VolumePlan,
+    anchors: &BTreeMap<String, TilePos>,
+    settings: &V3CavesSettings,
+) -> Result<DerivedCaveTargets, WorldValidationIssue> {
+    let party = anchors
+        .get(PARTY_START)
+        .copied()
+        .ok_or_else(|| recipe_issue("Caves target derivation cannot find its party anchor"))?;
+    let hostile = anchors
+        .get(HOSTILE_START)
+        .copied()
+        .ok_or_else(|| recipe_issue("Caves target derivation cannot find its hostile anchor"))?;
+    let conflict = anchors
+        .get(CONFLICT_CENTER)
+        .copied()
+        .ok_or_else(|| recipe_issue("Caves target derivation cannot find its conflict anchor"))?;
+    let topology_mask = cave_topology_mask(patch);
+    let frame = context_patch_frame(patch, &topology_mask).map_err(|issues| {
+        issues.into_iter().next().unwrap_or_else(|| {
+            recipe_issue("Caves target derivation cannot resolve its patch frame")
+        })
     })?;
-    let topology = (0..6)
-        .filter_map(|orientation| {
-            build_topology(&patch.mask, frame, orientation, settings, None).ok()
-        })
-        .find(|topology| {
-            topology
-                .entrance
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .copied()
-                == Some(party)
-        })
-        .ok_or_else(|| recipe_issue("Caves validation cannot recover its entrance orientation"))?;
-    Ok((
-        exact_interior_positions(&plan.volume, &topology.critical_coords),
-        exact_interior_positions(&plan.volume, &topology.optional_coords),
-    ))
+    let mut coordinate_targets = None;
+    for orientation in 0..6 {
+        let Ok(entrance) = entrance_ramp(&topology_mask, frame, orientation, settings) else {
+            continue;
+        };
+        if entrance.rows.first().and_then(|row| row.first()).copied() != Some(party) {
+            continue;
+        }
+        coordinate_targets = Some(
+            cave_target_coordinates(&topology_mask, frame, orientation, settings, &entrance)
+                .map_err(|issues| {
+                    issues.into_iter().next().unwrap_or_else(|| {
+                        recipe_issue("Caves target derivation cannot resolve chamber geometry")
+                    })
+                })?,
+        );
+        break;
+    }
+    let (critical_coords, optional_coords) = coordinate_targets.ok_or_else(|| {
+        recipe_issue("Caves target derivation cannot recover its entrance orientation")
+    })?;
+    let centerline = shortest_ordinary_route(volume, party, hostile).ok_or_else(|| {
+        recipe_issue("Caves target derivation cannot recover its party-to-hostile route")
+    })?;
+    let mut critical = exact_interior_positions(volume, &critical_coords);
+    critical.extend(centerline.iter().copied());
+    critical.extend([party, hostile, conflict]);
+    let mut optional = exact_interior_positions(volume, &optional_coords);
+    optional.retain(|position| !critical.contains(position));
+    if optional.len() < usize::from(settings.chamber_count) {
+        return Err(recipe_issue(format!(
+            "Caves independently derived optional branch is too small: {}/{} floors",
+            optional.len(),
+            settings.chamber_count
+        )));
+    }
+    Ok(DerivedCaveTargets {
+        critical,
+        optional,
+        centerline,
+    })
+}
+
+fn shortest_ordinary_route(
+    volume: &VolumePlan,
+    start: TilePos,
+    goal: TilePos,
+) -> Option<Vec<TilePos>> {
+    let graph = OrdinaryGraph::from_volume(volume, None);
+    let distances = graph.distances_from(start);
+    let mut cursor = goal;
+    let mut route = vec![cursor];
+    while cursor != start {
+        let distance = distances.get(&cursor).copied()?;
+        cursor = graph
+            .neighbors(cursor)
+            .iter()
+            .copied()
+            .filter(|neighbor| distances.get(neighbor).copied() == Some(distance.saturating_sub(1)))
+            .min()?;
+        route.push(cursor);
+    }
+    route.reverse();
+    Some(route)
 }
 
 fn exact_interior_positions(volume: &VolumePlan, coords: &BTreeSet<HexCoord>) -> BTreeSet<TilePos> {
@@ -3018,6 +3565,82 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_missing_or_retagged_exact_light_target_metadata() {
+        let settings = settings();
+        let V3LayoutSettings::Single(patch) = &settings.layout else {
+            unreachable!();
+        };
+        let V3RecipeSettings::Caves(cave_settings) = &patch.recipe else {
+            unreachable!();
+        };
+        let selected = generate(12, 0.4, &settings, 17).expect("Caves should generate");
+        let mut missing = selected.validated.plan.clone();
+        missing.features.clearings.remove(OPTIONAL_DARK_BRANCHES);
+        let WorldValidation::Invalid(issues) = validate_caves(&missing, cave_settings) else {
+            panic!("missing exact cave light-target metadata must fail");
+        };
+        assert!(issues.iter().any(|issue| issue
+            .detail
+            .contains("required-light route and optional-dark")));
+
+        let mut retagged = selected.validated.plan.clone();
+        let optional = retagged
+            .features
+            .clearings
+            .remove(OPTIONAL_DARK_BRANCHES)
+            .expect("Caves should retain optional branch metadata");
+        retagged
+            .features
+            .clearings
+            .insert("cave_optional_branch_alias".to_owned(), optional);
+        let WorldValidation::Invalid(issues) = validate_caves(&retagged, cave_settings) else {
+            panic!("retagged exact cave light-target metadata must fail");
+        };
+        assert!(issues.iter().any(|issue| issue
+            .detail
+            .contains("required-light route and optional-dark")));
+
+        let mut self_attested = selected.validated.plan;
+        let (critical, optional) = exact_cave_target_sets(&self_attested.features)
+            .expect("generated Caves should publish exact target metadata");
+        let (retained_id, retained_light, lit_floor, dark_floor) = self_attested
+            .lights
+            .iter()
+            .find_map(|(id, light)| {
+                let lit = critical
+                    .iter()
+                    .find(|floor| illuminated(light.origin, light.radius, **floor))
+                    .copied()?;
+                let dark = optional
+                    .iter()
+                    .find(|floor| !illuminated(light.origin, light.radius, **floor))
+                    .copied()?;
+                Some((*id, *light, lit, dark))
+            })
+            .expect("at least one crystal should illuminate required but not all optional floors");
+        self_attested.lights = BTreeMap::from([(retained_id, retained_light)]);
+        let route = self_attested
+            .features
+            .protected_routes
+            .get_mut(REQUIRED_LIGHT_ROUTE)
+            .expect("Caves should retain required route metadata");
+        route.centerline = vec![lit_floor];
+        route.surfaces = BTreeSet::from([lit_floor]);
+        self_attested
+            .features
+            .clearings
+            .get_mut(OPTIONAL_DARK_BRANCHES)
+            .expect("Caves should retain optional branch metadata")
+            .surfaces = BTreeSet::from([dark_floor]);
+        let WorldValidation::Invalid(issues) = validate_caves(&self_attested, cave_settings) else {
+            panic!("self-attested cave target subsets must fail independent validation");
+        };
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("independently derived chamber")));
+    }
+
+    #[test]
     fn validator_rejects_a_missing_critical_light_network() {
         let selected = generate(12, 0.4, &settings(), 17).expect("Caves should generate");
         let mut plan = selected.validated.plan;
@@ -3186,42 +3809,43 @@ mod tests {
             (
                 33,
                 Some(1),
-                18_085_428_821_256_931_804,
+                460_986_542_194_957_565,
                 16_715_970_756_191_823_297,
             ),
             (
                 178,
                 Some(4),
-                15_578_452_451_260_576_352,
+                18_266_463_698_801_943_829,
                 15_852_936_182_682_831_065,
             ),
             (
                 445,
                 Some(5),
-                13_372_267_763_965_264_527,
+                14_611_451_387_656_814_863,
                 1_525_721_581_912_758_674,
             ),
             (
                 736_283_041,
-                Some(2),
-                11_318_601_618_626_144_040,
-                16_767_723_275_272_645_400,
+                Some(3),
+                12_105_472_314_089_222_227,
+                4_037_154_299_986_603_022,
             ),
         ];
         let mut crystal_kinds = BTreeSet::new();
         let mut site_kinds = BTreeSet::new();
-        for (seed, candidate, semantic_fingerprint, map_fingerprint) in expected {
+        let mut observed = Vec::new();
+        for (seed, _candidate, _semantic_fingerprint, _map_fingerprint) in expected {
             let selected =
                 generate(12, 0.4, &settings(), seed).expect("reviewed Caves seed should generate");
             let build =
                 super::super::build(12, 0.4, &settings(), seed, &palette(), &is_solid, None)
                     .expect("reviewed Caves seed should materialize");
-            assert_eq!(selected.selected_candidate, candidate);
-            assert_eq!(
+            observed.push((
+                seed,
+                selected.selected_candidate,
                 selected.validated.semantic_fingerprint,
-                semantic_fingerprint
-            );
-            assert_eq!(build.report.map_fingerprint, map_fingerprint);
+                build.report.map_fingerprint,
+            ));
             for light in selected.validated.plan.lights.values() {
                 let Some(PlannedLightPresentation::CaveCrystal(crystal)) = light.presentation
                 else {
@@ -3231,6 +3855,7 @@ mod tests {
                 site_kinds.insert(crystal.site);
             }
         }
+        assert_eq!(observed, expected);
         assert_eq!(
             crystal_kinds,
             BTreeSet::from([

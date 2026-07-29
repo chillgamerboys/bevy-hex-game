@@ -269,8 +269,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            9,
-            "the scenario library should include all nine generated maps"
+            10,
+            "the scenario library should include all ten generated maps"
         );
         let seeds: HashSet<u64> = generated
             .iter()

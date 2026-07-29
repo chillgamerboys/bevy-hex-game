@@ -477,19 +477,14 @@ fn construct_patch_with_objects(
             .map_err(|error| vec![recipe_issue(error)])?,
         None => 0,
     };
-    let party_coord = rotate(
+    let nominal_party_coord = rotate(
         HexCoord::from_axial((-radius).saturating_add(2), route_offset),
         rotation,
     );
-    let hostile_coord = rotate(
+    let nominal_hostile_coord = rotate(
         HexCoord::from_axial(radius.saturating_sub(2), route_offset),
         rotation,
     );
-    if !mask.contains(&party_coord) || !mask.contains(&hostile_coord) {
-        return Err(vec![recipe_issue(
-            "Forest footprint cannot fit its selected actor landings",
-        )]);
-    }
     let relief = ReliefPlan::new(
         patch_radius,
         &mask,
@@ -515,9 +510,9 @@ fn construct_patch_with_objects(
         .map(|coord| frame.to_local(coord).map_err(recipe_issue))
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|issue| vec![issue])?;
-
     let mut surfaces = BTreeMap::new();
     let mut surface_by_coord = BTreeMap::new();
+    let mut ordinary_surface_by_coord = BTreeMap::new();
     for coord in &mask {
         let surface_level = local_levels.get(coord).copied().ok_or_else(|| {
             vec![recipe_issue(format!(
@@ -525,17 +520,42 @@ fn construct_patch_with_objects(
             ))]
         })?;
         let position = TilePos::new(*coord, surface_level);
+        let world_position = frame
+            .position_to_world(position)
+            .map_err(|error| vec![recipe_issue(error)])?;
+        let access = seam_shape.access_for(world_position, SurfaceAccess::Ordinary);
         surfaces.insert(
             position,
             SurfaceMetadata {
-                access: SurfaceAccess::Ordinary,
+                access,
                 interior: None,
             },
         );
         surface_by_coord.insert(*coord, position);
+        if access == SurfaceAccess::Ordinary {
+            ordinary_surface_by_coord.insert(*coord, position);
+        }
     }
+    let ordinary_coords = ordinary_surface_by_coord
+        .keys()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let party_coord = nearest_ordinary_landing(
+        nominal_party_coord,
+        &ordinary_surface_by_coord,
+        rotation,
+        true,
+    )
+    .ok_or_else(|| vec![recipe_issue("Forest route has no ordinary party landing")])?;
+    let hostile_coord = nearest_ordinary_landing(
+        nominal_hostile_coord,
+        &ordinary_surface_by_coord,
+        rotation,
+        false,
+    )
+    .ok_or_else(|| vec![recipe_issue("Forest route has no ordinary hostile landing")])?;
 
-    let woodland: BTreeSet<_> = mask
+    let woodland: BTreeSet<_> = ordinary_coords
         .iter()
         .copied()
         .filter(|coord| is_woodland(*coord, rotation))
@@ -543,14 +563,14 @@ fn construct_patch_with_objects(
     let clearings = clearing_coordinates(
         radius,
         rotation,
-        &mask,
+        &ordinary_coords,
         &woodland,
         streams.map(|streams| streams.clearings),
     )?;
     let mut clearing_plans = BTreeMap::new();
     let mut clearing_coords = BTreeSet::new();
     for (index, clearing) in clearings.iter().enumerate() {
-        let surfaces = exact_position_set(&clearing.coords, &surface_by_coord)?;
+        let surfaces = exact_position_set(&clearing.coords, &ordinary_surface_by_coord)?;
         clearing_coords.extend(clearing.coords.iter().copied());
         clearing_plans.insert(
             format!("forest_clearing_{index}"),
@@ -561,6 +581,9 @@ fn construct_patch_with_objects(
     let mut tree_exclusions = clearing_coords.iter().copied().collect::<BTreeSet<_>>();
     tree_exclusions.extend(local_protected.iter().copied());
     tree_exclusions.extend(
+        (0..=PRAIRIE_TAPER_DEPTH).map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation)),
+    );
+    tree_exclusions.extend(
         party_coord
             .within_radius(1)
             .into_iter()
@@ -569,14 +592,15 @@ fn construct_patch_with_objects(
     let tree_roots = select_tree_roots(
         &woodland,
         &tree_exclusions,
-        &surface_by_coord,
+        &ordinary_surface_by_coord,
         streams.map(|streams| streams.trees),
+        patch.layout().kind == super::layout::LayoutKind::Ring7,
     );
     let tree_features = plan_tree_features(
         tree_roots,
         &woodland,
         &tree_exclusions,
-        &surface_by_coord,
+        &ordinary_surface_by_coord,
         objects,
         streams.map(|streams| streams.tree_objects),
         streams.map(|streams| streams.tree_rotations),
@@ -591,11 +615,11 @@ fn construct_patch_with_objects(
         })
         .collect();
     let road = plan_road(
-        radius,
         rotation,
         route_offset,
-        &mask,
-        &surface_by_coord,
+        party_coord,
+        &ordinary_coords,
+        &ordinary_surface_by_coord,
         &tree_blocker_coords,
         &clearings,
         streams.map(|streams| streams.routes),
@@ -614,9 +638,9 @@ fn construct_patch_with_objects(
         surfaces,
     };
 
-    let road_centerline = exact_positions(&road.centerline, &surface_by_coord)?;
-    let road_surfaces = exact_position_set(&road.surfaces, &surface_by_coord)?;
-    let prairie: BTreeSet<_> = mask.difference(&woodland).copied().collect();
+    let road_centerline = exact_positions(&road.centerline, &ordinary_surface_by_coord)?;
+    let road_surfaces = exact_position_set(&road.surfaces, &ordinary_surface_by_coord)?;
+    let prairie: BTreeSet<_> = ordinary_coords.difference(&woodland).copied().collect();
     let mut grass_exclusions = road.surfaces.clone();
     grass_exclusions.extend(local_protected.iter().copied());
     grass_exclusions.extend(
@@ -628,7 +652,7 @@ fn construct_patch_with_objects(
     let grass_roots = select_grass_roots(
         &prairie,
         &grass_exclusions,
-        &surface_by_coord,
+        &ordinary_surface_by_coord,
         streams.map(|streams| streams.grass),
     );
     let grass_features = plan_grass_features(
@@ -644,24 +668,24 @@ fn construct_patch_with_objects(
         clearing_plans,
     );
 
-    let party_start = surface_by_coord
+    let party_start = ordinary_surface_by_coord
         .get(&party_coord)
         .copied()
         .ok_or_else(|| vec![recipe_issue("Forest route has no party surface")])?;
-    let hostile_start = surface_by_coord
+    let hostile_start = ordinary_surface_by_coord
         .get(&hostile_coord)
         .copied()
         .ok_or_else(|| vec![recipe_issue("Forest route has no hostile surface")])?;
     let forest_clearing = clearings
         .first()
-        .and_then(|clearing| surface_by_coord.get(&clearing.center))
+        .and_then(|clearing| ordinary_surface_by_coord.get(&clearing.center))
         .copied()
         .ok_or_else(|| vec![recipe_issue("Forest has no clearing anchor surface")])?;
     let prairie_coord = rotate(HexCoord::from_axial(radius / 2, -radius / 4), rotation);
-    let prairie_overlook = surface_by_coord
-        .get(&prairie_coord)
-        .copied()
-        .ok_or_else(|| vec![recipe_issue("Forest has no prairie overlook surface")])?;
+    let prairie_overlook =
+        nearest_ordinary_landing(prairie_coord, &ordinary_surface_by_coord, rotation, false)
+            .and_then(|coord| ordinary_surface_by_coord.get(&coord).copied())
+            .ok_or_else(|| vec![recipe_issue("Forest has no prairie overlook surface")])?;
     let anchors = BTreeMap::from([
         (PARTY_START.to_owned(), party_start),
         (HOSTILE_START.to_owned(), hostile_start),
@@ -701,6 +725,23 @@ fn construct_patch_with_objects(
     }
 }
 
+fn nearest_ordinary_landing(
+    nominal: HexCoord,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    rotation: u8,
+    from_low_x_side: bool,
+) -> Option<HexCoord> {
+    surfaces.keys().copied().min_by_key(|coord| {
+        let local_x = unrotate(*coord, rotation).x();
+        let inward_priority = if from_low_x_side {
+            local_x.saturating_neg()
+        } else {
+            local_x
+        };
+        (nominal.distance(*coord), inward_priority, *coord)
+    })
+}
+
 fn build_feature_plan(
     tree_features: Vec<PlannedFeature>,
     grass_features: Vec<PlannedFeature>,
@@ -735,7 +776,41 @@ fn build_feature_plan(
     )
 }
 
+pub(crate) fn validate_patch(
+    patch: PatchRecipeContext<'_>,
+    plan: &GeneratedPatchPlan,
+) -> WorldValidation<ForestMetrics> {
+    let approach_depth = patch
+        .shared_edges()
+        .map(|edge| edge.contract.approach_depth)
+        .max()
+        .unwrap_or_default();
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return WorldValidation::Invalid(vec![recipe_issue(format!(
+                    "Forest validation frame failed: {error}"
+                ))]);
+            }
+        };
+    match frame.canonical_local_world(plan) {
+        Ok(plan) => validate_forest_inner(&plan, Some(approach_depth)),
+        Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
+            "Forest validation projection failed: {error}"
+        ))]),
+    }
+}
+
 pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
+    validate_forest_inner(plan, None)
+}
+
+fn validate_forest_inner(
+    plan: &GeneratedWorldPlan,
+    stitched_approach_depth: Option<u32>,
+) -> WorldValidation<ForestMetrics> {
+    let stitched_patch = stitched_approach_depth.is_some();
     let mut issues = Vec::new();
     if !plan.liquids.bodies.is_empty() {
         issues.push(recipe_issue("Forest must not contain liquid topology"));
@@ -749,7 +824,12 @@ pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<Fore
         ));
     }
 
-    let Some((rotation, route_offset)) = detect_orientation(plan) else {
+    let orientation = if stitched_patch {
+        detect_stitched_orientation(plan)
+    } else {
+        detect_orientation(plan)
+    };
+    let Some((rotation, route_offset)) = orientation else {
         return WorldValidation::Invalid(vec![recipe_issue(
             "Forest actor anchors do not match one supported orientation",
         )]);
@@ -764,27 +844,55 @@ pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<Fore
             "Forest must contain exactly one protected woodland road",
         ));
     }
-    let woodland: BTreeSet<_> = plan
+    let all_woodland: BTreeSet<_> = plan
         .volume
         .surfaces
         .keys()
         .copied()
         .filter(|position| is_woodland(position.coord, rotation))
         .collect();
-    let prairie: BTreeSet<_> = plan
+    let woodland = if stitched_patch {
+        all_woodland
+            .iter()
+            .copied()
+            .filter(|position| {
+                plan.volume
+                    .surfaces
+                    .get(position)
+                    .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+            })
+            .collect()
+    } else {
+        all_woodland.clone()
+    };
+    let all_prairie: BTreeSet<_> = plan
         .volume
         .surfaces
         .keys()
         .copied()
         .filter(|position| !is_woodland(position.coord, rotation))
         .collect();
+    let prairie = if stitched_patch {
+        all_prairie
+            .iter()
+            .copied()
+            .filter(|position| {
+                plan.volume
+                    .surfaces
+                    .get(position)
+                    .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+            })
+            .collect()
+    } else {
+        all_prairie
+    };
     let total_surfaces = plan.volume.surfaces.len();
-    if woodland.len().saturating_mul(100) < total_surfaces.saturating_mul(42)
-        || woodland.len().saturating_mul(100) > total_surfaces.saturating_mul(58)
+    if all_woodland.len().saturating_mul(100) < total_surfaces.saturating_mul(42)
+        || all_woodland.len().saturating_mul(100) > total_surfaces.saturating_mul(58)
     {
         issues.push(recipe_issue(format!(
             "Forest woodland must cover 42-58% of surfaces, got {}/{}",
-            woodland.len(),
+            all_woodland.len(),
             total_surfaces
         )));
     }
@@ -893,6 +1001,7 @@ pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<Fore
         rotation,
         route_offset,
         &tree_blocker_coords,
+        stitched_approach_depth,
         &mut issues,
     );
     let party = plan.anchors.get(PARTY_START).copied();
@@ -1053,10 +1162,15 @@ fn validate_review_anchors(
     }
 
     let radius = i32::try_from(plan.layout.grid_radius).unwrap_or(i32::MAX);
-    let expected_overlook_coord = rotate(HexCoord::from_axial(radius / 2, -(radius / 4)), rotation);
-    let expected_overlook = prairie
+    let nominal_overlook_coord = rotate(HexCoord::from_axial(radius / 2, -(radius / 4)), rotation);
+    let prairie_by_coord = prairie
         .iter()
-        .find(|position| position.coord == expected_overlook_coord);
+        .copied()
+        .map(|position| (position.coord, position))
+        .collect::<BTreeMap<_, _>>();
+    let expected_overlook_coord =
+        nearest_ordinary_landing(nominal_overlook_coord, &prairie_by_coord, rotation, false);
+    let expected_overlook = expected_overlook_coord.and_then(|coord| prairie_by_coord.get(&coord));
     if plan.anchors.get(PRAIRIE_OVERLOOK) != expected_overlook {
         issues.push(recipe_issue(format!(
             "Forest prairie_overlook anchor must name the exact prairie surface at \
@@ -1097,6 +1211,7 @@ fn validate_road(
     rotation: u8,
     route_offset: i32,
     trees: &BTreeSet<HexCoord>,
+    stitched_approach_depth: Option<u32>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
     let radius = i32::try_from(plan.layout.grid_radius).unwrap_or(i32::MAX);
@@ -1126,7 +1241,21 @@ fn validate_road(
         HexCoord::from_axial(PRAIRIE_TAPER_DEPTH, route_offset),
         rotation,
     );
-    if first.coord != expected_first_coord
+    let first_matches = if stitched_approach_depth.is_some() {
+        let ordinary_surfaces = plan
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(position, metadata)| {
+                (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+            })
+            .collect::<BTreeMap<_, _>>();
+        nearest_ordinary_landing(expected_first_coord, &ordinary_surfaces, rotation, true)
+            == Some(first.coord)
+    } else {
+        first.coord == expected_first_coord
+    };
+    if !first_matches
         || last.coord != expected_last_coord
         || plan.anchors.get(PARTY_START) != Some(first)
     {
@@ -1342,24 +1471,81 @@ fn detect_orientation(plan: &GeneratedWorldPlan) -> Option<(u8, i32)> {
     None
 }
 
+fn detect_stitched_orientation(plan: &GeneratedWorldPlan) -> Option<(u8, i32)> {
+    let party = plan.anchors.get(PARTY_START)?;
+    let hostile = plan.anchors.get(HOSTILE_START)?;
+    let road = plan.features.protected_routes.get(ROAD_ROUTE)?;
+    let road_start = road.centerline.first()?;
+    let road_end = road.centerline.last()?;
+    let radius = i32::try_from(plan.layout.grid_radius).ok()?;
+    let ordinary_surfaces = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for rotation in 0..6_u8 {
+        for offset in -1..=1 {
+            let nominal_party = rotate(
+                HexCoord::from_axial((-radius).saturating_add(2), offset),
+                rotation,
+            );
+            let nominal_hostile = rotate(
+                HexCoord::from_axial(radius.saturating_sub(2), offset),
+                rotation,
+            );
+            let expected_road_end =
+                rotate(HexCoord::from_axial(PRAIRIE_TAPER_DEPTH, offset), rotation);
+            let expected_party =
+                nearest_ordinary_landing(nominal_party, &ordinary_surfaces, rotation, true)?;
+            let expected_hostile =
+                nearest_ordinary_landing(nominal_hostile, &ordinary_surfaces, rotation, false)?;
+            if party.coord == road_start.coord
+                && party.coord == expected_party
+                && hostile.coord == expected_hostile
+                && road_end.coord == expected_road_end
+            {
+                return Some((rotation, offset));
+            }
+        }
+    }
+    None
+}
+
 fn plan_road(
-    radius: i32,
     rotation: u8,
     route_offset: i32,
+    start: HexCoord,
     mask: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
     trees: &BTreeSet<HexCoord>,
     clearings: &[PlannedClearing],
     stream: Option<SeedStream<'_>>,
 ) -> Result<PlannedRoad, Vec<WorldValidationIssue>> {
-    let start = rotate(
-        HexCoord::from_axial((-radius).saturating_add(2), route_offset),
-        rotation,
-    );
-    let end = rotate(
-        HexCoord::from_axial(PRAIRIE_TAPER_DEPTH, route_offset),
-        rotation,
-    );
+    let taper = (0..=PRAIRIE_TAPER_DEPTH)
+        .map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation))
+        .collect::<Vec<_>>();
+    if taper.iter().any(|coord| {
+        !mask.contains(coord) || !surfaces.contains_key(coord) || trees.contains(coord)
+    }) || taper.windows(2).any(|pair| {
+        !matches!(pair, [from, to]
+            if from.distance(*to) == 1
+                && surfaces
+                    .get(from)
+                    .zip(surfaces.get(to))
+                    .is_some_and(|(first, second)| first.level.abs_diff(second.level) <= 1))
+    }) {
+        return Err(vec![recipe_issue(
+            "Forest road cannot fit its exact three-cell prairie taper",
+        )]);
+    }
+    let taper_start = taper.first().copied().ok_or_else(|| {
+        vec![recipe_issue(
+            "Forest road cannot resolve its prairie taper start",
+        )]
+    })?;
     let mut ordered_clearings: Vec<_> = clearings.iter().map(|clearing| clearing.center).collect();
     ordered_clearings
         .sort_unstable_by_key(|coord| (unrotate(*coord, rotation).x(), std::cmp::Reverse(*coord)));
@@ -1398,7 +1584,7 @@ fn plan_road(
         .ok_or_else(|| vec![recipe_issue("Forest road has no late clearing")])?;
 
     let mut centerline = Vec::new();
-    for (segment_index, pair) in [start, early, late, end].windows(2).enumerate() {
+    for (segment_index, pair) in [start, early, late, taper_start].windows(2).enumerate() {
         let [from, to] = pair else {
             continue;
         };
@@ -1426,6 +1612,7 @@ fn plan_road(
                 .skip(usize::from(!centerline.is_empty())),
         );
     }
+    centerline.extend(taper.into_iter().skip(1));
     if centerline.iter().copied().collect::<BTreeSet<_>>().len() != centerline.len() {
         return Err(vec![recipe_issue(
             "Forest road guide produced a self-intersecting centerline",
@@ -1507,7 +1694,7 @@ fn find_road_segment(
             if !mask.contains(&neighbor)
                 || trees.contains(&neighbor)
                 || (forbidden.contains(&neighbor) && neighbor != goal)
-                || unrotate(neighbor, rotation).x() > PRAIRIE_TAPER_DEPTH
+                || unrotate(neighbor, rotation).x() > 0
             {
                 continue;
             }
@@ -1562,54 +1749,36 @@ fn clearing_coordinates(
     let mut clearings = Vec::new();
     let mut claimed = BTreeSet::new();
     for (index, base) in base_centers.into_iter().enumerate() {
-        let mut center = rotate(base, rotation);
-        if let Some(stream) = stream {
-            let options = std::iter::once(center)
-                .chain(center.neighbors())
-                .collect::<Vec<_>>();
-            let option_count = u64::try_from(options.len()).unwrap_or(1);
+        let nominal = rotate(base, rotation);
+        let initial_options = std::iter::once(nominal)
+            .chain(nominal.neighbors())
+            .collect::<Vec<_>>();
+        let sampled = stream.and_then(|stream| {
+            let option_count = u64::try_from(initial_options.len()).ok()?;
             let sampled = usize::try_from(
                 stream.sample(u64::try_from(index).unwrap_or_default()) % option_count,
             )
-            .unwrap_or_default();
-            if let Some(candidate) = options.get(sampled).copied() {
-                center = candidate;
-            }
-        }
-        if !mask.contains(&center) || !woodland.contains(&center) || claimed.contains(&center) {
+            .ok()?;
+            initial_options.get(sampled).copied()
+        });
+        let mut candidates = woodland.iter().copied().collect::<Vec<_>>();
+        candidates.sort_unstable_by_key(|coord| {
+            (
+                usize::from(Some(*coord) != sampled),
+                nominal.distance(*coord),
+                feature_priority(stream, *coord, 90),
+                *coord,
+            )
+        });
+        let Some((center, interior)) = candidates.into_iter().find_map(|center| {
+            clearing_footprint(center, mask, woodland, &claimed, stream)
+                .map(|interior| (center, interior))
+        }) else {
             return Err(vec![recipe_issue(format!(
-                "Forest clearing {index} center leaves its available woodland footprint"
+                "Forest clearing {index} cannot fit ten distinct woodland surfaces near its \
+                 nominal center"
             ))]);
-        }
-        let mut interior = BTreeSet::new();
-        let mut optional_edge = Vec::new();
-        for coord in center.within_radius(2) {
-            if !mask.contains(&coord) || !woodland.contains(&coord) || claimed.contains(&coord) {
-                continue;
-            }
-            if center.distance(coord) <= 1 {
-                interior.insert(coord);
-            } else {
-                optional_edge.push(coord);
-            }
-        }
-        optional_edge.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 100), *coord));
-        for coord in &optional_edge {
-            if feature_priority(stream, *coord, 101) % 100 < 68 {
-                interior.insert(*coord);
-            }
-        }
-        for coord in optional_edge {
-            if interior.len() >= 10 {
-                break;
-            }
-            interior.insert(coord);
-        }
-        if interior.len() < 10 {
-            return Err(vec![recipe_issue(format!(
-                "Forest clearing {index} cannot fit ten irregular surfaces"
-            ))]);
-        }
+        };
         claimed.extend(interior.iter().copied());
         clearings.push(PlannedClearing {
             center,
@@ -1619,15 +1788,105 @@ fn clearing_coordinates(
     Ok(clearings)
 }
 
+fn clearing_footprint(
+    center: HexCoord,
+    mask: &BTreeSet<HexCoord>,
+    woodland: &BTreeSet<HexCoord>,
+    claimed: &BTreeSet<HexCoord>,
+    stream: Option<SeedStream<'_>>,
+) -> Option<BTreeSet<HexCoord>> {
+    if !mask.contains(&center) || !woodland.contains(&center) || claimed.contains(&center) {
+        return None;
+    }
+    let mut interior = BTreeSet::new();
+    let mut optional_edge = Vec::new();
+    for coord in center.within_radius(2) {
+        if !mask.contains(&coord) || !woodland.contains(&coord) || claimed.contains(&coord) {
+            continue;
+        }
+        if center.distance(coord) <= 1 {
+            interior.insert(coord);
+        } else {
+            optional_edge.push(coord);
+        }
+    }
+    optional_edge.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 100), *coord));
+    for coord in &optional_edge {
+        if feature_priority(stream, *coord, 101) % 100 < 68 {
+            interior.insert(*coord);
+        }
+    }
+    for coord in optional_edge {
+        if interior.len() >= 10 {
+            break;
+        }
+        interior.insert(coord);
+    }
+    (interior.len() >= 10).then_some(interior)
+}
+
 fn select_tree_roots(
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
     stream: Option<SeedStream<'_>>,
+    stitched_patch: bool,
 ) -> BTreeSet<TilePos> {
     let mut eligible: Vec<_> = woodland.difference(exclusions).copied().collect();
     eligible.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 0), *coord));
     let target = woodland.len().saturating_mul(TREE_DENSITY_PERCENT) / 100;
+    if stitched_patch {
+        let mut color_classes: [Vec<HexCoord>; 3] = std::array::from_fn(|_| Vec::new());
+        for coord in &eligible {
+            let color = usize::try_from(coord.x().saturating_sub(coord.y()).rem_euclid(3))
+                .unwrap_or_default();
+            if let Some(class) = color_classes.get_mut(color) {
+                class.push(*coord);
+            }
+        }
+        for class in &mut color_classes {
+            class.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 1), *coord));
+        }
+        let phase = color_classes
+            .iter()
+            .enumerate()
+            .min_by_key(|(phase, class)| {
+                (
+                    std::cmp::Reverse(class.len()),
+                    stream.map_or(u64::try_from(*phase).unwrap_or_default(), |stream| {
+                        stream.sample(
+                            700_u64.saturating_add(u64::try_from(*phase).unwrap_or_default()),
+                        )
+                    }),
+                    *phase,
+                )
+            })
+            .map(|(phase, _)| phase)
+            .unwrap_or_default();
+        let mut selected = color_classes
+            .get(phase)
+            .into_iter()
+            .flatten()
+            .take(target)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for coord in eligible {
+            if selected.len() >= target {
+                break;
+            }
+            if coord
+                .neighbors()
+                .into_iter()
+                .all(|neighbor| !selected.contains(&neighbor))
+            {
+                selected.insert(coord);
+            }
+        }
+        return selected
+            .into_iter()
+            .filter_map(|coord| surfaces.get(&coord).copied())
+            .collect();
+    }
     let mut selected = BTreeSet::new();
     for coord in eligible {
         if selected.len() >= target {

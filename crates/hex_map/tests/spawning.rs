@@ -477,6 +477,22 @@ fn v3_caves_app() -> App {
     app
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Ring7 review world is a compile-time integration fixture"
+)]
+fn v3_ring7_app() -> App {
+    let mut app = test_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../assets/config/worlds/procedural-ring7.ron"
+    ))
+    .expect("tracked Ring7 settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(703_700_113));
+    app.insert_resource(runtime_art_catalog());
+    app
+}
+
 #[test]
 fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
     let recipe_metrics = ProceduralRecipeMetrics::Ring7(Ring7Metrics {
@@ -488,10 +504,11 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
         macro_edges: 6,
         redundant_regions: 7,
         directed_liquid_seams: 8,
-        feature_instances: 9,
-        structures: 10,
-        gameplay_lights: 11,
-        interiors: 12,
+        liquid_cells: 9,
+        feature_instances: 10,
+        structures: 11,
+        gameplay_lights: 12,
+        interiors: 13,
     });
     let ProceduralRecipeMetrics::Ring7(Ring7Metrics {
         ordinary_surfaces,
@@ -502,6 +519,7 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
         macro_edges,
         redundant_regions,
         directed_liquid_seams,
+        liquid_cells,
         feature_instances,
         structures,
         gameplay_lights,
@@ -510,6 +528,7 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
     else {
         panic!("the Ring7 report must retain its exact aggregate metrics");
     };
+    assert_eq!(liquid_cells, 9);
     assert_eq!(
         (
             ordinary_surfaces,
@@ -525,7 +544,7 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
             gameplay_lights,
             interiors,
         ),
-        (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+        (1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13)
     );
 
     let app = test_app();
@@ -539,6 +558,221 @@ fn ring7_recipe_metrics_are_public_reflected_and_exhaustive() {
             "Ring7 report vocabulary is missing reflection registration"
         );
     }
+}
+
+#[test]
+fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
+    const RADIUS_33_COLUMNS: usize = 1 + 3 * 33 * 34;
+
+    let mut app = v3_ring7_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(app.world().resource::<ResolvedMapSeed>().0, 703_700_113);
+    assert_eq!(
+        app.world().resource::<VoxelMap>().len(),
+        RADIUS_33_COLUMNS,
+        "Ring7 must materialize every horizontal column in its fixed radius-33 world"
+    );
+    let first_tile_count = tile_count(&mut app);
+    assert!(
+        first_tile_count > RADIUS_33_COLUMNS,
+        "stacked caves and sky islands should materialize more footing than a flat radius-33 map"
+    );
+
+    let report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 703_700_113);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(
+        report.valid_candidates >= 2,
+        "pinned Ring7 seed should retain multiple whole-world candidates: {:?}",
+        report.notes
+    );
+    assert!(report.selected_candidate.is_some());
+    assert!(!report.used_fallback, "{:?}", report.notes);
+    assert_eq!(report.repair_rounds, 0);
+    assert!(report.repair_actions.is_empty());
+    assert_ne!(report.settings_fingerprint, 0);
+    assert!(
+        report
+            .semantic_plan_fingerprint
+            .is_some_and(|fingerprint| fingerprint != 0),
+        "V3 Ring7 should publish a distinct semantic identity"
+    );
+    assert_ne!(report.map_fingerprint, 0);
+
+    let Some(ProceduralRecipeMetrics::Ring7(metrics)) = report.recipe_metrics.as_ref() else {
+        panic!("V3 Ring7 should publish exact whole-world metrics");
+    };
+    assert_eq!(metrics.ordinary_surfaces, metrics.reachable_surfaces);
+    assert!(metrics.reachable_elevation_levels > 1);
+    assert!(metrics.relief > 0);
+    assert!(metrics.critical_route_steps > 0);
+    assert_eq!(metrics.macro_edges, 12);
+    assert_eq!(metrics.redundant_regions, 7);
+    assert_eq!(metrics.directed_liquid_seams, 2);
+    assert!(metrics.liquid_cells > 0);
+    assert!(metrics.feature_instances > 0);
+    assert!(metrics.structures > 0);
+    assert!(metrics.gameplay_lights > 0);
+    assert_eq!(metrics.interiors, 1);
+    assert_eq!(
+        report.metrics.reachable_surfaces,
+        metrics.reachable_surfaces
+    );
+    assert_eq!(report.metrics.barrier_cells, metrics.liquid_cells);
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "center_party_start",
+        "center_hostile_start",
+        "center_conflict_center",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing composed Ring7 anchor {name}"
+        );
+    }
+    let first_anchors: BTreeMap<String, TilePos> = anchors
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    assert_eq!(
+        first_anchors.get("party_start"),
+        first_anchors.get("center_party_start"),
+        "the canonical party alias should resolve to the center Hills anchor"
+    );
+    assert_eq!(
+        first_anchors.get("hostile_start"),
+        first_anchors.get("center_hostile_start"),
+        "the canonical hostile alias should resolve to the center Hills anchor"
+    );
+
+    let first_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    let represented_regions = first_biomes
+        .values()
+        .copied()
+        .collect::<BTreeSet<BiomeRegionId>>();
+    assert_eq!(
+        represented_regions,
+        (0..7).map(BiomeRegionId).collect(),
+        "Ring7 should publish exact memberships for all seven patches"
+    );
+    assert!(first_biomes.len() >= RADIUS_33_COLUMNS);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
+
+    let first_view = *app.world().resource::<MapViewHint>();
+    let first_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let first_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    assert!(!first_interior_floors.is_empty());
+    assert_eq!(
+        first_lights.len(),
+        usize::try_from(metrics.gameplay_lights).unwrap_or(usize::MAX)
+    );
+    assert_eq!(
+        first_interior_floors
+            .values()
+            .copied()
+            .collect::<BTreeSet<_>>()
+            .len(),
+        usize::try_from(metrics.interiors).unwrap_or(usize::MAX)
+    );
+    assert!(
+        first_lights
+            .keys()
+            .all(|position| first_interior_floors.contains_key(position)),
+        "every Ring7 gameplay light should be rooted on an exact cave floor"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    let light_count_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&GameplayLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(light_count_after_exit, 0);
+
+    enter_gameplay(&mut app);
+
+    assert!(app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, report.seed);
+    assert_eq!(second_report.selected_candidate, report.selected_candidate);
+    assert_eq!(second_report.valid_candidates, report.valid_candidates);
+    assert_eq!(
+        second_report.settings_fingerprint,
+        report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, report.map_fingerprint);
+    assert_eq!(second_report.metrics, report.metrics);
+    assert_eq!(second_report.recipe_metrics, report.recipe_metrics);
+    assert_eq!(*app.world().resource::<MapViewHint>(), first_view);
+    let second_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    let second_biomes: BTreeMap<TilePos, BiomeRegionId> =
+        app.world().resource::<BiomeRegions>().iter().collect();
+    let second_interior_floors: BTreeMap<TilePos, InteriorRegionId> = app
+        .world()
+        .resource::<InteriorRegions>()
+        .surfaces()
+        .collect();
+    let second_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
+    assert_eq!(second_anchors, first_anchors);
+    assert_eq!(second_biomes, first_biomes);
+    assert_eq!(second_interior_floors, first_interior_floors);
+    assert_eq!(second_lights, first_lights);
 }
 
 #[test]

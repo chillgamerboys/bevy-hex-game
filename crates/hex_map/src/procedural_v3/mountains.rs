@@ -11,6 +11,7 @@ use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
@@ -270,27 +271,66 @@ fn construct_patch_with_streams(
         &BTreeSet::new(),
     )
     .ok_or_else(|| vec![recipe_issue("Mountains could not route its high pass")])?;
+    let landing_overlap: usize = if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+        1
+    } else {
+        2
+    };
     let high_interior: BTreeSet<_> = high_centerline
         .iter()
         .copied()
-        .skip(2)
-        .take(high_centerline.len().saturating_sub(4))
+        .skip(landing_overlap)
+        .take(
+            high_centerline
+                .len()
+                .saturating_sub(landing_overlap.saturating_mul(2)),
+        )
         .collect();
-    let bypass_centerline = route_via(
-        &route_mask,
-        party_coord,
-        bypass_control,
-        hostile_coord,
-        &high_interior,
-    )
-    .ok_or_else(|| vec![recipe_issue("Mountains could not route its lower bypass")])?;
+    let bypass_controls = if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+        ordered_bypass_controls(
+            &route_mask,
+            party_coord,
+            hostile_coord,
+            orientation,
+            high_control,
+        )
+    } else {
+        vec![bypass_control]
+    };
+    let bypass_centerline = bypass_controls
+        .into_iter()
+        .filter(|control| !high_interior.contains(control))
+        .find_map(|control| {
+            route_via(
+                &route_mask,
+                party_coord,
+                control,
+                hostile_coord,
+                &high_interior,
+            )
+            .filter(|route| {
+                route
+                    .iter()
+                    .filter(|coord| high_centerline.contains(coord))
+                    .count()
+                    <= 2
+            })
+        })
+        .ok_or_else(|| vec![recipe_issue("Mountains could not route its lower bypass")])?;
     let high_footprint = two_wide_footprint(&route_mask, &high_centerline, orientation, true);
     let bypass_footprint = two_wide_footprint(&route_mask, &bypass_centerline, orientation, false);
     let route_cells: BTreeSet<_> = high_footprint.union(&bypass_footprint).copied().collect();
-    let excluded: BTreeSet<_> = route_cells
-        .union(&patch.protected_approaches())
+    let seam_approaches = patch.protected_approaches();
+    let seam_buffer = mask
+        .iter()
         .copied()
-        .collect();
+        .filter(|coord| {
+            seam_approaches
+                .iter()
+                .any(|approach| approach.distance(*coord) <= 3)
+        })
+        .collect::<BTreeSet<_>>();
+    let excluded: BTreeSet<_> = route_cells.union(&seam_buffer).copied().collect();
     let peaks = select_peaks(
         &mask,
         usize::from(settings.peak_count),
@@ -321,7 +361,14 @@ fn construct_patch_with_streams(
         settings.base_level,
         settings.relief / 2,
     );
+    let authored_surface_by_coord = surface_by_coord.clone();
     let seam_shape = shape_walker_seams(&patch, &mut surface_by_coord)?;
+    for (coord, authored_level) in authored_surface_by_coord {
+        let in_peak_core = peaks.iter().any(|peak| peak.distance(coord) <= 2);
+        if in_peak_core && !seam_approaches.contains(&coord) && !route_cells.contains(&coord) {
+            surface_by_coord.insert(coord, authored_level);
+        }
+    }
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
@@ -499,6 +546,29 @@ fn route_controls(
             "Mountains patch cannot separate high-pass and bypass controls",
         )]),
     }
+}
+
+fn ordered_bypass_controls(
+    mask: &BTreeSet<HexCoord>,
+    start: HexCoord,
+    end: HexCoord,
+    orientation: u8,
+    high_control: HexCoord,
+) -> Vec<HexCoord> {
+    let start_axis = axis_value(start, orientation);
+    let end_axis = axis_value(end, orientation);
+    let midpoint = start_axis.saturating_add(end_axis) / 2;
+    let half_band = start_axis.abs_diff(end_axis).saturating_div(5).max(1);
+    let side_turn = orientation.saturating_add(2) % 6;
+    let mut candidates = mask
+        .iter()
+        .copied()
+        .filter(|coord| axis_value(*coord, orientation).abs_diff(midpoint) <= half_band)
+        .filter(|coord| coord.distance(start) >= 3 && coord.distance(end) >= 3)
+        .filter(|coord| *coord != high_control)
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|coord| (axis_value(*coord, side_turn), *coord));
+    candidates
 }
 
 fn route_via(
@@ -764,9 +834,78 @@ fn route_membership(
     })
 }
 
-fn validate_mountains(
+pub(crate) fn validate_mountains(
     plan: &GeneratedWorldPlan,
     settings: &V3MountainsSettings,
+) -> WorldValidation<MountainsMetrics> {
+    validate_mountains_inner(
+        plan,
+        settings,
+        settings.base_level.saturating_add(settings.relief / 2),
+    )
+}
+
+pub(crate) fn validate_patch(
+    patch: PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    settings: &V3MountainsSettings,
+) -> WorldValidation<MountainsMetrics> {
+    let seam_approaches = patch.protected_approaches();
+    let available_rise = fragment
+        .features
+        .protected_routes
+        .get(HIGH_PASS)
+        .and_then(|route| {
+            route
+                .centerline
+                .iter()
+                .map(|position| {
+                    seam_approaches
+                        .iter()
+                        .map(|approach| approach.distance(position.coord))
+                        .min()
+                        .unwrap_or(u32::MAX)
+                })
+                .max()
+        })
+        .and_then(|rise| i32::try_from(rise).ok())
+        .unwrap_or(settings.relief / 2)
+        .min(settings.relief / 2);
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return WorldValidation::Invalid(vec![recipe_issue(format!(
+                    "Mountains validation frame failed: {error}"
+                ))]);
+            }
+        };
+    let mut local = match frame.canonical_local_world(fragment) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Mountains validation projection failed: {error}"
+            ))]);
+        }
+    };
+    local.layout.grid_radius = local
+        .layout
+        .footprint
+        .iter()
+        .map(|coord| HexCoord::ORIGIN.distance(*coord))
+        .max()
+        .unwrap_or_default();
+    validate_mountains_inner(
+        &local,
+        settings,
+        settings.base_level.saturating_add(available_rise),
+    )
+}
+
+fn validate_mountains_inner(
+    plan: &GeneratedWorldPlan,
+    settings: &V3MountainsSettings,
+    required_saddle: Level,
 ) -> WorldValidation<MountainsMetrics> {
     let mut issues = plan.validate();
     if !plan.liquids.bodies.is_empty() {
@@ -814,10 +953,10 @@ fn validate_mountains(
         .map(|position| position.level)
         .max()
         .unwrap_or_default();
-    if high_peak < settings.base_level.saturating_add(settings.relief / 2) {
-        issues.push(recipe_issue(
-            "Mountains high pass does not reach its saddle",
-        ));
+    if high_peak < required_saddle {
+        issues.push(recipe_issue(format!(
+            "Mountains high pass reaches {high_peak}; expected saddle level {required_saddle}"
+        )));
     }
     let bypass_peak = lower_bypass
         .centerline

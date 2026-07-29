@@ -15,6 +15,19 @@ use super::volume::{SurfaceAccess, VolumePlan};
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
 
 const SEAM_CLOSURE_REGION_BASE: u32 = 0x0ffe_0000;
+const SEAM_CLOSURE_REGION_LIMIT: u32 = SEAM_CLOSURE_REGION_BASE + 0x1_0000;
+
+/// Whether an access marker is an exact shared-seam closure rather than a
+/// recipe-owned special-movement region.
+#[must_use]
+pub(crate) const fn is_seam_closure_access(access: SurfaceAccess) -> bool {
+    matches!(
+        access,
+        SurfaceAccess::SpecialMovement(region)
+            if region.0 >= SEAM_CLOSURE_REGION_BASE
+                && region.0 < SEAM_CLOSURE_REGION_LIMIT
+    )
+}
 
 /// Exact local consequences of shaping one patch's shared walker seams.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -39,16 +52,24 @@ impl WalkerSeamShape {
         self.boundary_regions.contains_key(&coord)
     }
 
+    /// Projects one surface access value through the resolved seam closure.
+    #[must_use]
+    pub(crate) fn access_for(&self, surface: TilePos, access: SurfaceAccess) -> SurfaceAccess {
+        let Some(region) = self.boundary_regions.get(&surface.coord).copied() else {
+            return access;
+        };
+        if !self.open_surfaces.contains(&surface) && access == SurfaceAccess::Ordinary {
+            SurfaceAccess::SpecialMovement(region)
+        } else {
+            access
+        }
+    }
+
     /// Projects every non-aperture boundary surface into special movement.
     pub(crate) fn apply(&self, volume: &mut VolumePlan) -> Result<(), Vec<WorldValidationIssue>> {
         let mut issues = Vec::new();
         for (surface, metadata) in &mut volume.surfaces {
-            let Some(region) = self.boundary_regions.get(&surface.coord).copied() else {
-                continue;
-            };
-            if !self.open_surfaces.contains(surface) && metadata.access == SurfaceAccess::Ordinary {
-                metadata.access = SurfaceAccess::SpecialMovement(region);
-            }
+            metadata.access = self.access_for(*surface, metadata.access);
         }
         for surface in &self.open_surfaces {
             if !matches!(
@@ -177,7 +198,6 @@ pub(crate) fn validate_patch_walker_seams(
 ) -> Vec<WorldValidationIssue> {
     let mut issues = Vec::new();
     let ordinary = OrdinaryGraph::from_volume(volume, None);
-    let mut globally_open = BTreeSet::new();
 
     for edge in patch.shared_edges() {
         let ports = edge.walker_ports();
@@ -201,7 +221,6 @@ pub(crate) fn validate_patch_walker_seams(
             }
             for coord in &port.first_approach {
                 let position = TilePos::new(*coord, edge.preferred_level());
-                globally_open.insert(position);
                 validate_local_surface(patch.id, edge.id, position, volume, &ordinary, &mut issues);
                 if !landings
                     .iter()
@@ -216,19 +235,65 @@ pub(crate) fn validate_patch_walker_seams(
         }
     }
 
+    let mut expected_closures = BTreeMap::<HexCoord, SpecialMovementRegion>::new();
     for edge in patch.shared_edges() {
+        let region = SpecialMovementRegion(SEAM_CLOSURE_REGION_BASE.saturating_add(edge.id.0));
+        for (local, _) in edge.boundary_pairs() {
+            expected_closures
+                .entry(local)
+                .and_modify(|existing| {
+                    if region < *existing {
+                        *existing = region;
+                    }
+                })
+                .or_insert(region);
+        }
+    }
+    for edge in patch.shared_edges() {
+        let edge_open = edge
+            .walker_ports()
+            .into_iter()
+            .flat_map(|port| port.first_approach)
+            .map(|coord| TilePos::new(coord, edge.preferred_level()))
+            .collect::<BTreeSet<_>>();
         for (local, _) in edge.boundary_pairs() {
             for (surface, metadata) in volume
                 .surfaces
                 .iter()
                 .filter(|(surface, _)| surface.coord == local)
             {
-                if metadata.access == SurfaceAccess::Ordinary && !globally_open.contains(surface) {
+                if metadata.access == SurfaceAccess::Ordinary && !edge_open.contains(surface) {
                     issues.push(seam_issue(format!(
                         "patch {} seam {:?} leaves undeclared boundary surface {surface:?} ordinary",
                         patch.id.0, edge.id
                     )));
                 }
+            }
+        }
+    }
+    for (coord, expected_region) in expected_closures {
+        let contains_fill = volume.columns.get(&coord).is_some_and(|column| {
+            column
+                .elements
+                .iter()
+                .any(|element| matches!(element, super::volume::VolumeElement::Fill(_)))
+        });
+        for (surface, metadata) in volume
+            .surfaces
+            .iter()
+            .filter(|(surface, _)| surface.coord == coord)
+        {
+            if metadata.access == SurfaceAccess::Ordinary
+                || (metadata.access == SurfaceAccess::NonStandable && contains_fill)
+            {
+                continue;
+            }
+            if metadata.access != SurfaceAccess::SpecialMovement(expected_region) {
+                issues.push(seam_issue(format!(
+                    "patch {} shared boundary surface {surface:?} uses {:?}, expected exact seam \
+                     closure {:?}",
+                    patch.id.0, metadata.access, expected_region
+                )));
             }
         }
     }
