@@ -21,9 +21,12 @@ use hex_core::{ElementId, Screen, SpellId};
 use hex_lattice::{Casting, FusionTable, Requirement, SpellTable};
 use thiserror::Error;
 
-use crate::elements::ElementCatalog;
-use crate::spells::{CastingAxis, SpellBook};
-use crate::substances::SubstanceTable;
+use crate::elements::{ElementCatalog, ElementFile};
+use crate::fingerprint::FingerprintEncoder;
+use crate::lattices::{LatticeFile, LatticeLibrary};
+use crate::spells::{CastingAxis, SpellBook, SpellFile};
+use crate::substances::{SubstanceFile, SubstanceTable};
+use crate::ArtPalette;
 
 /// A cross-file reference that did not resolve.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
@@ -66,6 +69,12 @@ struct ResolvedSpell {
 pub struct ContentIndex {
     #[reflect(ignore)]
     spells: HashMap<SpellId, ResolvedSpell>,
+    #[reflect(ignore)]
+    source_elements: u64,
+    #[reflect(ignore)]
+    source_spells: u64,
+    #[reflect(ignore)]
+    source_substances: u64,
 }
 
 impl ContentIndex {
@@ -114,7 +123,12 @@ impl ContentIndex {
         }
 
         if errors.is_empty() {
-            Ok(Self { spells: resolved })
+            Ok(Self {
+                spells: resolved,
+                source_elements: elements.source_fingerprint(),
+                source_spells: spells.source_fingerprint(),
+                source_substances: substances.semantic_fingerprint(),
+            })
         } else {
             Err(errors)
         }
@@ -159,6 +173,65 @@ impl ContentIndex {
     pub fn is_empty(&self) -> bool {
         self.spells.is_empty()
     }
+
+    /// Whether this index was resolved from these exact table semantics.
+    #[must_use]
+    pub fn matches_sources(
+        &self,
+        elements: &ElementCatalog,
+        spells: &SpellBook,
+        substances: &SubstanceTable,
+    ) -> bool {
+        self.source_elements == elements.source_fingerprint()
+            && self.source_spells == spells.source_fingerprint()
+            && self.source_substances == substances.semantic_fingerprint()
+    }
+
+    fn source_revision(&self) -> u64 {
+        let mut encoder = FingerprintEncoder::new(b"hex-content-index-sources-v1");
+        encoder.u64(self.source_elements);
+        encoder.u64(self.source_spells);
+        encoder.u64(self.source_substances);
+        encoder.finish()
+    }
+}
+
+/// One fully cross-checked revision of the authored gameplay content graph.
+///
+/// The last valid [`ContentIndex`] and [`LatticeLibrary`] intentionally remain
+/// available after a rejected edit, but this resource is removed until every raw
+/// source, direct catalog and derived table agrees again. Loading gates on this
+/// acceptance marker instead of Bevy change ticks.
+#[derive(Resource, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
+#[reflect(Resource)]
+pub struct AcceptedContentRevision {
+    content_sources: u64,
+    lattice_sources: u64,
+}
+
+impl AcceptedContentRevision {
+    /// Stable identity of the complete accepted semantic revision.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        let mut encoder = FingerprintEncoder::new(b"hex-accepted-content-revision-v1");
+        encoder.u64(self.content_sources);
+        encoder.u64(self.lattice_sources);
+        encoder.finish()
+    }
+
+    /// Whether these are still the resolved tables accepted by this revision.
+    #[must_use]
+    pub fn matches_resolved(&self, content: &ContentIndex, lattices: &LatticeLibrary) -> bool {
+        self.content_sources == content.source_revision()
+            && self.lattice_sources == lattices.source_revision()
+    }
+}
+
+/// Ordering hook for consumers that must see acceptance changes in the same frame.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContentReadinessSystems {
+    /// Publishes or withdraws [`AcceptedContentRevision`].
+    PublishAcceptedRevision,
 }
 
 /// The engine's content lookups, over the loaded tables.
@@ -213,10 +286,17 @@ impl FusionTable for ContentTables<'_> {
 
 /// Registers the cross-file content index.
 pub fn plugin(app: &mut App) {
-    app.register_type::<ContentIndex>();
+    app.register_type::<ContentIndex>()
+        .register_type::<AcceptedContentRevision>();
     app.add_systems(
         Update,
         build_content_index.run_if(not(in_state(Screen::Gameplay))),
+    );
+    app.add_systems(
+        PostUpdate,
+        publish_accepted_content_revision
+            .in_set(ContentReadinessSystems::PublishAcceptedRevision)
+            .run_if(not(in_state(Screen::Gameplay))),
     );
 }
 
@@ -245,6 +325,69 @@ fn build_content_index(
             // Keep the last valid index (insert nothing), mirroring the settings
             // loader's last-valid-on-bad-reload.
         }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the acceptance boundary must compare every raw and derived content resource"
+)]
+fn publish_accepted_content_revision(
+    mut commands: Commands,
+    element_file: Option<Res<ElementFile>>,
+    elements: Option<Res<ElementCatalog>>,
+    spell_file: Option<Res<SpellFile>>,
+    spells: Option<Res<SpellBook>>,
+    substance_file: Option<Res<SubstanceFile>>,
+    palette: Option<Res<ArtPalette>>,
+    substances: Option<Res<SubstanceTable>>,
+    lattice_file: Option<Res<LatticeFile>>,
+    content: Option<Res<ContentIndex>>,
+    lattices: Option<Res<LatticeLibrary>>,
+    accepted: Option<Res<AcceptedContentRevision>>,
+) {
+    let current = match (
+        element_file.as_deref(),
+        elements.as_deref(),
+        spell_file.as_deref(),
+        spells.as_deref(),
+        substance_file.as_deref(),
+        palette.as_deref(),
+        substances.as_deref(),
+        lattice_file.as_deref(),
+        content.as_deref(),
+        lattices.as_deref(),
+    ) {
+        (
+            Some(element_file),
+            Some(elements),
+            Some(spell_file),
+            Some(spells),
+            Some(substance_file),
+            Some(palette),
+            Some(substances),
+            Some(lattice_file),
+            Some(content),
+            Some(lattices),
+        ) if elements.matches_source(element_file)
+            && spells.matches_source(spell_file)
+            && substances.matches_sources(substance_file, palette)
+            && content.matches_sources(elements, spells, substances)
+            && lattices.matches_sources(lattice_file, elements, spells) =>
+        {
+            Some(AcceptedContentRevision {
+                content_sources: content.source_revision(),
+                lattice_sources: lattices.source_revision(),
+            })
+        }
+        _ => None,
+    };
+
+    match (current, accepted.as_deref()) {
+        (Some(current), Some(previous)) if current == *previous => {}
+        (Some(current), _) => commands.insert_resource(current),
+        (None, Some(_)) => commands.remove_resource::<AcceptedContentRevision>(),
+        (None, None) => {}
     }
 }
 
@@ -337,6 +480,27 @@ mod tests {
             map.insert(name.to_owned(), spell);
         }
         SpellBook::from_file(&SpellFile { spells: map })
+    }
+
+    fn shipped_sources() -> (
+        ElementFile,
+        SpellFile,
+        SubstanceFile,
+        ArtPalette,
+        LatticeFile,
+    ) {
+        (
+            ron::from_str(include_str!("../../../assets/config/elements.ron"))
+                .expect("shipped elements should parse"),
+            ron::from_str(include_str!("../../../assets/config/spells.ron"))
+                .expect("shipped spells should parse"),
+            ron::from_str(include_str!("../../../assets/config/substances.ron"))
+                .expect("shipped substances should parse"),
+            ron::from_str(include_str!("../../../assets/art/palette.ron"))
+                .expect("shipped palette should parse"),
+            ron::from_str(include_str!("../../../assets/config/lattices.ron"))
+                .expect("shipped lattices should parse"),
+        )
     }
 
     #[test]
@@ -441,5 +605,105 @@ mod tests {
             index.requirements(SpellId(0)).is_some(),
             "the previously resolved spell is still there"
         );
+    }
+
+    #[test]
+    fn rejected_cross_file_revision_stays_unaccepted_until_repaired() {
+        let (element_file, spell_file, substance_file, palette, lattice_file) = shipped_sources();
+        let elements = ElementCatalog::from_file(&element_file);
+        let spells = SpellBook::from_file(&spell_file);
+        let substances = SubstanceTable::from_file(&substance_file, &palette)
+            .expect("shipped substances should resolve");
+        let content =
+            ContentIndex::build(&elements, &spells, &substances).expect("content should resolve");
+        let lattices = LatticeLibrary::build(&lattice_file, &elements, &spells)
+            .expect("lattices should resolve");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(element_file);
+        app.insert_resource(elements);
+        app.insert_resource(spell_file.clone());
+        app.insert_resource(spells);
+        app.insert_resource(substance_file);
+        app.insert_resource(palette);
+        app.insert_resource(substances);
+        app.insert_resource(lattice_file);
+        app.insert_resource(content);
+        app.insert_resource(lattices);
+        app.add_systems(Update, build_content_index);
+        app.add_systems(PostUpdate, publish_accepted_content_revision);
+
+        app.update();
+        assert!(
+            app.world().contains_resource::<AcceptedContentRevision>(),
+            "the initial coherent graph should be accepted"
+        );
+
+        let mut broken = spell_file.clone();
+        broken
+            .spells
+            .get_mut("Ember")
+            .expect("shipped spells contain Ember")
+            .requirements
+            .first_mut()
+            .expect("Ember has a requirement")
+            .element = "Aether".to_owned();
+        app.insert_resource(SpellBook::from_file(&broken));
+        app.insert_resource(broken);
+
+        for _ in 0..4 {
+            app.update();
+            assert!(
+                !app.world().contains_resource::<AcceptedContentRevision>(),
+                "settled change ticks must not accept a retained stale index"
+            );
+        }
+
+        app.insert_resource(SpellBook::from_file(&spell_file));
+        app.insert_resource(spell_file);
+        app.update();
+        assert!(
+            app.world().contains_resource::<AcceptedContentRevision>(),
+            "repairing the source graph should publish a new accepted revision"
+        );
+    }
+
+    #[test]
+    fn inserted_names_cannot_pair_shifted_ids_with_stale_derived_tables() {
+        let (element_file, mut spell_file, substance_file, palette, lattice_file) =
+            shipped_sources();
+        let elements = ElementCatalog::from_file(&element_file);
+        let original_spells = SpellBook::from_file(&spell_file);
+        let substances = SubstanceTable::from_file(&substance_file, &palette)
+            .expect("shipped substances should resolve");
+        let stale_content = ContentIndex::build(&elements, &original_spells, &substances)
+            .expect("shipped content should resolve");
+        let stale_lattices = LatticeLibrary::build(&lattice_file, &elements, &original_spells)
+            .expect("shipped lattices should resolve");
+
+        let inserted = spell_file
+            .spells
+            .get("Ember")
+            .expect("shipped spells contain Ember")
+            .clone();
+        spell_file.spells.insert("Aardvark".to_owned(), inserted);
+        let shifted_spells = SpellBook::from_file(&spell_file);
+
+        assert!(
+            !stale_content.matches_sources(&elements, &shifted_spells, &substances),
+            "a stale spell id index must reject a catalog whose sorted ids shifted"
+        );
+        assert!(
+            !stale_lattices.matches_sources(&lattice_file, &elements, &shifted_spells),
+            "stale lattice spell ids must reject the shifted catalog"
+        );
+
+        let rebuilt_content = ContentIndex::build(&elements, &shifted_spells, &substances)
+            .expect("the inserted spell remains semantically valid");
+        let rebuilt_lattices = LatticeLibrary::build(&lattice_file, &elements, &shifted_spells)
+            .expect("lattices should rebuild against shifted ids");
+        assert!(rebuilt_content.matches_sources(&elements, &shifted_spells, &substances));
+        assert!(rebuilt_lattices.matches_sources(&lattice_file, &elements, &shifted_spells));
     }
 }
