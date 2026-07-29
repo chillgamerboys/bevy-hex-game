@@ -35,9 +35,12 @@ use hex_lattice::{
 };
 
 use crate::casting::blocked_reason;
+use crate::menus::lattice_view::{
+    live_cell_view, spawn_lattice_cells, CellInteraction, LatticeScale,
+};
 use crate::menus::widgets::{
-    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets,
-    FUSION_COLOR, GEM_COLOR, LABEL, SMALL_BUTTON_WIDTH,
+    blurb, display, divider, fine, heading, label, panel, small_button, UiAssets,
+    SMALL_BUTTON_WIDTH,
 };
 
 use super::{despawn_screen, screen_root};
@@ -54,28 +57,8 @@ const DEMO_SPELLS: [&str; 4] = ["Ember", "Metal Shield", "Flamethrower", "Fireba
 /// rather than overwriting, at worst leaving a spell honestly unsatisfiable.
 const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 
-/// Pixel width of one hex cell sprite (pointy-top, so height runs longer).
-const CELL_SIZE: f32 = 62.0;
-
-/// Pixel height of the hex sprite: width times the 256/222 sprite ratio.
-const CELL_HEIGHT: f32 = 71.5;
-
-/// Horizontal distance between neighbouring cell centres — a slim gap keeps
-/// the cells reading as one bonded lattice rather than scattered dots.
-const CELL_STEP: f32 = 66.0;
-
-/// Vertical distance between rows: three quarters of the hex height.
-const ROW_STEP: f32 = 56.0;
-
 /// How many log lines the demo keeps.
 const LOG_LINES: usize = 6;
-
-/// Tints multiplied over the white hex sprite. `GEM_COLOR` and `FUSION_COLOR` moved to
-/// [`widgets`](crate::menus::widgets) when the gameplay casting panel started drawing
-/// the same vocabulary: two copies of a palette is one edit away from two palettes.
-const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
-const LOCKED_COLOR: Color = Color::srgba(0.72, 0.54, 0.18, 0.95);
-const DISABLED_COLOR: Color = Color::srgba(0.46, 0.13, 0.11, 0.95);
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
@@ -496,15 +479,6 @@ fn rebuild_readout(
     });
 }
 
-fn cell_position(coord: LatticeCoord) -> (f32, f32) {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "demo coordinates are single digits; f32 is exact far beyond them"
-    )]
-    let (q, r) = (coord.q() as f32, coord.r() as f32);
-    (CELL_STEP * (q + r * 0.5), ROW_STEP * r)
-}
-
 fn spawn_lattice_panel(
     panels: &mut ChildSpawnerCommands,
     demo: &DemoLattice,
@@ -512,158 +486,33 @@ fn spawn_lattice_panel(
     spells: &SpellBook,
     assets: &UiAssets,
 ) {
-    let mut min = (f32::MAX, f32::MAX);
-    let mut max = (f32::MIN, f32::MIN);
-    for (coord, _) in demo.spec.cells() {
-        let (x, y) = cell_position(coord);
-        min = (min.0.min(x), min.1.min(y));
-        max = (max.0.max(x), max.1.max(y));
-    }
     if demo.spec.capacity() == 0 {
         panels.spawn(blurb(assets, "the content defined no demo lattice"));
         return;
     }
+    let views: Vec<_> = demo
+        .spec
+        .cells()
+        .map(|(coord, kind)| {
+            live_cell_view(
+                coord,
+                kind,
+                &demo.stats,
+                &demo.state,
+                elements,
+                spells,
+                CellInteraction::Actionable,
+                false,
+            )
+        })
+        .collect();
 
     panels
         .spawn((Name::new("Lattice Panel"), panel()))
         .with_children(|framed| {
             framed.spawn(heading(assets, "the inscription"));
-            framed
-                .spawn((
-                    Name::new("Demo Lattice"),
-                    Node {
-                        width: Val::Px(max.0 - min.0 + CELL_SIZE),
-                        height: Val::Px(max.1 - min.1 + CELL_HEIGHT),
-                        ..default()
-                    },
-                ))
-                .with_children(|lattice| {
-                    spawn_lattice_cells(lattice, demo, elements, spells, assets, min);
-                });
+            spawn_lattice_cells(framed, &views, assets, LatticeScale::DEMO, "Demo", DemoCell);
         });
-}
-
-fn spawn_lattice_cells(
-    lattice: &mut ChildSpawnerCommands,
-    demo: &DemoLattice,
-    elements: &ElementCatalog,
-    spells: &SpellBook,
-    assets: &UiAssets,
-    min: (f32, f32),
-) {
-    for (coord, kind) in demo.spec.cells() {
-        let (x, y) = cell_position(coord);
-        let (color, title, line) = cell_face(coord, kind, demo, elements, spells);
-        lattice
-            .spawn((
-                // Coordinates in the name give the visual-walk scripts a
-                // deterministic handle on one specific cell.
-                Name::new(format!("Demo Cell ({}, {})", coord.q(), coord.r())),
-                Button,
-                DemoCell(coord),
-                OwnColors,
-                ImageNode {
-                    image: assets.hex_cell.clone(),
-                    color,
-                    ..default()
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(x - min.0),
-                    top: Val::Px(y - min.1),
-                    width: Val::Px(CELL_SIZE),
-                    height: Val::Px(CELL_HEIGHT),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|cell| {
-                cell.spawn((
-                    Text::new(title),
-                    TextFont {
-                        font: assets.body.clone().into(),
-                        ..TextFont::from_font_size(11.0)
-                    },
-                    TextColor(LABEL),
-                    Pickable::IGNORE,
-                ));
-                cell.spawn((
-                    Text::new(line),
-                    TextFont {
-                        font: assets.body.clone().into(),
-                        ..TextFont::from_font_size(10.0)
-                    },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.75)),
-                    Pickable::IGNORE,
-                ));
-            });
-    }
-}
-
-/// What one cell shows: its colour, headline, and detail line.
-fn cell_face(
-    coord: LatticeCoord,
-    kind: CellKind,
-    demo: &DemoLattice,
-    elements: &ElementCatalog,
-    spells: &SpellBook,
-) -> (Color, String, String) {
-    let disabled = demo.state.is_disabled(coord);
-    let locked = demo.state.is_locked(coord);
-    let color = if disabled {
-        DISABLED_COLOR
-    } else if locked {
-        LOCKED_COLOR
-    } else {
-        match kind {
-            CellKind::Gem { .. } => GEM_COLOR,
-            CellKind::Fusion { .. } => FUSION_COLOR,
-            _ => SPELL_COLOR,
-        }
-    };
-    let (title, mut line) = match kind {
-        CellKind::Gem { element } => (
-            short_name(elements.name(element).unwrap_or("gem")),
-            format!(
-                "{}/{}",
-                demo.state.mana(coord),
-                demo.stats.capacity(element)
-            ),
-        ),
-        CellKind::Fusion { output } => (
-            "fusion".to_owned(),
-            short_name(elements.name(output).unwrap_or("?")),
-        ),
-        CellKind::Spell { spell } => (
-            short_name(spells.name(spell).unwrap_or("spell")),
-            spells
-                .spell(spell)
-                .map(|entry| format!("tier {}", entry.tier()))
-                .unwrap_or_default(),
-        ),
-        CellKind::Blank => ("-".to_owned(), String::new()),
-    };
-    if disabled {
-        line = "disabled".to_owned();
-    } else if locked {
-        line = format!("{line} locked");
-    }
-    (color, title, line)
-}
-
-/// Truncates a name to what fits inside one hex cell; the control panel
-/// carries the full name.
-fn short_name(name: &str) -> String {
-    const FITS: usize = 8;
-    if name.chars().count() <= FITS {
-        name.to_owned()
-    } else {
-        let head: String = name.chars().take(FITS - 1).collect();
-        format!("{head}…")
-    }
 }
 
 fn spawn_control_panel(

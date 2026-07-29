@@ -9,6 +9,7 @@
 
 use bevy::prelude::*;
 
+pub(crate) mod lattice_view;
 mod pause;
 pub mod widgets;
 
