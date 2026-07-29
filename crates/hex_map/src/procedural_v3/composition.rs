@@ -1162,6 +1162,7 @@ mod tests {
                     origin: anchor,
                     level: IlluminationLevel::Bright,
                     radius: 4,
+                    presentation: None,
                 },
             )]),
             biome_regions,

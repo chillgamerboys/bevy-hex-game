@@ -23,9 +23,12 @@ use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::volume::{
     FillMaterialRole, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement, VolumePlan,
 };
+#[cfg(test)]
+use super::world::CaveCrystalPresentation;
 use super::world::{
-    FeatureKind, FeaturePlan, GeneratedWorldPlan, PlannedGameplayLight, PlannedInterior,
-    PlannedStructure, StructureKind,
+    CaveCrystalKind, CaveCrystalSiteKind, FeatureKind, FeaturePlan, GeneratedWorldPlan,
+    PlannedGameplayLight, PlannedInterior, PlannedLightPresentation, PlannedStructure,
+    StructureKind,
 };
 
 const SETTINGS_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/settings";
@@ -664,8 +667,31 @@ fn encode_lights(
         encoder.tile_pos(light.origin);
         encoder.tag(illumination_tag(light.level));
         encoder.u32(light.radius);
+        encode_light_presentation(encoder, light.presentation);
     }
     Ok(())
+}
+
+pub(super) fn encode_light_presentation(
+    encoder: &mut FingerprintEncoder,
+    presentation: Option<PlannedLightPresentation>,
+) {
+    match presentation {
+        None => encoder.tag(0),
+        Some(PlannedLightPresentation::CaveCrystal(crystal)) => {
+            encoder.tag(1);
+            encoder.tag(match crystal.site {
+                CaveCrystalSiteKind::InteriorAlcove => 0,
+                CaveCrystalSiteKind::EntranceLanding => 1,
+            });
+            encoder.tag(match crystal.kind {
+                CaveCrystalKind::LowCluster => 0,
+                CaveCrystalKind::Branched => 1,
+                CaveCrystalKind::Spire => 2,
+            });
+            encoder.tag(crystal.rotation);
+        }
+    }
 }
 
 const fn illumination_tag(level: IlluminationLevel) -> u8 {
@@ -1338,6 +1364,7 @@ mod tests {
                     origin: TilePos::ORIGIN,
                     level: IlluminationLevel::Bright,
                     radius: 4,
+                    presentation: None,
                 },
             );
         }
@@ -1392,6 +1419,45 @@ mod tests {
                 "mutating {name} must change semantic identity"
             );
         }
+    }
+
+    #[test]
+    fn semantic_identity_covers_every_crystal_presentation_choice() {
+        let mut fingerprints = BTreeSet::new();
+        for site in [
+            CaveCrystalSiteKind::InteriorAlcove,
+            CaveCrystalSiteKind::EntranceLanding,
+        ] {
+            for kind in [
+                CaveCrystalKind::LowCluster,
+                CaveCrystalKind::Branched,
+                CaveCrystalKind::Spire,
+            ] {
+                for rotation in 0..6 {
+                    let mut plan = compact_world();
+                    plan.lights.insert(
+                        LightId(1),
+                        PlannedGameplayLight {
+                            origin: TilePos::ORIGIN,
+                            level: IlluminationLevel::Bright,
+                            radius: 4,
+                            presentation: Some(PlannedLightPresentation::CaveCrystal(
+                                CaveCrystalPresentation {
+                                    kind,
+                                    site,
+                                    rotation,
+                                },
+                            )),
+                        },
+                    );
+                    fingerprints.insert(
+                        semantic_plan_fingerprint(&plan)
+                            .expect("every crystal presentation choice should encode"),
+                    );
+                }
+            }
+        }
+        assert_eq!(fingerprints.len(), 36);
     }
 
     #[test]
