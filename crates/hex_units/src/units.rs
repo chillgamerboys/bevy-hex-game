@@ -19,10 +19,11 @@ use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use hex_ai::{AiController, AiGroupId, AiProfileId};
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
-    GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
+    AiProfileCatalog, ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
+    FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
 };
 use hex_lattice::LatticeState;
 use std::collections::BTreeMap;
@@ -258,6 +259,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<Archetype>()
         .register_type::<Downed>()
         .register_type::<Faction>()
+        .register_type::<AiController>()
         // `hex_core` has no plugin, so the runtime plugin that introduces its
         // shared types registers them.
         .register_type::<UnitId>()
@@ -618,6 +620,7 @@ fn spawn_units(
     // headless test harness has no content, and demanding it would make every one of
     // them build a library to spawn a unit that does not cast.
     lattices: Option<Res<LatticeLibrary>>,
+    profiles: Option<Res<AiProfileCatalog>>,
     anchors: Option<Res<MapAnchors>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
@@ -659,6 +662,32 @@ fn spawn_units(
     // rather than of this run.
     for (unit, standing) in placements {
         let faction = Faction::from(unit.faction);
+        let lattice = lattice_for(lattices.as_deref(), unit.archetype);
+        let controller = if faction == Faction::Hostile {
+            let profile = unit
+                .ai_profile
+                .or_else(|| lattice.and_then(|archetype| archetype.ai_profile.as_deref()))
+                .unwrap_or("baseline");
+            let profile_id = AiProfileId(profile.to_owned());
+            if profiles
+                .as_deref()
+                .is_some_and(|catalog| catalog.get(&profile_id).is_none())
+            {
+                let reason = format!(
+                    "Encounter {:?}: hostile {:?} references missing AI profile {:?}.",
+                    encounter.name, unit.archetype, profile
+                );
+                error!("{reason}");
+                commands.insert_resource(GameplaySetupFailure::new(reason));
+                return;
+            }
+            Some(AiController {
+                profile: profile_id,
+                group: unit.ai_group.map(|group| AiGroupId(group.to_owned())),
+            })
+        } else {
+            None
+        };
         spawn_unit(
             &mut commands,
             &assets,
@@ -670,7 +699,8 @@ fn spawn_units(
                     Faction::Hostile => enemy_material.clone(),
                 },
                 archetype: unit.archetype,
-                lattice: lattice_for(lattices.as_deref(), unit.archetype),
+                lattice,
+                controller,
                 settings: &settings,
                 body,
             },
@@ -926,6 +956,7 @@ struct UnitSpawn<'a> {
     /// this — it simply cannot cast and cannot be damaged. That is the honest fallback,
     /// and `spawn_units` warns when it happens so it is not a silent one.
     lattice: Option<&'a hex_assets::Archetype>,
+    controller: Option<AiController>,
     settings: &'a PlayerSettings,
     body: Body,
 }
@@ -974,6 +1005,9 @@ fn spawn_unit(
             LatticeState::new(&lattice.spec, &lattice.stats),
             lattice.stats.clone(),
         ));
+    }
+    if let Some(controller) = spawn.controller {
+        unit.insert(controller);
     }
 
     match spawn.faction {

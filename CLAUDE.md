@@ -106,7 +106,7 @@ every UI root pointed at the redirected camera.
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_units → hex_perception → hex_combat  (planned)
-hex_core → hex_ai → hex_assets   (AI contracts and profile content; combat host next)
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game

@@ -33,7 +33,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Run bottoms on tiles | publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to wave 3 terrain casting | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
-| AI host | pure `hex_ai` request/action contracts; authoritative canonical legal-action enumeration; profile/algorithm registry; archetype defaults, encounter overrides and deterministic `baseline-v1` | combat |
 | Party controls | six-member party strip, selection/focus, Group/Solo mode, and explicit formation preset/member-slot editing | units/game |
 | Formation traversal | rotating formation plans, deterministic bottleneck compression and reformation, plus atomic exact-path `MoveParty` validation | units/combat |
 | Outcomes and recovery | retained-world Victory/Defeat modals, same-seed Retry, Renewal restoration choices and next-round revival, plus exploration Rest | combat/game |
@@ -67,6 +66,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 |---|---|
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
+| AI host | Wave 4 Part 1: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
 
 ## Sequencing — independent lanes behind one contract
 
