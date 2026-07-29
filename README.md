@@ -33,6 +33,8 @@ Two things worth knowing:
 | Hover a hex tile | Trace the route the piece would take to it |
 | Left-click a hex tile | Walk the piece along that route |
 | `SPACE` | End your turn, in combat |
+| `H` | Hide/show ordinary gameplay readouts (an active damage choice stays visible) |
+| Click lattice cells, then `ENTER` | Choose and confirm which of your cells incoming damage disables |
 | `ESC` | Pause (or quit, on the title screen) |
 | `BACKSPACE` | Return to the title screen |
 | Click a scenario | Start it from the title screen |

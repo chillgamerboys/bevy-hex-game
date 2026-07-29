@@ -154,7 +154,8 @@ channelling in it for free; more requires further points.
 
 There is no HP. Damage disables hexes.
 
-- Spells disable a **flat count**, roughly 1–4. Ember disables 1, fireball 3.
+- Spells disable a **flat count**, roughly 1–4. Ember disables 1 and burns for two
+  affected-unit turns; fireball disables 3.
 - **The defender chooses which hexes are disabled**, except for abilities that target
   hexes directly. Those are the counter to tight packing — a shared gem is a
   two-for-one kill and no defender surrenders one voluntarily. They should be rare and
@@ -257,8 +258,8 @@ an observed retreat, while losing sight starts a separate one-round search.
 
 **An enemy's lattice is its entire stat block.** There is no separate authoring
 system. A wolf is four hexes with a bite. A raider is eight with a metal shield. A
-hedge-mage is twelve with a fusion chain. Difficulty is the size and complexity of the
-drawing, and every enemy runs on the player's rules.
+hedge-mage is thirteen with a fusion chain and Scrying Eye. Difficulty is the size and
+complexity of the drawing, and every enemy runs on the player's rules.
 
 This makes the information layer self-balancing. Small enemies are learnable — once
 you know a wolf, divining one is a wasted action. Bosses and novel enemies stay

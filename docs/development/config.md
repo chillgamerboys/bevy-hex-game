@@ -462,11 +462,16 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-A scenario is three files it names and nothing else: a world, a sky, and an encounter.
+A scenario names a world, a sky, and an encounter, and makes one required menu
+placement decision. The title screen has independently scrollable `Map`, `Combat`,
+and `Demo` columns; `category` chooses one. Scenario-backed demos share the Demo
+column with the static **Lattice Demo** card.
 
 ```ron
 (
     name: "Rolling Hills",
+    category: Map,
+    blurb: "Open procedural ground under heavy cloud.",
     world: "config/worlds/rolling-hills.ron",
     lighting: "config/lighting/overcast.ron",
     encounter: "config/encounters/open-ground.ron",
@@ -484,6 +489,8 @@ reproducible seed here:
 ```ron
 (
     name: "Procedural Hills",
+    category: Map,
+    blurb: "Seeded temperate hills split by a river.",
     world: "config/worlds/procedural-hills.ron",
     generation_seed: Some(1592598566),
     encounter: "config/encounters/anchored-skirmish.ron",
@@ -596,7 +603,8 @@ the title screen rather than starting a fight with a unit missing.
 `lattices.ron` is where enemies are designed. **An enemy's lattice is its entire stat
 block** — there is no separate stats system, no hit points, and no difficulty slider. A
 wolf is four hexes and a bite. A raider is eight around a metal shield. A hedge-mage is
-twelve with a fusion chain. Difficulty is the size and complexity of the drawing.
+thirteen with a fusion chain and Scrying Eye. Difficulty is the size and complexity of
+the drawing.
 
 An archetype named here is what `archetype: "raider"` in an encounter roster looks up.
 
@@ -653,9 +661,9 @@ archetype and the name in the message.
 
 ## Elements and spells
 
-Two files define the magic system as content. Nothing in the game reads them *yet* —
-the lattice that actually casts spells is being built alongside this — but they load,
-validate and cross-check now, so authoring can begin.
+Two files define the magic system as content. The lattice renderer, cast panel, command
+applier, combat log, and knowledge projection all read the resolved catalogs. They also
+load, validate, and cross-check together, so a dangling name cannot ship silently.
 
 ### `elements.ron`
 
@@ -699,7 +707,10 @@ Each spell by name:
             mana: Fixed,
             co_castable: false,
             targeting: (range: 3, shape: Single, needs_los: true),
-            effects: [DisableHexes(count: 1, targeted: false)],
+            effects: [
+                DisableHexes(count: 1, targeted: false),
+                Burn(turns: 2),
+            ],
         ),
     },
 )

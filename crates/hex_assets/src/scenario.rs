@@ -32,10 +32,12 @@ pub struct ScenarioLibrary {
 }
 
 /// One playable setup: a world, and where the units start on it.
-#[derive(Reflect, Debug, Clone, Deserialize)]
+#[derive(Reflect, Debug, Clone)]
 pub struct Scenario {
     /// What the title screen calls it.
     pub name: String,
+    /// Which framed title-screen column owns this scenario.
+    pub category: ScenarioCategory,
     /// One line under the name, saying what is interesting about it.
     pub blurb: String,
     /// Asset path of the world file, relative to `assets/`.
@@ -49,19 +51,16 @@ pub struct Scenario {
     /// mean every new entry copying a path it will never change. Called `lighting`
     /// rather than `sky` because it also decides the sun's angle and colour, and so
     /// which way the shadows fall.
-    #[serde(default = "shipped_lighting")]
     pub lighting: String,
     /// Reproducible terrain seed for a generated world.
     ///
     /// Authored scenarios omit this. The title screen can replace a configured seed
     /// for the current process, but never writes that replacement back to this asset.
-    #[serde(default)]
     pub generation_seed: Option<u64>,
     /// Optional time of day at which this scenario starts, in `[0, 24)`.
     ///
     /// Only cyclic lighting profiles accept an override. That cross-asset contract is
     /// checked after both this scenario and its lighting file have loaded.
-    #[serde(default, deserialize_with = "deserialize_optional_hour")]
     pub starting_time_hours: Option<f32>,
     /// Asset path of the encounter file: the roster standing on this world.
     ///
@@ -71,6 +70,73 @@ pub struct Scenario {
     ///
     /// Not optional: a scenario with no encounter has nothing to play.
     pub encounter: String,
+}
+
+/// The three title-screen lanes a scenario can inhabit.
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
+pub enum ScenarioCategory {
+    /// Worlds whose terrain or traversal is the main attraction.
+    Map,
+    /// Setups authored to exercise the combat loop.
+    Combat,
+    /// Focused mechanics showcases and rules probes.
+    Demo,
+}
+
+/// Deserialization mirror used so a missing category can name the scenario it broke.
+///
+/// A derived `Deserialize` on [`Scenario`] can only report `missing field category`.
+/// That is needlessly hostile in a nine-entry content file: the designer then has to
+/// count parentheses to discover which entry failed. Reading the other fields first
+/// lets the error identify the exact scenario while keeping category genuinely required.
+#[derive(Deserialize)]
+struct ScenarioFields {
+    name: String,
+    #[serde(default, deserialize_with = "deserialize_present_category")]
+    category: Option<ScenarioCategory>,
+    blurb: String,
+    world: String,
+    #[serde(default = "shipped_lighting")]
+    lighting: String,
+    #[serde(default)]
+    generation_seed: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_hour")]
+    starting_time_hours: Option<f32>,
+    encounter: String,
+}
+
+impl<'de> Deserialize<'de> for Scenario {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let fields = ScenarioFields::deserialize(deserializer)?;
+        let Some(category) = fields.category else {
+            return Err(D::Error::custom(format!(
+                "scenario {:?} is missing required field `category`",
+                fields.name
+            )));
+        };
+        Ok(Self {
+            name: fields.name,
+            category,
+            blurb: fields.blurb,
+            world: fields.world,
+            lighting: fields.lighting,
+            generation_seed: fields.generation_seed,
+            starting_time_hours: fields.starting_time_hours,
+            encounter: fields.encounter,
+        })
+    }
+}
+
+fn deserialize_present_category<'de, D>(
+    deserializer: D,
+) -> Result<Option<ScenarioCategory>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ScenarioCategory::deserialize(deserializer).map(Some)
 }
 
 /// The lighting a scenario gets when it does not name one.
@@ -142,6 +208,7 @@ mod tests {
             format!(
                 r#"(
                     name: "Time",
+                    category: Demo,
                     blurb: "Time validation.",
                     world: "config/world.ron",
                     starting_time_hours: {hours},
@@ -165,6 +232,23 @@ mod tests {
                 "unexpected error for {invalid}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn a_missing_category_error_names_the_scenario() {
+        let error = ron::from_str::<Scenario>(
+            r#"(
+                name: "Forgotten Lane",
+                blurb: "Invalid on purpose.",
+                world: "config/world.ron",
+                encounter: "config/encounters/bridge-crossing.ron",
+            )"#,
+        )
+        .expect_err("category is a required authoring decision")
+        .to_string();
+
+        assert!(error.contains("category"), "{error}");
+        assert!(error.contains("Forgotten Lane"), "{error}");
     }
 
     /// Generated scenarios own distinct reproducible seeds and name an encounter file.

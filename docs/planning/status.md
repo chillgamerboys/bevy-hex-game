@@ -55,10 +55,10 @@ end to end.
 
 **Damage exists.** The lattice engine (`hex_lattice`) is joined to the game at last:
 `lattices.ron` authors the three archetypes the design names — a wolf of four hexes and
-a bite, a raider of eight around a metal shield, a hedge-mage of twelve with the roster's
-only fusion chain — and units spawn carrying them, keyed by the archetype their encounter
-rostered. A cast goes through the command funnel, up the first three rungs of the legality
-ladder, and drains the lattice that paid for it. Damage names a count; **the defender
+a bite, a raider of eight around a metal shield, a hedge-mage of thirteen with the
+roster's only fusion chain and Scrying Eye — and units spawn carrying them, keyed by the
+archetype their encounter rostered. A cast goes through the command funnel and the
+legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
 is in the replay log rather than made inside the applier. A unit whose every hex is
 disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
@@ -79,14 +79,13 @@ of this existed is gone.
 Bodies are one hex wide; there is no footprint for anything larger, and units do not
 obstruct each other — so a route may be drawn straight through another piece.
 
-The **knowledge seam exists** as `hex_combat::knowledge`: `FactionKnowledge::view` is
-the one read path for what a faction knows about a hostile lattice, entries carry
-their source and their own expiry so a divination-written fact decays on its own
-schedule, and decay ticks on `RoundElapsed`. It **fills now** that units carry lattices.
-What is still missing is presentation: nothing draws a hostile lattice, so the HUD shows
-your own party's hex count rather than anything about the enemy, and no divination writes
-into the store because `Reveal` is still refused with a reason. The dev reveal-all toggle
-is `K` under the `dev` feature.
+The **knowledge seam is live** as `hex_combat::knowledge`:
+`FactionKnowledge::view` is the one read path for a hostile lattice. Observation
+publishes existence and faction only; capacity and cells remain opaque until Reveal.
+Scrying Eye writes a complete, expiring projection whose known cells refresh from live
+mana and disabled state without extending its lifetime. The HUD renders that projection,
+retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
+enters the bounded log. The dev reveal-all toggle remains `K` under the `dev` feature.
 
 Around the game sits its own verification tooling. A **lattice-demo screen** on the
 title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
@@ -244,10 +243,6 @@ The first implementation also ships with explicit limitations:
   cast, so the preview cannot promise what the applier will not deliver. The refusal
   lifts the day the applier iterates the volume and queues one decision per unit inside
   it; it is the same seam `RunBottom` and the announce path close for terrain.
-- **The HUD counts your own party's hexes, not the enemy's.** Damage you take is legible
-  — the count drops — and damage you deal is not. That is a presentation gap rather than
-  a rules one: `FactionKnowledge` already carries what a faction knows about an enemy
-  lattice, and nothing reads it into the HUD yet.
 - **Burn attributes one source per tick.** Several burns on one target come due as a
   single count and therefore a single decision, which has room for one `source`. The
   earliest-lit fire fills it. The rules never read `source`, so the imprecision is

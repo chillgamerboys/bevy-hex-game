@@ -859,7 +859,7 @@ mod tests {
     use std::fs;
 
     use bevy::state::app::StatesPlugin;
-    use hex_assets::{Substance, SubstanceFile};
+    use hex_assets::{ScenarioCategory, Substance, SubstanceFile};
     use hex_core::{HexCoord, TraversalProfile};
 
     use crate::capture::{has_visual_coverage, temporary_capture_path};
@@ -869,6 +869,7 @@ mod tests {
     fn scenario(seed: Option<u64>) -> Scenario {
         Scenario {
             name: "Test".to_owned(),
+            category: ScenarioCategory::Demo,
             blurb: "A test scenario.".to_owned(),
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),

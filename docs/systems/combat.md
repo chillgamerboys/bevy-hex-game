@@ -41,6 +41,28 @@ would cut the animation off and strand the piece between two hexes.
 Keys: `SPACE` ends a turn. `ESC` and `BACKSPACE` were already taken by pause and
 quit-to-title.
 
+### A defender choice is command-modal, not Pause
+
+When damage opens `PendingDecision::ChooseDisables`, the command applier rejects every
+simulation command except a `ChooseDisables` answer for that exact defender. Input
+emitters also stop producing movement, casts, end-turn commands, and AI actions while
+the decision is open, keeping the refusal log quiet during ordinary play.
+
+A `Player` defender uses the own-lattice panel: only live cells are buttons, additional
+picks stop at the owed quota, Clear removes the local selection, and Confirm or `ENTER`
+emits the answer. If every live cell is owed, all are preselected but confirmation is
+still explicit. Non-player defenders use the deterministic policy and issue the answer
+under their own `ControlOwner`.
+
+This is not the `Pause` state. Camera and ordinary UI keep running. `H` hides ordinary
+readouts but deliberately leaves an active decision lattice and its controls visible.
+
+Every accepted outcome and refusal is also a public, serde-capable `CombatEvent` or
+`CommandRefusal`. Those contracts use stable unit ids, spell names, positions, and exact
+lattice-coordinate lists—never session-local spell ids or formatted presentation
+strings. The combat log applies faction disclosure when it ingests each event, so later
+divination cannot rewrite what an older line was allowed to reveal.
+
 ## Saying no out loud
 
 Clicking a tile can fail for five different reasons — not your turn, nothing standable
@@ -125,30 +147,30 @@ divination holds knowledge that way, and its writer owns the lifetime.
 Decay reads `RoundElapsed` and is ordered `.after(CombatSystems::Advance)`, which
 writes it. A local `.chain()` would look correct and race.
 
-### What is public
+### What observation publishes
 
-A lattice's **shape** is public and its **contents** are not. Capacity is apparent
-from looking at a character, so base visibility — faction and cell count — is
-available with no reveal at all. That is what makes the "unknown lattice, N hexes"
-readout honest rather than a placeholder.
+Base visibility establishes only that the subject exists and which faction it belongs
+to. **Shape and capacity are hidden information too.** Until divination learns capacity,
+`known_capacity()` and `unknown_count()` both return `None`; the target panel says only
+`lattice unknown`.
 
-### Wired, and what is still missing
+### Wired presentation and Reveal
 
 Units carry lattices. `lattices.ron` holds the archetypes, `spawn_units` attaches
 a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
 `Archetype`, and the publishing systems that matched nothing now populate the
 store every frame in gameplay. `view()` returns real base visibility.
 
-Two things it does not yet do. **Nothing draws a hostile lattice** — the store
-fills, the dev reveal-all toggle fills it further, and no UI renders either, so
-the readout in the HUD is your own party's hex count rather than anything about
-the enemy. And **nothing writes divination-sourced knowledge**, because casting
-does not resolve yet; `Reveal` is still refused with a reason.
+The target panel reads no hostile `LatticeSpec` or `LatticeState`; it projects only
+`FactionKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
+and every cell. While it lasts, already-divined cells refresh mana and disabled state
+from live truth without resetting their expiry. Tier one lasts through the current
+partial round and the next complete round, expiring at the following rollover.
 
-`Reveal` (the shipped "Scrying Eye") reaches the store through the cast path,
-which HEX-12 also lands. A cast must still anchor on a currently Observed
-position — the rule is [absolute, including for divination](casting.md#observation),
-because `Reveal` targets a unit you must already see.
+A cast must still anchor on a currently Observed position — the rule is
+[absolute, including for divination](casting.md#observation), because Reveal targets a
+unit you must already see. `RevealAll` remains a separate live developer override, not
+knowledge written into the store.
 
 The dev reveal-all toggle is `K`, behind the `dev` feature: the shipped build has
 no key that exposes hidden information, since hidden information is this game's
@@ -180,9 +202,10 @@ redefined without touching the framework.
 round boundary — the design words fire's damage over time that way, and a round-boundary
 burn would hit a unit that had just acted and one that had not at the same moment.
 
-The tick is driven by a `(round, unit)` cursor rather than by a one-frame signal, because
-a turn is many frames long: anything keyed on "the acting unit is burning" would fire
-every frame and empty a lattice in about a second.
+The tick is driven by each newly added `Turn`. A turn is many frames long, so anything
+keyed on "the acting unit is burning" would fire every frame and empty a lattice in
+about a second. Conversely, a real same-round handoff that adds another `Turn` is another
+tick; round number is not a substitute for turns taken.
 
 ### Burn ignores armour, but not the defender
 

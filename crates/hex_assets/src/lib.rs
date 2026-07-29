@@ -41,7 +41,7 @@ pub use lattices::{
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
-pub use scenario::{Scenario, ScenarioLibrary};
+pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
     ChannellingTrickle, CombatSettings, CubeCoord, DisplaySettings, InitiativePolicy,

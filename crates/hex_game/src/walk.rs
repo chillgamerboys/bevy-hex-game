@@ -7,7 +7,8 @@
 //! (waiting for screens, settling frames, injecting clicks and keys, capturing
 //! PNGs) and exits with success only if every step completed. A per-step
 //! watchdog turns a stall into a diagnostic and a failing exit instead of a
-//! hang.
+//! hang. `HEX_WALK_SIZE=1280x720` optionally selects an exact review viewport;
+//! the default is 1920×1080.
 //!
 //! # Why clicks are injected as `Interaction::Pressed`
 //!
@@ -32,7 +33,11 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::ScenarioLibrary;
-use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen, TerrainReady};
+use hex_core::{
+    CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, IssuedCommand, ResolvedMapSeed,
+    Screen, TerrainReady, UnitId,
+};
+use hex_units::{Player, StandsOn};
 use serde::Deserialize;
 
 use crate::capture::write_png;
@@ -40,9 +45,10 @@ use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
+const SIZE_ENV: &str = "HEX_WALK_SIZE";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
-const WALK_WIDTH: u32 = 1920;
-const WALK_HEIGHT: u32 = 1080;
+const DEFAULT_WALK_WIDTH: u32 = 1920;
+const DEFAULT_WALK_HEIGHT: u32 = 1080;
 
 /// Installs the walk runner only when its environment is present.
 pub(super) fn plugin(app: &mut App) {
@@ -68,12 +74,28 @@ pub(super) fn plugin(app: &mut App) {
             return;
         }
     };
+    let size = match env::var(SIZE_ENV) {
+        Ok(size) => match parse_size(&size) {
+            Ok(size) => size,
+            Err(error) => {
+                install_config_error(app, error);
+                return;
+            }
+        },
+        Err(env::VarError::NotPresent) => (DEFAULT_WALK_WIDTH, DEFAULT_WALK_HEIGHT),
+        Err(error) => {
+            install_config_error(app, format!("cannot read {SIZE_ENV}: {error}"));
+            return;
+        }
+    };
 
     info!(
-        "visual walk: {} steps from {script}, output to {out}",
-        steps.len()
+        "visual walk: {} steps from {script}, output to {out} at {}x{}",
+        steps.len(),
+        size.0,
+        size.1
     );
-    app.insert_resource(WalkState::new(steps, PathBuf::from(out)))
+    app.insert_resource(WalkState::new(steps, PathBuf::from(out), size))
         .add_systems(PreUpdate, run_walk.after(InputSystems));
 }
 
@@ -110,8 +132,17 @@ enum WalkStep {
         #[serde(default)]
         index: usize,
     },
+    /// Wait until a named button exists without activating it.
+    AwaitButton(String),
     /// Press and release a supported gameplay or menu key.
     Key(String),
+    /// Deliberately send a movement command through the simulation funnel.
+    ///
+    /// Walk-only probes bypass the quiet input prefilter so a modal refusal becomes a
+    /// visible combat-log line, proving the authoritative choke point held.
+    AttemptMove,
+    /// Deliberately send an end-turn command through the simulation funnel.
+    AttemptEndTurn,
     /// Launch a scenario by exact name, bypassing the menu UI.
     StartScenario {
         name: String,
@@ -143,6 +174,9 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         }
         WalkStep::Click { name, .. } if name.trim().is_empty() => {
             Err("click name must not be empty".to_owned())
+        }
+        WalkStep::AwaitButton(name) if name.trim().is_empty() => {
+            Err("awaited button name must not be empty".to_owned())
         }
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
@@ -184,6 +218,26 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
     }
 }
 
+fn parse_size(size: &str) -> Result<(u32, u32), String> {
+    let invalid = || format!("{SIZE_ENV} must be WIDTHxHEIGHT with two positive integers");
+    let Some((width, height)) = size.split_once('x') else {
+        return Err(invalid());
+    };
+    if height.contains('x') {
+        return Err(invalid());
+    }
+    let width = width
+        .parse::<u32>()
+        .map_err(|error| format!("{SIZE_ENV} width is invalid: {error}"))?;
+    let height = height
+        .parse::<u32>()
+        .map_err(|error| format!("{SIZE_ENV} height is invalid: {error}"))?;
+    if width == 0 || height == 0 {
+        return Err(invalid());
+    }
+    Ok((width, height))
+}
+
 /// What the capture observer reports back to the runner.
 #[derive(Debug)]
 enum CaptureOutcome {
@@ -216,11 +270,13 @@ struct WalkState {
     target: Option<Handle<Image>>,
     /// The camera entity the UI roots must be pointed at.
     camera: Option<Entity>,
+    /// Exact offscreen viewport under review.
+    size: (u32, u32),
     failed: bool,
 }
 
 impl WalkState {
-    fn new(steps: Vec<WalkStep>, out_dir: PathBuf) -> Self {
+    fn new(steps: Vec<WalkStep>, out_dir: PathBuf, size: (u32, u32)) -> Self {
         Self {
             steps,
             cursor: 0,
@@ -233,6 +289,7 @@ impl WalkState {
             held_key: None,
             target: None,
             camera: None,
+            size,
             failed: false,
         }
     }
@@ -261,6 +318,8 @@ fn run_walk(
     library: Option<Res<ScenarioLibrary>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
+    players: Query<(&UnitId, &ControlOwner, &StandsOn), With<Player>>,
+    mut queue: ResMut<CommandQueue>,
     mut images: ResMut<Assets<Image>>,
     mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
     ui_roots: Query<Entity, (With<Node>, Without<ChildOf>, Without<UiTargetCamera>)>,
@@ -276,8 +335,12 @@ fn run_walk(
         let Ok((camera, mut render_target)) = camera_targets.single_mut() else {
             return;
         };
-        let image =
-            Image::new_target_texture(WALK_WIDTH, WALK_HEIGHT, TextureFormat::Rgba8UnormSrgb, None);
+        let image = Image::new_target_texture(
+            state.size.0,
+            state.size.1,
+            TextureFormat::Rgba8UnormSrgb,
+            None,
+        );
         let handle = images.add(image);
         *render_target = RenderTarget::Image(handle.clone().into());
         state.target = Some(handle);
@@ -412,11 +475,45 @@ fn run_walk(
             state.pressed = Some(entity);
             state.advance();
         }
+        WalkStep::AwaitButton(ref name) => {
+            if buttons
+                .iter()
+                .any(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
+            {
+                state.advance();
+            }
+        }
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
             keys.press(key);
             state.held_key = Some(key);
+            state.advance();
+        }
+        WalkStep::AttemptMove => {
+            let Ok((unit, owner, standing)) = players.single() else {
+                return;
+            };
+            queue.push(IssuedCommand {
+                seat: owner.0,
+                command: GameCommand::MoveAlong {
+                    unit: *unit,
+                    // The modal gate runs before path validation. Naming the current
+                    // surface keeps the probe deterministic without pretending the
+                    // walk knows this scenario's terrain graph.
+                    path: vec![standing.0.pos],
+                },
+            });
+            state.advance();
+        }
+        WalkStep::AttemptEndTurn => {
+            let Ok((unit, owner, _)) = players.single() else {
+                return;
+            };
+            queue.push(IssuedCommand {
+                seat: owner.0,
+                command: GameCommand::EndTurn { unit: *unit },
+            });
             state.advance();
         }
         WalkStep::StartScenario { ref name, seed } => {
@@ -459,13 +556,16 @@ mod tests {
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
+        AwaitButton("Cast Ember"),
+        AttemptMove,
+        AttemptEndTurn,
         Capture("02-crossing"),
     ]"#;
 
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 9);
+        assert_eq!(steps.len(), 12);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -497,6 +597,16 @@ mod tests {
             index: 0
         })
         .is_err());
+        assert!(validate_step(&WalkStep::AwaitButton(" ".into())).is_err());
+    }
+
+    #[test]
+    fn capture_size_is_explicit_and_positive() {
+        assert_eq!(parse_size("1280x720"), Ok((1280, 720)));
+        assert_eq!(parse_size("1920x1080"), Ok((1920, 1080)));
+        for invalid in ["", "1280", "1280X720", "x720", "1280x", "0x720", "1280x0"] {
+            assert!(parse_size(invalid).is_err(), "{invalid:?} should fail");
+        }
     }
 
     #[test]

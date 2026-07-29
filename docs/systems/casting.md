@@ -4,10 +4,9 @@ How a spell becomes a change to the world: what makes a cast legal, what shape i
 affects, who decides what happens to the material inside that shape, and how effects
 that outlive their turn are expressed.
 
-> **Status:** this is the normative contract for wave 3's casting work. The pieces
-> that exist today are marked **built**; everything else is a contract, not a
-> description. Nothing in the shipped game casts a spell yet — `GameCommand::Cast`
-> parses and is rejected with a reason.
+> **Status:** this is the normative contract for wave 3's casting work. Unit effects,
+> Burn, Reveal, geometry, aiming, and the command path are built. Terrain announcements,
+> obstruction, and spell-created illumination remain contracts.
 
 Read [the design](../design/game.md) for the magic system this serves, and
 [combat.md](combat.md) for the turn loop a cast happens inside.
@@ -114,22 +113,20 @@ applier in `hex_combat` is authoritative.
 1. **Actor** — whose turn it is, seat ownership, not `Busy`, action available.
    **Built** — this is the command funnel's existing validation.
 2. **Lattice** — [`castable()`](../../crates/hex_lattice/src/cast.rs) returns a
-   `CastPlan` or a blocked reason the UI can show. **Built** (unwired).
+   `CastPlan` or a blocked reason the UI shows. **Built and wired**.
 3. **Targeting** — the anchor is in range, the shape resolves to a voxel set, and the
    trajectory is clear. Range uses
    [`in_reach`](../../crates/hex_units/src/targeting.rs) (**built**), so **spells
    inherit high-ground-buys-range automatically** — the rule was written for this and
    has had exactly one consumer until now, engagement. Trajectory is deferred; see
    *Obstruction*.
-4. **Unit interaction — provisional first-wave safety policy.** Terrain-creation
-   voxels that intersect a unit's body are initially illegal. A single-target shaping
-   spell aimed at an occupied hex is refused before mana moves; an area spell drops
-   only the conflicting terrain voxels and still applies its other effects.
-
-   The first wave also refuses edits to a unit's supporting surface, so nobody can be
-   entombed or undermined before falling and post-edit footing rules exist. This is a
-   temporary safety policy to test, not a permanent prohibition on undermining.
-5. **Announce** — the surviving volume goes to the world, which arbitrates.
+4. **Unit interaction — provisional first-wave safety policy.** The current unit-effect
+   applier reaches the unit on the anchor. Content therefore refuses a unit-affecting
+   spell only when its resolved shape can contain more than one distinct voxel. Boundary
+   shapes resolving to zero or one distinct voxel remain legal; genuinely area-shaped
+   unit effects wait until resolution iterates every occupied voxel.
+5. **Announce** — the surviving terrain volume goes to the world, which arbitrates.
+   Terrain effects still fail closed as undeliverable rather than charging for no result.
 
 Rungs 1–2 are gameplay's own state. Rung 4 is gameplay's knowledge too: **where
 characters stand is ours**, so a cast interacts with units through legality, exactly as
@@ -181,8 +178,8 @@ slightly squashed on screen. That is the correct trade.
 
 The shape vocabulary resolves to exact voxel sets in
 [`hex_units::volumes`](../../crates/hex_units/src/volumes.rs) (**built**), and
-`TargetShape` in `spells.ron` names the same seven (**built**). What consumes a
-resolved volume — the legality ladder, the announcement — does not exist yet.
+`TargetShape` in `spells.ron` names the same seven (**built**). Preview and unit-effect
+cardinality validation consume the result today; terrain announcement does not.
 
 | Shape | Volume |
 |---|---|
@@ -217,12 +214,11 @@ alone, and a zero-height column, a zero-length line or cone, and an empty path a
 the empty volume. Content validation refuses to author most of those, but the geometry
 does not depend on it having done so.
 
-**One volume affects every unit and terrain voxel inside it**, including allies,
-enemies, and the caster. A blast that reaches a bridge deck hits whoever is standing
-on it. Generated feature effects are deferred: trees, tall grass, and other feature
-entities ignore the initial impact even when their occupied positions lie inside the
-volume. Vertical reach is the entire point of describing volumes rather than
-footprints.
+The binding contract is that **one volume eventually affects every unit and terrain
+voxel inside it**, including allies, enemies, and the caster. The current unit-effect
+implementation intentionally accepts only resolved cardinality zero or one, because it
+still applies to the anchor's occupant. That fail-closed content guard prevents a
+multi-voxel preview from promising area damage the applier cannot yet deliver.
 
 Initial conjured walls are **2 voxels tall**. The canonical walker is 2 tall and climbs
 1, so a 1-voxel wall is a step rather than a useful first implementation.
@@ -253,11 +249,9 @@ Cast {
 }
 ```
 
-`Sextant` is a six-value direction type `hex_core` **does not have yet** and this
-contract introduces. Today the only notion of direction is the fixed order of
-`HexCoord::neighbors()`, which returns `[Self; 6]` — the new type names those six
-positions so a `Path` shape's rotation is expressed in the domain rather than as a
-bare index.
+`Sextant` is the built six-value direction type in `hex_core`. It names the fixed
+directions returned by `HexCoord::neighbors()`, so a `Path` rotation is expressed in the
+domain rather than as a bare index.
 
 A unit target resolves to the voxel that unit stands on, so there is one target
 vocabulary rather than two — which is forced anyway, since interior voxels have no
@@ -279,8 +273,9 @@ three hats, so they are built once:
 Vocabulary in `hex_core`, runtime in `hex_combat`, lattice payloads applied through
 `hex_lattice`'s existing functions — the same split the command funnel uses.
 
-- **End conditions in wave 3**: after N rounds, or bound to an enchantment (ending when
-  it breaks). Area-lingering zones and dispel effects come later.
+- **End conditions in wave 3**: after N affected-unit turns, after N rounds, or bound
+  to an enchantment (ending when it breaks). Area-lingering zones and dispel effects
+  come later.
 - **Tick point is per payload.** Some effects are personal and tick at the start of the
   affected unit's turn — which is exactly how the design words fire's damage over time —
   and some are global and tick at round boundaries.
@@ -291,7 +286,8 @@ without touching the framework, which is the point of having one.
 ## Rulings worth writing down
 
 - **There is no ally/enemy targeting filter, and there will not be one.** You may heal
-  an enemy and immolate a friend. Area effects hit everyone inside the volume, always.
+  an enemy and immolate a friend. Multi-voxel unit effects are fail-closed until the
+  applier can honor the eventual every-occupant contract.
 - **Combat-only casting is provisional in wave 3.** Shaping terrain out of combat is
   attractive, and the mana half of that question now has an answer: recovery between
   fights is an explicit **rest action** (ruled 2026-07-27 — see
@@ -306,28 +302,22 @@ without touching the framework, which is the point of having one.
 - **Downed-first death is provisional.** Wave 3 initially removes a fully disabled
   unit from the turn order and leaves it revivable by a restoring spell. Functional
   death and permadeath remain separate design decisions.
-- **`Reveal` and `Illuminate` reject with a reason** naming what they wait on: the
-  knowledge seam, and spell-created lights in the perception lane. They are in the
-  shipped roster and must not silently do nothing.
+- **`Reveal` is live; `Illuminate` still rejects with a reason.** Reveal writes a
+  complete tier-bounded view through the knowledge seam. Spell-created lights still
+  wait on the perception lane and must not silently do nothing.
 - **Generated features are unaffected initially.** Destructible trees, tall grass,
   and other feature effects wait on an explicit world response and outcome contract.
 
 ## Verification gate
 
-Legality tests cover each rung independently and in combination: a cast refused for
-lack of mana must not also consume the action; every target anchor must be Observed; a
-shape may spill into hidden positions without exposing them; and the provisional
-occupied-voxel and supporting-surface policies behave consistently.
+Legality tests cover each live rung independently and in combination: a cast refused
+for lack of mana must not consume the action; every target anchor must be Observed; a
+shape may spill into hidden positions without exposing them; and every zero/one-versus-
+many resolved-cardinality boundary is pinned.
 
 Volume tests pin the grid-space metric on stacked surfaces — a sphere centred on a
 bridge deck must reach the ground below it exactly when the level distance says so, and
-`Path` rotation must produce congruent shapes in all six sextants. They also pin
-friendly fire and prove generated features remain unaffected in the first wave.
-
-Announcement tests prove the contract's honesty: under the provisional payment rule,
-a cast at undiggable material spends mana and changes nothing. The authoritative
-acknowledgment reports it unchanged, while player-facing presentation and logs reveal
-that result only to a faction currently observing it.
+`Path` rotation must produce congruent shapes in all six sextants.
 
 Replay tests extend the funnel's existing determinism test to casts, including variable
 mana and facing — the same sequence applied twice must land the same world.

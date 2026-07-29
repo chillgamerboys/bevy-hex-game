@@ -8,6 +8,7 @@
 // FIELDS
 //
 //   name      what the button says
+//   category  REQUIRED title-screen column: Map, Combat, or Demo
 //   blurb     one line underneath, saying what is interesting about this one
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
@@ -37,6 +38,7 @@
     scenarios: [
         (
             name: "The Crossing",
+            category: Map,
             blurb: "A river with one bridge over it, a mountain, and a switchback up the side.",
             world: "config/world.ron",
             // No `lighting`, so this one gets `config/lighting.ron`.
@@ -44,6 +46,7 @@
         ),
         (
             name: "Procedural Hills",
+            category: Map,
             blurb: "Seeded temperate hills split by a river, with a bridge and a longer alternate crossing.",
             world: "config/worlds/procedural-hills.ron",
             generation_seed: Some(1592598566),
@@ -51,6 +54,7 @@
         ),
         (
             name: "Rolling Hills",
+            category: Map,
             blurb: "Open procedural ground under heavy cloud. Nowhere to funnel through, so distance is the only obstacle.",
             world: "config/worlds/rolling-hills.ron",
             lighting: "config/lighting/overcast.ron",
@@ -58,6 +62,7 @@
         ),
         (
             name: "Frozen Hills",
+            category: Map,
             blurb: "A cold-environment probe using the same crossing guarantees as the temperate hills.",
             world: "config/worlds/procedural-frozen.ron",
             lighting: "config/lighting/overcast.ron",
@@ -66,6 +71,7 @@
         ),
         (
             name: "Volcanic Hills",
+            category: Map,
             blurb: "A basalt and lava probe with a cooled alternate crossing.",
             world: "config/worlds/procedural-volcanic.ron",
             generation_seed: Some(444211238),
@@ -73,6 +79,7 @@
         ),
         (
             name: "Sky Islands",
+            category: Map,
             blurb: "A playable hills map beneath a high, flight-gated city of floating islands.",
             world: "config/worlds/procedural-sky-islands.ron",
             generation_seed: Some(94445606),
@@ -80,6 +87,7 @@
         ),
         (
             name: "Mountains",
+            category: Map,
             blurb: "A broad frozen massif split by a high saddle and a longer low-valley bypass.",
             world: "config/worlds/procedural-mountains.ron",
             generation_seed: Some(129704046),
@@ -87,6 +95,7 @@
         ),
         (
             name: "Caves",
+            category: Map,
             blurb: "A varied rocky surface opening into a dense network of full-height underground passages.",
             world: "config/worlds/procedural-caves.ron",
             generation_seed: Some(736283041),
@@ -94,6 +103,7 @@
         ),
         (
             name: "Close Quarters",
+            category: Combat,
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
             world: "config/world.ron",
             encounter: "config/encounters/close-quarters.ron",
