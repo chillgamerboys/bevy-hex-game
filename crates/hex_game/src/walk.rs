@@ -238,11 +238,12 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "CharacterCreator" => Ok(Screen::CharacterCreator),
+        "SpellCreator" => Ok(Screen::SpellCreator),
         "CombatLab" => Ok(Screen::CombatLab),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Settings, CharacterCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Settings, CharacterCreator, SpellCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }

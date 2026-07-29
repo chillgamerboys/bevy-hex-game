@@ -546,6 +546,7 @@ fn capture_timeout_diagnostic(
             | Screen::Settings
             | Screen::LatticeDemo
             | Screen::CharacterCreator
+            | Screen::SpellCreator
             | Screen::CombatLab => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,

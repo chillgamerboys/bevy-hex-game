@@ -1,7 +1,10 @@
 # Creator and Combat Lab
 
-Wave 6 replaces the old title-screen Lattice Demo with two entries in the existing
-**Demos** column: **Character & Spell Creator** and **Combat Lab**. The lattice
+Wave 6 replaces the old title-screen Lattice Demo with three vertically stacked entries
+in the existing **Demos** column: **Character Creator**, **Spell Creator**, and
+**Combat Lab**. Character and spell libraries have independent screens and workspaces;
+the character workspace links directly to spell management when an inscription needs
+work. The lattice
 mechanics sandbox still exists, but only as a local test launched from the Creator.
 Ability Lab and Raider Mirror are fixtures selected inside Combat Lab rather than
 separate title cards.
@@ -76,10 +79,14 @@ Combat Lab has two tabs.
 
 ### Sandbox
 
-Sandbox offers Flat Arena, The Crossing, and Procedural Hills through the versioned
-`combat_lab_maps.ron` catalog. Each stable map record names its scenario, fixed seed,
-and separate Player and Hostile deployment regions. A region resolves from an authored
-cube coordinate or named map anchor plus a bounded footing radius. Both rosters are
+Sandbox offers all eleven distinct shipped environments through the versioned
+`combat_lab_maps.ron` catalog: Flat Arena, The Crossing, Procedural Hills, Rolling
+Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall, and
+Forest. Duplicate scenario uses of Flat Arena and The Crossing do not create duplicate
+map choices. Each stable map record names its scenario, deterministic seed contract,
+renderer-generated preview, tactical description and tags, and separate Player and
+Hostile deployment regions. A region resolves from an authored cube coordinate or
+named map anchor plus a bounded footing radius. Both rosters are
 fully editable and ordered, with one to six units per side. Choices come from packaged
 templates or saved Map-ready characters. Player units are human controlled; hostile
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.

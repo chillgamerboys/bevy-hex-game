@@ -139,12 +139,15 @@ creation library owns stable custom character and spell IDs, supports reopen,
 modify, rename, duplicate, and confirmed deletion, and refuses removal of referenced
 spells. Draft/Ready and Map-ready diagnostics fail closed through shared schema and
 combat validation. Immutable human templates are duplicable; automation-only
-creator-format records are isolated from local saves. The Creator provides a
+creator-format records are isolated from local saves. Separate Character Creator and
+Spell Creator navigation leads to focused libraries and workspaces; the character
+workspace retains a direct spell-management link. The Character Creator provides a
 contiguous 64-cell lattice editor, manual stats, undo/redo, ordered spell effects, and
 an unsaved local mechanics test.
 
-Combat Lab owns transient Sandbox setup for three fixed-seed maps, complete ordered
-one-to-six rosters, deterministic deployment, and creator-origin return routing.
+Combat Lab owns transient Sandbox setup for all eleven distinct supported shipped
+maps, with deterministic renderer previews, tactical descriptions and tags, complete
+ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
 Its searchable fixture selector replaces individual title cards and adds packaged
 creator spell and roster matrices. Every launch freezes its content namespace,
 encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime

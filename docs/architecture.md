@@ -311,7 +311,8 @@ forgets to update.
 
 ```
 Splash ──► Title ◄──────────────► Settings
-              │  ├──► Character & Spell Creator ──► local lattice test
+              │  ├──► Character Creator ──► local lattice test
+              │  ├──► Spell Creator
               │  └──► Combat Lab setup ──► deployment
               │
               │ New Game / valid Continue / Sandbox / fixed fixture

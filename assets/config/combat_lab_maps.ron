@@ -1,11 +1,14 @@
 // Curated, deterministic maps for the transient Wave 6 Combat Lab Sandbox.
 // Regions are authored separately from encounters because testers place every unit.
 (
-    schema_version: 1,
+    schema_version: 2,
     maps: [
         (
             id: "flat-arena",
             display_name: "Flat Arena",
+            description: "A compact, level arena with unobstructed sightlines for isolating combat behavior.",
+            tags: ["Flat", "Open", "Combat"],
+            preview: "ui/combat-lab/flat-arena.png",
             scenario: "Ability Lab",
             fixed_seed: None,
             player_region: (
@@ -20,6 +23,9 @@
         (
             id: "the-crossing",
             display_name: "The Crossing",
+            description: "A river chokepoint, single bridge, mountain, and switchback reward deliberate deployment.",
+            tags: ["Bridge", "Vertical", "Chokepoint"],
+            preview: "ui/combat-lab/the-crossing.png",
             scenario: "The Crossing",
             fixed_seed: None,
             player_region: (
@@ -34,8 +40,147 @@
         (
             id: "procedural-hills",
             display_name: "Procedural Hills",
+            description: "Temperate hills split by a river, with a bridge and a longer alternate crossing.",
+            tags: ["River", "Bridge", "Elevation"],
+            preview: "ui/combat-lab/procedural-hills.png",
             scenario: "Procedural Hills",
             fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "rolling-hills",
+            display_name: "Rolling Hills",
+            description: "Open rolling ground without a funnel; distance and elevation are the primary obstacles.",
+            tags: ["Open", "Rolling", "Distance"],
+            preview: "ui/combat-lab/rolling-hills.png",
+            scenario: "Rolling Hills",
+            fixed_seed: None,
+            player_region: (
+                center: Fixed((x: 0, y: 0, z: 0)),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Fixed((x: 5, y: -5, z: 0)),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "frozen-hills",
+            display_name: "Frozen Hills",
+            description: "A cold crossing with frozen slopes, a divided approach, and meaningful elevation.",
+            tags: ["Cold", "River", "Elevation"],
+            preview: "ui/combat-lab/frozen-hills.png",
+            scenario: "Frozen Hills",
+            fixed_seed: Some(484450342),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "volcanic-hills",
+            display_name: "Volcanic Hills",
+            description: "Basalt ridges and lava divide the field around a cooled alternate crossing.",
+            tags: ["Lava", "Bridge", "Hazards"],
+            preview: "ui/combat-lab/volcanic-hills.png",
+            scenario: "Volcanic Hills",
+            fixed_seed: Some(444211238),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "sky-islands",
+            display_name: "Sky Islands",
+            description: "A playable lower battlefield beneath high, flight-gated floating islands.",
+            tags: ["Vertical", "Islands", "Gated"],
+            preview: "ui/combat-lab/sky-islands.png",
+            scenario: "Sky Islands",
+            fixed_seed: Some(94445606),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "mountains",
+            display_name: "Mountains",
+            description: "A broad frozen massif offers a high saddle and a longer low-valley bypass.",
+            tags: ["Vertical", "Saddle", "Routes"],
+            preview: "ui/combat-lab/mountains.png",
+            scenario: "Mountains",
+            fixed_seed: Some(129704046),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "caves",
+            display_name: "Caves",
+            description: "A rocky surface opens into a dense network of full-height underground passages.",
+            tags: ["Interior", "Vertical", "Tunnels"],
+            preview: "ui/combat-lab/caves.png",
+            scenario: "Caves",
+            fixed_seed: Some(736283041),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "waterfall",
+            display_name: "Waterfall",
+            description: "An elevated river falls through the map with short and long dry routes around it.",
+            tags: ["Water", "Vertical", "Routes"],
+            preview: "ui/combat-lab/waterfall.png",
+            scenario: "Waterfall",
+            fixed_seed: Some(771203419),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "forest",
+            display_name: "Forest",
+            description: "Wooded hills open onto prairie through protected clearings and traversable trails.",
+            tags: ["Cover", "Clearings", "Trails"],
+            preview: "ui/combat-lab/forest.png",
+            scenario: "Forest",
+            fixed_seed: Some(381654729),
             player_region: (
                 center: Anchor("party_start"),
                 radius: 4,

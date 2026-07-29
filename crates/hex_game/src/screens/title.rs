@@ -30,6 +30,7 @@ use crate::menus::widgets::{
 };
 use crate::scenarios::ScenarioToLoad;
 
+use super::creator::CreatorEntryRequest;
 use super::{despawn_screen, screen_root};
 
 /// Stops the three columns becoming unreadably wide on an ultrawide display.
@@ -49,6 +50,7 @@ pub(super) fn plugin(app: &mut App) {
             start_chosen_scenario,
             start_new_game,
             open_character_creator,
+            open_spell_creator,
             open_combat_lab,
             open_settings,
             quit_game,
@@ -92,9 +94,13 @@ struct RerollsScenario {
     scenario: Scenario,
 }
 
-/// The button that opens saved character and spell authoring.
+/// The button that opens saved character authoring.
 #[derive(Component)]
 struct OpensCharacterCreator;
+
+/// The button that opens saved spell authoring.
+#[derive(Component)]
+struct OpensSpellCreator;
 
 /// The button that opens sandbox and deterministic combat fixtures.
 #[derive(Component)]
@@ -427,15 +433,32 @@ fn spawn_wave_six_demo_cards(list: &mut ChildSpawnerCommands, assets: &UiAssets)
     ))
     .with_children(|entry| {
         entry
-            .spawn((button("Character & Spell Creator"), OpensCharacterCreator))
+            .spawn((button("Character Creator"), OpensCharacterCreator))
             .insert(scenario_card_node())
             .insert(BorderColor::all(ACCENT_EDGE))
             .with_children(|button| {
-                button.spawn(label(assets, "Character & Spell Creator"));
+                button.spawn(label(assets, "Character Creator"));
                 button.spawn((
                     blurb(
                         assets,
-                        "Build, save, revise, duplicate, and test lattices and spells.",
+                        "Build, save, revise, duplicate, and test character lattices.",
+                    ),
+                    Node {
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
+            });
+        entry
+            .spawn((button("Spell Creator"), OpensSpellCreator))
+            .insert(scenario_card_node())
+            .insert(BorderColor::all(ACCENT_EDGE))
+            .with_children(|button| {
+                button.spawn(label(assets, "Spell Creator"));
+                button.spawn((
+                    blurb(
+                        assets,
+                        "Compose, validate, save, revise, and duplicate combat spells.",
                     ),
                     Node {
                         width: Val::Percent(100.0),
@@ -661,12 +684,27 @@ fn start_new_game(
 
 /// Opens the lattice ruleset demo when its button is pressed.
 fn open_character_creator(
+    mut commands: Commands,
     clicked: Query<&Interaction, (Changed<Interaction>, With<OpensCharacterCreator>)>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     for interaction in &clicked {
         if *interaction == Interaction::Pressed {
+            commands.insert_resource(CreatorEntryRequest::CharacterLibrary);
             next.set(Screen::CharacterCreator);
+        }
+    }
+}
+
+fn open_spell_creator(
+    mut commands: Commands,
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensSpellCreator>)>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    for interaction in &clicked {
+        if *interaction == Interaction::Pressed {
+            commands.insert_resource(CreatorEntryRequest::SpellLibrary);
+            next.set(Screen::SpellCreator);
         }
     }
 }
@@ -945,7 +983,7 @@ mod tests {
         ));
     }
 
-    /// Creator authoring is a static Demo-lane entry and switches screens.
+    /// Character authoring is a static Demo-lane entry and switches screens.
     #[test]
     fn the_creator_button_opens_the_creator_screen() {
         let mut app = test_app();
@@ -966,6 +1004,29 @@ mod tests {
             *app.world().resource::<State<Screen>>().get(),
             Screen::CharacterCreator,
             "pressing the creator button should enter the creator screen"
+        );
+    }
+
+    #[test]
+    fn the_spell_creator_button_opens_the_spell_creator_screen() {
+        let mut app = test_app();
+        go_to(&mut app, Screen::Title);
+
+        let world = app.world_mut();
+        let mut buttons = world.query_filtered::<Entity, With<OpensSpellCreator>>();
+        let button = buttons
+            .single(world)
+            .expect("the title screen should offer exactly one spell creator button");
+        app.world_mut()
+            .entity_mut(button)
+            .insert(Interaction::Pressed);
+        app.update();
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::SpellCreator,
+            "pressing the spell creator button should enter its dedicated screen"
         );
     }
 
@@ -1014,11 +1075,11 @@ mod tests {
         let (_, wrapper) = wave_six_wrappers
             .iter(world)
             .find(|(name, _)| name.as_str() == "Static Wave 6 Demo Entries")
-            .expect("the two Wave 6 entries share one Demo-lane wrapper");
+            .expect("the three Wave 6 entries share one Demo-lane wrapper");
         assert_eq!(
             wrapper.flex_direction,
             FlexDirection::Column,
-            "Creator and Combat Lab must stack vertically at full width"
+            "both creators and Combat Lab must stack vertically at full width"
         );
         let mut static_entries = world.query_filtered::<Entity, With<StaticDemoEntry>>();
         assert_eq!(
@@ -1026,16 +1087,17 @@ mod tests {
             1,
             "scenario-backed demos must not replace the static rules demo"
         );
-        let mut demo_buttons =
-            world.query_filtered::<(&Name, Entity), Or<(With<OpensCharacterCreator>, With<OpensCombatLab>)>>();
+        let mut demo_buttons = world.query_filtered::<(&Name, Entity), Or<(
+            With<OpensCharacterCreator>,
+            With<OpensSpellCreator>,
+            With<OpensCombatLab>,
+        )>>();
         let buttons: Vec<_> = demo_buttons.iter(world).collect();
-        assert_eq!(buttons.len(), 2);
+        assert_eq!(buttons.len(), 3);
         let static_button = buttons
             .iter()
-            .find_map(|(name, entity)| {
-                (name.as_str() == "Character & Spell Creator").then_some(*entity)
-            })
-            .expect("the static creator entry exists");
+            .find_map(|(name, entity)| (name.as_str() == "Character Creator").then_some(*entity))
+            .expect("the static character creator entry exists");
 
         let static_entry = world
             .get::<ChildOf>(static_button)

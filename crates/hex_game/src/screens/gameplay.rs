@@ -692,6 +692,7 @@ fn sync_outcome_modal(
         .as_deref()
         .map(|session| match session.return_to {
             Screen::CharacterCreator => "Return to Creator",
+            Screen::SpellCreator => "Return to Spell Creator",
             Screen::CombatLab => "Return to Combat Lab",
             _ => "Return to Title",
         })

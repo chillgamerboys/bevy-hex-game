@@ -70,7 +70,16 @@ pub(crate) struct CreatorSession {
     undo: Vec<CreatorSnapshot>,
     redo: Vec<CreatorSnapshot>,
     return_to_combat_lab: bool,
+    return_to_character_creator: bool,
     revision: u64,
+}
+
+/// Explicit entry intent keeps top-level navigation separate from gameplay returns.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CreatorEntryRequest {
+    CharacterLibrary,
+    SpellLibrary,
+    SpellFromCharacter,
 }
 
 impl CreatorSession {
@@ -102,8 +111,8 @@ impl CreatorSession {
 
 #[derive(Component, Debug, Clone)]
 enum CreatorAction {
-    Tab(CreatorTab),
     Back,
+    OpenSpellCreator,
     NewCharacter,
     NewSpell,
     SelectCharacter(CustomCharacterId),
@@ -173,6 +182,10 @@ pub(super) fn plugin(app: &mut App) {
             (initialize_session, rebuild_screen).chain(),
         )
         .add_systems(
+            OnEnter(Screen::SpellCreator),
+            (initialize_session, rebuild_screen).chain(),
+        )
+        .add_systems(
             Update,
             (
                 sync_name_fields,
@@ -181,17 +194,29 @@ pub(super) fn plugin(app: &mut App) {
                 handle_escape,
             )
                 .chain()
-                .run_if(in_state(Screen::CharacterCreator)),
+                .run_if(creator_screen_active),
         )
         .add_systems(
             OnExit(Screen::CharacterCreator),
             despawn_screen(Screen::CharacterCreator),
+        )
+        .add_systems(
+            OnExit(Screen::SpellCreator),
+            despawn_screen(Screen::SpellCreator),
         );
+}
+
+fn creator_screen_active(screen: Res<State<Screen>>) -> bool {
+    matches!(
+        screen.get(),
+        Screen::CharacterCreator | Screen::SpellCreator
+    )
 }
 
 fn initialize_session(
     mut commands: Commands,
     mut session: ResMut<CreatorSession>,
+    entry_request: Option<Res<CreatorEntryRequest>>,
     edit_request: Option<Res<super::combat_lab::CreatorEditRequest>>,
     store: Res<CreationStore>,
     spell_file: Option<Res<SpellFile>>,
@@ -208,7 +233,13 @@ fn initialize_session(
         substances.as_deref(),
     );
     commands.remove_resource::<super::combat_lab::CombatLabSession>();
-    session.return_to_combat_lab = editing_from_lab;
+    if editing_from_lab {
+        session.return_to_combat_lab = true;
+    }
+    if let Some(request) = entry_request.as_deref().copied() {
+        apply_entry_request(&mut session, request);
+        commands.remove_resource::<CreatorEntryRequest>();
+    }
     if let Some(request) = edit_request {
         if let Some(character) = store
             .file
@@ -251,17 +282,50 @@ fn initialize_session(
     session.bump();
 }
 
+fn apply_entry_request(session: &mut CreatorSession, request: CreatorEntryRequest) {
+    match request {
+        CreatorEntryRequest::CharacterLibrary => {
+            session.tab = CreatorTab::Characters;
+            session.view = CreatorView::Hub;
+            session.return_to_combat_lab = false;
+            session.return_to_character_creator = false;
+        }
+        CreatorEntryRequest::SpellLibrary => {
+            session.tab = CreatorTab::Spells;
+            session.view = CreatorView::Hub;
+            session.return_to_combat_lab = false;
+            session.return_to_character_creator = false;
+        }
+        CreatorEntryRequest::SpellFromCharacter => {
+            session.tab = CreatorTab::Spells;
+            session.view = CreatorView::Hub;
+            session.return_to_character_creator = true;
+        }
+    }
+}
+
 fn handle_escape(
     keys: Res<ButtonInput<KeyCode>>,
     mut next: ResMut<NextState<Screen>>,
-    session: Res<CreatorSession>,
+    mut session: ResMut<CreatorSession>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) && !session.character_dirty && !session.spell_dirty {
-        next.set(if session.return_to_combat_lab {
-            Screen::CombatLab
+    let dirty = match session.tab {
+        CreatorTab::Characters => session.character_dirty,
+        CreatorTab::Spells => session.spell_dirty,
+    };
+    if keys.just_pressed(KeyCode::Escape) && !dirty {
+        if session.tab == CreatorTab::Spells && session.return_to_character_creator {
+            session.tab = CreatorTab::Characters;
+            session.view = CreatorView::Character;
+            session.return_to_character_creator = false;
+            next.set(Screen::CharacterCreator);
         } else {
-            Screen::Title
-        });
+            next.set(if session.return_to_combat_lab {
+                Screen::CombatLab
+            } else {
+                Screen::Title
+            });
+        }
     }
 }
 
@@ -336,14 +400,12 @@ fn spawn_creator_ui(
     lattice_file: Option<&LatticeFile>,
     presets: Option<&CreationPresetCatalog>,
 ) {
+    let screen = match session.tab {
+        CreatorTab::Characters => Screen::CharacterCreator,
+        CreatorTab::Spells => Screen::SpellCreator,
+    };
     commands
-        .spawn((
-            screen_root(
-                Screen::CharacterCreator,
-                "Character and Spell Creator Screen",
-            ),
-            CreatorRoot,
-        ))
+        .spawn((screen_root(screen, "Creator Screen"), CreatorRoot))
         .insert(Node {
             padding: UiRect::all(Val::Px(18.0)),
             row_gap: Val::Px(10.0),
@@ -361,7 +423,10 @@ fn spawn_creator_ui(
                 header.spawn(display(
                     assets,
                     match session.view {
-                        CreatorView::Hub => "Creator Library",
+                        CreatorView::Hub => match session.tab {
+                            CreatorTab::Characters => "Character Library",
+                            CreatorTab::Spells => "Spell Library",
+                        },
                         CreatorView::Character => "Character Workspace",
                         CreatorView::Spell => "Spell Workspace",
                     },
@@ -391,7 +456,11 @@ fn spawn_creator_ui(
                                 140.0,
                             );
                         }
-                        if session.character_dirty || session.spell_dirty {
+                        let current_dirty = match session.tab {
+                            CreatorTab::Characters => session.character_dirty,
+                            CreatorTab::Spells => session.spell_dirty,
+                        };
+                        if current_dirty {
                             action_button(
                                 actions,
                                 assets,
@@ -468,25 +537,33 @@ fn spawn_creator_hub(
             ..panel_node()
         })
         .with_children(|navigation| {
-            navigation.spawn(heading(assets, "library"));
-            action_button(
-                navigation,
+            navigation.spawn(heading(
                 assets,
-                "Characters",
-                CreatorAction::Tab(CreatorTab::Characters),
-                190.0,
-            );
-            action_button(
-                navigation,
-                assets,
-                "Spells",
-                CreatorAction::Tab(CreatorTab::Spells),
-                190.0,
-            );
+                match session.tab {
+                    CreatorTab::Characters => "character creator",
+                    CreatorTab::Spells => "spell creator",
+                },
+            ));
             navigation.spawn(blurb(
                 assets,
-                "Only saved, clean, Map-ready characters and Ready spells enter Combat Lab.",
+                match session.tab {
+                    CreatorTab::Characters => {
+                        "Build saved lattices from templates or start blank. Only clean, Map-ready characters enter Combat Lab."
+                    }
+                    CreatorTab::Spells => {
+                        "Build saved spells from templates or start blank. Ready spells can be inscribed by characters."
+                    }
+                },
             ));
+            if session.tab == CreatorTab::Characters {
+                action_button(
+                    navigation,
+                    assets,
+                    "Open Spell Creator",
+                    CreatorAction::OpenSpellCreator,
+                    190.0,
+                );
+            }
         });
 
     body.spawn(panel())
@@ -872,6 +949,13 @@ fn spawn_character_tab(
                     }
                 }
             }
+            action_button(
+                palette,
+                assets,
+                "Manage Spells",
+                CreatorAction::OpenSpellCreator,
+                190.0,
+            );
             colored_tool_button(
                 palette,
                 assets,
@@ -1825,17 +1909,22 @@ fn handle_actions(
             session.confirm_reset = false;
         }
         match action {
-            CreatorAction::Tab(tab) => {
-                session.tab = *tab;
-                session.confirm_delete = false;
-            }
             CreatorAction::Back => {
-                if session.character_dirty || session.spell_dirty {
+                let dirty = match session.tab {
+                    CreatorTab::Characters => session.character_dirty,
+                    CreatorTab::Spells => session.spell_dirty,
+                };
+                if dirty {
                     session.notice = "Save or discard the current edits before leaving.".to_owned();
                 } else if session.view != CreatorView::Hub {
                     session.view = CreatorView::Hub;
                     session.active_tool = None;
                     session.erase_tool = false;
+                } else if session.tab == CreatorTab::Spells && session.return_to_character_creator {
+                    session.tab = CreatorTab::Characters;
+                    session.view = CreatorView::Character;
+                    session.return_to_character_creator = false;
+                    next.set(Screen::CharacterCreator);
                 } else {
                     next.set(if session.return_to_combat_lab {
                         Screen::CombatLab
@@ -1843,6 +1932,10 @@ fn handle_actions(
                         Screen::Title
                     });
                 }
+            }
+            CreatorAction::OpenSpellCreator => {
+                commands.insert_resource(CreatorEntryRequest::SpellFromCharacter);
+                next.set(Screen::SpellCreator);
             }
             CreatorAction::NewCharacter => {
                 if session.character_dirty {
@@ -2664,5 +2757,21 @@ mod tests {
         }
         spell.spell.effects.swap(0, 99);
         assert_eq!(spell.spell.effects.len(), 100);
+    }
+
+    #[test]
+    fn spell_management_preserves_a_combat_lab_return_route() {
+        let mut session = CreatorSession {
+            return_to_combat_lab: true,
+            ..default()
+        };
+        apply_entry_request(&mut session, CreatorEntryRequest::SpellFromCharacter);
+        assert!(session.return_to_combat_lab);
+        assert!(session.return_to_character_creator);
+        assert_eq!(session.tab, CreatorTab::Spells);
+
+        apply_entry_request(&mut session, CreatorEntryRequest::SpellLibrary);
+        assert!(!session.return_to_combat_lab);
+        assert!(!session.return_to_character_creator);
     }
 }

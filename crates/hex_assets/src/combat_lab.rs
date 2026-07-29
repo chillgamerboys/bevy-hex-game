@@ -8,7 +8,7 @@ use serde::{de::Error as _, Deserialize, Deserializer};
 use crate::{CubeCoord, LoadSettings, CONFIG_EXTENSIONS};
 
 /// Current on-disk schema for `config/combat_lab_maps.ron`.
-pub const COMBAT_LAB_MAP_SCHEMA_VERSION: u32 = 1;
+pub const COMBAT_LAB_MAP_SCHEMA_VERSION: u32 = 2;
 
 /// Curated maps offered by the transient Combat Lab Sandbox.
 #[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq)]
@@ -28,6 +28,12 @@ pub struct CombatLabMapDefinition {
     pub id: String,
     /// Player-facing map name.
     pub display_name: String,
+    /// Concise tactical description shown beside the renderer-generated preview.
+    pub description: String,
+    /// Mechanic and terrain labels used to scan the map shelf.
+    pub tags: Vec<String>,
+    /// Asset path to a deterministic preview captured from the shipped renderer.
+    pub preview: String,
     /// Stable scenario name whose world and lighting are loaded.
     pub scenario: String,
     /// Exact seed used when the selected scenario is generated.
@@ -86,9 +92,20 @@ impl CombatLabMapCatalog {
         for map in &self.maps {
             if map.id.trim().is_empty()
                 || map.display_name.trim().is_empty()
+                || map.description.trim().is_empty()
                 || map.scenario.trim().is_empty()
+                || map.preview.trim().is_empty()
             {
-                return Err("Combat Lab map IDs, names, and scenarios cannot be blank".to_owned());
+                return Err(
+                    "Combat Lab map IDs, names, descriptions, previews, and scenarios cannot be blank"
+                        .to_owned(),
+                );
+            }
+            if map.tags.is_empty() || map.tags.iter().any(|tag| tag.trim().is_empty()) {
+                return Err(format!(
+                    "Combat Lab map {:?} needs at least one non-blank tag",
+                    map.id
+                ));
             }
             if !ids.insert(map.id.as_str()) {
                 return Err(format!("duplicate Combat Lab map ID {:?}", map.id));
@@ -151,5 +168,32 @@ mod tests {
         assert!(catalog.get("flat-arena").is_some());
         assert!(catalog.get("the-crossing").is_some());
         assert!(catalog.get("procedural-hills").is_some());
+        assert!(catalog.get("forest").is_some());
+        assert_eq!(catalog.maps.len(), 11);
+
+        let scenarios: crate::ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("shipped scenarios parse");
+        for scenario in scenarios
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.category == crate::ScenarioCategory::Map)
+        {
+            assert!(
+                catalog.maps.iter().any(|map| map.scenario == scenario.name),
+                "Map scenario {:?} is missing from Combat Lab",
+                scenario.name
+            );
+        }
+
+        let asset_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        for map in &catalog.maps {
+            assert!(
+                asset_root.join(&map.preview).is_file(),
+                "preview for {:?} does not exist at {:?}",
+                map.id,
+                map.preview
+            );
+        }
     }
 }

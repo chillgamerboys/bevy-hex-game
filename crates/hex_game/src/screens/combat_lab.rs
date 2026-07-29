@@ -41,32 +41,7 @@ enum LabTab {
     Fixtures,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SandboxMap {
-    Flat,
-    Crossing,
-    Hills,
-}
-
-impl SandboxMap {
-    const ALL: [Self; 3] = [Self::Flat, Self::Crossing, Self::Hills];
-
-    const fn stable_id(self) -> &'static str {
-        match self {
-            Self::Flat => "flat-arena",
-            Self::Crossing => "the-crossing",
-            Self::Hills => "procedural-hills",
-        }
-    }
-
-    const fn label(self) -> &'static str {
-        match self {
-            Self::Flat => "Flat Arena",
-            Self::Crossing => "The Crossing",
-            Self::Hills => "Procedural Hills",
-        }
-    }
-}
+const DEFAULT_SANDBOX_MAP: &str = "flat-arena";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RosterChoice {
@@ -77,7 +52,7 @@ enum RosterChoice {
 #[derive(Resource, Debug)]
 struct CombatLabState {
     tab: LabTab,
-    map: SandboxMap,
+    map: String,
     players: Vec<RosterChoice>,
     hostiles: Vec<RosterChoice>,
     fixture_filter: String,
@@ -90,7 +65,7 @@ impl Default for CombatLabState {
     fn default() -> Self {
         Self {
             tab: LabTab::Sandbox,
-            map: SandboxMap::Flat,
+            map: DEFAULT_SANDBOX_MAP.to_owned(),
             players: vec![RosterChoice::Template("hedge-mage".to_owned())],
             hostiles: vec![RosterChoice::Template("raider".to_owned())],
             fixture_filter: String::new(),
@@ -225,7 +200,7 @@ enum DeploymentAction {
 enum LabAction {
     Tab(LabTab),
     Back,
-    SelectMap(SandboxMap),
+    SelectMap(String),
     AddPlayerTemplate(String),
     AddHostileTemplate(String),
     AddPlayerCustom(CustomCharacterId),
@@ -348,7 +323,19 @@ pub(crate) fn creator_fixture_payload(
         elements,
         substances,
     )?;
-    let encounter = sandbox_encounter(SandboxMap::Flat, &players, &hostiles, None);
+    let encounter = encounter_with_placements(
+        "Flat Arena",
+        &players,
+        &hostiles,
+        EncounterPlacement::Formation {
+            center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
+            spread: 3,
+        },
+        EncounterPlacement::Formation {
+            center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
+            spread: 3,
+        },
+    );
     Ok(Some((overlay, encounter)))
 }
 
@@ -414,6 +401,7 @@ fn initialize_lab(
 fn spawn_lab(
     mut commands: Commands,
     assets: Res<UiAssets>,
+    asset_server: Res<AssetServer>,
     state: Res<CombatLabState>,
     store: Res<CreationStore>,
     elements: Option<Res<ElementCatalog>>,
@@ -430,6 +418,7 @@ fn spawn_lab(
         spells.as_deref(),
         presets.as_deref(),
         maps.as_deref(),
+        &asset_server,
     );
 }
 
@@ -437,6 +426,7 @@ fn rebuild_lab(
     mut commands: Commands,
     roots: Query<Entity, With<LabRoot>>,
     assets: Res<UiAssets>,
+    asset_server: Res<AssetServer>,
     state: Res<CombatLabState>,
     store: Res<CreationStore>,
     elements: Option<Res<ElementCatalog>>,
@@ -458,6 +448,7 @@ fn rebuild_lab(
             spells.as_deref(),
             presets.as_deref(),
             maps.as_deref(),
+            &asset_server,
         );
         *last_revision = state.revision;
     }
@@ -472,6 +463,7 @@ fn spawn_lab_ui(
     spells: Option<&SpellBook>,
     presets: Option<&CreationPresetCatalog>,
     maps: Option<&CombatLabMapCatalog>,
+    asset_server: &AssetServer,
 ) {
     commands
         .spawn((screen_root(Screen::CombatLab, "Combat Lab Screen"), LabRoot))
@@ -510,7 +502,15 @@ fn spawn_lab_ui(
             match state.tab {
                 LabTab::Sandbox => {
                     spawn_sandbox_setup(
-                        root, assets, state, store, elements, spells, presets, maps,
+                        root,
+                        assets,
+                        state,
+                        store,
+                        elements,
+                        spells,
+                        presets,
+                        maps,
+                        asset_server,
                     );
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
@@ -531,6 +531,56 @@ fn lab_button(
         .with_child(label(assets, text));
 }
 
+fn map_button(
+    parent: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    map: &CombatLabMapDefinition,
+    selected: bool,
+) {
+    let text = if selected {
+        format!("SELECTED · {}", map.display_name)
+    } else {
+        map.display_name.clone()
+    };
+    parent
+        .spawn((
+            row_button(map.display_name.clone(), 280.0),
+            LabAction::SelectMap(map.id.clone()),
+        ))
+        .insert(BorderColor::all(if selected {
+            Color::srgba(0.49, 0.68, 0.86, 1.0)
+        } else {
+            Color::srgba(0.26, 0.29, 0.34, 0.9)
+        }))
+        .with_child(label(assets, text));
+}
+
+fn map_seed_label(map: &CombatLabMapDefinition) -> String {
+    map.fixed_seed.map_or_else(
+        || "Authored / embedded seed".to_owned(),
+        |seed| format!("Seed {seed}"),
+    )
+}
+
+fn deployment_summary(map: &CombatLabMapDefinition) -> String {
+    format!(
+        "Deploy P {} r{} · H {} r{}",
+        region_center_label(&map.player_region.center),
+        map.player_region.radius,
+        region_center_label(&map.hostile_region.center),
+        map.hostile_region.radius,
+    )
+}
+
+fn region_center_label(center: &CombatLabRegionCenter) -> String {
+    match center {
+        CombatLabRegionCenter::Fixed(coord) => {
+            format!("({},{},{})", coord.x, coord.y, coord.z)
+        }
+        CombatLabRegionCenter::Anchor(anchor) => format!("@{anchor}"),
+    }
+}
+
 fn spawn_sandbox_setup(
     root: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -540,6 +590,7 @@ fn spawn_sandbox_setup(
     spells: Option<&SpellBook>,
     presets: Option<&CreationPresetCatalog>,
     maps: Option<&CombatLabMapCatalog>,
+    asset_server: &AssetServer,
 ) {
     root.spawn(Node {
         width: Val::Percent(96.0),
@@ -553,25 +604,61 @@ fn spawn_sandbox_setup(
     .with_children(|body| {
         body.spawn(panel())
             .insert(Node {
-                width: Val::Px(300.0),
+                width: Val::Px(320.0),
                 min_height: Val::Px(0.0),
                 ..panel_node()
             })
             .with_children(|map_panel| {
-                map_panel.spawn(heading(assets, "map"));
-                for map in SandboxMap::ALL {
-                    let label = maps
-                        .and_then(|catalog| catalog.get(map.stable_id()))
-                        .map_or_else(
-                            || map.label().to_owned(),
-                            |record| record.display_name.clone(),
-                        );
-                    lab_button(map_panel, assets, label, LabAction::SelectMap(map), 250.0);
+                map_panel.spawn(heading(assets, "selected map"));
+                if let Some(record) = maps.and_then(|catalog| catalog.get(&state.map)) {
+                    map_panel.spawn((
+                        Name::new(format!("Map Preview: {}", record.display_name)),
+                        ImageNode::new(asset_server.load(record.preview.clone())),
+                        Node {
+                            width: Val::Px(280.0),
+                            height: Val::Px(158.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(0.49, 0.68, 0.86, 0.85)),
+                    ));
+                    map_panel.spawn(heading(assets, record.display_name.clone()));
+                    map_panel.spawn(fine(assets, record.tags.join("  ·  ")));
+                    map_panel.spawn(blurb(assets, record.description.clone()));
+                    map_panel.spawn(fine(
+                        assets,
+                        format!(
+                            "{}  ·  {}",
+                            map_seed_label(record),
+                            deployment_summary(record)
+                        ),
+                    ));
+                } else {
+                    map_panel
+                        .spawn(blurb(assets, "The packaged map catalog is still loading."))
+                        .insert(TextColor(DANGER));
                 }
-                map_panel.spawn(fine(
-                    assets,
-                    "All maps use fixed seeds and authored deployment regions.",
-                ));
+                map_panel.spawn(heading(assets, "available maps"));
+                map_panel
+                    .spawn((
+                        ScrollArea,
+                        Node {
+                            width: Val::Percent(100.0),
+                            min_height: Val::Px(90.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|list| {
+                        if let Some(maps) = maps {
+                            for map in &maps.maps {
+                                map_button(list, assets, map, state.map == map.id);
+                            }
+                        }
+                    });
             });
 
         body.spawn(panel())
@@ -583,8 +670,8 @@ fn spawn_sandbox_setup(
             })
             .with_children(|rosters| {
                 let map_label = maps
-                    .and_then(|catalog| catalog.get(state.map.stable_id()))
-                    .map_or_else(|| state.map.label(), |record| record.display_name.as_str());
+                    .and_then(|catalog| catalog.get(&state.map))
+                    .map_or("Loading map", |record| record.display_name.as_str());
                 rosters.spawn(heading(assets, format!("{map_label} · rosters")));
                 rosters
                     .spawn(Node {
@@ -1115,7 +1202,7 @@ fn handle_lab_actions(
             }
             LabAction::Back => next.set(Screen::Title),
             LabAction::SelectMap(map) => {
-                state.map = *map;
+                state.map = map.clone();
             }
             LabAction::AddPlayerTemplate(name) => {
                 if state.players.len() < MAX_ROSTER {
@@ -1152,12 +1239,10 @@ fn handle_lab_actions(
             LabAction::PrepareDeployment => {
                 let Some(map_definition) = map_catalog
                     .as_deref()
-                    .and_then(|catalog| catalog.get(state.map.stable_id()))
+                    .and_then(|catalog| catalog.get(&state.map))
                 else {
-                    state.notice = format!(
-                        "Packaged map definition {:?} is unavailable.",
-                        state.map.stable_id()
-                    );
+                    state.notice =
+                        format!("Packaged map definition {:?} is unavailable.", state.map);
                     state.bump();
                     continue;
                 };
@@ -1187,12 +1272,7 @@ fn handle_lab_actions(
                         continue;
                     }
                 };
-                let encounter = sandbox_encounter(
-                    state.map,
-                    &state.players,
-                    &state.hostiles,
-                    Some(map_definition),
-                );
+                let encounter = sandbox_encounter(&state.players, &state.hostiles, map_definition);
                 let resolved_seed = map_definition
                     .fixed_seed
                     .or(scenario.generation_seed)
@@ -1396,56 +1476,28 @@ fn build_creator_overlay(
 }
 
 fn sandbox_encounter(
-    map: SandboxMap,
     players: &[RosterChoice],
     hostiles: &[RosterChoice],
-    definition: Option<&CombatLabMapDefinition>,
+    definition: &CombatLabMapDefinition,
 ) -> Encounter {
-    let (player_placement, hostile_placement) = definition.map_or_else(
-        || match map {
-            SandboxMap::Flat => (
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
-                    spread: 3,
-                },
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
-                    spread: 3,
-                },
-            ),
-            SandboxMap::Crossing => (
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 8, z: -8 }),
-                    spread: 3,
-                },
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: -8, z: 8 }),
-                    spread: 3,
-                },
-            ),
-            SandboxMap::Hills => (
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Anchor("party_start".to_owned()),
-                    spread: 3,
-                },
-                EncounterPlacement::Formation {
-                    center: FormationCenter::Anchor("hostile_start".to_owned()),
-                    spread: 3,
-                },
-            ),
-        },
-        |definition| {
-            (
-                deployment_region_placement(&definition.player_region),
-                deployment_region_placement(&definition.hostile_region),
-            )
-        },
-    );
+    encounter_with_placements(
+        &definition.display_name,
+        players,
+        hostiles,
+        deployment_region_placement(&definition.player_region),
+        deployment_region_placement(&definition.hostile_region),
+    )
+}
+
+fn encounter_with_placements(
+    map_name: &str,
+    players: &[RosterChoice],
+    hostiles: &[RosterChoice],
+    player_placement: EncounterPlacement,
+    hostile_placement: EncounterPlacement,
+) -> Encounter {
     Encounter {
-        name: format!(
-            "Creator Sandbox · {}",
-            definition.map_or_else(|| map.label(), |record| record.display_name.as_str())
-        ),
+        name: format!("Creator Sandbox · {map_name}"),
         rosters: vec![
             Roster {
                 faction: EncounterFaction::Player,

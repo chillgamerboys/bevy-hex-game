@@ -124,7 +124,7 @@ of the larger design remain ahead. The exact boundary is recorded in the
 
 The title screen separates development **Maps** and focused **Demos** from application
 **Actions**. **New Game** launches Party Trial as the one integrated default scenario;
-the Demos column contains **Character & Spell Creator** and **Combat Lab**. Combat Lab
+the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**. Combat Lab
 provides a transient roster/deployment Sandbox and a searchable fixed-fixture
 selector for Ability Lab, Raider Mirror, and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary

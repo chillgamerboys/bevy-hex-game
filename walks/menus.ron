@@ -1,4 +1,4 @@
-// The Wave 6 menu walk: title, settings, creator, Combat Lab, and return trips.
+// The Wave 6 menu walk: title, settings, both creators, Combat Lab, and return trips.
 [
     AwaitScreen("Title"),
     Settle(45),
@@ -9,11 +9,14 @@
     Capture("02-settings"),
     Click(name: "Back"),
     AwaitScreen("Title"),
-    Click(name: "Character & Spell Creator"),
+    Click(name: "Character Creator"),
     AwaitScreen("CharacterCreator"),
     Settle(30),
     Capture("03-character-creator"),
-    Click(name: "Spells"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+    Click(name: "Spell Creator"),
+    AwaitScreen("SpellCreator"),
     Settle(20),
     Capture("04-spell-creator"),
     Click(name: "Back"),
