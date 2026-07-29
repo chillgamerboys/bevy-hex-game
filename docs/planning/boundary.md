@@ -507,11 +507,14 @@ procedural saves wait for the generator-independent snapshot rather than extendi
 legacy generator lifetime.
 
 **Scheduling note (gameplay side agrees, and has moved to suit).** Your rule that no
-production save may depend on regenerating a V1/V2 seed makes D2 a *prerequisite* for
-shipping saves rather than an optimization — and D1 a prerequisite for restoring an
-edited world. Save and load has accordingly moved out of wave 3 and into wave 5
-([roadmap.md](roadmap.md)), so this can land on your clock rather than blocking on it.
-When it does land, contract H's outcome log is what makes a replayed impact reproducible
+production save may depend on regenerating a V1/V2 seed still makes D2 a
+*prerequisite* for durable saves rather than an optimization — and D1 a prerequisite
+for restoring an edited world. Wave 5's pre-alpha resume slot is a deliberately
+disposable exception: it records an explicit seed, generator version, and content
+digests, then refuses drift instead of migrating or silently rebuilding a different
+world ([roadmap.md](roadmap.md)). It never claims production compatibility and does
+not save combat. D1 and D2 therefore remain asked without blocking that scaffold.
+When they land, contract H's outcome log is what makes a replayed impact reproducible
 without pinning the response table's version.
 
 ## F — Deliberate non-asks
