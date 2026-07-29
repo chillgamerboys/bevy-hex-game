@@ -1212,12 +1212,15 @@ mod tests {
         let palette = shipped_palette();
         let styles = shipped_style_catalog();
 
-        assert_eq!(palette.swatches().len(), 20);
-        assert_eq!(styles.styles().len(), 4);
+        assert_eq!(palette.swatches().len(), 22);
+        assert_eq!(styles.styles().len(), 7);
         for style_name in [
+            "crystal/cyan-body",
+            "crystal/cyan-glow",
             "plant/foliage-dark",
             "plant/foliage-light",
             "plant/foliage-mid",
+            "plant/grass-tuft",
             "plant/trunk",
         ] {
             assert!(

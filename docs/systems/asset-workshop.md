@@ -355,8 +355,10 @@ mesh chunks grouped by style and canopy membership. Repeated instances share tho
 meshes and materials, and object voxels never become one ECS entity each.
 
 Run `cargo object-gallery` to inspect all six rotations of the first production
-object under the neutral rig. Set `HEX_OBJECT_GALLERY_RIG=dark` for the matching dark
-render without changing the asset or its runtime material. Set
+object under the neutral rig. Set `HEX_OBJECT_GALLERY_OBJECT=<object-id>` to inspect
+any tracked object; the camera and layout scale to its authored bounds. Set
+`HEX_OBJECT_GALLERY_RIG=dark` for the matching dark render without changing the asset
+or its runtime material. Set
 `HEX_OBJECT_GALLERY_CAPTURE=<path.png>` to capture the selected rig through an
 offscreen target and exit automatically. Set
 `HEX_OBJECT_GALLERY_MATERIAL_FIXTURES=1` to add transient opaque, cutout, translucent,
