@@ -279,6 +279,20 @@ pub(crate) fn construct_patch_with_streams(
                 "Hills seam approach conversion failed: {error}"
             ))]
         })?;
+    let liquid_ports = local_liquid_ports(&patch, frame)?;
+    let liquid_approaches = liquid_ports
+        .iter()
+        .flat_map(|port| port.approach.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let liquid_sources = liquid_ports
+        .iter()
+        .filter(|port| port.source)
+        .flat_map(|port| port.boundary.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let river_exclusions = protected
+        .difference(&liquid_approaches)
+        .copied()
+        .collect::<BTreeSet<_>>();
     let lateral_offsets: &[i32] = if patch.layout().kind == super::layout::LayoutKind::Single {
         &[0]
     } else {
@@ -294,17 +308,33 @@ pub(crate) fn construct_patch_with_streams(
         .filter_map(|(orientation, river_offset)| {
             crossing_geometry(&local_mask, orientation, frame.scale(), river_offset)
                 .ok()
-                .filter(|crossings| crossings.river.is_disjoint(&protected))
+                .filter(|crossings| {
+                    crossings.river.is_disjoint(&river_exclusions)
+                        && liquid_ports
+                            .iter()
+                            .all(|port| port.approach.is_subset(&crossings.river))
+                })
                 .and_then(|crossings| {
-                    river_nodes(&crossings.river, orientation, river_offset, river_level)
-                        .ok()
-                        .map(|nodes| (orientation, river_offset, crossings, nodes))
+                    river_nodes(
+                        &crossings.river,
+                        orientation,
+                        river_offset,
+                        river_level,
+                        &liquid_sources,
+                    )
+                    .ok()
+                    .filter(|nodes| {
+                        liquid_ports
+                            .iter()
+                            .all(|port| port.accepts_nodes(nodes, river_level))
+                    })
+                    .map(|nodes| (orientation, river_offset, crossings, nodes))
                 })
         })
         .next()
         .ok_or_else(|| {
             vec![recipe_issue(
-                "Hills cannot orient its liquid barrier away from protected walker seams",
+                "Hills cannot align its liquid barrier with the resolved liquid and walker seams",
             )]
         })?;
     let mut excluded = protected;
@@ -595,6 +625,60 @@ pub(crate) fn construct_patch_with_streams(
 }
 
 #[derive(Debug)]
+struct LocalLiquidPort {
+    source: bool,
+    boundary: BTreeSet<HexCoord>,
+    approach: BTreeSet<HexCoord>,
+}
+
+impl LocalLiquidPort {
+    fn accepts_nodes(&self, nodes: &BTreeMap<TilePos, LiquidNode>, level: Level) -> bool {
+        self.boundary.iter().all(|coord| {
+            let Some(node) = nodes.get(&TilePos::new(*coord, level)) else {
+                return false;
+            };
+            !self.source || (node.state == LiquidFlowState::Still && node.downstream.is_none())
+        })
+    }
+}
+
+fn local_liquid_ports(
+    patch: &PatchRecipeContext<'_>,
+    frame: LocalPatchFrame,
+) -> Result<Vec<LocalLiquidPort>, Vec<WorldValidationIssue>> {
+    patch
+        .shared_edges()
+        .filter_map(|edge| edge.liquid_port())
+        .map(|(source, port)| {
+            let boundary = port
+                .lanes
+                .iter()
+                .map(|(coord, _)| frame.to_local(*coord))
+                .collect::<Result<BTreeSet<_>, _>>();
+            let approach = port
+                .first_approach
+                .iter()
+                .copied()
+                .map(|coord| frame.to_local(coord))
+                .collect::<Result<BTreeSet<_>, _>>();
+            Ok(LocalLiquidPort {
+                source,
+                boundary: boundary.map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills liquid boundary conversion failed: {error}"
+                    ))]
+                })?,
+                approach: approach.map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills liquid approach conversion failed: {error}"
+                    ))]
+                })?,
+            })
+        })
+        .collect()
+}
+
+#[derive(Debug)]
 struct CrossingGeometry {
     river: BTreeSet<HexCoord>,
     bridge_deck: BTreeSet<HexCoord>,
@@ -835,6 +919,7 @@ fn river_nodes(
     orientation: u8,
     river_offset: i32,
     top_level: Level,
+    terminal_sources: &BTreeSet<HexCoord>,
 ) -> Result<BTreeMap<TilePos, LiquidNode>, Vec<WorldValidationIssue>> {
     let mut nodes = BTreeMap::new();
     for coord in river {
@@ -843,7 +928,9 @@ fn river_nodes(
             HexCoord::from_axial(local.x(), local.y().saturating_add(1)),
             orientation,
         );
-        let downstream_coord = if river.contains(&forward) {
+        let downstream_coord = if terminal_sources.contains(coord) {
+            None
+        } else if river.contains(&forward) {
             Some(forward)
         } else if local.x() != river_offset {
             let merge = rotate(HexCoord::from_axial(river_offset, local.y()), orientation);
