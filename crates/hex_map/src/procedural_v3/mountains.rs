@@ -9,8 +9,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
-use super::patch::PatchRecipeContext;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
@@ -106,18 +108,21 @@ impl V3Recipe for MountainsRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let streams = patch.seed_streams(context.seed, context.candidate);
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.level_height,
-            Some(MountainStreams {
-                orientation: streams.stage("mountains.orientation"),
-                peaks: streams.stage("mountains.peaks"),
-            }),
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Fatal(V3GenerationError::RecipeContract(format!(
+                "Mountains single-patch composition failed: {error:?}"
+            )))
+        })
     }
 
     fn validate(
@@ -163,12 +168,12 @@ impl V3Recipe for MountainsRecipe {
                 "Mountains fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.level_height,
-            None,
+            PatchBuildMode::CanonicalFallback,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -178,6 +183,11 @@ impl V3Recipe for MountainsRecipe {
                     .collect::<Vec<_>>()
                     .join("; "),
             )
+        })?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "Mountains fallback composition failed: {error:?}"
+            ))
         })
     }
 }
@@ -218,24 +228,42 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_plan(
-    layout: ResolvedLayoutPlan,
-    patch_id: PatchId,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3MountainsSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let streams = mode.seed_streams(&patch);
+    construct_patch_with_streams(
+        patch,
+        settings,
+        level_height,
+        streams.map(|streams| MountainStreams {
+            orientation: streams.stage("mountains.orientation"),
+            peaks: streams.stage("mountains.peaks"),
+        }),
+    )
+}
+
+fn construct_patch_with_streams(
+    patch: PatchRecipeContext<'_>,
     settings: &V3MountainsSettings,
     level_height: f32,
     streams: Option<MountainStreams<'_>>,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch = PatchRecipeContext::resolve(&layout, patch_id)
-        .map_err(|error| vec![recipe_issue(error.to_string())])?;
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let mask = patch.mask().clone();
     let orientation = streams.map_or(0, |streams| {
         u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
-    let (party_coord, hostile_coord) = opposing_landings(&mask, orientation)?;
+    let landing_candidates = seam_landing_candidates(&patch);
+    let closed_boundary = closed_boundary_coords(&patch, &landing_candidates);
+    let route_mask: BTreeSet<_> = mask.difference(&closed_boundary).copied().collect();
+    let (party_coord, hostile_coord) = opposing_landings(&landing_candidates, orientation)?;
     let (high_control, bypass_control) =
-        route_controls(&mask, party_coord, hostile_coord, orientation)?;
+        route_controls(&route_mask, party_coord, hostile_coord, orientation)?;
     let high_centerline = route_via(
-        &mask,
+        &route_mask,
         party_coord,
         high_control,
         hostile_coord,
@@ -249,15 +277,15 @@ pub(crate) fn construct_plan(
         .take(high_centerline.len().saturating_sub(4))
         .collect();
     let bypass_centerline = route_via(
-        &mask,
+        &route_mask,
         party_coord,
         bypass_control,
         hostile_coord,
         &high_interior,
     )
     .ok_or_else(|| vec![recipe_issue("Mountains could not route its lower bypass")])?;
-    let high_footprint = two_wide_footprint(&mask, &high_centerline, orientation, true);
-    let bypass_footprint = two_wide_footprint(&mask, &bypass_centerline, orientation, false);
+    let high_footprint = two_wide_footprint(&route_mask, &high_centerline, orientation, true);
+    let bypass_footprint = two_wide_footprint(&route_mask, &bypass_centerline, orientation, false);
     let route_cells: BTreeSet<_> = high_footprint.union(&bypass_footprint).copied().collect();
     let excluded: BTreeSet<_> = route_cells
         .union(&patch.protected_approaches())
@@ -293,7 +321,7 @@ pub(crate) fn construct_plan(
         settings.base_level,
         settings.relief / 2,
     );
-    fit_shared_approaches(&patch, &mut surface_by_coord);
+    let seam_shape = shape_walker_seams(&patch, &mut surface_by_coord)?;
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
@@ -313,13 +341,14 @@ pub(crate) fn construct_plan(
         columns,
         surfaces,
     };
+    seam_shape.apply(&mut volume)?;
     let party = exact_position(&surface_by_coord, party_coord)?;
     let hostile = exact_position(&surface_by_coord, hostile_coord)?;
     let initial_graph = OrdinaryGraph::from_volume(&volume, None);
     let reachable = initial_graph.distances_from(party);
-    let special_region = SpecialMovementRegion(patch_id.0.saturating_mul(8));
+    let special_region = SpecialMovementRegion(0);
     for (position, metadata) in &mut volume.surfaces {
-        if !reachable.contains_key(position) {
+        if metadata.access == SurfaceAccess::Ordinary && !reachable.contains_key(position) {
             metadata.access = SurfaceAccess::SpecialMovement(special_region);
         }
     }
@@ -364,10 +393,11 @@ pub(crate) fn construct_plan(
         .copied()
         .map(|surface| (surface, patch.biome_region()))
         .collect();
-    let view_hint = mountain_view_hint(&mask, &surface_by_coord, layout.grid_radius, level_height)?;
+    let view_hint =
+        mountain_view_hint(&mask, &surface_by_coord, patch.grid_radius(), level_height)?;
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let fragment = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: Default::default(),
         features,
@@ -378,7 +408,44 @@ pub(crate) fn construct_plan(
         interiors: InteriorPlan::default(),
         anchors,
         view_hint,
-    })
+    };
+    let mut issues = validate_patch_walker_seams(&patch, &fragment.volume);
+    issues.extend(
+        fragment
+            .validate_against(patch.layout())
+            .into_iter()
+            .map(|issue| {
+                recipe_issue(format!(
+                    "Mountains patch {:?} failed {:?}: {}",
+                    issue.patch, issue.code, issue.detail
+                ))
+            }),
+    );
+    if issues.is_empty() {
+        Ok(fragment)
+    } else {
+        Err(issues)
+    }
+}
+
+fn seam_landing_candidates(patch: &PatchRecipeContext<'_>) -> BTreeSet<HexCoord> {
+    let protected = patch.protected_approaches();
+    if protected.is_empty() {
+        patch.mask().clone()
+    } else {
+        protected
+    }
+}
+
+fn closed_boundary_coords(
+    patch: &PatchRecipeContext<'_>,
+    open: &BTreeSet<HexCoord>,
+) -> BTreeSet<HexCoord> {
+    patch
+        .shared_edges()
+        .flat_map(|edge| edge.boundary_pairs().into_iter().map(|(local, _)| local))
+        .filter(|coord| !open.contains(coord))
+        .collect()
 }
 
 fn opposing_landings(
@@ -612,26 +679,6 @@ fn apply_route(
             .min_by_key(|(center, _)| (center.distance(*coord), *center))
         {
             levels.insert(*coord, *level);
-        }
-    }
-}
-
-fn fit_shared_approaches(patch: &PatchRecipeContext<'_>, levels: &mut BTreeMap<HexCoord, Level>) {
-    for edge in patch.shared_edges() {
-        let preferred = edge.preferred_level();
-        for coord in patch.mask() {
-            let distance = edge
-                .protected_approaches()
-                .iter()
-                .map(|approach| approach.distance(*coord))
-                .min()
-                .unwrap_or(u32::MAX);
-            let distance = i32::try_from(distance).unwrap_or(i32::MAX);
-            if let Some(level) = levels.get_mut(coord) {
-                *level = (*level)
-                    .min(preferred.saturating_add(distance))
-                    .max(preferred.saturating_sub(distance));
-            }
         }
     }
 }

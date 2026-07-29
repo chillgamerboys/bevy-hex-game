@@ -109,7 +109,7 @@ impl LocalPatchFrame {
     /// Moves a locally authored camera frame over the resolved patch.
     #[must_use]
     pub(crate) fn view_hint_to_world(self, hint: MapViewHint) -> MapViewHint {
-        let offset = self.center.to_world(0.0);
+        let offset = self.center().to_world(0.0);
         MapViewHint::new(
             (hint.eye.0 + offset.x, hint.eye.1, hint.eye.2 + offset.z),
             (

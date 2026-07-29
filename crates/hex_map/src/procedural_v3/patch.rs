@@ -77,13 +77,6 @@ impl<'a> PatchSharedEdge<'a> {
 
     /// Walker apertures oriented from this patch to its neighbor.
     #[must_use]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Ring7 recipe construction consumes oriented walker ports in the integration PR"
-        )
-    )]
     pub(crate) fn walker_ports(&self) -> Vec<ResolvedPort> {
         self.contract
             .walker
@@ -207,13 +200,6 @@ impl<'a> PatchRecipeContext<'a> {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "Ring7 recipe construction consumes oriented ports in the integration PR"
-    )
-)]
 fn orient_port(port: &ResolvedPort, patch_is_first: bool) -> ResolvedPort {
     if patch_is_first {
         return port.clone();
