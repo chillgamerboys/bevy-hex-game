@@ -27,22 +27,27 @@ use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hex_assets::GameAssets;
-use hex_assets::{Substance, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+};
 use hex_core::{
-    CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
-    HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint,
-    ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
-    TerrainEdit, TerrainReady, TilePos, MAX_HEADROOM,
+    BiomeRegionId, BiomeRegions, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom,
+    HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, Level, MapAnchorId,
+    MapAnchors, MapViewHint, ResolvedMapSeed, Screen, SpecialMovementRegion,
+    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, TraversalBlockers,
+    MAX_HEADROOM,
 };
 use hex_map::{
     CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
-    MountainsSettings, PerlinSettings, PerlinStepSettings, ProceduralSettings,
-    ProceduralV1Settings, ProceduralV2Settings, SkyIslandsSettings, SubstanceRun, TacticalSettings,
-    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, VoxelMap,
+    MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
+    PerlinSettings, PerlinStepSettings, ProceduralSettings, ProceduralV1Settings,
+    ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings, SubstanceRun, TacticalMetrics,
+    TacticalSettings, TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+    V3EnvironmentSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -123,7 +128,35 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the integration test immediately"
+)]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
+    let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
+    let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
+    let palette = ArtPalette::new(BTreeMap::from([
+        (
+            foam,
+            PaletteSwatch::new(
+                "Water Foam",
+                SrgbColor::new(0.896_243_8, 0.959_346_6, 0.991_156_4)
+                    .expect("the fixture foam color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture foam swatch should be valid"),
+        ),
+        (
+            swatch.clone(),
+            PaletteSwatch::new(
+                "Test Neutral",
+                SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture swatch should be valid"),
+        ),
+    ]))
+    .expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
         ("air", false, false),
@@ -144,14 +177,15 @@ fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
         }
         substances.insert(
             name.to_owned(),
-            Substance {
-                color: (0.5, 0.5, 0.5),
-                solid,
-                diggable,
+            if name == "air" {
+                Substance::invisible(solid, diggable)
+            } else {
+                Substance::from_swatch(swatch.clone(), solid, diggable)
             },
         );
     }
-    SubstanceTable::from_file(&SubstanceFile { substances })
+    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+        .expect("the fixture substances should resolve through the fixture palette")
 }
 
 /// Runs the app until it has entered gameplay and the world has settled.
@@ -201,6 +235,35 @@ fn v2_hills_app() -> App {
                 valley_level: 15,
                 max_relief: 8,
                 hills_per_bank: 3,
+            }),
+        })),
+    });
+    app
+}
+
+fn v3_hills_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Hills(V3HillsSettings {
+                    valley_level: 15,
+                    max_relief: 8,
+                    hills_per_bank: 3,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
             }),
         })),
     });
@@ -733,6 +796,97 @@ fn replacing_roof_material_does_not_transfer_its_cutaway_tag() {
     );
 }
 
+fn insert_stale_generated_resources(app: &mut App) {
+    let position = TilePos::new(HexCoord::ORIGIN, 7);
+
+    let mut map = VoxelMap::new();
+    map.set(position, SubstanceId(1));
+    app.insert_resource(map);
+
+    let mut anchors = MapAnchors::new();
+    assert_eq!(
+        anchors.insert(MapAnchorId::from("stale_anchor"), position),
+        None
+    );
+    app.insert_resource(anchors);
+
+    let mut special_regions = SpecialMovementRegions::new();
+    assert_eq!(
+        special_regions.insert(position, SpecialMovementRegion(91)),
+        None
+    );
+    app.insert_resource(special_regions);
+
+    let mut interiors = InteriorRegions::new();
+    assert_eq!(
+        interiors.insert_surface(position, InteriorRegionId(92)),
+        None
+    );
+    assert_eq!(
+        interiors.insert_roof_voxel(position.above(), InteriorRegionId(92)),
+        None
+    );
+    app.insert_resource(interiors);
+
+    let mut blockers = TraversalBlockers::new();
+    assert!(blockers.insert(position));
+    app.insert_resource(blockers);
+
+    let mut biomes = BiomeRegions::new();
+    assert_eq!(biomes.insert(position, BiomeRegionId(93)), None);
+    app.insert_resource(biomes);
+
+    app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
+    app.insert_resource(GenerationReport {
+        generator_version: 99,
+        seed: 99,
+        selected_candidate: Some(7),
+        candidates_evaluated: 8,
+        valid_candidates: 1,
+        repair_rounds: 0,
+        repair_actions: vec!["stale".to_owned()],
+        used_fallback: false,
+        settings_fingerprint: 1,
+        semantic_plan_fingerprint: Some(2),
+        map_fingerprint: 3,
+        metrics: TacticalMetrics::default(),
+        elapsed_micros: 4,
+        notes: vec!["stale".to_owned()],
+    });
+    app.insert_resource(TerrainReady);
+}
+
+#[test]
+fn unavailable_v3_recipe_fails_closed_and_clears_stale_generated_state() {
+    let mut app = v3_hills_app();
+    insert_stale_generated_resources(&mut app);
+
+    enter_gameplay(&mut app);
+
+    let failure = app.world().resource::<GameplaySetupFailure>();
+    assert!(
+        failure.reason.contains("V3 recipe Hills is not available"),
+        "unexpected setup failure: {}",
+        failure.reason
+    );
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<SpecialMovementRegions>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<TraversalBlockers>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
+    assert!(!app.world().contains_resource::<MapViewHint>());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+
+    let grids = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(grids, 0, "failed V3 setup spawned a grid");
+}
+
 #[test]
 fn procedural_setup_without_a_seed_never_marks_terrain_ready() {
     let mut app = procedural_app();
@@ -780,6 +934,24 @@ fn tile_count(app: &mut App) -> usize {
         .count()
 }
 
+fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
+    let world = app.world_mut();
+    let mut query = world.query::<(Entity, &Name, &ChildOf, &Pickable, Option<&HexTile>)>();
+    query
+        .iter(world)
+        .filter(|(_entity, name, _parent, _pickable, _tile)| {
+            matches!(name.as_str(), "LiquidCap" | "LiquidFallCurtain")
+        })
+        .map(|(entity, _name, parent, pickable, tile)| {
+            assert!(
+                tile.is_none(),
+                "presentation entities must not become tiles"
+            );
+            (entity, parent.parent(), *pickable)
+        })
+        .collect()
+}
+
 #[test]
 fn nonprocedural_maps_publish_an_empty_region_registry() {
     let mut app = test_app();
@@ -802,6 +974,82 @@ fn entering_gameplay_spawns_a_full_grid() {
         tile_count(&mut app) >= columns,
         "every column should spawn at least one prism"
     );
+}
+
+#[test]
+fn liquid_presentation_is_additive_non_pickable_and_tracks_grid_lifecycle() {
+    let mut app = procedural_app();
+    enter_gameplay(&mut app);
+
+    let expected_tiles: usize = app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .map(|(_coord, column)| hex_map::runs(column).len())
+        .sum();
+    assert_eq!(
+        tile_count(&mut app),
+        expected_tiles,
+        "presentation geometry changed the authoritative tile count"
+    );
+
+    let first_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the first grid should exist");
+    let first_presentations = liquid_presentations(&mut app);
+    assert!(
+        !first_presentations.is_empty(),
+        "the procedural river should produce presentation caps"
+    );
+    assert!(first_presentations
+        .iter()
+        .all(|(_entity, parent, pickable)| *parent == first_grid && *pickable == Pickable::IGNORE));
+
+    let solid_edit = {
+        let world = app.world();
+        let table = world.resource::<SubstanceTable>();
+        world
+            .resource::<VoxelMap>()
+            .columns()
+            .find_map(|(coord, column)| {
+                hex_map::runs(column)
+                    .into_iter()
+                    .find(|run| table.is_solid(run.substance) && table.is_diggable(run.substance))
+                    .map(|run| TilePos::new(coord, run.top - 1))
+            })
+            .expect("the generated map should contain diggable solid terrain")
+    };
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: solid_edit });
+    app.update();
+    app.update();
+
+    let second_grid = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the rebuilt grid should exist");
+    assert_ne!(second_grid, first_grid);
+    assert!(first_presentations
+        .iter()
+        .all(|(entity, _parent, _pickable)| app.world().get_entity(*entity).is_err()));
+    let second_presentations = liquid_presentations(&mut app);
+    assert!(!second_presentations.is_empty());
+    assert!(
+        second_presentations
+            .iter()
+            .all(|(_entity, parent, pickable)| *parent == second_grid
+                && *pickable == Pickable::IGNORE)
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert!(liquid_presentations(&mut app).is_empty());
 }
 
 #[test]
@@ -1303,6 +1551,7 @@ fn leaving_gameplay_removes_the_map() {
 fn leaving_v2_hills_removes_all_generated_resources() {
     let mut app = v2_hills_app();
     enter_gameplay(&mut app);
+    assert!(app.world().contains_resource::<TerrainReady>());
     assert!(app.world().contains_resource::<MapViewHint>());
     assert!(app.world().contains_resource::<GenerationReport>());
 
@@ -1317,6 +1566,8 @@ fn leaving_v2_hills_removes_all_generated_resources() {
     assert!(!app.world().contains_resource::<MapAnchors>());
     assert!(!app.world().contains_resource::<SpecialMovementRegions>());
     assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert!(!app.world().contains_resource::<TraversalBlockers>());
+    assert!(!app.world().contains_resource::<BiomeRegions>());
     assert!(!app.world().contains_resource::<MapViewHint>());
     assert!(!app.world().contains_resource::<GenerationReport>());
     assert!(!app.world().contains_resource::<TerrainReady>());

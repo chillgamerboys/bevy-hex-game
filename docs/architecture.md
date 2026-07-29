@@ -11,6 +11,7 @@ hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
+{Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 ```
 
 An arrow means "may depend on". **Cargo enforces this.** A `use` that crosses the
@@ -34,6 +35,16 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_combat` | The loop: modes, turn order, the placeholder AI | `hex_core`, `hex_assets`, `hex_anim`, `hex_units` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
+| `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
+
+`hex_editor` is not a game screen and does not depend on runtime world or gameplay
+crates. Reusable art schemas and validation live in `hex_assets`; the editor owns only
+authoring workflow, crash recovery, review presentation, and filesystem side effects.
+Recovery and review output stay untracked under `.context/asset-workshop/`, while
+explicit saves are the only operations that change `assets/art/`. The canonical
+palette and object contracts are described in
+[design/visual-language.md](design/visual-language.md), and the operational workflow
+is in [systems/asset-workshop.md](systems/asset-workshop.md).
 
 ### `hex_map` is a leaf, on purpose
 
@@ -90,6 +101,10 @@ and perform their routine exports and registration without waiting on a permanen
 loader gate. A change to the generic loading mechanism or to a cross-domain contract
 still requires the owning review; placing domain code in `hex_assets` does not waive
 the crate graph or the contract-first process.
+
+Authored-art schemas and `assets/art/` are a shared visual-content contract: either
+owner may add assets, while schema changes receive both reviews. Runtime adapters stay
+with the crate that draws or consumes them.
 
 Where the two meet is [contracts.md](contracts.md); what each is still asking of the
 other is [planning/boundary.md](planning/boundary.md).
@@ -322,7 +337,7 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 |---|---|---|
 | Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
-| At spawn | `world.ron`, `substances.ron`, `player.ron` scale/colour | Next `OnEnter(Screen::Gameplay)` |
+| At spawn | `world.ron`, `substances.ron`, `palette.ron` substance/unit swatches, `player.ron` scale | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
 values every frame, but the sun and ambient were only applied on

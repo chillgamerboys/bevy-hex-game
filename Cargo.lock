@@ -358,6 +358,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomicwrites"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ef1bb8d1b645fe38d51dfc331d720fb5fc2c94b440c76cc79c80ff265ca33e3"
+dependencies = [
+ "rustix 0.38.44",
+ "tempfile",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -818,6 +829,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7466095822999850fc52074c0b65e9f8b42da100bf7bbd10e5dc87415c6b3401"
 dependencies = [
  "arboard",
+ "bevy_a11y",
  "bevy_app",
  "bevy_asset",
  "bevy_camera",
@@ -830,12 +842,14 @@ dependencies = [
  "bevy_log",
  "bevy_math",
  "bevy_mesh",
+ "bevy_picking",
  "bevy_platform",
  "bevy_reflect",
  "bevy_render",
  "bevy_shader",
  "bevy_time",
  "bevy_transform",
+ "bevy_ui_render",
  "bevy_utils",
  "bevy_window",
  "bevy_winit",
@@ -3247,6 +3261,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_editor"
+version = "0.1.0"
+dependencies = [
+ "atomicwrites",
+ "bevy",
+ "bevy_egui",
+ "hex_assets",
+ "hex_core",
+ "image",
+ "ron",
+ "serde",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "hex_game"
 version = "0.1.0"
 dependencies = [
@@ -3296,6 +3325,7 @@ dependencies = [
  "hex_anim",
  "hex_assets",
  "hex_core",
+ "ron",
  "serde",
  "serde_json",
 ]
@@ -5469,6 +5499,19 @@ dependencies = [
  "grid",
  "serde",
  "slotmap",
+]
+
+[[package]]
+name = "tempfile"
+version = "3.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+dependencies = [
+ "fastrand",
+ "getrandom 0.4.3",
+ "once_cell",
+ "rustix 1.1.4",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

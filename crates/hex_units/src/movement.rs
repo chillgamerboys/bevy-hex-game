@@ -461,31 +461,33 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
-    use hex_assets::{Substance, SubstanceFile};
+    use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
     use hex_core::{Level, MAX_HEADROOM};
 
     const STONE: SubstanceId = SubstanceId(1);
 
     fn table() -> SubstanceTable {
+        let stone_id =
+            SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
+        let stone = PaletteSwatch::new(
+            "Stone",
+            SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+            BTreeSet::from(["test".to_owned()]),
+        )
+        .expect("the fixture swatch should be valid");
+        let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
+            .expect("the fixture palette should be valid");
         let mut substances = HashMap::default();
-        substances.insert(
-            "air".to_owned(),
-            Substance {
-                color: (0.0, 0.0, 0.0),
-                solid: false,
-                diggable: false,
-            },
-        );
+        substances.insert("air".to_owned(), Substance::invisible(false, false));
         substances.insert(
             "stone".to_owned(),
-            Substance {
-                color: (0.5, 0.5, 0.5),
-                solid: true,
-                diggable: true,
-            },
+            Substance::from_swatch(stone_id, true, true),
         );
-        SubstanceTable::from_file(&SubstanceFile { substances })
+        SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("the fixture substance should resolve through its palette")
     }
 
     /// A body of the size the game actually ships, for tests about stepping rather

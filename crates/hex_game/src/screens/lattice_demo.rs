@@ -872,7 +872,7 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Scre
 
 #[cfg(test)]
 mod tests {
-    use hex_assets::{ElementFile, SpellFile, SubstanceFile, SubstanceTable};
+    use hex_assets::{ArtPalette, ElementFile, SpellFile, SubstanceFile, SubstanceTable};
 
     use super::*;
 
@@ -892,10 +892,16 @@ mod tests {
             "/../../assets/config/substances.ron"
         )))
         .expect("substances.ron parses");
+        let palette: ArtPalette = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/palette.ron"
+        )))
+        .expect("palette.ron parses");
 
         let elements = ElementCatalog::from_file(&element_file);
         let spells = SpellBook::from_file(&spell_file);
-        let substances = SubstanceTable::from_file(&substance_file);
+        let substances = SubstanceTable::from_file(&substance_file, &palette)
+            .expect("shipped substances resolve through the art palette");
         let index = ContentIndex::build(&elements, &spells, &substances)
             .expect("shipped content cross-references resolve");
         (elements, spells, index)

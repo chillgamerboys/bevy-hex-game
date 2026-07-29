@@ -10,13 +10,17 @@
 //! sim's entire input is an ordered command sequence, and a sequence applied
 //! twice from the same spawn state must land the same world twice.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_assets::{PlayerSettings, Substance, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
+    SwatchId,
+};
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
@@ -39,7 +43,6 @@ fn test_app() -> App {
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
-        color: (1.0, 0.2, 0.2),
     });
     // A fixed tick makes every run take the same frames through the same
     // animations — which the replay test depends on to mean anything.
@@ -74,25 +77,28 @@ fn spawn_terrain(mut commands: Commands) {
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the test immediately"
+)]
 fn substance_table() -> SubstanceTable {
+    let stone_id = SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
+    let stone = PaletteSwatch::new(
+        "Stone",
+        SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+        BTreeSet::from(["test".to_owned()]),
+    )
+    .expect("the fixture swatch should be valid");
+    let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
+        .expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert(
-        "air".to_owned(),
-        Substance {
-            color: (0.0, 0.0, 0.0),
-            solid: false,
-            diggable: false,
-        },
-    );
+    substances.insert("air".to_owned(), Substance::invisible(false, false));
     substances.insert(
         "stone".to_owned(),
-        Substance {
-            color: (0.5, 0.5, 0.5),
-            solid: true,
-            diggable: true,
-        },
+        Substance::from_swatch(stone_id, true, true),
     );
-    SubstanceTable::from_file(&SubstanceFile { substances })
+    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+        .expect("the fixture substance should resolve through its palette")
 }
 
 /// A unit with an explicit, pre-registered id.

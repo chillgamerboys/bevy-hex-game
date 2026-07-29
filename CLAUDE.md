@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a ten-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as an eleven-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -25,6 +25,7 @@ with errors that don't obviously point at the toolchain.
 ```
 cargo dev            # inspector + live asset reload
 cargo run --release  # as it ships
+cargo editor         # standalone Asset Workshop
 ```
 
 **Always run through cargo.** `BEVY_ASSET_ROOT` is set in `.cargo/config.toml`
@@ -68,12 +69,15 @@ cargo run --release -p hex_game --features map-review
 `HEX_REVIEW_CAPTURE`; omitting the view uses `default`. `HEX_REVIEW_CAMERA` accepts
 `map` or `character` and also requires a capture. `HEX_REVIEW_TIME` accepts an hour in
 `[0, 24)` and can be used with or without a capture, but the selected scenario must use
-cyclic lighting. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to an exact
-generated anchor before framing and requires a capture. `HEX_REVIEW_CUTAWAY=full`
-exposes the selected cave interior for a review overview while ordinary gameplay keeps
-its local six-hex opening; it also requires a capture. The process exits after
-persisting the PNG. A frame that fails the visual-coverage check still leaves its PNG
-at the requested path and exits with an error, so the rejected output can be inspected.
+cyclic lighting. `HEX_REVIEW_LIQUID_PHASE` accepts any finite phase in seconds and
+freezes liquid presentation there; captures default to `0.0`, while launches without a
+capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected actor to
+an exact generated anchor before framing and requires a capture.
+`HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
+while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+The process exits after persisting the PNG. A frame that fails the visual-coverage
+check still leaves its PNG at the requested path and exits with an error, so the
+rejected output can be inspected.
 Map-review builds keep their console on Windows because these diagnostics are part of
 the tool.
 
@@ -100,6 +104,7 @@ every UI root pointed at the redirected camera.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+{Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -303,7 +308,7 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 534 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 881 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

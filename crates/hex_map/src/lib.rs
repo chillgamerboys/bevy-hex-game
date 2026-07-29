@@ -40,9 +40,11 @@ use bevy::prelude::*;
 pub mod generator;
 /// Turning generated terrain into tile entities.
 pub mod grid;
+mod liquid_render;
 /// Versioned semantic-first procedural map generation and diagnostics.
 mod procedural;
 mod procedural_v2;
+mod procedural_v3;
 /// Designer-facing map settings, loaded from RON.
 pub mod settings;
 /// Pure construction of complete voxel maps from terrain presets.
@@ -51,14 +53,20 @@ mod terrain;
 pub mod voxel;
 
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
+pub use liquid_render::LiquidVisualTime;
 pub use procedural::{GenerationReport, TacticalMetrics};
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,
-    EnvironmentSettings, HillsSettings, LandformSettings, LayeredSkyIslandsSettings,
-    LinkedIslandsSettings, MapSettings, MountainSettings, MountainsSettings, PerlinSettings,
-    PerlinStepSettings, ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings,
-    RiverSettings, ShowcaseSettings, SkyIslandsSettings, TacticalSettings, TerrainSettings,
-    V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings,
+    EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, EnvironmentSettings,
+    HillsSettings, LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
+    MountainSettings, MountainsSettings, NamedOverlaySettings, PatchEdgeContractSettings,
+    PatchEdgesSettings, PatchMaskSettings, PatchSpec, PerlinSettings, PerlinStepSettings,
+    ProceduralSettings, ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings,
+    RiverSettings, SharedEdgeSettings, ShowcaseSettings, SkyIslandsSettings, TacticalSettings,
+    TerrainSettings, V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
+    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
+    V3MountainsSettings, V3OverlaySettings, V3RecipeSettings, V3Ring7Settings,
+    V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
 };
 pub use voxel::{runs, Column, SubstanceRun, VoxelMap};
 

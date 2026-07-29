@@ -2,15 +2,20 @@
 
 ## Setup
 
+Follow the [setup guide](docs/development/setup.md) for prerequisites, platform
+packages, first-run verification, and troubleshooting. The quick start is:
+
 ```sh
 cargo dev            # run with the world inspector and live asset reload
+cargo editor         # run the standalone Asset Workshop
 cargo run --release  # run as it ships: no inspector, much faster
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`; rustup fetches the right
-compiler on first build. Install the dependency auditor once with
-`cargo install cargo-deny --locked`. A cold build takes 10–20 minutes. Linux also
-needs the system packages in the README appendix; macOS and Windows do not.
+Contributors also need the dependency auditor:
+
+```sh
+cargo install cargo-deny --locked
+```
 
 Only changing values in `assets/config/`? You want [docs/development/config.md](docs/development/config.md)
 instead; none of this applies.
@@ -51,14 +56,20 @@ CI runs the final build command on Linux, Windows, and macOS. Run it on your loc
 platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
 commands, but still need valid relative links.
 
-**Then run the game.** This is not optional, and it is not covered by the above.
-Several failure modes here produce a clean log and a wrong window: missing assets
-render as a plain blue screen, a sky shader that fails to load renders a black sky,
-and a speed-unit mistake just looks slightly off. Every one of those passes CI.
+**Then run the affected application.** This is not optional, and it is not covered by
+the above. Several failure modes here produce a clean log and a wrong window: missing
+assets render as a plain blue screen, a sky shader that fails to load renders a black
+sky, and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
 If your change touches rendering, movement, or state transitions, walk it: splash
 → title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
 **BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
+
+If it touches the Asset Workshop, run `cargo editor` and complete the relevant
+[authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Persistence
+changes require a save/reload round trip, recovery changes require an interrupted
+dirty draft, and review changes require inspection of every source frame, the contact
+sheet, and `report.ron`.
 
 ## Where code goes
 
@@ -75,6 +86,7 @@ version:
 | Rules: input, movement, interaction | `hex_units` | gameplay |
 | Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
 | A debug tool | `hex_dev` | gameplay |
+| Palette, voxel-style, and object authoring workflow | `hex_editor` | shared tooling |
 | A screen or menu | `hex_game` | shared |
 
 The two roles are defined in

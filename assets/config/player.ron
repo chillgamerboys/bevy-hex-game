@@ -8,6 +8,4 @@
     // Movement speed in world units per second. A tile is about 1.76 units
     // across, so 5.0 crosses one in a little over a third of a second.
     speed: 5.0,
-
-    color: (1.0, 0.2, 0.2),
 )
