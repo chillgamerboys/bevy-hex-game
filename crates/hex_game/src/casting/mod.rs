@@ -44,10 +44,11 @@ use hex_assets::{
 use hex_combat::TurnOrder;
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord,
-    IssuedCommand, LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen,
-    Sextant, SpellId, TilePos, Turn, UnitId,
+    IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems, PendingDecision,
+    PlayerSeat, Screen, Sextant, SpellId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
+use hex_perception::{FactionKnowledge, FactionMapKnowledge};
 use hex_units::{targeting, volumes};
 use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
 
@@ -274,6 +275,7 @@ fn refresh_readout(
     index: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
     combat: Option<Res<CombatSettings>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
     casters: Query<CasterData, (With<Player>, Without<Downed>)>,
     selected: Query<Entity, (With<Player>, With<Selected>, Without<Downed>)>,
 ) {
@@ -314,6 +316,9 @@ fn refresh_readout(
         let Some(row) = readout.row(&aim.spell) else {
             return false;
         };
+        let observed = knowledge.as_deref().is_some_and(|knowledge| {
+            knowledge.faction(Faction::Player).state(aim.anchor) == KnowledgeState::Observed
+        });
         let reachable = matches!(row.shape, TargetShape::SelfCast)
             || readout.caster.is_some_and(|caster| {
                 in_range(
@@ -323,7 +328,7 @@ fn refresh_readout(
                     readout.levels_per_bonus,
                 )
             });
-        survives && row.blocked.is_none() && reachable
+        survives && row.blocked.is_none() && reachable && observed
     });
     if aiming.0.is_some() && !valid {
         aiming.0 = None;
@@ -624,7 +629,8 @@ fn resolve_aim_input(
     keys: Res<ButtonInput<KeyCode>>,
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
-    units: Query<(&Faction, &StandsOn), Without<Downed>>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
+    active_units: Query<&UnitId, Without<Downed>>,
 ) {
     if pending.is_open() {
         return;
@@ -649,14 +655,17 @@ fn resolve_aim_input(
             if readout.unavailable.is_some() || row.blocked.is_some() {
                 return;
             }
-            let targets = targets_in_range(&readout, &caster, row, &units);
-            Some(Aim {
-                spell,
-                // Nothing in range is not a reason to refuse the choice: the caster's
-                // own surface is always within its own range, so aiming always starts
-                // somewhere and the player moves the anchor from there.
-                anchor: targets.first().copied().unwrap_or(caster.standing),
-            })
+            let Some(knowledge) = knowledge.as_deref() else {
+                return;
+            };
+            let player = knowledge.faction(Faction::Player);
+            let targets = targets_in_range(&readout, &caster, row, player, &active_units);
+            let fallback = (player.state(caster.standing) == KnowledgeState::Observed)
+                .then_some(caster.standing);
+            let Some(anchor) = targets.first().copied().or(fallback) else {
+                return;
+            };
+            Some(Aim { spell, anchor })
         }
         AimRequest::Next => {
             *exit = AimExit::None;
@@ -664,7 +673,16 @@ fn resolve_aim_input(
             let Some(row) = readout.row(&aim.spell) else {
                 return;
             };
-            let targets = targets_in_range(&readout, &caster, row, &units);
+            let Some(knowledge) = knowledge.as_deref() else {
+                return;
+            };
+            let targets = targets_in_range(
+                &readout,
+                &caster,
+                row,
+                knowledge.faction(Faction::Player),
+                &active_units,
+            );
             Some(Aim {
                 anchor: step_target(&targets, aim.anchor).unwrap_or(aim.anchor),
                 spell: aim.spell,
@@ -672,6 +690,11 @@ fn resolve_aim_input(
         }
         AimRequest::Confirm => {
             let Some(aim) = aiming.0.clone() else { return };
+            if !knowledge.as_deref().is_some_and(|knowledge| {
+                knowledge.faction(Faction::Player).state(aim.anchor) == KnowledgeState::Observed
+            }) {
+                return;
+            }
             if !emit_cast(&mut queue, &readout, &caster, &aim) {
                 return;
             }
@@ -788,22 +811,34 @@ fn emit_cast(queue: &mut CommandQueue, readout: &CastReadout, caster: &Caster, a
 /// The caster is in its own list when it is in its own range, because there is no
 /// ally-or-enemy targeting filter and there will not be one: you may heal an enemy and
 /// immolate a friend.
+///
+/// Downed units remain spatially visible, but the target-cycle shortcut omits them just
+/// as it did before perception became the source of positions. The live-unit query is
+/// only intersected with authorized observations; it can never add a hidden identity.
 fn targets_in_range(
     readout: &CastReadout,
     caster: &Caster,
     row: &SpellRow,
-    units: &Query<(&Faction, &StandsOn), Without<Downed>>,
+    knowledge: &FactionKnowledge,
+    active_units: &Query<&UnitId, Without<Downed>>,
 ) -> Vec<TilePos> {
     if matches!(row.shape, TargetShape::SelfCast) {
-        return vec![caster.standing];
+        return (knowledge.state(caster.standing) == KnowledgeState::Observed)
+            .then_some(caster.standing)
+            .into_iter()
+            .collect();
     }
-    let mut ranked: Vec<(bool, u32, TilePos)> = units
-        .iter()
-        .map(|(faction, standing)| (faction, standing.0.pos))
-        .filter(|(_, pos)| in_range(caster.standing, *pos, row.range, readout.levels_per_bonus))
+    let mut ranked: Vec<(bool, u32, TilePos)> = knowledge
+        .units()
+        .filter(|(_, unit)| active_units.iter().any(|id| *id == unit.id))
+        .map(|(_, unit)| (unit.faction, unit.pos))
+        .filter(|(_, pos)| {
+            knowledge.state(*pos) == KnowledgeState::Observed
+                && in_range(caster.standing, *pos, row.range, readout.levels_per_bonus)
+        })
         .map(|(faction, pos)| {
             (
-                !Faction::Player.is_hostile_to(*faction),
+                !Faction::Player.is_hostile_to(faction),
                 volumes::grid_distance(caster.standing, pos),
                 pos,
             )

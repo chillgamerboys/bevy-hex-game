@@ -167,8 +167,9 @@ pub fn can_observe(
 
 /// Resolves pooled observations for both factions.
 ///
-/// Every supplied unit is an active observer for its own faction. Callers therefore
-/// filter out inactive or incapacitated units before building these snapshots.
+/// Supplied units whose [`ObservedUnit::provides_sight`] flag is set are active
+/// observers for their own faction. Other supplied units remain eligible to be seen
+/// by an active observer without extending their faction's field of view.
 /// Current surfaces come from `illumination`. Formerly known positions that have
 /// disappeared from current truth are also tested using their last-seen domain and
 /// current ambient/local-light rules; if in sight they enter the observation so
@@ -235,7 +236,10 @@ fn resolve_faction(
     profile: SightProfile,
 ) -> Result<FactionObservation, PerceptionError> {
     let mut observers = Vec::new();
-    for unit in units.values().filter(|unit| unit.faction == faction) {
+    for unit in units
+        .values()
+        .filter(|unit| unit.faction == faction && unit.provides_sight)
+    {
         let Some(resolved) = illumination.get(unit.pos) else {
             return Err(PerceptionError::UnitMissingSurface {
                 id: unit.id,
@@ -338,6 +342,14 @@ mod tests {
             id: UnitId(id),
             faction,
             pos: position,
+            provides_sight: true,
+        }
+    }
+
+    fn inactive_unit(id: u64, faction: Faction, position: TilePos) -> ObservedUnit {
+        ObservedUnit {
+            provides_sight: false,
+            ..unit(id, faction, position)
         }
     }
 
@@ -517,6 +529,48 @@ mod tests {
         let player = observations.faction(Faction::Player);
         assert!(player.observes(target));
         assert_eq!(player.unit(hostile.id), Some(hostile));
+    }
+
+    #[test]
+    fn inactive_units_remain_visible_without_extending_faction_sight() {
+        let active = pos(0, 0, 5);
+        let inactive = pos(1, 0, 5);
+        let beyond = pos(2, 0, 5);
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (active, LightDomain::Exterior),
+                (inactive, LightDomain::Exterior),
+                (beyond, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let inactive_player = inactive_unit(2, Faction::Player, inactive);
+        let hidden_hostile = unit(3, Faction::Hostile, beyond);
+
+        let observations = resolve_observations(
+            [
+                unit(1, Faction::Player, active),
+                inactive_player,
+                hidden_hostile,
+            ],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            profile(1, 1, 1, 10),
+        )
+        .expect("observations");
+
+        let player = observations.faction(Faction::Player);
+        assert_eq!(player.unit(inactive_player.id), Some(inactive_player));
+        assert!(player.observes(inactive));
+        assert_eq!(player.unit(hidden_hostile.id), None);
+        assert!(
+            !player.observes(beyond),
+            "the inactive unit must not extend sight one more hex"
+        );
     }
 
     #[test]

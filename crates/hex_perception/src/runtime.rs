@@ -14,7 +14,7 @@ use hex_core::{
     IlluminationLevel, InteriorRegions, LightDomain, LocalMapKnowledge, PausableSystems,
     PerceptionSystems, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers, UnitId,
 };
-use hex_units::{Body, Faction, MovementSystems, StandsOn};
+use hex_units::{Body, Downed, Faction, MovementSystems, StandsOn};
 
 use crate::{
     apply_observations, resolve_observations, FactionMapKnowledge, FactionObservations,
@@ -43,6 +43,7 @@ type UnitProjectionQuery<'w, 's> = Query<
         Option<&'static UnitId>,
         Option<&'static Faction>,
         Option<&'static StandsOn>,
+        Has<Downed>,
     ),
     With<Body>,
 >;
@@ -238,6 +239,7 @@ struct PerceptionInputChanges<'w, 's> {
                 Changed<UnitId>,
                 Changed<Faction>,
                 Changed<StandsOn>,
+                Changed<Downed>,
             )>,
         ),
     >,
@@ -251,6 +253,7 @@ struct PerceptionInputChanges<'w, 's> {
     removed_unit_ids: RemovedComponents<'w, 's, UnitId>,
     removed_factions: RemovedComponents<'w, 's, Faction>,
     removed_standing: RemovedComponents<'w, 's, StandsOn>,
+    removed_downed: RemovedComponents<'w, 's, Downed>,
     table: Option<Res<'w, SubstanceTable>>,
     exterior: Option<Res<'w, ExteriorIllumination>>,
     interiors: Option<Res<'w, InteriorRegions>>,
@@ -319,6 +322,7 @@ fn detect_perception_input_changes(
         || inputs.removed_unit_ids.read().next().is_some()
         || inputs.removed_factions.read().next().is_some()
         || inputs.removed_standing.read().next().is_some()
+        || inputs.removed_downed.read().next().is_some()
         || inputs
             .settings
             .as_ref()
@@ -597,7 +601,7 @@ fn snapshot_lights(
 
 fn snapshot_units(units: &UnitProjectionQuery) -> Result<Vec<ObservedUnit>, String> {
     let mut snapshots = Vec::new();
-    for (id, faction, standing) in units {
+    for (id, faction, standing, downed) in units {
         let (Some(id), Some(faction), Some(standing)) = (id, faction, standing) else {
             return Err("A Body is missing UnitId, Faction, or StandsOn.".to_owned());
         };
@@ -605,6 +609,7 @@ fn snapshot_units(units: &UnitProjectionQuery) -> Result<Vec<ObservedUnit>, Stri
             id: *id,
             faction: *faction,
             pos: standing.0.pos,
+            provides_sight: !downed,
         });
     }
     snapshots.sort_by_key(|unit| unit.id);
@@ -930,6 +935,36 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual 10,000-frame radius-40 lifecycle stress gate"]
+    fn radius_40_ten_thousand_idle_frames_reuse_every_projection() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        for coord in HexCoord::ORIGIN.within_radius(40) {
+            spawn_tile(&mut app, TilePos::new(coord, 15), substances.stone, 8);
+        }
+        let player = TilePos::new(HexCoord::ORIGIN, 15);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+
+        enter(&mut app, Screen::Gameplay);
+        let before = *app.world().resource::<PerceptionRuntimeStats>();
+        for _ in 0..10_000 {
+            app.update();
+        }
+        let after = *app.world().resource::<PerceptionRuntimeStats>();
+
+        assert_eq!(after.frames_checked, before.frames_checked + 10_000);
+        assert_eq!(after.surface_rebuilds, before.surface_rebuilds);
+        assert_eq!(
+            after.illumination_resolutions,
+            before.illumination_resolutions
+        );
+        assert_eq!(
+            after.observation_resolutions,
+            before.observation_resolutions
+        );
+        assert_eq!(after.knowledge_publications, before.knowledge_publications);
+    }
+
+    #[test]
     fn unit_changes_restart_at_observation_without_rebuilding_the_map() {
         let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
         let start = pos(0, 0, 5);
@@ -976,6 +1011,67 @@ mod tests {
         assert_eq!(
             after_settings.knowledge_publications,
             after.knowledge_publications + 1
+        );
+    }
+
+    #[test]
+    fn downed_changes_republish_visibility_without_removing_the_visible_unit() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let active = pos(0, 0, 5);
+        let nearby = pos(1, 0, 5);
+        spawn_tile(&mut app, active, substances.stone, 2);
+        spawn_tile(&mut app, nearby, substances.stone, 2);
+        spawn_unit(&mut app, 0, Faction::Player, active);
+        let incapacitated = spawn_unit(&mut app, 1, Faction::Player, nearby);
+
+        enter(&mut app, Screen::Gameplay);
+        let before = *app.world().resource::<PerceptionRuntimeStats>();
+        app.world_mut().entity_mut(incapacitated).insert(Downed);
+        app.update();
+        let after_down = *app.world().resource::<PerceptionRuntimeStats>();
+
+        assert_eq!(after_down.surface_rebuilds, before.surface_rebuilds);
+        assert_eq!(
+            after_down.illumination_resolutions,
+            before.illumination_resolutions
+        );
+        assert_eq!(
+            after_down.observation_resolutions,
+            before.observation_resolutions + 1
+        );
+        assert_eq!(
+            after_down.knowledge_publications,
+            before.knowledge_publications + 1
+        );
+        let visible = app
+            .world()
+            .resource::<FactionMapKnowledge>()
+            .faction(Faction::Player)
+            .unit(UnitId(1))
+            .expect("the active nearby ally still observes the downed unit");
+        assert!(
+            !visible.provides_sight,
+            "downed units remain visible but cannot extend faction sight"
+        );
+
+        app.world_mut().entity_mut(incapacitated).remove::<Downed>();
+        app.update();
+        let after_revival = *app.world().resource::<PerceptionRuntimeStats>();
+        assert_eq!(
+            after_revival.observation_resolutions,
+            after_down.observation_resolutions + 1
+        );
+        assert_eq!(
+            after_revival.knowledge_publications,
+            after_down.knowledge_publications + 1
+        );
+        assert!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(Faction::Player)
+                .unit(UnitId(1))
+                .expect("the revived unit remains visible")
+                .provides_sight
         );
     }
 
@@ -1493,6 +1589,56 @@ mod tests {
     }
 
     #[test]
+    fn one_hundred_gameplay_cycles_leave_exact_perception_state() {
+        let (mut app, substances) = runtime_app(IlluminationLevel::Bright);
+        let player = pos(0, 0, 5);
+        let adjacent = pos(1, 0, 5);
+        spawn_tile(&mut app, player, substances.stone, 2);
+        spawn_tile(&mut app, adjacent, substances.stone, 2);
+        spawn_unit(&mut app, 0, Faction::Player, player);
+        let expected_entities = app.world().entities().len();
+
+        for cycle in 0..100 {
+            enter(&mut app, Screen::Gameplay);
+            assert_eq!(
+                app.world().entities().len(),
+                expected_entities,
+                "perception spawned or leaked an entity on gameplay cycle {cycle}"
+            );
+            assert_eq!(
+                app.world().resource::<SurfaceSnapshots>().len(),
+                2,
+                "cycle {cycle} did not rebuild the exact surface projection"
+            );
+            assert!(app.world().contains_resource::<ResolvedIllumination>());
+            assert!(app.world().contains_resource::<FactionObservations>());
+            assert!(app.world().contains_resource::<FactionMapKnowledge>());
+            assert!(app.world().contains_resource::<LocalMapKnowledge>());
+
+            enter(&mut app, Screen::Title);
+            assert_eq!(
+                app.world().entities().len(),
+                expected_entities,
+                "perception leaked an entity while leaving gameplay cycle {cycle}"
+            );
+            assert!(!app.world().contains_resource::<PerceptionFrame>());
+            assert!(!app.world().contains_resource::<SurfaceSnapshots>());
+            assert!(!app.world().contains_resource::<ResolvedIllumination>());
+            assert!(!app.world().contains_resource::<FactionObservations>());
+            assert!(!app.world().contains_resource::<FactionMapKnowledge>());
+            assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+            assert_eq!(
+                *app.world().resource::<PerceptionRuntimeStats>(),
+                PerceptionRuntimeStats::default()
+            );
+            assert_eq!(
+                *app.world().resource::<PerceptionInvalidation>(),
+                PerceptionInvalidation::all()
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "manual headless radius-40 perception recomputation benchmark"]
     fn radius_40_recomputation_benchmark() {
         let snapshots = SurfaceSnapshots::try_from_iter(
@@ -1516,11 +1662,13 @@ mod tests {
                 id: UnitId(0),
                 faction: Faction::Player,
                 pos: TilePos::new(HexCoord::ORIGIN, 15),
+                provides_sight: true,
             },
             ObservedUnit {
                 id: UnitId(1),
                 faction: Faction::Hostile,
                 pos: TilePos::new(HexCoord::from_axial(40, 0), 15),
+                provides_sight: true,
             },
         ];
         let mut samples = Vec::new();
