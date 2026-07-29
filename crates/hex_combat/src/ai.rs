@@ -376,8 +376,11 @@ fn drive_ai(
         actor: actor_id,
         group: controller.group.clone(),
         kind,
+        observation: request.observation.clone(),
+        legal_actions: request.legal_actions.clone(),
         fingerprint: request.legal_actions.fingerprint(),
         selected,
+        command: command.clone(),
         failure,
     });
     if let Some(failure) = failure {

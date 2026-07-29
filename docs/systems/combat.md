@@ -91,6 +91,42 @@ authored amount and the cells currently disabled. Restoring at least one cell re
 `Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
 it rejoins the initiative sort by initiative then stable `UnitId`.
 
+### Integrated reporting and Party Trial
+
+`CombatSummary` is the session-scoped, serde-capable verification artifact. It records
+the highest round reached; successful commands by stable unit and semantic kind; exact
+AI dispatch traces (profile, algorithm, observation, canonical legal actions,
+fingerprint, selection, and emitted command); aggregate moves, casts, strikes,
+decisions, and explicit end turns; raw, prevented, and applied disables; restored
+cells, revivals, and downings; the ordered structured event stream; and the final
+outcome. It resets with the gameplay session.
+
+The shipped **Party Trial** scenario is the Wave 4 Part 1 integration fixture: matching
+hedge-mage, raider, and wolf rosters approach the authored Crossing from opposite
+banks. Its headless replay runs the same deterministic player stream twice and compares
+the party routes, AI observations/action sets/fingerprints/routes/commands, events,
+turn order, positions, aggregate report, and outcome.
+
+The release-shaped visual walk is `walks/party_trial.ron`. Run it at both review sizes:
+
+```sh
+HEX_WALK_SCRIPT=walks/party_trial.ron \
+HEX_WALK_OUT=.context/walks/party-trial-1280 \
+HEX_WALK_SIZE=1280x720 \
+cargo run --release --features visual-walk
+
+HEX_WALK_SCRIPT=walks/party_trial.ron \
+HEX_WALK_OUT=.context/walks/party-trial-1920 \
+HEX_WALK_SIZE=1920x1080 \
+cargo run --release --features visual-walk
+```
+
+The script proves formation editing, Rest, bridge compression and reformation, 3v3
+entry, a baseline hostile cast, Renewal and its exact-cell restoration decision,
+Defeat, and same-scenario Retry. A human playtest must additionally exercise Renewal
+on a downed ally and verify its next-round initiative return before Wave 4 may merge
+to `dev`.
+
 ## Saying no out loud
 
 Clicking a tile can fail for five different reasons — not your turn, nothing standable

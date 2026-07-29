@@ -195,6 +195,7 @@ fn spawn_party_strip(
                 for index in 0..6 {
                     members
                         .spawn((
+                            Name::new(format!("Party Member {}", index + 1)),
                             Button,
                             PartyMemberButton(index),
                             Node {
@@ -228,6 +229,7 @@ fn spawn_party_strip(
             .with_children(|controls| {
                 controls
                     .spawn((
+                        Name::new("Party Movement Mode"),
                         Button,
                         PartyModeButton,
                         Node {
@@ -246,6 +248,7 @@ fn spawn_party_strip(
                     ));
                 controls
                     .spawn((
+                        Name::new("Party Rest"),
                         Button,
                         PartyRestButton,
                         Node {
@@ -264,6 +267,7 @@ fn spawn_party_strip(
                 for preset in &formations.presets {
                     controls
                         .spawn((
+                            Name::new(format!("Formation Preset {}", preset.name)),
                             Button,
                             PartyPresetButton(preset.name.clone()),
                             Node {
@@ -294,6 +298,11 @@ fn spawn_party_strip(
                     .with_children(|grid| {
                         for (offset, x, y) in &slot_pixels {
                             grid.spawn((
+                                Name::new(format!(
+                                    "Formation Slot ({}, {})",
+                                    offset.x(),
+                                    offset.y()
+                                )),
                                 Button,
                                 PartySlotButton(*offset),
                                 Node {
@@ -428,12 +437,15 @@ fn update_party_strip(
         Has<Selected>,
     )>,
     mut members: Query<(&PartyMemberButton, &Children, &mut BackgroundColor)>,
-    mut slots: Query<(
-        &PartySlotButton,
-        &Children,
-        &mut Visibility,
-        &mut BackgroundColor,
-    )>,
+    mut slots: Query<
+        (
+            &PartySlotButton,
+            &Children,
+            &mut Visibility,
+            &mut BackgroundColor,
+        ),
+        Without<PartyMemberButton>,
+    >,
     mut modes: Query<&mut Text, With<PartyModeText>>,
     mut texts: Query<&mut Text, Without<PartyModeText>>,
 ) {

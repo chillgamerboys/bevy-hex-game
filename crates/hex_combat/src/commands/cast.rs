@@ -515,10 +515,10 @@ pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
 /// Whether the applier delivers **any** of a spell's effects today.
 ///
 /// The gate the interface and the applier share, and the reason it exists is a specific
-/// failure: several shipped spells — Renewal, Earthen Wall, Stone Shaper, Daylight —
-/// are legal casts whose every effect is still waiting on a lane that has not
-/// landed. Offering one is worse than hiding it. The cast is legal, so it is charged: the
-/// mana goes, the turn goes, and the only trace is a log line the player cannot see.
+/// failure: several shipped spells — Earthen Wall, Stone Shaper, Daylight — are legal
+/// casts whose every effect is still waiting on a lane that has not landed. Offering
+/// one is worse than hiding it. The cast is legal, so it is charged: the mana goes, the
+/// turn goes, and the only trace is a log line the player cannot see.
 ///
 /// **Any, not all.** A partially built spell still does something, and refusing it would
 /// take away a real effect because a second one is pending; the applier already reports
@@ -535,8 +535,9 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         spell.casting,
         CastingAxis::Enchantment { defense } if defense > 0
     ) || spell.effects.iter().any(|effect| match effect {
-        // Damage the defender chooses hexes for, and fire. Both land today.
+        // Damage and restoration both park on an exact-cell decision; fire lands too.
         Effect::DisableHexes { targeted, .. } => !targeted,
+        Effect::RestoreHexes { .. } => true,
         Effect::Burn { .. } => true,
         // Everything below is refused by name in the match above; see the reasons there.
         Effect::Reveal { .. } => true,
@@ -544,7 +545,6 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         | Effect::SetTerrain { .. }
         | Effect::ClearTerrain
         | Effect::SpawnWall { .. }
-        | Effect::RestoreHexes { .. }
         | Effect::ModifyIncomingDisables { .. }
         | Effect::Displace { .. } => false,
     })

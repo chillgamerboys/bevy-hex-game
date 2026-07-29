@@ -108,5 +108,12 @@
             world: "config/world.ron",
             encounter: "config/encounters/close-quarters.ron",
         ),
+        (
+            name: "Party Trial",
+            category: Combat,
+            blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",
+            world: "config/world.ron",
+            encounter: "config/encounters/party-trial.ron",
+        ),
     ],
 )

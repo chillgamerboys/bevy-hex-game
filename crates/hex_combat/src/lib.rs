@@ -42,6 +42,8 @@ pub mod knowledge;
 pub mod outcomes;
 /// Terminal encounter detection and its simulation gate.
 pub mod resolution;
+/// Deterministic session combat reporting.
+pub mod summary;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
@@ -55,6 +57,7 @@ pub use outcomes::{
     RestorationRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
+pub use summary::{CombatSummary, CommandKind};
 pub use turns::{Initiative, TurnOrder};
 
 /// The order a turn resolves in.
@@ -115,5 +118,6 @@ pub fn plugin(app: &mut App) {
         effects::plugin,
         knowledge::plugin,
         resolution::plugin,
+        summary::plugin,
     ));
 }
