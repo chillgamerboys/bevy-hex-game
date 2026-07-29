@@ -77,18 +77,47 @@ reshape terrain: a spell describes the energy and volume it applies, while the w
 decides how dirt, stone, water, or another material responds. Winning should come
 from understanding the board, not rerolling it.
 
-## Where the build stands
+## The 0.3 playable slice
 
-Hex is an early playable skeleton, not the complete game described above. The current
-build has deterministic procedural terrain, stacked-surface movement and path
-preview, exploration and combat tempos, validated element and spell content, and a
-pure lattice rules engine with an interactive demonstration.
+Version 0.3 is the first build in which the lattice idea is playable end to end. It is
+still an early skeleton, not the complete game described above: deterministic
+procedural terrain, stacked-surface movement and path preview lead into combat on the
+same map, where live lattices power spells and absorb wounds.
 
-The central connection is still missing: characters in the world do not yet carry
-their lattices. In-world casting, spell effects, and lattice-based damage are not
-wired into combat, so an attack currently produces an animation and log entry rather
-than disabling cells. The exact, regularly updated boundary is recorded in the
+The combat HUD shows both the stable initiative order and the acting unit, keeps the
+player's lattice in view, retains a valid hostile target, and records a bounded
+knowledge-safe event log. A hostile starts as only a known presence—its formation and
+capacity stay hidden. Scrying Eye reveals the complete live lattice for a bounded
+number of rounds, including current mana and disabled cells, without exposing earlier
+hidden choices retroactively.
+
+Ember deals direct damage and applies Burn for two of the target's actual turns.
+Incoming damage is command-modal: movement, casting, and ending the turn wait while
+the player chooses and confirms which live cells to disable. A unit with no live cells
+is downed and retained for future restoration rather than erased. Terrain-changing
+spells, obstruction, rout and surrender, party control, saves, and much of the larger
+design remain ahead. The exact, regularly updated boundary is recorded in the
 [project status](docs/planning/status.md).
+
+### Play the current build
+
+The title screen groups playable setups into Maps, Combat, and Demos. Eight map
+showcases exercise authored and procedural terrain, **Close Quarters** begins inside
+the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox.
+
+| Input | Action |
+|---|---|
+| Right-mouse drag | Orbit the camera around its focus |
+| `W` `A` `S` `D` | Pan the camera |
+| Mouse wheel | Zoom |
+| Hover / left-click a hex tile | Preview a route / move along it |
+| Click a spell row, then a lit target | Aim a cast |
+| `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
+| `SPACE` | End the current player turn; hostile turns cannot be skipped |
+| `H` | Hide or show ordinary readouts; an active damage choice stays visible |
+| Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
+| `ESC` | Pause, or leave the title screen |
+| `BACKSPACE` | Return to the title screen |
 
 <!--
 Regenerate readme_assets/lattice-demo-disabled-gem.png with:
@@ -117,3 +146,7 @@ Hex is written in Rust with [Bevy](https://bevy.org/) 0.19. Start with the
 [setup guide](docs/development/setup.md), read [CONTRIBUTING.md](CONTRIBUTING.md)
 before changing code, or use the [documentation index](docs/README.md) to find the
 design, system, and development reference for a specific area.
+
+Artists and content authors can also run `cargo editor` for the standalone
+[Asset Workshop](docs/systems/asset-workshop.md), which edits the canonical palette,
+voxel styles, and object blueprints and exports deterministic review packs.

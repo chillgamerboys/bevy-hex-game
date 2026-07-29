@@ -16,15 +16,15 @@
 
 use bevy::prelude::*;
 use hex_assets::{
-    choose_settings, LightingSettings, Scenario, ScenarioPlacement, ScenarioSettings,
-    SelectSettings, SettingsRegistry, CONFIG_EXTENSIONS,
+    choose_settings, Encounter, LightingSettings, Scenario, SelectSettings, SettingsRegistry,
+    CONFIG_EXTENSIONS,
 };
 use hex_core::{
     GameplaySetup, GameplaySetupFailure, InteriorRegions, MapAnchors, MapViewHint, ResolvedMapSeed,
     Screen, SimSeeds, SpecialMovementRegions, TerrainReady,
 };
 use hex_map::{MapSettings, TerrainSettings};
-use hex_units::{Enemy, Player};
+use hex_units::Faction;
 use hex_world::TimeOfDay;
 
 pub(super) fn plugin(app: &mut App) {
@@ -39,6 +39,10 @@ pub(super) fn plugin(app: &mut App) {
     // `hex_assets` no longer loads `lighting.ron` at startup -- two mechanisms writing
     // one resource is the collision `hex_map` already had.
     app.select_settings::<LightingSettings>(CONFIG_EXTENSIONS);
+    // And so is the encounter: one file per roster, chosen by path. A *directory* of
+    // encounters is never loaded at once, because a scenario needs exactly one of them
+    // — which is what keeps the one-path-one-type settings loader untouched.
+    app.select_settings::<Encounter>(CONFIG_EXTENSIONS);
     app.add_systems(OnEnter(Screen::Loading), apply_selected_scenario)
         .add_systems(
             OnEnter(Screen::Gameplay),
@@ -86,7 +90,7 @@ pub(super) enum ScenarioContractStatus {
     Invalid,
 }
 
-/// Asks for the chosen scenario's world, and installs its unit placements.
+/// Asks for the three files the chosen scenario names: its world, its sky, its roster.
 fn apply_selected_scenario(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -115,7 +119,7 @@ fn apply_selected_scenario(
         // State changes requested from OnEnter are applied before the PostUpdate
         // readiness gate, so returning to title is sufficient and leaves the registry
         // truthful.
-        commands.remove_resource::<ScenarioSettings>();
+        commands.remove_resource::<Encounter>();
         commands.insert_resource(GameplaySetupFailure::new(
             "Loading started without a selected scenario.",
         ));
@@ -134,7 +138,6 @@ fn apply_selected_scenario(
         info!("starting scenario: {}", scenario.name);
     }
     commands.insert_resource(sim_seeds_for(&scenario.name, resolved_seed));
-    commands.insert_resource(scenario.units.clone());
     commands.insert_resource(ScenarioTimeOverride(scenario.starting_time_hours));
     choose_settings::<MapSettings>(&mut commands, &asset_server, &mut registry, &scenario.world);
     choose_settings::<LightingSettings>(
@@ -142,6 +145,12 @@ fn apply_selected_scenario(
         &asset_server,
         &mut registry,
         &scenario.lighting,
+    );
+    choose_settings::<Encounter>(
+        &mut commands,
+        &asset_server,
+        &mut registry,
+        &scenario.encounter,
     );
 }
 
@@ -155,7 +164,7 @@ pub(crate) fn validate_loaded_scenario(
     mut commands: Commands,
     registry: Res<SettingsRegistry>,
     map: Option<Res<MapSettings>>,
-    scenario: Option<Res<ScenarioSettings>>,
+    encounter: Option<Res<Encounter>>,
     lighting: Option<Res<LightingSettings>>,
     time_override: Option<Res<ScenarioTimeOverride>>,
     seed: Option<Res<ResolvedMapSeed>>,
@@ -169,13 +178,13 @@ pub(crate) fn validate_loaded_scenario(
     {
         return;
     }
-    let (Some(map), Some(scenario), Some(lighting), Some(time_override)) =
-        (map, scenario, lighting, time_override)
+    let (Some(map), Some(encounter), Some(lighting), Some(time_override)) =
+        (map, encounter, lighting, time_override)
     else {
         return;
     };
     let inputs_changed = map.is_changed()
-        || scenario.is_changed()
+        || encounter.is_changed()
         || lighting.is_changed()
         || time_override.is_changed()
         || seed.as_ref().is_some_and(|seed| seed.is_changed());
@@ -183,7 +192,7 @@ pub(crate) fn validate_loaded_scenario(
         return;
     }
 
-    let contract_error = scenario_contract_error(&map, &scenario, seed.as_deref())
+    let contract_error = scenario_contract_error(&map, &encounter, seed.as_deref())
         .or_else(|| lighting.resolve(time_override.0).err());
     if let Some(reason) = contract_error {
         error!("selected scenario is incompatible with its world: {reason}");
@@ -248,9 +257,15 @@ fn validate_gameplay_lighting_contract(
     next.set(Screen::Title);
 }
 
+/// Whether the chosen encounter can be placed on the world the scenario named.
+///
+/// Two files, each valid alone: an encounter cannot see whether its terrain is generated,
+/// and a world cannot see who is standing on it. Every entry is checked rather than a
+/// side at a time — one authored coordinate in an otherwise anchored roster is the same
+/// bug, and it would otherwise only surface as one unit missing from the fight.
 fn scenario_contract_error(
     map: &MapSettings,
-    scenario: &ScenarioSettings,
+    encounter: &Encounter,
     seed: Option<&ResolvedMapSeed>,
 ) -> Option<String> {
     match &map.terrain {
@@ -258,9 +273,14 @@ fn scenario_contract_error(
             if seed.is_none() {
                 return Some("procedural terrain has no resolved generation seed".to_owned());
             }
-            for (who, placement) in [("player", &scenario.player), ("enemy", &scenario.enemy)] {
-                if !matches!(placement, ScenarioPlacement::Anchor(_)) {
-                    return Some(format!("procedural {who} placement must use a map anchor"));
+            for unit in encounter.entries() {
+                if !unit.placement.is_generated() {
+                    return Some(format!(
+                        "the {} {:?} is placed on an authored coordinate, but procedural terrain \
+                         must use a map anchor",
+                        unit.faction.label(),
+                        unit.archetype
+                    ));
                 }
             }
         }
@@ -270,10 +290,15 @@ fn scenario_contract_error(
                     "authored terrain must not receive a scenario generation seed".to_owned(),
                 );
             }
-            if !matches!(scenario.player, ScenarioPlacement::Fixed(_))
-                || !matches!(scenario.enemy, ScenarioPlacement::Fixed(_))
-            {
-                return Some("authored terrain requires Fixed unit placements".to_owned());
+            for unit in encounter.entries() {
+                if let Some(anchor) = unit.placement.anchor() {
+                    return Some(format!(
+                        "the {} {:?} uses map anchor {anchor:?}, but authored terrain publishes \
+                         none and requires fixed placements",
+                        unit.faction.label(),
+                        unit.archetype
+                    ));
+                }
             }
         }
     }
@@ -288,8 +313,8 @@ fn finalize_gameplay_setup(
     mut commands: Commands,
     failure: Option<Res<GameplaySetupFailure>>,
     terrain_ready: Option<Res<TerrainReady>>,
-    players: Query<(), With<Player>>,
-    enemies: Query<(), With<Enemy>>,
+    encounter: Option<Res<Encounter>>,
+    units: Query<&Faction>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let reason = failure
@@ -300,14 +325,7 @@ fn finalize_gameplay_setup(
                 .is_none()
                 .then(|| "The selected scenario could not build valid terrain.".to_owned())
         })
-        .or_else(|| {
-            (players.iter().count() != 1)
-                .then(|| "The selected scenario did not create exactly one player.".to_owned())
-        })
-        .or_else(|| {
-            (enemies.iter().count() != 1)
-                .then(|| "The selected scenario did not create exactly one enemy.".to_owned())
-        });
+        .or_else(|| roster_shortfall(encounter.as_deref(), &units));
 
     let Some(reason) = reason else { return };
     if failure.is_none() {
@@ -315,6 +333,41 @@ fn finalize_gameplay_setup(
     }
     error!("gameplay setup failed: {reason}");
     next.set(Screen::Title);
+}
+
+/// Whether every side the encounter rosters actually stands on the map.
+///
+/// This replaced "exactly one player and exactly one enemy", which was true of the
+/// two-coordinate scaffold and is not a fact about a roster: an encounter may field four
+/// player units, three hostiles, or two hostile groups holding different ground. What
+/// still has to hold is that each side the encounter rosters *arrived in full* — the
+/// count is compared per faction rather than in total, so three hostiles standing in for
+/// a missing party member does not add up to a valid setup.
+///
+/// `hex_units` names the entry and the reason when a placement fails, and it is the
+/// better message. This is the backstop for a placement that goes missing without one.
+fn roster_shortfall(encounter: Option<&Encounter>, units: &Query<&Faction>) -> Option<String> {
+    let Some(encounter) = encounter else {
+        return Some("Gameplay started with no encounter to spawn.".to_owned());
+    };
+
+    for faction in encounter.factions() {
+        let rostered = encounter.unit_count(faction);
+        let standing = units
+            .iter()
+            .filter(|spawned| **spawned == Faction::from(faction))
+            .count();
+        if standing != rostered {
+            let plural = if rostered == 1 { "unit" } else { "units" };
+            return Some(format!(
+                "Encounter {:?} rosters {rostered} {} {plural}, but {standing} of them stand on \
+                 the map.",
+                encounter.name,
+                faction.label()
+            ));
+        }
+    }
+    None
 }
 
 fn clear_session_resources(mut commands: Commands) {
@@ -365,9 +418,9 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::{
-        ArtPalette, CombatSettings, CubeCoord, GameAssets, LightingSettings, PlayerSettings,
-        ScenarioLibrary, ScenarioPlacement, ScenarioSettings, SettingsRegistry, SubstanceFile,
-        SubstanceTable,
+        ArtPalette, CombatSettings, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
+        FormationCenter, GameAssets, LightingSettings, PlayerSettings, Roster, RosterEntry,
+        ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
         AppSystems, CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, HexGrid,
@@ -376,7 +429,7 @@ mod tests {
         TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
-    use hex_units::{either_in_reach, Body, Enemy, Footing, Player, Reach, StandsOn};
+    use hex_units::{either_in_reach, Body, Enemy, Faction, Footing, Player, Reach, StandsOn};
     use hex_world::TimeOfDay;
 
     use super::{
@@ -392,6 +445,46 @@ mod tests {
 
     fn assets_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    }
+
+    /// The encounter a scenario names, read off disk.
+    ///
+    /// The whole point of the path is that this crate is the first layer allowed to open
+    /// both files, so the cross-file contract is checked here and nowhere lower.
+    fn encounter_of(scenario: &super::Scenario) -> Encounter {
+        let path = assets_dir().join(&scenario.encounter);
+        let text = fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "scenario {:?} names encounter {:?}, which could not be read: {error}",
+                scenario.name, scenario.encounter
+            )
+        });
+        ron::from_str(&text).unwrap_or_else(|error| {
+            panic!(
+                "scenario {:?} names an encounter that does not parse: {error}",
+                scenario.name
+            )
+        })
+    }
+
+    /// A two-unit encounter built in Rust, for the contract cases that need a roster the
+    /// shipped content deliberately does not contain.
+    fn duel(player: EncounterPlacement, hostile: EncounterPlacement) -> Encounter {
+        let side = |faction, placement, archetype: &str| Roster {
+            faction,
+            placement,
+            units: vec![RosterEntry {
+                archetype: archetype.to_owned(),
+                placement: None,
+            }],
+        };
+        Encounter {
+            name: "Test Duel".to_owned(),
+            rosters: vec![
+                side(EncounterFaction::Player, player, "hedge-mage"),
+                side(EncounterFaction::Hostile, hostile, "raider"),
+            ],
+        }
     }
 
     /// Cube distance from the centre of the map.
@@ -425,6 +518,37 @@ mod tests {
                 scenario.name,
                 world.err()
             );
+        }
+    }
+
+    /// Every encounter a scenario names exists, parses, and rosters both sides.
+    ///
+    /// Same reasoning as the world and lighting checks — the path is a plain string, so
+    /// a typo would otherwise be a loading screen that hangs for the one scenario nobody
+    /// clicked. `Encounter`'s `Deserialize` runs `validate()`, so this also proves the
+    /// roster is *placeable* in the ways a single file can be judged: no empty roster, no
+    /// coordinate that is not a hex, no two units sharing one exact surface.
+    #[test]
+    fn every_scenario_names_an_encounter_that_exists_and_parses() {
+        for scenario in &library().scenarios {
+            let encounter = encounter_of(scenario);
+            assert!(
+                encounter.unit_count(EncounterFaction::Player) >= 1,
+                "scenario {:?} rosters no player units",
+                scenario.name
+            );
+            assert!(
+                encounter.unit_count(EncounterFaction::Hostile) >= 1,
+                "scenario {:?} rosters nobody to fight",
+                scenario.name
+            );
+            for unit in encounter.entries() {
+                assert!(
+                    !unit.archetype.is_empty(),
+                    "scenario {:?} rosters a unit with no archetype",
+                    scenario.name
+                );
+            }
         }
     }
 
@@ -465,7 +589,7 @@ mod tests {
                 ron::from_str(&text).expect("the shipped world should deserialize");
             let seed = scenario.generation_seed.map(ResolvedMapSeed);
             assert_eq!(
-                scenario_contract_error(&world, &scenario.units, seed.as_ref()),
+                scenario_contract_error(&world, &encounter_of(scenario), seed.as_ref()),
                 None,
                 "scenario {:?} does not match {:?}",
                 scenario.name,
@@ -521,7 +645,7 @@ mod tests {
             ron::from_str::<MapSettings>(&world_text)
                 .expect("the static scenario world should deserialize"),
         );
-        app.insert_resource(entry.units);
+        app.insert_resource(encounter_of(&entry));
         app.insert_resource(
             ron::from_str::<LightingSettings>(&lighting_text)
                 .expect("the static scenario lighting should deserialize"),
@@ -600,15 +724,15 @@ mod tests {
             ron::from_str(&text).expect("the procedural world should deserialize");
         assert!(matches!(world.terrain, TerrainSettings::Procedural(_)));
 
-        assert!(scenario_contract_error(&world, &entry.units, None)
+        assert!(scenario_contract_error(&world, &encounter_of(&entry), None)
             .is_some_and(|error| error.contains("no resolved")));
 
-        let fixed = ScenarioSettings {
-            player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
-            enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
-        };
+        let authored = duel(
+            EncounterPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+            EncounterPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
+        );
         assert!(
-            scenario_contract_error(&world, &fixed, Some(&ResolvedMapSeed(1)))
+            scenario_contract_error(&world, &authored, Some(&ResolvedMapSeed(1)))
                 .is_some_and(|error| error.contains("map anchor"))
         );
     }
@@ -624,10 +748,15 @@ mod tests {
         let text = fs::read_to_string(path).expect("the procedural world should be readable");
         let world: MapSettings =
             ron::from_str(&text).expect("the procedural world should deserialize");
-        let placements = ScenarioSettings {
-            player: ScenarioPlacement::Anchor("surface_entrance".to_owned()),
-            enemy: ScenarioPlacement::Anchor("deep_chamber".to_owned()),
-        };
+        // Recipe-specific names, and a formation on one side: a formation is generated
+        // exactly when its centre is, so it satisfies the same contract as a bare anchor.
+        let placements = duel(
+            EncounterPlacement::Anchor("surface_entrance".to_owned()),
+            EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("deep_chamber".to_owned()),
+                spread: 2,
+            },
+        );
 
         assert_eq!(
             scenario_contract_error(&world, &placements, Some(&ResolvedMapSeed(1))),
@@ -646,16 +775,16 @@ mod tests {
             .expect("the procedural world should be readable");
         let world: MapSettings =
             ron::from_str(&world_text).expect("the procedural world should deserialize");
-        let fixed = ScenarioSettings {
-            player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
-            enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
-        };
+        let authored = duel(
+            EncounterPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+            EncounterPlacement::Fixed(CubeCoord { x: 1, y: -1, z: 0 }),
+        );
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_state::<Screen>();
         app.insert_resource(SettingsRegistry::default());
         app.insert_resource(world);
-        app.insert_resource(fixed);
+        app.insert_resource(authored);
         let lighting_text = fs::read_to_string(assets_dir().join(&entry.lighting))
             .expect("the procedural lighting should be readable");
         app.insert_resource(
@@ -789,10 +918,16 @@ mod tests {
         assert!((app.world().resource::<TimeOfDay>().hours - expected).abs() < f32::EPSILON);
     }
 
+    /// A finalizer harness: an encounter rostering `rostered` units a side, with
+    /// `spawned` of each actually standing on the map.
+    ///
+    /// The counts are separate because the check is exactly the gap between them. It used
+    /// to be "exactly one player and exactly one enemy", which is a fact about the
+    /// scaffold rather than about a roster — a party of four was structurally invalid.
     fn finalizer_app(
         terrain_ready: bool,
-        player_count: usize,
-        enemy_count: usize,
+        rostered: usize,
+        spawned: usize,
         failure: Option<GameplaySetupFailure>,
     ) -> App {
         let mut app = App::new();
@@ -820,11 +955,29 @@ mod tests {
         if let Some(failure) = failure {
             app.insert_resource(failure);
         }
-        for _ in 0..player_count {
-            app.world_mut().spawn(Player);
-        }
-        for _ in 0..enemy_count {
-            app.world_mut().spawn(Enemy);
+        let side = |faction| Roster {
+            faction,
+            placement: EncounterPlacement::Formation {
+                center: FormationCenter::Anchor("party_start".to_owned()),
+                spread: 2,
+            },
+            units: (0..rostered)
+                .map(|_| RosterEntry {
+                    archetype: "hedge-mage".to_owned(),
+                    placement: None,
+                })
+                .collect(),
+        };
+        app.insert_resource(Encounter {
+            name: "Finalizer".to_owned(),
+            rosters: vec![
+                side(EncounterFaction::Player),
+                side(EncounterFaction::Hostile),
+            ],
+        });
+        for _ in 0..spawned {
+            app.world_mut().spawn((Player, Faction::Player));
+            app.world_mut().spawn((Enemy, Faction::Hostile));
         }
         app
     }
@@ -837,9 +990,13 @@ mod tests {
         app.update();
     }
 
+    /// A roster that arrives short is a setup failure naming the shortfall.
+    ///
+    /// Four rostered, three standing: the count that matters is per side and against the
+    /// roster, so the old "exactly one" check would have called this a valid setup.
     #[test]
-    fn finalizer_returns_to_title_when_a_required_actor_is_missing() {
-        let mut app = finalizer_app(true, 0, 1, None);
+    fn finalizer_returns_to_title_when_a_rostered_unit_is_missing() {
+        let mut app = finalizer_app(true, 4, 3, None);
 
         enter_gameplay_and_settle(&mut app);
 
@@ -847,11 +1004,27 @@ mod tests {
             *app.world().resource::<State<Screen>>().get(),
             Screen::Title
         );
-        assert!(app
-            .world()
-            .resource::<GameplaySetupFailure>()
-            .reason
-            .contains("exactly one player"));
+        let reason = &app.world().resource::<GameplaySetupFailure>().reason;
+        assert!(
+            reason.contains("rosters 4 player units, but 3"),
+            "the failure should say how many are missing from which side: {reason}"
+        );
+    }
+
+    /// And a full roster of four a side is a valid setup, which the retired check made
+    /// structurally impossible.
+    #[test]
+    fn finalizer_accepts_a_party_larger_than_one() {
+        let mut app = finalizer_app(true, 4, 4, None);
+
+        enter_gameplay_and_settle(&mut app);
+
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Gameplay,
+            "a four-unit roster is a valid encounter"
+        );
+        assert!(!app.world().contains_resource::<GameplaySetupFailure>());
     }
 
     #[test]
@@ -934,57 +1107,58 @@ mod tests {
         }
     }
 
-    /// And every unit starts inside the world it is placed on.
+    /// And every rostered unit starts inside the world it is placed on.
     ///
-    /// Not a formality. `coord_from` and `spawn_unit` both warn and fall back to the
-    /// centre of the map, so a scenario whose player sits outside its own grid radius
-    /// *works* — the piece simply is not where the designer put it, and the only
-    /// evidence is a line in the terminal nobody is reading.
+    /// Not a formality. An authored coordinate outside the grid radius has no surface
+    /// under it, which now fails setup and sends the player back to the title screen —
+    /// so a scenario nobody has clicked yet would be broken with nothing to say so.
+    ///
+    /// Every entry, not one per side: a roster can be wrong about its fourth unit.
     #[test]
     fn every_unit_starts_inside_its_own_world() {
         for scenario in &library().scenarios {
             let text = fs::read_to_string(assets_dir().join(&scenario.world))
                 .expect("the world file should exist");
             let world: MapSettings = ron::from_str(&text).expect("the world should parse");
+            let encounter = encounter_of(scenario);
 
-            for (who, placement) in [
-                ("player", &scenario.units.player),
-                ("enemy", &scenario.units.enemy),
-            ] {
-                match placement {
-                    ScenarioPlacement::Fixed(coord) => {
-                        assert_eq!(
-                            coord.x + coord.y + coord.z,
-                            0,
-                            "scenario {:?}: the {who}'s coordinates do not sum to zero",
-                            scenario.name
-                        );
-                        assert!(
-                            distance_from_centre(*coord) <= world.grid_radius,
-                            "scenario {:?}: the {who} starts {} hexes out on a map of radius {}",
-                            scenario.name,
-                            distance_from_centre(*coord),
-                            world.grid_radius
-                        );
-                    }
-                    ScenarioPlacement::Anchor(anchor) => {
-                        assert!(
-                            !anchor.is_empty(),
-                            "scenario {:?}: the {who} has an empty generated anchor",
-                            scenario.name
-                        );
-                        assert!(
-                            scenario.generation_seed.is_some(),
-                            "scenario {:?}: the {who} uses a generated anchor without a seed",
-                            scenario.name
-                        );
-                    }
+            for unit in encounter.entries() {
+                let who = format!("{} {:?}", unit.faction.label(), unit.archetype);
+                if let Some(coord) = unit.placement.fixed_coord() {
+                    assert_eq!(
+                        coord.x + coord.y + coord.z,
+                        0,
+                        "scenario {:?}: the {who}'s coordinates do not sum to zero",
+                        scenario.name
+                    );
+                    assert!(
+                        distance_from_centre(coord) <= world.grid_radius,
+                        "scenario {:?}: the {who} starts {} hexes out on a map of radius {}",
+                        scenario.name,
+                        distance_from_centre(coord),
+                        world.grid_radius
+                    );
+                }
+                if let Some(anchor) = unit.placement.anchor() {
+                    assert!(
+                        !anchor.is_empty(),
+                        "scenario {:?}: the {who} has an empty generated anchor",
+                        scenario.name
+                    );
+                    assert!(
+                        scenario.generation_seed.is_some(),
+                        "scenario {:?}: the {who} uses a generated anchor without a seed",
+                        scenario.name
+                    );
                 }
             }
         }
     }
 
     /// The showcase starts with one unit at each end of its defining crossing.
+    ///
+    /// A formation of one stands exactly on its centre, so this is still an assertion
+    /// about two precise hexes — which is what the scenario is for.
     #[test]
     fn the_crossing_starts_units_at_opposite_bridge_landings() {
         let library = library();
@@ -993,14 +1167,18 @@ mod tests {
             .iter()
             .find(|scenario| scenario.name == "The Crossing")
             .expect("the shipped library should contain The Crossing");
+        let encounter = encounter_of(crossing);
+        let landings: Vec<Option<CubeCoord>> = encounter
+            .entries()
+            .map(|unit| unit.placement.fixed_coord())
+            .collect();
 
         assert_eq!(
-            crossing.units.player,
-            ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 4, z: -4 })
-        );
-        assert_eq!(
-            crossing.units.enemy,
-            ScenarioPlacement::Fixed(CubeCoord { x: 0, y: -4, z: 4 })
+            landings,
+            vec![
+                Some(CubeCoord { x: 0, y: 4, z: -4 }),
+                Some(CubeCoord { x: 0, y: -4, z: 4 }),
+            ]
         );
     }
 
@@ -1043,12 +1221,12 @@ mod tests {
             PostUpdate,
             enter_gameplay_if_registry_is_ready.run_if(in_state(Screen::Loading)),
         );
-        let stale_units = library()
+        let stale_encounter = library()
             .scenarios
             .first()
-            .map(|scenario| scenario.units.clone())
+            .map(encounter_of)
             .expect("the shipped library should not be empty");
-        app.insert_resource(stale_units);
+        app.insert_resource(stale_encounter);
         app.insert_resource(ResolvedMapSeed(99));
         app.insert_resource(TimeOfDay { hours: 3.0 });
         app.insert_resource(SpecialMovementRegions::new());
@@ -1069,8 +1247,7 @@ mod tests {
             "returning to title left the settings registry falsely pending"
         );
         assert!(
-            !app.world()
-                .contains_resource::<hex_assets::ScenarioSettings>(),
+            !app.world().contains_resource::<hex_assets::Encounter>(),
             "loading without a click reused stale scenario placements"
         );
         assert!(
@@ -1173,7 +1350,7 @@ mod tests {
         let (first, first_light) = settle(&mut app);
         let first_units = app
             .world()
-            .get_resource::<hex_assets::ScenarioSettings>()
+            .get_resource::<hex_assets::Encounter>()
             .expect("the scenario's placements should be installed")
             .clone();
 
@@ -1187,7 +1364,7 @@ mod tests {
         let (second, second_light) = settle(&mut app);
         let second_units = app
             .world()
-            .get_resource::<hex_assets::ScenarioSettings>()
+            .get_resource::<hex_assets::Encounter>()
             .expect("the scenario's placements should be installed")
             .clone();
 
@@ -1200,8 +1377,8 @@ mod tests {
             "both scenarios produced the same lighting; the sky does not follow the scenario"
         );
         assert_ne!(
-            first_units.enemy, second_units.enemy,
-            "both scenarios produced the same placements"
+            first_units, second_units,
+            "both scenarios produced the same encounter"
         );
     }
 
@@ -1322,7 +1499,7 @@ mod tests {
         );
         app.insert_resource(player);
         app.insert_resource(palette);
-        app.insert_resource(entry.units);
+        app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
         app.insert_resource(seed);
         app.add_plugins((hex_map::plugin, hex_units::movement::plugin));
@@ -1426,8 +1603,17 @@ mod tests {
     #[test]
     fn missing_generated_enemy_anchor_fails_setup_and_cleans_partial_world() {
         let mut app = procedural_gameplay_app("Procedural Hills");
-        app.world_mut().resource_mut::<ScenarioSettings>().enemy =
-            ScenarioPlacement::Anchor("missing_enemy_anchor".to_owned());
+        // Point the hostile roster at an anchor the generator does not publish. The
+        // whole roster must fail rather than the map coming up one unit short.
+        {
+            let mut encounter = app.world_mut().resource_mut::<Encounter>();
+            let hostile = encounter
+                .rosters
+                .iter_mut()
+                .find(|roster| roster.faction == EncounterFaction::Hostile)
+                .expect("the shipped encounter should roster a hostile side");
+            hostile.placement = EncounterPlacement::Anchor("missing_enemy_anchor".to_owned());
+        }
 
         enter_screen(&mut app, Screen::Gameplay);
 
@@ -1487,13 +1673,11 @@ mod tests {
                 !report.used_fallback,
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
+            let encounter = encounter_of(&scenario);
             let anchors = app.world().resource::<MapAnchors>();
-            for required in [&scenario.units.player, &scenario.units.enemy]
-                .into_iter()
-                .filter_map(|placement| match placement {
-                    ScenarioPlacement::Anchor(name) => Some(name.as_str()),
-                    ScenarioPlacement::Fixed(_) => None,
-                })
+            for required in encounter
+                .entries()
+                .filter_map(|unit| unit.placement.anchor())
             {
                 assert!(
                     anchors.get(&MapAnchorId::from(required)).is_some(),

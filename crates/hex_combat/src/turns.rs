@@ -37,19 +37,20 @@ use bevy::prelude::*;
 use hex_assets::CombatSettings;
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, Screen, TilePos, Turn, UnitId,
+    PausableSystems, PendingDecision, RoundElapsed, Screen, TilePos, Turn, UnitId,
 };
+use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
-    either_in_reach, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt, UnitAllocator,
-    UnitRegistry,
+    either_in_reach, Downed, Faction, MovementCrossings, Standing, StandsOn, StopMovingAt,
+    UnitAllocator, UnitRegistry,
 };
 
 /// Where a unit sits in the turn order. Higher acts first.
 ///
 /// A component so the rule is swappable without touching anything that reads it. The
-/// design proposes deriving this from lattice size — which would also give a large
+/// design proposes deriving this from lattice size — which could also give a large
 /// lattice several slots in the order, solving boss action economy with the same
-/// mechanic — but lattices do not exist yet, so this is a number on a unit.
+/// mechanic — but that policy remains unsettled, so this is a number on a unit.
 ///
 /// **No randomness.** The design is explicit that uncertainty should come from hidden
 /// information rather than dice, and a turn order that a player cannot predict makes
@@ -104,15 +105,55 @@ impl TurnOrder {
     }
 
     /// Moves to the next unit, wrapping and counting a round.
-    fn advance(&mut self) {
+    ///
+    /// Returns whether the wrap happened — that is, whether a **round
+    /// elapsed**. Several systems need to know: effects that tick per round,
+    /// knowledge that decays per round, and anything counting fight length.
+    /// Returning it here rather than having each of them re-derive it from
+    /// `round` is what keeps them from disagreeing about when a round ended.
+    fn advance(&mut self) -> bool {
         if self.order.is_empty() {
-            return;
+            return false;
         }
         self.current += 1;
         if self.current >= self.order.len() {
             self.current = 0;
             self.round += 1;
+            return true;
         }
+        false
+    }
+
+    /// Takes a unit out of the fight, keeping whose turn it is intact.
+    ///
+    /// Returns whether the unit was in the order at all.
+    ///
+    /// **`current` is an index, not an id**, so removing somebody earlier in
+    /// the order silently hands the turn to the wrong unit unless the index
+    /// moves with them. That is the entire reason this is a method rather than
+    /// a `Vec::retain` at each call site — death, rout and despawn all need it,
+    /// and each would get the off-by-one wrong separately.
+    ///
+    /// Removing the acting unit leaves `current` pointing at whoever now
+    /// occupies that slot — the next unit — which is what a turn order should
+    /// do when somebody dies mid-turn. Removing the last unit wraps to the
+    /// front **without** counting a round, because no round elapsed: units
+    /// simply stopped existing.
+    pub fn remove(&mut self, unit: UnitId) -> bool {
+        let Some(index) = self.position_of(unit) else {
+            return false;
+        };
+        self.order.remove(index);
+        if self.order.is_empty() {
+            self.current = 0;
+            return true;
+        }
+        if index < self.current {
+            self.current -= 1;
+        } else if self.current >= self.order.len() {
+            self.current = 0;
+        }
+        true
     }
 
     fn clear(&mut self) {
@@ -124,7 +165,8 @@ impl TurnOrder {
 
 /// Registers the loop.
 pub fn plugin(app: &mut App) {
-    app.register_type::<Initiative>()
+    app.add_message::<RoundElapsed>()
+        .register_type::<Initiative>()
         .register_type::<Turn>()
         .init_resource::<TurnOrder>()
         // Idempotent alongside hex_units' own init: combat resolves the order
@@ -157,6 +199,13 @@ pub fn plugin(app: &mut App) {
                     .before(crate::CombatSystems::Apply)
                     .in_set(PausableSystems)
                     .run_if(in_state(Mode::Combat)),
+                // Between applying and advancing: a unit that goes down on its own
+                // turn must not then be handed that turn.
+                check_for_downed
+                    .after(crate::CombatSystems::Apply)
+                    .before(crate::CombatSystems::Advance)
+                    .in_set(PausableSystems)
+                    .run_if(in_state(Mode::Combat)),
                 advance_turn
                     .in_set(crate::CombatSystems::Advance)
                     .in_set(PausableSystems)
@@ -187,7 +236,7 @@ fn engagement(
     mut commands: Commands,
     mode: Res<State<Mode>>,
     mut next: ResMut<NextState<Mode>>,
-    units: Query<(Entity, &Faction, &StandsOn)>,
+    units: Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: Option<Res<MovementCrossings>>,
     settings: Res<CombatSettings>,
 ) {
@@ -230,7 +279,7 @@ fn engagement(
 /// horizontally, and exactly why the answer has to come from a reach rule that knows
 /// what height is worth rather than from raw separation.
 fn any_hostile_in_reach(
-    units: &Query<(Entity, &Faction, &StandsOn)>,
+    units: &Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     range: u32,
     levels_per_bonus: u32,
 ) -> Option<bool> {
@@ -255,7 +304,7 @@ fn any_hostile_in_reach(
 /// final [`StandsOn`] would miss a fast unit that entered and left the engagement
 /// radius during one frame.
 fn first_hostile_crossing(
-    units: &Query<(Entity, &Faction, &StandsOn)>,
+    units: &Query<(Entity, &Faction, &StandsOn), Without<Downed>>,
     crossings: &MovementCrossings,
     range: u32,
     levels_per_bonus: u32,
@@ -280,7 +329,7 @@ fn first_hostile_crossing(
 fn begin_combat(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), With<Faction>>,
+    units: Query<(Entity, Option<&UnitId>, Option<&Initiative>), (With<Faction>, Without<Downed>)>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     settings: Res<CombatSettings>,
@@ -348,30 +397,33 @@ fn end_combat(
 
 /// Emits an end-turn command when the player presses the key.
 ///
-/// The seat is read off the current unit itself, so the applier's ownership
-/// check passes for exactly the units this session commands. Deliberately no
-/// faction filter: the key skips whoever is acting, enemy turns included —
-/// today's debug affordance, and the funnel is where it will grow teeth when
-/// seats become real.
+/// The seat is read off the current player unit itself, so the applier's ownership
+/// check passes for exactly the unit this input controls. Enemy turns are deliberately
+/// ignored: keyboard input must not become a debug back door that skips hostile actions.
 fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
-    owners: Query<&ControlOwner>,
+    pending: Res<PendingDecision>,
+    owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) {
+    if !keys.just_pressed(KeyCode::Space) || pending.is_open() {
         return;
     }
     let Some(current) = turn_order.current() else {
         return;
     };
-    let seat = registry
-        .entity_of(current)
-        .and_then(|entity| owners.get(entity).ok())
-        .copied()
-        .unwrap_or_default()
-        .0;
+    let Some(entity) = registry.entity_of(current) else {
+        return;
+    };
+    let Ok((owner, faction)) = owners.get(entity) else {
+        return;
+    };
+    if *faction != Faction::Player {
+        return;
+    }
+    let seat = owner.copied().unwrap_or_default().0;
     queue.push(IssuedCommand {
         seat,
         command: GameCommand::EndTurn { unit: current },
@@ -389,6 +441,7 @@ fn advance_turn(
     mut turn_order: ResMut<TurnOrder>,
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
+    mut rounds: MessageWriter<RoundElapsed>,
     acting: Query<(Entity, &Turn, Has<Busy>)>,
 ) {
     let Some(current) = turn_order.current() else {
@@ -410,7 +463,9 @@ fn advance_turn(
     }
 
     commands.entity(entity).remove::<Turn>();
-    turn_order.advance();
+    if turn_order.advance() {
+        rounds.write(RoundElapsed);
+    }
     if let Some(next) = turn_order
         .current()
         .and_then(|unit| registry.entity_of(unit))
@@ -419,6 +474,62 @@ fn advance_turn(
             movement_left: settings.movement_per_turn,
             acted: false,
         });
+    }
+}
+
+/// Movement budget when `combat.ron` has not loaded, for headless harnesses only.
+const DEFAULT_MOVEMENT_PER_TURN: u32 = 4;
+
+/// Takes units whose lattice is entirely disabled out of the fight.
+///
+/// **Downed, not dead.** The design leaves both functional death — a threshold arriving
+/// before zero — and permadeath open, and this settles neither: a unit whose every hex
+/// is disabled leaves the turn order, gains [`Downed`], and stays on the map revivable
+/// by a restoring spell. That is a testable starting behaviour, not an answer.
+///
+/// Runs after the applier, because that is what disables hexes, and before the turn
+/// advances, so a unit that goes down on its own turn does not get to take it.
+fn check_for_downed(
+    mut commands: Commands,
+    mut turn_order: ResMut<TurnOrder>,
+    registry: Res<UnitRegistry>,
+    settings: Option<Res<CombatSettings>>,
+    units: Query<(Entity, &UnitId, &LatticeSpec, &LatticeState), Without<Downed>>,
+    mut events: MessageWriter<crate::CombatEvent>,
+) {
+    for (entity, &unit, spec, state) in &units {
+        // A lattice with no cells at all is not a downed unit — it is a unit with no
+        // lattice, which `all()` would call downed on the vacuous truth.
+        if spec.capacity() == 0 || !spec.cells().all(|(coord, _)| state.is_disabled(coord)) {
+            continue;
+        }
+        let held_the_turn = turn_order.current() == Some(unit);
+        commands.entity(entity).insert(Downed).remove::<Turn>();
+        turn_order.remove(unit);
+        events.write(crate::CombatEvent::Downed { unit });
+        info!("{unit:?} is down — every hex disabled");
+
+        // **Hand the turn on, or the fight stalls forever.** `advance_turn` only acts
+        // on a unit that *holds* a `Turn`, and `TurnOrder::remove` slides `current` onto
+        // a successor who has none — so taking the turn-holder out without granting the
+        // next one a turn means nobody ever acts again, and only combat ending unwedges
+        // it. This is the one path that removes a unit mid-order, so it is the one place
+        // that has to do the handover.
+        if !held_the_turn {
+            continue;
+        }
+        let budget = settings
+            .as_deref()
+            .map_or(DEFAULT_MOVEMENT_PER_TURN, |combat| combat.movement_per_turn);
+        if let Some(next) = turn_order
+            .current()
+            .and_then(|unit| registry.entity_of(unit))
+        {
+            commands.entity(next).insert(Turn {
+                movement_left: budget,
+                acted: false,
+            });
+        }
     }
 }
 
@@ -487,6 +598,77 @@ mod tests {
         order.clear();
         assert!(order.is_empty());
         assert_eq!(order.round, 0, "a new fight starts at round zero");
+    }
+
+    /// Removing somebody who already acted must not hand the turn to the
+    /// wrong unit. `current` is an index, so a naive `Vec::remove` shifts
+    /// everyone left and silently skips whoever was next.
+    #[test]
+    fn removing_an_earlier_unit_keeps_the_same_unit_acting() {
+        let mut order = order_of(&[UnitId(1), UnitId(2), UnitId(3)]);
+        order.advance();
+        assert_eq!(order.current(), Some(UnitId(2)), "precondition");
+
+        assert!(order.remove(UnitId(1)));
+
+        assert_eq!(
+            order.current(),
+            Some(UnitId(2)),
+            "removing an earlier unit must not change whose turn it is"
+        );
+    }
+
+    /// Removing whoever is acting passes the turn to the next unit rather than
+    /// skipping one, because the survivor slides into the vacated slot.
+    #[test]
+    fn removing_the_acting_unit_gives_the_turn_to_the_next() {
+        let mut order = order_of(&[UnitId(1), UnitId(2), UnitId(3)]);
+
+        assert!(order.remove(UnitId(1)));
+
+        assert_eq!(order.current(), Some(UnitId(2)));
+    }
+
+    /// Removing the last unit in the order wraps to the front — and must not
+    /// count a round, because none elapsed.
+    #[test]
+    fn removing_the_last_unit_wraps_without_counting_a_round() {
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
+        order.advance();
+        assert_eq!(order.current(), Some(UnitId(2)), "precondition");
+        assert_eq!(order.round, 0, "precondition");
+
+        assert!(order.remove(UnitId(2)));
+
+        assert_eq!(order.current(), Some(UnitId(1)), "the order should wrap");
+        assert_eq!(order.round, 0, "removal is not a round");
+    }
+
+    /// The last removal empties the fight without panicking on the index.
+    #[test]
+    fn removing_everyone_empties_the_order() {
+        let mut order = order_of(&[UnitId(1)]);
+        assert!(order.remove(UnitId(1)));
+        assert!(order.is_empty());
+        assert_eq!(order.current(), None);
+    }
+
+    #[test]
+    fn removing_a_unit_that_is_not_in_the_order_reports_it() {
+        let mut order = order_of(&[UnitId(1)]);
+        assert!(!order.remove(UnitId(9)));
+        assert_eq!(order.order().len(), 1);
+    }
+
+    /// The wrap is what a round *is*, and consumers are told about it exactly
+    /// once — anything re-deriving it from the counter could double-count.
+    #[test]
+    fn advance_reports_the_wrap_exactly_once() {
+        let mut order = order_of(&[UnitId(1), UnitId(2)]);
+
+        assert!(!order.advance(), "mid-order is not a round boundary");
+        assert!(order.advance(), "the wrap is the round boundary");
+        assert!(!order.advance(), "and the next step is not");
     }
 
     #[test]
