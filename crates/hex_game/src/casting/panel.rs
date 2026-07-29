@@ -34,6 +34,7 @@ use crate::menus::widgets::{
     blurb, divider, fine, heading, label, row_button, small_button, UiAssets, EDGE, PANEL_BG,
     SMALL_BUTTON_WIDTH,
 };
+use crate::readouts::HudElement;
 use crate::screens::DespawnOnExit;
 
 use super::preview::AimVolume;
@@ -83,6 +84,7 @@ pub(super) fn spawn_panel(
     commands
         .spawn((
             Name::new("Casting Panel"),
+            HudElement,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),

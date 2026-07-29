@@ -37,18 +37,10 @@ impl LatticeScale {
     pub(crate) const DEMO: Self = Self(1.0);
 
     /// Compact cells in gameplay side panels.
-    #[expect(
-        dead_code,
-        reason = "the gameplay panel adopts this scale in the following subsystem commit"
-    )]
     pub(crate) const PANEL: Self = Self(0.65);
 }
 
 /// Whether a projected cell participates in UI picking.
-#[expect(
-    dead_code,
-    reason = "read-only combat projections arrive in the following subsystem commit"
-)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CellInteraction {
     ReadOnly,
@@ -59,33 +51,77 @@ pub(crate) enum CellInteraction {
 ///
 /// `known_mana` and `known_locked` remain optional so knowledge-backed callers
 /// cannot accidentally turn an unknown value into a plausible-looking zero.
-#[derive(Component, Clone)]
+#[derive(Component, Clone, Debug, PartialEq)]
 pub(crate) struct LatticeCellView {
     pub(crate) coord: LatticeCoord,
     pub(crate) label: String,
     pub(crate) detail: String,
     pub(crate) color: Color,
-    #[expect(
-        dead_code,
-        reason = "combat projections consume knowledge and selection in the following subsystem"
-    )]
     pub(crate) known_mana: Option<u16>,
-    #[expect(
-        dead_code,
-        reason = "combat projections consume knowledge and selection in the following subsystem"
-    )]
     pub(crate) known_locked: Option<bool>,
-    #[expect(
-        dead_code,
-        reason = "combat projections consume knowledge and selection in the following subsystem"
-    )]
     pub(crate) disabled: bool,
-    #[expect(
-        dead_code,
-        reason = "combat projections consume knowledge and selection in the following subsystem"
-    )]
     pub(crate) selected: bool,
     pub(crate) interaction: CellInteraction,
+}
+
+/// Projects a revealed cell without inventing a maximum mana value or a lock
+/// state the viewer did not learn.
+pub(crate) fn known_cell_view(
+    coord: LatticeCoord,
+    kind: CellKind,
+    known_mana: Option<u16>,
+    known_locked: Option<bool>,
+    disabled: bool,
+    elements: &ElementCatalog,
+    spells: &SpellBook,
+) -> LatticeCellView {
+    let locked = known_locked == Some(true);
+    let color = if disabled {
+        DISABLED_COLOR
+    } else if locked {
+        LOCKED_COLOR
+    } else {
+        match kind {
+            CellKind::Gem { element } => element_color(Some(element), elements),
+            CellKind::Fusion { .. } => FUSION_COLOR,
+            _ => SPELL_COLOR,
+        }
+    };
+    let (label, mut detail) = match kind {
+        CellKind::Gem { element } => (
+            short_name(elements.name(element).unwrap_or("gem")),
+            known_mana.map_or_else(|| "mana unknown".to_owned(), |mana| format!("{mana} mana")),
+        ),
+        CellKind::Fusion { output } => (
+            "fusion".to_owned(),
+            short_name(elements.name(output).unwrap_or("?")),
+        ),
+        CellKind::Spell { spell } => (
+            short_name(spells.name(spell).unwrap_or("spell")),
+            spells
+                .spell(spell)
+                .map(|entry| format!("tier {}", entry.tier()))
+                .unwrap_or_default(),
+        ),
+        CellKind::Blank => ("-".to_owned(), String::new()),
+    };
+    if disabled {
+        detail = "disabled".to_owned();
+    } else if locked {
+        detail = format!("{detail} locked");
+    }
+
+    LatticeCellView {
+        coord,
+        label,
+        detail,
+        color,
+        known_mana,
+        known_locked,
+        disabled,
+        selected: false,
+        interaction: CellInteraction::ReadOnly,
+    }
 }
 
 /// Projects a fully known, live cell without changing the demo's established
@@ -173,6 +209,7 @@ pub(crate) fn spawn_lattice_cells<M: Bundle>(
                 height: Val::Px(max.1 - min.1 + CELL_HEIGHT * scale.0),
                 ..default()
             },
+            Pickable::IGNORE,
         ))
         .with_children(|lattice| {
             for view in views {
@@ -186,7 +223,7 @@ pub(crate) fn spawn_lattice_cells<M: Bundle>(
                     OwnColors,
                     ImageNode {
                         image: assets.hex_cell.clone(),
-                        color: view.color,
+                        color: styled_color(view, Interaction::None),
                         ..default()
                     },
                     Node {
@@ -206,6 +243,8 @@ pub(crate) fn spawn_lattice_cells<M: Bundle>(
                 ));
                 if view.interaction == CellInteraction::Actionable {
                     cell.insert(Button);
+                } else {
+                    cell.insert(Pickable::IGNORE);
                 }
                 cell.with_children(|cell| {
                     cell.spawn((
@@ -229,6 +268,38 @@ pub(crate) fn spawn_lattice_cells<M: Bundle>(
                 });
             }
         });
+}
+
+/// Explicitly paints actionable lattice cells without handing their semantic
+/// colors to the ordinary button palette.
+pub(crate) fn paint_interactions(
+    mut cells: Query<
+        (&Interaction, &LatticeCellView, &mut ImageNode),
+        (Changed<Interaction>, With<Button>),
+    >,
+) {
+    for (interaction, view, mut image) in &mut cells {
+        image.color = styled_color(view, *interaction);
+    }
+}
+
+fn styled_color(view: &LatticeCellView, interaction: Interaction) -> Color {
+    let interaction_lift: f32 = match interaction {
+        Interaction::Pressed => 0.28,
+        Interaction::Hovered => 0.16,
+        Interaction::None => 0.0,
+    };
+    let lift = interaction_lift.max(if view.selected { 0.24 } else { 0.0 });
+    if lift == 0.0 {
+        return view.color;
+    }
+    let color = view.color.to_srgba();
+    Color::srgba(
+        color.red + (1.0 - color.red) * lift,
+        color.green + (1.0 - color.green) * lift,
+        color.blue + (1.0 - color.blue) * lift,
+        color.alpha,
+    )
 }
 
 fn bounds(views: &[LatticeCellView], scale: LatticeScale) -> Option<((f32, f32), (f32, f32))> {
@@ -260,5 +331,73 @@ pub(crate) fn short_name(name: &str) -> String {
     } else {
         let head: String = name.chars().take(FITS - 1).collect();
         format!("{head}…")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::MinimalPlugins;
+
+    use super::*;
+
+    fn view(interaction: CellInteraction, selected: bool) -> LatticeCellView {
+        LatticeCellView {
+            coord: LatticeCoord::ORIGIN,
+            label: "Fire".to_owned(),
+            detail: "2 mana".to_owned(),
+            color: Color::srgb(0.2, 0.3, 0.4),
+            known_mana: Some(2),
+            known_locked: Some(false),
+            disabled: false,
+            selected,
+            interaction,
+        }
+    }
+
+    #[test]
+    fn read_only_cells_have_no_button_and_defer_picking_to_the_panel() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
+        app.add_systems(Startup, |mut commands: Commands, assets: Res<UiAssets>| {
+            commands.spawn(Node::default()).with_children(|parent| {
+                spawn_lattice_cells(
+                    parent,
+                    &[view(CellInteraction::ReadOnly, false)],
+                    &assets,
+                    LatticeScale::PANEL,
+                    "Target",
+                    |_| (),
+                );
+            });
+        });
+        app.update();
+
+        let mut cells = app
+            .world_mut()
+            .query_filtered::<(Has<Button>, Option<&Pickable>), With<LatticeCellView>>();
+        let rows: Vec<_> = cells.iter(app.world()).collect();
+        assert_eq!(rows, vec![(false, Some(&Pickable::IGNORE))]);
+
+        let mut containers = app
+            .world_mut()
+            .query_filtered::<(&Name, &Pickable), Without<LatticeCellView>>();
+        assert!(containers
+            .iter(app.world())
+            .any(|(name, pickable)| name.as_str() == "Target Lattice"
+                && *pickable == Pickable::IGNORE));
+    }
+
+    #[test]
+    fn hover_and_selection_both_lift_an_actionable_cells_color() {
+        let plain = view(CellInteraction::Actionable, false);
+        let selected = view(CellInteraction::Actionable, true);
+        assert_ne!(styled_color(&selected, Interaction::None), selected.color);
+        assert_ne!(styled_color(&plain, Interaction::Hovered), plain.color);
+        assert_eq!(styled_color(&plain, Interaction::None), plain.color);
     }
 }

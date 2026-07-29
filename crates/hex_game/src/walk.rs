@@ -110,7 +110,7 @@ enum WalkStep {
         #[serde(default)]
         index: usize,
     },
-    /// Press and release a key: `Backspace`, `Escape`, `Space`, or `Enter`.
+    /// Press and release a supported gameplay or menu key.
     Key(String),
     /// Launch a scenario by exact name, bypassing the menu UI.
     StartScenario {
@@ -177,8 +177,9 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         // into a screen with no aiming UI on it at all.
         "Tab" => Ok(KeyCode::Tab),
         "KeyQ" => Ok(KeyCode::KeyQ),
+        "KeyH" => Ok(KeyCode::KeyH),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, Tab, or KeyQ"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, Tab, KeyQ, or KeyH"
         )),
     }
 }
@@ -487,6 +488,7 @@ mod tests {
 
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
+        assert_eq!(parse_key("KeyH"), Ok(KeyCode::KeyH));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());

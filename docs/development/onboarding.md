@@ -24,6 +24,7 @@ Click **The Crossing**. You should get a hex grid, two pieces, and a sky. Then:
 | `W` `A` `S` `D` | move the camera |
 | Scroll | zoom |
 | Click a tile | the piece walks there |
+| `H` | hide/show gameplay readouts |
 | `ESC` | pause |
 | `BACKSPACE` | back to the title screen |
 

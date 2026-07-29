@@ -663,6 +663,12 @@ fn a_defence_reports_the_exact_damage_it_prevented() {
         "the fully absorbed hit opens no decision"
     );
     assert_eq!(disabled_count(&app, fight.defender), 0);
+    assert!(
+        app.world()
+            .get::<hex_anim::Transformation>(fight.defender)
+            .is_none(),
+        "a fully absorbed spell should not make the defender recoil"
+    );
     assert_eq!(
         take_events(&mut app),
         vec![
@@ -677,6 +683,26 @@ fn a_defence_reports_the_exact_damage_it_prevented() {
                 amount: 1,
             },
         ]
+    );
+}
+
+#[test]
+fn successful_direct_spell_damage_reuses_the_target_recoil() {
+    let mut app = test_app(2);
+    app.insert_resource(hex_assets::PlayerSettings {
+        scale: 0.25,
+        speed: 5.0,
+        color: (1.0, 0.2, 0.2),
+    });
+    let fight = two_ember_casters(&mut app);
+
+    cast_named(&mut app, UnitId(1), "Ember", fight.defender_pos);
+
+    assert!(
+        app.world()
+            .get::<hex_anim::Transformation>(fight.defender)
+            .is_some(),
+        "direct spell damage should visibly recoil its target"
     );
 }
 

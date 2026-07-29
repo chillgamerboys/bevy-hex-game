@@ -27,7 +27,7 @@ use hex_units::{targeting, volumes};
 
 use crate::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
 
-use super::{ActorQuery, Verb};
+use super::{presentation, ActorQuery, Verb};
 
 /// Applies a cast, or returns the reason it was refused.
 #[expect(
@@ -251,6 +251,7 @@ pub(super) fn apply(
     let target_unit = unit_standing_on(ctx, actors, target);
     let round = ctx.turn_order.round;
     let mut refusals: Vec<&'static str> = Vec::new();
+    let mut played_direct_recoil = false;
     for effect in &spec.effects {
         match effect {
             Effect::DisableHexes { count, targeted } => {
@@ -263,7 +264,7 @@ pub(super) fn apply(
                     // cast that hurt nothing, and it has already been paid for.
                     continue;
                 };
-                open_disable_decision(
+                let landed = open_disable_decision(
                     ctx,
                     lattices,
                     defender.0,
@@ -271,6 +272,20 @@ pub(super) fn apply(
                     unit,
                     u16::from(*count),
                 );
+                if landed && !played_direct_recoil {
+                    if let (Some(settings), Ok((Some(target_standing), ..))) =
+                        (ctx.settings, actors.get(defender.1))
+                    {
+                        presentation::recoil(
+                            commands,
+                            defender.1,
+                            target_standing.0,
+                            standing,
+                            settings.speed,
+                        );
+                        played_direct_recoil = true;
+                    }
+                }
             }
             Effect::Reveal { tier } => {
                 let Some(subject) = target_unit else {
@@ -436,9 +451,9 @@ pub(super) fn open_disable_decision(
     defender_entity: Entity,
     source: UnitId,
     raw: u16,
-) {
+) -> bool {
     let Ok((_, state)) = lattices.get(defender_entity) else {
-        return;
+        return false;
     };
     let count = hex_lattice::resolve_incoming(state, raw);
     let prevented = raw.saturating_sub(count);
@@ -451,7 +466,7 @@ pub(super) fn open_disable_decision(
     }
     if count == 0 {
         info!("cast: {defender_id:?} absorbed the whole hit");
-        return;
+        return false;
     }
     *ctx.pending = PendingDecision::ChooseDisables {
         decider: defender_id,
@@ -463,6 +478,7 @@ pub(super) fn open_disable_decision(
         source,
         count,
     });
+    true
 }
 
 /// The refusal a spell gets when nothing it does is built yet.

@@ -46,6 +46,9 @@ pub const ACCENT: Color = Color::srgb(0.93, 0.79, 0.46);
 /// The accent at edge strength, for borders that should glow rather than shout.
 pub const ACCENT_EDGE: Color = Color::srgba(0.93, 0.79, 0.46, 0.4);
 
+/// Errors, destructive outcomes, and setup failures.
+pub const DANGER: Color = Color::srgb(0.94, 0.36, 0.30);
+
 /// The hairline that gives a resting button its shape.
 pub const EDGE: Color = Color::srgba(1.0, 1.0, 1.0, 0.13);
 

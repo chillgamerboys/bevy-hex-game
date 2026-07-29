@@ -19,6 +19,7 @@ use hex_units::Player;
 
 use super::{despawn_screen, DespawnOnExit};
 use crate::menus::widgets::UiAssets;
+use crate::readouts::HudElement;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_sub_state::<Pause>();
@@ -58,6 +59,7 @@ fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
     commands
         .spawn((
             Name::new("Gameplay HUD"),
+            HudElement,
             Node {
                 position_type: PositionType::Absolute,
                 bottom: Val::Px(12.0),
@@ -89,7 +91,7 @@ fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn exploring_hint() -> String {
     "EXPLORING   ·   click a tile to move   ·   right-drag to orbit   ·   \
-     WASD to pan   ·   scroll to zoom   ·   ESC to pause"
+     WASD to pan   ·   scroll to zoom   ·   H hides HUD   ·   ESC to pause"
         .to_owned()
 }
 
@@ -123,7 +125,7 @@ fn update_hud(
             };
             format!(
                 "COMBAT   ·   round {}   ·   {}{}   ·   cast from the panel   \
-                 ·   SPACE to end turn   ·   ESC to pause",
+                 ·   SPACE to end turn   ·   H hides HUD   ·   ESC to pause",
                 order.round + 1,
                 whose,
                 lattice_readout(&party)
@@ -142,15 +144,14 @@ fn update_hud(
 /// Behind the `dev` feature deliberately: the shipped build has no key that
 /// exposes hidden information, and hidden information is the game's source of
 /// uncertainty rather than dice. `K` for knowledge — `Escape`, `Backspace`,
-/// `Space`, `C`, `Enter` and `WASD` are all taken.
+/// `Space`, `Tab`, `Q`, `H`, `C`, `Enter` and `WASD` are all taken.
 ///
 /// The resource is initialised by `hex_combat`'s plugin, which the binary always
 /// adds, so this cannot be the observer-on-the-title-screen crash: it is a
 /// system, it is gated on the gameplay screen, and its parameter always resolves.
 ///
-/// Logs the new state because the reveal has no presentation of its own yet: units now
-/// carry lattices, so the store fills, but nothing draws a hostile one. A silent key
-/// that appears to do nothing is indistinguishable from a broken one.
+/// Logs the new state as well as updating the hostile lattice panel. The line is
+/// useful when a designer is validating disclosure and the HUD itself is hidden.
 #[cfg(feature = "dev")]
 fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_combat::RevealAll>) {
     if keys.just_pressed(KeyCode::KeyK) {

@@ -30,6 +30,7 @@ mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod menus;
+mod readouts;
 #[cfg(feature = "map-review")]
 mod review;
 mod scenarios;
@@ -203,6 +204,7 @@ impl Plugin for AppPlugin {
             // After `screens`, which owns the sub-states the casting systems are gated
             // on, and after `menus`, which inserts the fonts its panel is built from.
             casting::plugin,
+            readouts::plugin,
         ));
 
         #[cfg(feature = "map-review")]
