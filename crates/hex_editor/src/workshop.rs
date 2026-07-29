@@ -156,6 +156,18 @@ impl WorkshopDraft {
         &self.styles
     }
 
+    /// Palette checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_palette(&self) -> &ArtPalette {
+        &self.saved_palette
+    }
+
+    /// Style checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_styles(&self) -> &VoxelStyleCatalog {
+        &self.saved_styles
+    }
+
     /// Current object editor.
     #[must_use]
     pub const fn editor(&self) -> &EditorModel {
@@ -430,6 +442,32 @@ impl WorkshopDraft {
     pub fn mark_catalogs_saved(&mut self) {
         self.saved_palette = self.palette.clone();
         self.saved_styles = self.styles.clone();
+    }
+
+    /// Rebases recovered catalog drafts onto the current tracked catalogs.
+    ///
+    /// The application performs the three-way merge because it also owns the
+    /// filesystem revision contract. This method adopts its validated result and
+    /// makes the current tracked catalogs the new save checkpoint.
+    pub(crate) fn adopt_rebased_catalogs(
+        &mut self,
+        current_palette: ArtPalette,
+        current_styles: VoxelStyleCatalog,
+        merged_palette: ArtPalette,
+        merged_styles: VoxelStyleCatalog,
+    ) -> Result<(), WorkshopDraftError> {
+        current_styles
+            .validate(&current_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        merged_styles
+            .validate(&merged_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        self.palette = merged_palette;
+        self.styles = merged_styles;
+        self.saved_palette = current_palette;
+        self.saved_styles = current_styles;
+        self.clear_history();
+        Ok(())
     }
 
     /// Marks the object as explicitly saved under its current identity.

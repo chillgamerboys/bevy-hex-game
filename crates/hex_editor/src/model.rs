@@ -247,9 +247,14 @@ impl EditorModel {
     /// intentionally session-only and are not included.
     #[must_use]
     pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
+        let (saved_object, saved_object_is_checkpoint) = self.saved_object.as_ref().map_or_else(
+            || (RawObjectDraft::from_blueprint(&self.object), false),
+            |saved| (RawObjectDraft::from_blueprint(saved), true),
+        );
         EditorRecoveryDraft {
             object: RawObjectDraft::from_blueprint(&self.object),
-            saved_object: RawObjectDraft::from_blueprint(&self.saved_object),
+            saved_object,
+            saved_object_is_checkpoint,
             mode: self.mode,
             tool: self.tool,
             preview_rig: self.preview_rig,
@@ -272,6 +277,7 @@ impl EditorModel {
         let EditorRecoveryDraft {
             object,
             saved_object,
+            saved_object_is_checkpoint,
             mode,
             tool,
             preview_rig,
@@ -281,7 +287,7 @@ impl EditorModel {
             selection,
         } = recovery;
         let object = object.into_blueprint();
-        let saved_object = saved_object.into_blueprint();
+        let saved_object = saved_object_is_checkpoint.then(|| saved_object.into_blueprint());
         let (selection, sanitization) = sanitized_selection(selection, &object);
         Ok((
             Self {

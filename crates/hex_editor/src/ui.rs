@@ -155,6 +155,8 @@ pub struct WorkshopUiSnapshot {
     pub recovery_prompt: Option<RecoveryPrompt>,
     /// Whether restored work was based on an older tracked art revision.
     pub recovery_conflict: bool,
+    /// Whether recovered catalogs were safely rebased while object rescue remains.
+    pub recovery_catalogs_reconciled: bool,
     /// Whether any tracked replacement is currently blocked.
     pub tracked_writes_blocked: bool,
     /// Whether the current document satisfies every one-click review precondition.
@@ -192,6 +194,7 @@ impl WorkshopUiSnapshot {
         external_changes: &[ExternalAssetChange],
         recovery_prompt: Option<RecoveryPrompt>,
         recovery_conflict: bool,
+        recovery_catalogs_reconciled: bool,
         review_ready: bool,
         review_in_progress: bool,
         close_confirmation: bool,
@@ -210,6 +213,7 @@ impl WorkshopUiSnapshot {
         self.external_changes = external_changes.to_vec();
         self.recovery_prompt = recovery_prompt;
         self.recovery_conflict = recovery_conflict;
+        self.recovery_catalogs_reconciled = recovery_catalogs_reconciled;
         self.tracked_writes_blocked = recovery_conflict || !external_changes.is_empty();
         self.review_ready = review_ready;
         self.review_in_progress = review_in_progress;
@@ -230,6 +234,7 @@ impl WorkshopUiSnapshot {
         self.external_changes.clear();
         self.recovery_prompt = None;
         self.recovery_conflict = false;
+        self.recovery_catalogs_reconciled = false;
         self.tracked_writes_blocked = true;
         self.review_ready = false;
         self.review_in_progress = false;
@@ -295,6 +300,8 @@ pub enum WorkshopUiAction {
     RestoreRecovery,
     /// Explicitly delete the pending startup recovery file.
     DiscardRecovery,
+    /// Three-way merge recovered catalog drafts onto the current tracked catalogs.
+    ReconcileRecoveryCatalogs,
     /// Validate, save every dirty tracked document, and close the Workshop.
     SaveAllAndClose,
     /// Explicitly discard local changes and their recovery file, then close.
@@ -994,9 +1001,15 @@ fn draw_top_toolbar(
                 }
 
                 let save_ready = match mode {
-                    WorkshopMode::VoxelStyles => project_ready,
-                    WorkshopMode::Objects => saved_document,
-                } && !snapshot.tracked_writes_blocked;
+                    WorkshopMode::VoxelStyles => {
+                        project_ready
+                            && (!snapshot.tracked_writes_blocked
+                                || snapshot.recovery_catalogs_reconciled)
+                    }
+                    WorkshopMode::Objects => {
+                        saved_document && !snapshot.tracked_writes_blocked
+                    }
+                };
                 if ui
                     .add_enabled(save_ready, egui::Button::new("Save"))
                     .on_hover_text("Validate and explicitly save the active authoring data")
@@ -1006,6 +1019,17 @@ fn draw_top_toolbar(
                         WorkshopMode::VoxelStyles => WorkshopUiAction::SaveCatalogs,
                         WorkshopMode::Objects => WorkshopUiAction::SaveObject,
                     });
+                }
+                if snapshot.recovery_conflict && !snapshot.recovery_catalogs_reconciled {
+                    if ui
+                        .button("Reconcile")
+                        .on_hover_text(
+                            "Merge recovered palette and style edits onto the current tracked catalogs",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogs);
+                    }
                 }
                 if mode == WorkshopMode::Objects {
                     if ui
@@ -1149,7 +1173,7 @@ fn draw_top_toolbar(
                         if snapshot.recovery_conflict {
                             ui.label(egui::RichText::new("Recovery conflict").color(ERROR))
                                 .on_hover_text(
-                                    "Recovered work has an older tracked baseline; reload or use Save As",
+                                    "Reconcile recovered catalogs, then use Save As for changed tracked objects",
                                 );
                         }
                         if dirty {
@@ -2602,7 +2626,7 @@ fn draw_recovery_prompt(
                     ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(
-                            "Tracked art changed after this draft. Restore is safe, but overwrites remain blocked; use Save As or reload.",
+                            "Tracked art changed after this draft. Restore is safe; reconcile catalogs and use Save As for a changed tracked object before overwriting.",
                         )
                         .color(WARNING),
                     );
