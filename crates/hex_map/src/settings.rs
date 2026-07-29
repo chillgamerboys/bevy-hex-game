@@ -2874,13 +2874,27 @@ mod tests {
             waterfall_west.liquid,
             EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 })
         );
+        let PatchEdgeContractSettings::Shared(center_west) = &ring.center.edges.west else {
+            panic!("the center west edge should be shared")
+        };
+        assert_eq!(
+            center_west.liquid,
+            EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 })
+        );
+        let PatchEdgeContractSettings::Shared(caves_east) = &ring.caves.edges.east else {
+            panic!("the Caves east edge should be shared")
+        };
+        assert_eq!(
+            caves_east.liquid,
+            EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 })
+        );
 
         assert_eq!(
             shared
                 .iter()
                 .filter(|contract| matches!(contract.liquid, EdgeLiquidSettings::Dry))
                 .count(),
-            22,
+            20,
             "every other internal seam should be dry"
         );
         assert!(
