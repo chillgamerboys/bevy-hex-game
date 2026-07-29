@@ -11,6 +11,8 @@
 //!
 //! Headless, so nothing visual is covered — see the note in `hex_map`'s tests.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use bevy::app::PluginsState;
 use bevy::asset::AssetPlugin;
 use bevy::camera::NormalizedRenderTarget;
@@ -21,7 +23,10 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
-use hex_assets::{CubeCoord, GameAssets, PlayerSettings, ScenarioPlacement, ScenarioSettings};
+use hex_assets::{
+    ArtPalette, CubeCoord, GameAssets, PaletteSwatch, PlayerSettings, ScenarioPlacement,
+    ScenarioSettings, SrgbColor, SwatchId,
+};
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan,
@@ -124,12 +129,13 @@ fn test_app() -> App {
         hex_tile: Handle::default(),
         player_pieces: [Handle::default(), Handle::default()],
     });
-    app.insert_resource(substance_table());
+    let palette = art_palette();
+    app.insert_resource(substance_table(&palette));
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
-        color: (1.0, 0.2, 0.2),
     });
+    app.insert_resource(palette);
     app.insert_resource(ScenarioSettings {
         player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
         enemy: ScenarioPlacement::Fixed(CubeCoord {
@@ -199,44 +205,62 @@ fn spawn_fake_terrain(mut commands: Commands) {
 }
 
 /// A substance table with one solid substance, matching `STONE`.
-fn substance_table() -> SubstanceTable {
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the test immediately"
+)]
+fn fixture_swatch_id(id: &str) -> SwatchId {
+    SwatchId::new(id).expect("fixture swatch ids should be valid")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the test immediately"
+)]
+fn art_palette() -> ArtPalette {
+    let swatches = [
+        ("liquid/lava", "Lava", [0.9, 0.2, 0.05]),
+        ("liquid/water", "Water", [0.1, 0.3, 0.65]),
+        ("terrain/stone", "Stone", [0.5, 0.5, 0.5]),
+        ("unit/hostile", "Hostile", [0.25, 0.45, 0.9]),
+        ("unit/player", "Player", [1.0, 0.2, 0.2]),
+    ]
+    .into_iter()
+    .map(|(id, name, [red, green, blue])| {
+        let color =
+            SrgbColor::new(red, green, blue).expect("fixture swatch colors should be valid");
+        let swatch = PaletteSwatch::new(name, color, BTreeSet::from(["test".to_owned()]))
+            .expect("fixture palette entries should be valid");
+        (fixture_swatch_id(id), swatch)
+    })
+    .collect::<BTreeMap<_, _>>();
+    ArtPalette::new(swatches).expect("fixture palette should be valid")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time fixture data should fail the test immediately"
+)]
+fn substance_table(palette: &ArtPalette) -> SubstanceTable {
     let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert(
-        "air".to_owned(),
-        Substance {
-            color: (0.0, 0.0, 0.0),
-            solid: false,
-            diggable: false,
-        },
-    );
+    substances.insert("air".to_owned(), Substance::invisible(false, false));
     substances.insert(
         "lava".to_owned(),
-        Substance {
-            color: (0.9, 0.2, 0.05),
-            solid: false,
-            diggable: true,
-        },
+        Substance::from_swatch(fixture_swatch_id("liquid/lava"), false, true),
     );
     substances.insert(
         "stone".to_owned(),
-        Substance {
-            color: (0.5, 0.5, 0.5),
-            solid: true,
-            diggable: true,
-        },
+        Substance::from_swatch(fixture_swatch_id("terrain/stone"), true, true),
     );
     // Rendered, but never footing. Added when the showcase map introduced a river:
     // the map publishes a water run as an ordinary tile entity, and the *only* thing
     // stopping a piece walking onto it is gameplay checking `solid`.
     substances.insert(
         "water".to_owned(),
-        Substance {
-            color: (0.1, 0.3, 0.65),
-            solid: false,
-            diggable: true,
-        },
+        Substance::from_swatch(fixture_swatch_id("liquid/water"), false, true),
     );
-    SubstanceTable::from_file(&SubstanceFile { substances })
+    SubstanceTable::from_file(&SubstanceFile { substances }, palette)
+        .expect("fixture substances should resolve through the fixture palette")
 }
 
 /// Fires a click at `entity`, as the picking backend would.
@@ -330,6 +354,104 @@ fn the_player_spawns_on_the_surface() {
         (transform.translation.y - GROUND).abs() < 1e-4,
         "player is at y={} but the ground is at {GROUND}",
         transform.translation.y
+    );
+}
+
+#[test]
+fn shipped_unit_swatches_preserve_the_pre_migration_colors() {
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .expect("the shipped art palette should parse");
+
+    for (id, expected) in [
+        ("unit/player", [1.0_f32, 0.2, 0.2]),
+        ("unit/hostile", [0.25_f32, 0.45, 0.9]),
+    ] {
+        let actual = palette
+            .get_str(id)
+            .unwrap_or_else(|| panic!("the shipped palette should contain {id}"))
+            .color()
+            .to_array();
+        assert_eq!(
+            actual.map(f32::to_bits),
+            expected.map(f32::to_bits),
+            "{id} changed during the zero-delta palette migration"
+        );
+    }
+}
+
+#[test]
+fn unit_materials_use_the_exact_authored_palette_swatches() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let player_color = unit_material_color::<With<Player>>(&mut app)
+        .expect("the player mesh should have a material");
+    let hostile_color = unit_material_color::<With<Enemy>>(&mut app)
+        .expect("the hostile mesh should have a material");
+
+    assert_eq!(
+        player_color.to_srgba(),
+        Color::srgb(1.0, 0.2, 0.2).to_srgba(),
+        "the player material did not resolve unit/player"
+    );
+    assert_eq!(
+        hostile_color.to_srgba(),
+        Color::srgb(0.25, 0.45, 0.9).to_srgba(),
+        "the hostile material did not resolve unit/hostile"
+    );
+}
+
+#[test]
+fn a_missing_required_unit_swatch_fails_before_spawning_or_allocating_materials() {
+    let mut app = test_app();
+    let hostile_id = SwatchId::new("unit/hostile").expect("the shipped id should be valid");
+    let hostile_color = app
+        .world()
+        .resource::<ArtPalette>()
+        .get(&hostile_id)
+        .expect("the fixture should contain unit/hostile")
+        .color()
+        .to_bevy_color();
+    let player_color = app
+        .world()
+        .resource::<ArtPalette>()
+        .get_str("unit/player")
+        .expect("the fixture should contain unit/player")
+        .color()
+        .to_bevy_color();
+    app.world_mut()
+        .resource_mut::<ArtPalette>()
+        .remove(&hostile_id)
+        .expect("removing one swatch should preserve palette validity")
+        .expect("the fixture should contain unit/hostile");
+
+    enter_gameplay(&mut app);
+
+    let spawned = app
+        .world_mut()
+        .query_filtered::<Entity, With<Faction>>()
+        .iter(app.world())
+        .count();
+    assert_eq!(spawned, 0, "a palette failure left partial actors behind");
+    assert!(
+        app.world()
+            .resource::<GameplaySetupFailure>()
+            .reason
+            .contains("unit/hostile"),
+        "the setup failure did not identify the missing required swatch"
+    );
+
+    let materials = app.world().resource::<Assets<StandardMaterial>>();
+    assert_eq!(
+        materials.len(),
+        4,
+        "only the range, path, player-ring, and hostile-ring overlay materials should exist"
+    );
+    assert!(
+        materials.iter().all(|(_, material)| {
+            material.base_color != player_color && material.base_color != hostile_color
+        }),
+        "unit material allocation began before all required swatches resolved"
     );
 }
 
@@ -906,6 +1028,23 @@ fn ring_owner(app: &mut App) -> Option<Entity> {
 fn single<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> Option<Entity> {
     let mut query = app.world_mut().query_filtered::<Entity, Q>();
     query.iter(app.world()).next()
+}
+
+fn unit_material_color<Q: bevy::ecs::query::QueryFilter>(app: &mut App) -> Option<Color> {
+    let unit = single::<Q>(app)?;
+    let handle = {
+        let mut pieces = app
+            .world_mut()
+            .query::<(&ChildOf, &MeshMaterial3d<StandardMaterial>)>();
+        pieces
+            .iter(app.world())
+            .find(|(parent, _)| parent.parent() == unit)
+            .map(|(_, material)| material.0.clone())?
+    };
+    app.world()
+        .resource::<Assets<StandardMaterial>>()
+        .get(&handle)
+        .map(|material| material.base_color)
 }
 
 /// Points the cursor at the standable surface of a coordinate.

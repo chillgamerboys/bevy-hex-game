@@ -323,7 +323,7 @@ const fn coord(raw: CubeCoord) -> HexCoord {
 mod tests {
     use std::collections::{HashMap as StdHashMap, HashSet as StdHashSet, VecDeque};
 
-    use hex_assets::SubstanceFile;
+    use hex_assets::{ArtPalette, SubstanceFile};
 
     use super::*;
 
@@ -357,6 +357,11 @@ mod tests {
             .expect("the shipped showcase settings should parse")
     }
 
+    fn art_palette() -> ArtPalette {
+        ron::from_str(include_str!("../../../assets/art/palette.ron"))
+            .expect("the shipped art palette should parse")
+    }
+
     fn showcase(settings: &MapSettings) -> &ShowcaseSettings {
         let TerrainSettings::Showcase(showcase) = &settings.terrain else {
             panic!("test settings should select Showcase")
@@ -379,7 +384,8 @@ mod tests {
         for environment_material in ["snow", "ice", "basalt", "lava"] {
             substances.substances.remove(environment_material);
         }
-        let table = SubstanceTable::from_file(&substances);
+        let table = SubstanceTable::from_file(&substances, &art_palette())
+            .expect("the remaining substances should resolve through the shipped palette");
         let showcase = settings();
 
         assert!(
@@ -403,7 +409,8 @@ mod tests {
             ron::from_str(include_str!("../../../assets/config/substances.ron"))
                 .expect("the shipped substances should parse");
         substances.substances.remove("lava");
-        let table = SubstanceTable::from_file(&substances);
+        let table = SubstanceTable::from_file(&substances, &art_palette())
+            .expect("the remaining substances should resolve through the shipped palette");
         let procedural: MapSettings = ron::from_str(include_str!(
             "../../../assets/config/worlds/procedural-hills.ron"
         ))

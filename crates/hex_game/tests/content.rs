@@ -7,7 +7,8 @@
 //! from sorted names, resolve across files — but headless, with no `App`.
 
 use hex_assets::{
-    ContentIndex, ElementCatalog, ElementFile, SpellBook, SpellFile, SubstanceFile, SubstanceTable,
+    ArtPalette, ContentIndex, ElementCatalog, ElementFile, SpellBook, SpellFile, SubstanceFile,
+    SubstanceTable,
 };
 use ron::error::SpannedError;
 
@@ -26,12 +27,20 @@ fn parse_substances() -> Result<SubstanceFile, SpannedError> {
     ron::from_str(include_str!("../../../assets/config/substances.ron"))
 }
 
+fn parse_palette() -> Result<ArtPalette, SpannedError> {
+    ron::from_str(include_str!("../../../assets/art/palette.ron"))
+}
+
 #[test]
 fn shipped_content_cross_references_resolve() {
     let elements =
         ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
     let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
-    let substances = SubstanceTable::from_file(&parse_substances().expect("substances.ron parses"));
+    let substances = SubstanceTable::from_file(
+        &parse_substances().expect("substances.ron parses"),
+        &parse_palette().expect("palette.ron parses and validates"),
+    )
+    .expect("shipped substances resolve through the art palette");
 
     let index = match ContentIndex::build(&elements, &spells, &substances) {
         Ok(index) => index,

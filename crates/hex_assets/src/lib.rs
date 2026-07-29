@@ -52,7 +52,7 @@ pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
     TargetingSpec,
 };
-pub use substances::{Substance, SubstanceFile, SubstanceTable};
+pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
 
 const HEX_MESH: &str = "meshes/hex.glb";
 const PIECES_MESH: &str = "meshes/pieces.glb";
@@ -98,7 +98,8 @@ pub fn plugin(app: &mut App) {
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
-        .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS);
+        .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS)
+        .load_settings::<ArtPalette>("art/palette.ron", CONFIG_EXTENSIONS);
 }
 
 /// Handles to everything the game loads from disk.

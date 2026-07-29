@@ -136,7 +136,9 @@ Everything behind that interface is yours to change.
 Both `world.ron` and `substances.ron` are map-owned content. Their loading machinery
 and the shared `SubstanceTable` live in `hex_assets`, because gameplay also needs
 to ask whether a substance is solid, but decisions about the map's settings and
-substance catalogue belong here.
+substance catalogue belong here. Rendered substances reference the shared visual
+palette by stable swatch id; adding a material therefore requires coordinating its
+map-owned behavior with its palette entry rather than embedding another RGB literal.
 
 ## Knowing you have not broken anything
 
