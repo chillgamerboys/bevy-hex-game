@@ -501,13 +501,12 @@ fn rebuild_viewport(
         match assets.content_materials.get_mut(id) {
             Some(cached) if cached.source == *style && cached.rig == *rig => {}
             Some(cached) => {
-                let reused_handle =
-                    if let Some(material) = materials.get_mut_untracked(&cached.handle) {
-                        *material = material_for(*style, *rig);
-                        true
-                    } else {
-                        false
-                    };
+                let reused_handle = if let Some(mut material) = materials.get_mut(&cached.handle) {
+                    *material = material_for(*style, *rig);
+                    true
+                } else {
+                    false
+                };
                 if !reused_handle {
                     cached.handle = materials.add(material_for(*style, *rig));
                     rebind_styles.insert(id.clone());
@@ -1312,6 +1311,9 @@ fn frame_for(content: &ViewportContent, mode: ViewportMode) -> (Vec3, f32) {
 
 #[cfg(test)]
 mod tests {
+    use bevy::asset::{AssetEvent, AssetPlugin};
+    use bevy::ecs::message::Messages;
+
     use super::*;
 
     fn assert_vec3_close(actual: Vec3, expected: Vec3) {
@@ -1411,6 +1413,77 @@ mod tests {
                 style: repainted_style,
             })]
         );
+    }
+
+    #[test]
+    fn rebuilding_a_changed_style_emits_a_material_modified_event() {
+        let Ok(style_id) = VoxelStyleId::new("test/material-events") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let style = ViewportStyle {
+            color: SrgbColor::new(0.2, 0.4, 0.6).expect("fixture colour should be valid"),
+            surface_mode: VoxelSurfaceMode::Opaque,
+            opacity: 1.0,
+            emission: None,
+        };
+        let content = ViewportContent {
+            styles: BTreeMap::from([(style_id.clone(), style)]),
+            show_grid: false,
+            ..default()
+        };
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<StandardMaterial>()
+            .insert_resource(ViewportRenderAssets {
+                hex_mesh: Handle::default(),
+                guide_material: Handle::default(),
+                missing_material: Handle::default(),
+                content_materials: BTreeMap::new(),
+            })
+            .insert_resource(content)
+            .insert_resource(ViewportMode::default())
+            .insert_resource(ViewportPreviewRig::default())
+            .insert_resource(ViewportSceneCache::default())
+            .add_systems(Update, rebuild_viewport);
+
+        app.update();
+        let material_handle = app
+            .world()
+            .resource::<ViewportRenderAssets>()
+            .content_materials
+            .get(&style_id)
+            .expect("first rebuild should cache the style material")
+            .handle
+            .clone();
+        app.world_mut()
+            .resource_mut::<Messages<AssetEvent<StandardMaterial>>>()
+            .clear();
+
+        app.world_mut()
+            .resource_mut::<ViewportContent>()
+            .styles
+            .insert(
+                style_id,
+                ViewportStyle {
+                    color: SrgbColor::new(0.8, 0.1, 0.3)
+                        .expect("updated fixture colour should be valid"),
+                    ..style
+                },
+            );
+        app.update();
+
+        let modified = app
+            .world_mut()
+            .resource_mut::<Messages<AssetEvent<StandardMaterial>>>()
+            .drain()
+            .any(|event| {
+                matches!(
+                    event,
+                    AssetEvent::Modified { id } if id == material_handle.id()
+                )
+            });
+        assert!(modified, "style edits must notify the renderer");
     }
 
     #[test]
