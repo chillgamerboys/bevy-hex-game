@@ -72,8 +72,9 @@ so several scenarios share one file, and every rostered unit is either placed or
 fails naming the entry and the reason. It replaced a two-coordinate scaffold that could
 express one player and one enemy and nothing else. **The archetype is looked up in
 `lattices.ron`**, so a roster line is most of what a unit is. The shipped encounters are
-still one unit a side, because a real party needs interface work the roster does not
-imply — see the note below.
+no longer limited to one unit a side. Party Trial fields matching three-member
+hedge-mage, raider, and wolf parties, while Ability Lab and Raider Mirror keep focused
+ability and identity checks small.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
@@ -94,8 +95,9 @@ archetype their encounter rostered. A cast goes through the command funnel and t
 legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
 is replayable rather than made inside the applier. A unit whose every hex is disabled
-leaves the turn order and is **downed** — retained with its lattice for a future
-restoration flow, not despawned. Reactivation is not implemented. A strike deals
+leaves the turn order and is **downed** — retained with its lattice rather than
+despawned. Renewal restores chosen cells, removes `Downed`, and returns the unit at the
+next round boundary; exploration Rest recovers the party immediately. A strike deals
 damage the same way, through the same decision.
 
 **And casting has an interface.** A spell panel lists what the acting unit inscribes,
@@ -112,6 +114,18 @@ of this existed is gone.
 
 Bodies are one hex wide; there is no footprint for anything larger, and units do not
 obstruct each other — so a route may be drawn straight through another piece.
+
+**Complete-party combat is live.** The stable party rail selects up to six members,
+number keys and camera focus follow that roster, and combat hands selection to the
+acting ally. Exploration can switch between Solo movement and atomic Group movement;
+authored formations rotate by route segment, compress through the Crossing bottleneck,
+and reform when space returns. Algorithm-neutral AI consumes canonical legal actions
+through the same command funnel as the player. Victory and Defeat retain the
+battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next round
+boundary, and exploration Rest recovers the whole party. The tactical HUD keeps actor,
+selected ally, decision owner, aimed target, and retained target as explicit roles.
+Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
+Mirror remain its focused automated companions.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
@@ -179,9 +193,10 @@ produce the same order across runs and saves.
 It disables hexes and it can put a unit down, and that is deliberately as far as it
 goes. **Downed is provisional**: the design leaves both functional death — a threshold
 arriving before zero — and permadeath open, and a unit whose lattice is spent simply
-leaves the turn order while retaining its lattice for a future restoration flow.
-Reactivation is not implemented. How many hexes a spell disables, how long a fight
-runs, and what a strike costs are all knobs rather than answers; `strike_disables`
+leaves the turn order while retaining its lattice for restoration. Renewal can
+reactivate it for the next round, and exploration Rest recovers it. How many hexes a
+spell disables, how long a fight runs, and what a strike costs are all knobs rather
+than answers; `strike_disables`
 sits in `combat.ron` beside the rest precisely so it can be moved without touching code.
 Further damage against an already downed target is refused before spending the action
 or mana, while non-damaging inspection such as Reveal can still reach the retained
@@ -217,13 +232,6 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
   unit positions would fix both and lives entirely in `hex_combat`. Encounter placement
   is the one exception: a roster never *starts* two units on one voxel, because
   placement tracks the surfaces it has already used.
-- **A party you would want to play.** Rosters, formations and per-unit spawning are
-  built, and a four-unit party spawns correctly today — but the interface is still
-  written for one piece a side: `select_a_player` picks whichever member it finds first
-  and there is no way to switch, so the rest of the party cannot be ordered to move, and
-  the hostile AI has never been played against more than one attacker. That work belongs
-  to selection, the camera and `hex_combat`, which is why the shipped encounters still
-  field one unit a side.
 - **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
   stays in the fight forever: `approach` finds no route, so it spends its turn doing
   nothing, every round. Height makes this easier to fall into, since a fight now starts
@@ -291,8 +299,8 @@ The first implementation also ships with explicit limitations:
   a unit and edits to its supporting surface until falling and footing reconciliation
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
-  turn order and retains its lattice for a future restoration flow. Reactivation is
-  not implemented; functional death and permadeath remain open.
+  turn order and retains its lattice. Renewal restores it into the next round and Rest
+  recovers it after combat; functional death and permadeath remain open.
 - **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
   area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
   list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever
@@ -329,7 +337,8 @@ Most of what makes this a product does not exist yet: no saves, no settings menu
 no audio, no input rebinding, and no signing or store packaging. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the title screen — but full crash *reporting*
-(symbolication, upload, a dialog) has not. The full checklist, with the evidence
-behind each line and the crate choices for closing them, is
-[production-audit.md](production-audit.md); the sequenced work is the
-production-hygiene epic in [roadmap.md](roadmap.md).
+(symbolication, upload, a dialog) has not. Wave 5 adds disposable pre-alpha continuity
+and replaceable app-shell, settings, audio/input, and artifact seams; it does not close
+the production gap or promise compatibility. The full checklist and evidence remain
+frozen in [production-audit.md](production-audit.md); the sequenced scaffold is in
+[roadmap.md](roadmap.md).

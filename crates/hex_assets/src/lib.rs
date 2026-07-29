@@ -15,11 +15,15 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+/// Data-authored algorithm dispatch for AI controllers.
+pub mod ai_profiles;
 pub mod art_palette;
 pub mod content_index;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
+/// Selectable exploration formation presets.
+pub mod formations;
 /// Who each of them is: archetype lattices, resolved from content.
 pub mod lattices;
 pub mod loader;
@@ -33,6 +37,7 @@ pub mod settings;
 pub mod spells;
 pub mod substances;
 
+pub use ai_profiles::AiProfileCatalog;
 pub use art_palette::{
     ArtContractError, ArtPalette, ObjectAssetId, PaletteSwatch, SrgbColor, SwatchId, SwatchMatch,
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
@@ -44,6 +49,7 @@ pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
     RosteredUnit,
 };
+pub use formations::FormationCatalog;
 pub use lattices::{
     Archetype, AxialPair, LatticeError, LatticeFile, LatticeLibrary, UnvalidatedArchetype,
     UnvalidatedCell, UnvalidatedEntry,
@@ -103,10 +109,12 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
     app.add_plugins(lattices::plugin);
+    app.add_plugins(formations::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //

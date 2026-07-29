@@ -207,16 +207,16 @@ thing that can go wrong is something they could in principle have known.
 
 - Hexes recover through healing spells or rest after combat.
 - The long-term consequence of total disablement is unresolved. Permanent death unless
-  reversed remains one candidate; the prototype uses restoration-ready downing, but
-  no restoring spell currently reactivates a downed unit.
+  reversed remains one candidate; the prototype uses restoration-ready downing.
 - **Proposed:** functional death arrives before zero. A character whose spell hexes
   are all offline can still channel but cannot act on the world. The threshold emerges
   from the mechanics rather than being imposed, makes the last few hexes a grace
   period rather than a slog, and gives enemies a legible rout condition.
 - **Provisional first implementation:** a unit whose hexes are all disabled leaves the
-  turn order and is **downed**, retaining its unit and lattice for a future restoring
-  flow. Reactivation is not implemented. This is a testable starting behavior, not
-  the answer to functional death or the [permadeath question](#permadeath).
+  turn order and is **downed**, retaining its unit and lattice. Renewal restores chosen
+  cells and returns the unit at the next round boundary; exploration Rest recovers the
+  party immediately. This is a testable starting behavior, not the answer to functional
+  death or the [permadeath question](#permadeath).
 - **Ruled 2026-07-27: out-of-combat recovery is an explicit rest action.** Channelling
   is a per-turn model and has nothing to say about the time between fights, so the
   alternative was inventing a regeneration curve before there was a fight to pace it

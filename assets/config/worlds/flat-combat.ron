@@ -1,0 +1,14 @@
+// A deliberately featureless combat test floor.
+//
+// Empty Perlin steps resolve to the height-map floor everywhere, producing one
+// connected level surface without introducing a new serialized terrain variant.
+// Ability and HUD walks use this world so terrain routing cannot obscure a combat
+// regression.
+(
+    grid_radius: 7,
+    level_height: 0.4,
+    terrain: Perlin((
+        seed: Some(20260729),
+        steps: [],
+    )),
+)
