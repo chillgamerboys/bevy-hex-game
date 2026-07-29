@@ -445,7 +445,7 @@ fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
 
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
-    let mut defender_choice_effects = 0_u8;
+    let mut exact_cell_decisions = 0_u8;
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
@@ -454,12 +454,15 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
                     return Err(zero("DisableHexes.count"));
                 }
                 if !targeted {
-                    defender_choice_effects = defender_choice_effects.saturating_add(1);
+                    exact_cell_decisions = exact_cell_decisions.saturating_add(1);
                 }
             }
             Effect::Burn { turns } if *turns == 0 => return Err(zero("Burn.turns")),
             Effect::RestoreHexes { count } if *count == 0 => {
                 return Err(zero("RestoreHexes.count"));
+            }
+            Effect::RestoreHexes { .. } => {
+                exact_cell_decisions = exact_cell_decisions.saturating_add(1);
             }
             Effect::ModifyIncomingDisables { amount } if *amount == 0 => {
                 return Err(zero("ModifyIncomingDisables.amount"));
@@ -477,10 +480,10 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             _ => {}
         }
     }
-    if defender_choice_effects > 1 {
+    if exact_cell_decisions > 1 {
         return Err(format!(
-            "spell '{name}' has multiple non-targeted DisableHexes effects; only one \
-             defender choice can be pending at a time"
+            "spell '{name}' has multiple exact-cell decision effects; only one damage \
+             or restoration choice can be pending at a time"
         ));
     }
 
@@ -802,7 +805,25 @@ mod tests {
             .validate()
             .expect_err("one cast cannot overwrite its own pending damage decision");
         assert!(
-            error.contains("multiple non-targeted DisableHexes"),
+            error.contains("multiple exact-cell decision effects"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_a_damage_choice_combined_with_a_restoration_choice() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects
+            .push(Effect::RestoreHexes { count: 1 });
+
+        let error = file
+            .validate()
+            .expect_err("one cast cannot overwrite damage with restoration");
+        assert!(
+            error.contains("multiple exact-cell decision effects"),
             "{error}"
         );
     }

@@ -819,7 +819,7 @@ mod tests {
         let library = shipped_library();
         assert_eq!(
             library.scenarios.len(),
-            12,
+            15,
             "update the title-screen coverage when the shipped scenario count changes"
         );
         let expected_rows = library.scenarios.len();
@@ -841,8 +841,8 @@ mod tests {
         }
         assert_eq!(
             by_category,
-            (11, 1, 0),
-            "the twelve shipped entries should retain their deliberate lanes"
+            (11, 2, 2),
+            "the fifteen shipped entries should retain their deliberate lanes"
         );
     }
 

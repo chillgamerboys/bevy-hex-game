@@ -244,12 +244,12 @@ fn free_neighbor(
         .find(|slot| !cells.contains_key(slot))
 }
 
-/// Fabricates the character stats the content pipeline does not yet supply.
+/// Fabricates generous stats for the isolated lattice demonstration.
 ///
 /// Capacity is the largest single cost the content ever asks of that element
 /// (floor 3); channelling is capacity plus two, generous enough that one end
-/// of turn refills what one cast drained. When real attunement stats land
-/// (HEX-12 and beyond), this function is what they replace.
+/// of turn refills what one cast drained. Gameplay uses authored archetype stats;
+/// this screen intentionally remains a rules sandbox.
 fn build_demo_stats(
     spec: &LatticeSpec,
     spells: &SpellBook,

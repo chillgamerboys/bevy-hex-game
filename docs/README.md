@@ -26,6 +26,7 @@ doc or the code, not drift.
 | Building V3 recipes or composing biome patches | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | Authoring colours, voxel styles, plants, props, or static effects | [design/visual-language.md](design/visual-language.md), then [systems/asset-workshop.md](systems/asset-workshop.md) |
 | Writing code that touches turns or movement | [systems/combat.md](systems/combat.md) |
+| Writing code that touches party selection or formations | [systems/party.md](systems/party.md) |
 | Writing code that casts a spell or reshapes terrain | [systems/casting.md](systems/casting.md) |
 | Wondering who owns a fact that crosses the boundary | [contracts.md](contracts.md) |
 | Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
@@ -42,6 +43,7 @@ doc or the code, not drift.
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
 | [systems/asset-workshop.md](systems/asset-workshop.md) | Artists and tooling contributors | Voxel-style and object schemas, editing behavior, persistence, review output, and the isolated editor boundary | Both, jointly |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | Gameplay owner |
+| [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and session lifetime | Gameplay owner |
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
 | [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | World owner (gameplay adapters: gameplay owner) |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | World owner |

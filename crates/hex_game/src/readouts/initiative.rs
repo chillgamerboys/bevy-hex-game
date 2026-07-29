@@ -3,12 +3,11 @@
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, TurnOrder};
-use hex_core::{AppSystems, Screen, UnitId};
+use hex_core::{AppSystems, GameplaySystems, Screen, UnitId};
 use hex_units::{Faction, UnitRegistry};
 
 use crate::menus::widgets::{heading, panel, UiAssets, ACCENT, LABEL};
-use crate::readouts::HudElement;
-use crate::screens::DespawnOnExit;
+use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, READ_ONLY_HUD};
 
 #[derive(Resource, Default, Debug, PartialEq, Eq)]
 struct InitiativeReadout(Vec<InitiativeEntry>);
@@ -27,14 +26,15 @@ struct InitiativePanel;
 #[derive(Component)]
 struct InitiativeBody;
 
-const FRAME: Pickable = Pickable {
-    should_block_lower: true,
-    is_hoverable: false,
-};
+#[derive(Component)]
+struct InitiativeHeading;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<InitiativeReadout>()
-        .add_systems(OnEnter(Screen::Gameplay), spawn_panel)
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            spawn_panel.in_set(HudSetup::Panels),
+        )
         .add_systems(
             Update,
             refresh
@@ -44,7 +44,10 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            rebuild.after(refresh).run_if(in_state(Screen::Gameplay)),
+            rebuild
+                .after(refresh)
+                .after(GameplaySystems::UiContext)
+                .run_if(in_state(Screen::Gameplay)),
         );
 }
 
@@ -52,44 +55,49 @@ fn spawn_panel(
     mut commands: Commands,
     mut readout: ResMut<InitiativeReadout>,
     assets: Res<UiAssets>,
+    regions: Query<(Entity, &HudRegion)>,
 ) {
     *readout = InitiativeReadout::default();
-    commands
+    let turn_region = region(HudRegion::Turn, &regions);
+    let panel = commands
         .spawn((
             Name::new("Initiative Panel"),
             InitiativePanel,
             HudElement,
             panel(),
-            FRAME,
-            DespawnOnExit(Screen::Gameplay),
+            READ_ONLY_HUD,
         ))
         .insert(Node {
             display: Display::None,
-            position_type: PositionType::Absolute,
-            top: Val::Px(12.0),
-            left: Val::Percent(50.0),
-            width: Val::Px(286.0),
-            margin: UiRect::left(Val::Px(-143.0)),
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(Val::Px(12.0)),
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
             border: UiRect::all(Val::Px(1.0)),
             border_radius: BorderRadius::all(Val::Px(10.0)),
-            row_gap: Val::Px(5.0),
+            column_gap: Val::Px(12.0),
             ..default()
         })
         .with_children(|panel| {
-            panel.spawn(heading(&assets, "initiative"));
+            panel.spawn((InitiativeHeading, heading(&assets, "turn order")));
             panel.spawn((
                 Name::new("Initiative Body"),
                 InitiativeBody,
                 Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(3.0),
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    align_items: AlignItems::Center,
                     ..default()
                 },
                 Pickable::IGNORE,
             ));
-        });
+        })
+        .id();
+    if let Some(turn_region) = turn_region {
+        commands.entity(turn_region).add_child(panel);
+    }
 }
 
 fn refresh(
@@ -124,10 +132,24 @@ fn rebuild(
     readout: Res<InitiativeReadout>,
     bodies: Query<Entity, With<InitiativeBody>>,
     mut panels: Query<&mut Node, With<InitiativePanel>>,
+    mut headings: Query<&mut Text, With<InitiativeHeading>>,
+    context: Option<Res<GameplayUiContext>>,
     assets: Res<UiAssets>,
 ) {
-    if !readout.is_changed() {
+    if !readout.is_changed() && !context.as_ref().is_some_and(|context| context.is_changed()) {
         return;
+    }
+    if let Ok(mut heading) = headings.single_mut() {
+        heading.0 = context
+            .as_deref()
+            .and_then(|context| context.acting.as_ref())
+            .map_or_else(
+                || "turn order".to_owned(),
+                |actor| match actor.faction {
+                    Faction::Player => "your turn".to_owned(),
+                    Faction::Hostile => "enemy turn".to_owned(),
+                },
+            );
     }
     if let Ok(mut node) = panels.single_mut() {
         node.display = if readout.0.is_empty() {
@@ -141,16 +163,16 @@ fn rebuild(
     commands.entity(body).with_children(|rows| {
         for entry in &readout.0 {
             let side = match entry.faction {
-                Faction::Player => "player",
-                Faction::Hostile => "hostile",
+                Faction::Player => "ALLY",
+                Faction::Hostile => "HOSTILE",
             };
             let marker = if entry.current { "▶" } else { "·" };
             rows.spawn((
                 Name::new(format!("Initiative Unit {}", entry.unit.0)),
-                Text::new(format!("{marker} {} · {side}", entry.name)),
+                Text::new(format!("{marker} {side} · {}", entry.name)),
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(12.0)
+                    ..TextFont::from_font_size(13.0)
                 },
                 TextColor(if entry.current { ACCENT } else { LABEL }),
                 Pickable::IGNORE,
@@ -205,8 +227,8 @@ mod tests {
         assert_eq!(
             rendered,
             vec![
-                ("▶ mage #4 · player".to_owned(), ACCENT),
-                ("· wolf #9 · hostile".to_owned(), LABEL),
+                ("▶ ALLY · mage #4".to_owned(), ACCENT),
+                ("· HOSTILE · wolf #9".to_owned(), LABEL),
             ]
         );
     }

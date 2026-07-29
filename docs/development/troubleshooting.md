@@ -36,6 +36,12 @@ error instead — fix the file and save it again.
 **It returned to the title screen with a notice.** Terrain generation or actor
 spawning failed after loading succeeded — the reason is on screen and in the log.
 
+**The log says an open combat decision was dropped after leaving a scenario.** This is
+intentional teardown when `BACKSPACE` or another state change exits combat while a
+defender-choice prompt is open. The decision names session-local units and must not
+survive into the next scenario. The same warning without an explicit screen/combat
+exit is a bug.
+
 ## Editing settings
 
 **A change had no effect.** Check that you saved the file, and that you are running
