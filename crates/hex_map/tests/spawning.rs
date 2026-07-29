@@ -134,15 +134,28 @@ fn substance_table() -> SubstanceTable {
 )]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([(
-        swatch.clone(),
-        PaletteSwatch::new(
-            "Test Neutral",
-            SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
-            BTreeSet::from(["test".to_owned()]),
-        )
-        .expect("the fixture swatch should be valid"),
-    )]))
+    let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
+    let palette = ArtPalette::new(BTreeMap::from([
+        (
+            foam,
+            PaletteSwatch::new(
+                "Water Foam",
+                SrgbColor::new(0.896_24, 0.959_34, 0.991_16)
+                    .expect("the fixture foam color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture foam swatch should be valid"),
+        ),
+        (
+            swatch.clone(),
+            PaletteSwatch::new(
+                "Test Neutral",
+                SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
+            )
+            .expect("the fixture swatch should be valid"),
+        ),
+    ]))
     .expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [

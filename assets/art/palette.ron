@@ -1,6 +1,11 @@
 (
     schema_version: 1,
     swatches: {
+        "liquid/foam": (
+            display_name: "Water Foam",
+            color: (red: 0.89624, green: 0.95934, blue: 0.99116),
+            tags: ["accent", "liquid", "world"],
+        ),
         "liquid/lava": (
             display_name: "Lava",
             color: (red: 0.90, green: 0.20, blue: 0.04),

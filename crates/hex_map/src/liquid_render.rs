@@ -25,6 +25,7 @@ use crate::procedural_v3::{FillMaterialRole, HexSide, LiquidFlowState, MapPresen
 use crate::voxel::{runs, SubstanceRun, VoxelMap};
 
 const LIQUID_SHADER_PATH: &str = "shaders/liquid.wgsl";
+const LIQUID_FOAM_SWATCH: &str = "liquid/foam";
 const PHASE_WRAP_SECONDS: f32 = 400.0;
 const CURRENT_FLOW_SPEED: f32 = 0.22;
 const RAPID_FLOW_SPEED: f32 = 0.55;
@@ -43,6 +44,8 @@ struct LiquidMaterialParams {
     flow_phase_scale: Vec4,
     /// Highlight, foam, roughness reduction, and cross-wave frequency.
     modulation: Vec4,
+    /// Canonical palette-backed foam colour in linear RGB.
+    foam_color: Vec4,
 }
 
 /// PBR extension used only by map-owned liquid presentation geometry.
@@ -192,6 +195,9 @@ pub(crate) enum LiquidPresentationError {
     MissingSubstance {
         role: FillMaterialRole,
     },
+    MissingPaletteSwatch {
+        swatch: &'static str,
+    },
     AmbiguousSubstances {
         id: SubstanceId,
     },
@@ -244,6 +250,12 @@ impl fmt::Display for LiquidPresentationError {
             }
             Self::MissingSubstance { role } => {
                 write!(formatter, "liquid role {role:?} has no live substance")
+            }
+            Self::MissingPaletteSwatch { swatch } => {
+                write!(
+                    formatter,
+                    "liquid presentation requires art-palette swatch '{swatch}'"
+                )
             }
             Self::AmbiguousSubstances { id } => {
                 write!(
@@ -353,11 +365,17 @@ pub(crate) fn spawn_presentations(
         .copied()
         .map(|role| role_color(role, table).map(|color| (role, color)))
         .collect::<Result<Vec<_>, _>>()?;
+    let foam = table
+        .palette_color(LIQUID_FOAM_SWATCH)
+        .map(to_color)
+        .ok_or(LiquidPresentationError::MissingPaletteSwatch {
+            swatch: LIQUID_FOAM_SWATCH,
+        })?;
     let cap = meshes.add(cap_geometry().into_mesh());
     let mut material_sets = Vec::with_capacity(role_colors.len());
     let mut registered_handles = Vec::with_capacity(role_colors.len().saturating_mul(4));
     for (role, color) in role_colors {
-        let set = MaterialSet::create(role, color, phase_seconds, materials);
+        let set = MaterialSet::create(role, color, foam, phase_seconds, materials);
         set.extend_registry(&mut registered_handles);
         material_sets.push(set);
     }
@@ -667,6 +685,7 @@ impl MaterialSet {
     fn create(
         role: FillMaterialRole,
         color: Color,
+        foam: Color,
         phase_seconds: f32,
         materials: &mut Assets<LiquidMaterial>,
     ) -> Self {
@@ -681,6 +700,7 @@ impl MaterialSet {
                 Vec2::ZERO,
                 phase_seconds,
                 Vec4::new(0.08, 0.0, 0.04, 0.65),
+                foam,
                 false,
             )),
             current: materials.add(liquid_material(
@@ -688,6 +708,7 @@ impl MaterialSet {
                 Vec2::new(0.0, CURRENT_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
+                foam,
                 false,
             )),
             rapid: materials.add(liquid_material(
@@ -695,6 +716,7 @@ impl MaterialSet {
                 Vec2::new(0.0, RAPID_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
+                foam,
                 false,
             )),
             fall: materials.add(liquid_material(
@@ -702,6 +724,7 @@ impl MaterialSet {
                 Vec2::new(0.0, FALL_FLOW_SPEED),
                 phase_seconds,
                 Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
+                foam,
                 true,
             )),
         }
@@ -741,8 +764,10 @@ fn liquid_material(
     flow_velocity: Vec2,
     phase_seconds: f32,
     modulation: Vec4,
+    foam: Color,
     double_sided: bool,
 ) -> LiquidMaterial {
+    let foam = foam.to_linear();
     LiquidMaterial {
         base: StandardMaterial {
             base_color: color,
@@ -763,6 +788,7 @@ fn liquid_material(
                     3.0,
                 ),
                 modulation,
+                foam_color: Vec4::new(foam.red, foam.green, foam.blue, 1.0),
             },
         },
     }
@@ -959,6 +985,11 @@ mod tests {
             ("terrain/stone", "Stone", (0.5, 0.5, 0.5)),
             ("liquid/water", "Water", (0.08, 0.32, 0.65)),
             ("liquid/lava", "Lava", (0.9, 0.2, 0.04)),
+            (
+                LIQUID_FOAM_SWATCH,
+                "Water Foam",
+                (0.896_24, 0.959_34, 0.991_16),
+            ),
         ]
         .into_iter()
         .map(|(id, name, (red, green, blue))| {
@@ -975,7 +1006,7 @@ mod tests {
         let palette = ArtPalette::new(swatches).expect("fixture palette should be valid");
 
         let mut substances = HashMap::default();
-        substances.insert("air".to_owned(), Substance::invisible(false, true));
+        substances.insert("air".to_owned(), Substance::invisible(false, false));
         for (name, swatch, solid) in [
             ("stone", "terrain/stone", true),
             ("water", "liquid/water", false),
@@ -1028,6 +1059,7 @@ mod tests {
         let set = MaterialSet::create(
             FillMaterialRole::Water,
             Color::srgb(0.08, 0.32, 0.65),
+            Color::srgb(0.896_24, 0.959_34, 0.991_16),
             phase,
             &mut materials,
         );
@@ -1222,13 +1254,18 @@ mod tests {
         let modulation = shader
             .find("modulation: vec4<f32>")
             .expect("shader must declare modulation");
-        assert!(flow < modulation);
+        let foam = shader
+            .find("foam_color: vec4<f32>")
+            .expect("shader must declare palette-backed foam");
+        assert!(flow < modulation && modulation < foam);
         assert!(shader.contains("@binding(100)"));
         assert!(shader.contains("pbr_input_from_standard_material"));
         assert!(shader.contains("apply_pbr_lighting"));
         assert!(shader.contains("main_pass_post_lighting_processing"));
         assert!(shader.contains("pbr_input.material.base_color = vec4<f32>"));
         assert!(!shader.contains("pbr_input.material.base_color.rgb ="));
+        assert!(shader.contains("liquid.foam_color.rgb"));
+        assert!(!shader.contains("vec3<f32>(0.78, 0.91, 0.98)"));
         assert!(shader.contains(&format!(
             "liquid.flow_phase_scale.z * {SECONDARY_WAVE_PHASE_RATE}"
         )));

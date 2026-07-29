@@ -44,14 +44,19 @@ The palette has two adoption rules on purpose:
    id. Object files never embed an arbitrary base colour, and procedural object
    generation may choose between swatches but may not invent per-instance tints.
 2. **Staged:** existing renderers retain their current colour sources until their own
-   migration. Terrain substances, liquids, construction metal, and unit presentation
-   now resolve palette swatches directly. Temporary Forest vegetation remains the
-   outstanding legacy renderer until its feature branch is reconciled.
+   migration. Terrain substances, liquid bodies and foam, construction metal, and
+   unit presentation now resolve palette swatches directly. Temporary Forest
+   vegetation remains the outstanding legacy renderer until its feature branch is
+   reconciled.
 
 This keeps the palette useful immediately without turning its introduction into a
 cross-cutting visual rewrite. During the staged period, a palette entry can be an
 inventory of a live literal rather than its authority. Its tag includes `legacy` until
 the corresponding renderer resolves the swatch directly.
+
+`liquid/foam` stores the sRGB encoding of the liquid shader's former linear blend
+target. Moving that colour into the palette therefore changes its ownership without
+intentionally changing the rendered Waterfall appearance.
 
 ## Adding a colour
 
@@ -105,7 +110,7 @@ The initial catalog records the currently rendered content vocabulary:
 | Group | Swatches | Current authority |
 |---|---|---|
 | Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
-| Liquids and construction | water, lava, metal | `palette.ron`, referenced by `substances.ron` |
+| Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
 | Temporary vegetation | trunk, three foliage values, two grass-blade values | Forest feature renderer |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 

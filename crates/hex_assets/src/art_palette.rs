@@ -1212,7 +1212,7 @@ mod tests {
         let palette = shipped_palette();
         let styles = shipped_style_catalog();
 
-        assert_eq!(palette.swatches().len(), 19);
+        assert_eq!(palette.swatches().len(), 20);
         assert!(styles.styles().is_empty());
         assert!(styles.validate(&palette).is_ok());
     }
@@ -1232,6 +1232,15 @@ mod tests {
         assert!(std::ptr::eq(typed, borrowed));
         assert_eq!(borrowed.display_name(), "Grass Terrain");
         assert!(palette.get_str("terrain/missing").is_none());
+        assert_eq!(
+            palette
+                .get_str("liquid/foam")
+                .expect("the liquid renderer's foam swatch should resolve")
+                .color()
+                .to_array()
+                .map(f32::to_bits),
+            [0.896_24, 0.959_34, 0.991_16].map(f32::to_bits)
+        );
     }
 
     #[test]
