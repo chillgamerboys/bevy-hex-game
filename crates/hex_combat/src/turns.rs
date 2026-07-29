@@ -37,8 +37,9 @@ use std::collections::BTreeMap;
 
 use hex_assets::CombatSettings;
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, PendingDecision, RoundElapsed, Screen, TilePos, Turn, UnitId,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, InputAction, InputBindings,
+    IssuedCommand, Mode, PausableSystems, PendingDecision, RoundElapsed, Screen, TilePos, Turn,
+    UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{
@@ -424,13 +425,14 @@ fn end_combat(
 /// ignored: keyboard input must not become a debug back door that skips hostile actions.
 fn end_turn_on_space(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     turn_order: Res<TurnOrder>,
     registry: Res<UnitRegistry>,
     pending: Res<PendingDecision>,
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
 ) {
-    if !keys.just_pressed(KeyCode::Space) || pending.is_open() {
+    if !bindings.just_pressed(&keys, InputAction::EndTurn) || pending.is_open() {
         return;
     }
     let Some(current) = turn_order.current() else {

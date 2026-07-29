@@ -97,6 +97,7 @@ pub enum CombatSystems {
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.add_message::<CombatEvent>();
     app.configure_sets(
         Update,

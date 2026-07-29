@@ -31,6 +31,7 @@ doc or the code, not drift.
 | Wondering who owns a fact that crosses the boundary | [contracts.md](contracts.md) |
 | Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
+| Producing or extending release artifacts | [development/release.md](development/release.md) |
 | Picking up the next piece of work | [planning/roadmap.md](planning/roadmap.md) |
 
 ## The index
@@ -52,6 +53,7 @@ doc or the code, not drift.
 | [development/setup.md](development/setup.md) | New contributors | Prerequisites, running the game, first-run verification, and platform setup | Whoever changes build or platform requirements |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
+| [development/release.md](development/release.md) | Release contributors | Pre-alpha artifact shape, application identity, retained symbols, and reserved future credential boundaries | Whoever changes packaging |
 | [development/troubleshooting.md](development/troubleshooting.md) | Everyone | The single list of failure modes, including the ones that log nothing at all | Whoever hits a new one |
 | [planning/status.md](planning/status.md) | Everyone | What is built, what is a placeholder, what each placeholder waits on — **the one doc allowed to drift** | Whoever lands a feature; `/update-docs` reports what a diff falsified |
 | [planning/roadmap.md](planning/roadmap.md) | Both devs | The epic table `/seed-tickets` turns into Linear tickets, plus the detail behind each | Whoever claims or finishes a row |

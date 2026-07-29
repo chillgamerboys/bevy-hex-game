@@ -138,8 +138,9 @@ default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate, and the *Close Quarters* scenario exists so a walk (or a person)
-reaches combat in one click. The menus wear vendored Cinzel/Inter type over a
+mechanical gate. New Game reaches the 3v3 Party Trial in one click, while Ability Lab
+and Raider Mirror isolate ability and identity checks. The menus wear vendored
+Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
 time-of-day is available to those that opt in. The title screen shows the workspace
 version, sessions write a `hex_game.log` beside the executable (fresh per launch),
@@ -328,12 +329,14 @@ The first implementation also ships with explicit limitations:
 
 ## The production gap
 
-Most of what makes this a product does not exist yet: no saves, no settings menu,
-no audio, no input rebinding, and no signing or store packaging. The first hygiene
+Most of what makes this a product does not exist yet: no durable saves, audio content,
+input rebinding, signing, or store packaging. Wave 5 now provides one atomic,
+build-bound exploration resume, a persistent settings menu, centralized fixed input
+actions, empty audio buses, normalized release artifacts, and retained symbol
+material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the title screen — but full crash *reporting*
-(symbolication, upload, a dialog) has not. Wave 5 adds disposable pre-alpha continuity
-and replaceable app-shell, settings, audio/input, and artifact seams; it does not close
-the production gap or promise compatibility. The full checklist and evidence remain
+(symbolication, upload, a dialog) has not. These replaceable seams do not close the
+production gap or promise compatibility. The full checklist and evidence remain
 frozen in [production-audit.md](production-audit.md); the sequenced scaffold is in
 [roadmap.md](roadmap.md).

@@ -95,15 +95,18 @@ Ember deals direct damage and applies Burn for two of the target's actual turns.
 Incoming damage is command-modal: movement, casting, and ending the turn wait while
 the player chooses and confirms which live cells to disable. A unit with no live cells
 is downed and retained for future restoration rather than erased. Terrain-changing
-spells, obstruction, rout and surrender, party control, saves, and much of the larger
-design remain ahead. The exact, regularly updated boundary is recorded in the
+spells, obstruction, rout and surrender, durable saves, and much of the larger design
+remain ahead. Complete-party controls now provide Group/Solo exploration, formation
+editing, recovery, and the integrated 3v3 Party Trial. The exact, regularly updated boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
 
-The title screen groups playable setups into Maps, Combat, and Demos. Ten map
-showcases exercise authored and procedural terrain, **Close Quarters** begins inside
-the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox.
+The title screen separates development **Maps** and focused **Demos** from application
+**Actions**. **New Game** launches Party Trial as the one integrated default scenario;
+Ability Lab, Raider Mirror, and Lattice Demo keep narrow mechanics checks available.
+**Continue** restores one explicitly saved, build-bound exploration slot. It is
+pre-alpha convenience data, not a compatibility promise.
 
 | Input | Action |
 |---|---|
@@ -114,6 +117,9 @@ the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox
 | Click a spell row, then a lit target | Aim a cast |
 | `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
 | `SPACE` | End the current player turn; hostile turns cannot be skipped |
+| `1`–`6` | Select a party member while exploring |
+| `R` | Recover the whole party while exploring |
+| `F5` while paused | Atomically save a quiescent exploration resume |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
@@ -124,7 +130,7 @@ Regenerate readme_assets/lattice-demo-disabled-gem.png with:
 HEX_WALK_SCRIPT=walks/menus.ron \
 HEX_WALK_OUT=.context/readme-captures/lattice \
 cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/lattice/06-demo-shield-broken.png \
+cp .context/readme-captures/lattice/07-demo-shield-broken.png \
   readme_assets/lattice-demo-disabled-gem.png
 -->
 ![The interactive lattice demo after a metal gem has been disabled, leaving Metal Shield blocked and showing the broken enchantment in the event log](readme_assets/lattice-demo-disabled-gem.png)

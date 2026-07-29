@@ -18,11 +18,11 @@ you do not need to recompile the game.
 | `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
+| `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
-| `display.ron` | Vsync / frame rate behaviour |
+| `display.ron` | Authored Vsync / frame-rate default; the local Settings screen owns the persisted player choice |
 
 ## Seeing your changes
 
@@ -40,7 +40,7 @@ How quickly you *see* the change depends on which file:
 | File | When it takes effect |
 |---|---|
 | `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
-| `display.ron` | Straight away |
+| `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
 | `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
@@ -529,10 +529,20 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-A scenario names a world, a sky, and an encounter, and makes one required menu
-placement decision. The title screen has independently scrollable `Map`, `Combat`,
-and `Demo` columns; `category` chooses one. Scenario-backed demos share the Demo
-column with the static **Lattice Demo** card.
+A scenario names a world, a sky, and an encounter. The library's `default_game`
+names the entry launched by New Game; that entry is hidden from the development lanes.
+Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
+`category`. Scenario-backed demos share the Demo lane with the static **Lattice Demo**
+card.
+
+```ron
+(
+    default_game: "Party Trial",
+    scenarios: [
+        // entries...
+    ],
+)
+```
 
 ```ron
 (
@@ -564,7 +574,7 @@ reproducible seed here:
 ),
 ```
 
-The title screen shows the resolved seed beside every generated scenario. Its
+The title screen shows the resolved seed beside every visible generated scenario. Its
 `reroll` button changes only the current session, and the exact replacement seed is
 shown and logged so a useful or broken map can be reproduced. It never edits
 `scenarios.ron`; restarting returns to the configured seed.
@@ -588,7 +598,8 @@ a warm horizon colour fills the screen with terracotta and reads as clay, not ev
 
 `world`, `lighting` and `encounter` are all paths, and none of them is checked by the
 compiler. A typo fails `cargo test` rather than at the loading screen, but only because
-tests open every file the scenarios name — keep it that way.
+tests open every file the scenarios name — keep it that way. `default_game` must also
+resolve to one uniquely named entry; it is validated independently from lane contents.
 
 ## Writing an encounter
 

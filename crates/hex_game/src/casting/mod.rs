@@ -44,8 +44,8 @@ use hex_assets::{
 use hex_combat::TurnOrder;
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord,
-    IssuedCommand, LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen,
-    Sextant, SpellId, TilePos, Turn, UnitId,
+    InputAction, InputBindings, IssuedCommand, LatticeCoord, Mode, PausableSystems,
+    PendingDecision, PlayerSeat, Screen, Sextant, SpellId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
@@ -55,18 +55,6 @@ use crate::menus::widgets::element_color;
 
 mod panel;
 mod preview;
-
-/// Steps to the next unit worth aiming at.
-const NEXT_TARGET_KEY: KeyCode = KeyCode::Tab;
-
-/// Commits the aimed cast.
-const CONFIRM_KEY: KeyCode = KeyCode::Enter;
-
-/// Puts the aimed spell down again.
-///
-/// Not `Escape`, which pauses, and not `Backspace`, which quits to the title — both of
-/// those already mean something louder, and a mis-hit would cost more than the aim.
-const CANCEL_KEY: KeyCode = KeyCode::KeyQ;
 
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
@@ -78,6 +66,7 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 
 /// Registers the spell panel, the shape preview, and the cast emitter.
 pub fn plugin(app: &mut App) {
+    app.init_resource::<InputBindings>();
     app.init_resource::<CastReadout>();
     app.init_resource::<Aiming>();
     app.init_resource::<AimExit>();
@@ -622,6 +611,7 @@ fn resolve_aim_input(
     mut queue: ResMut<CommandQueue>,
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     chooses: Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: Query<(&Interaction, &AimControl), Changed<Interaction>>,
     units: Query<(&Faction, &StandsOn), Without<Downed>>,
@@ -629,7 +619,7 @@ fn resolve_aim_input(
     if pending.is_open() {
         return;
     }
-    let Some(request) = requested(&keys, &chooses, &controls) else {
+    let Some(request) = requested(&keys, &bindings, &chooses, &controls) else {
         return;
     };
     let Some(caster) = readout.caster else {
@@ -706,6 +696,7 @@ enum AimRequest {
 /// keyboard shortcut in the same frame must still be one cast.
 fn requested(
     keys: &ButtonInput<KeyCode>,
+    bindings: &InputBindings,
     chooses: &Query<(&Interaction, &AimsSpell), Changed<Interaction>>,
     controls: &Query<(&Interaction, &AimControl), Changed<Interaction>>,
 ) -> Option<AimRequest> {
@@ -723,13 +714,13 @@ fn requested(
             });
         }
     }
-    if keys.just_pressed(CONFIRM_KEY) {
+    if bindings.just_pressed(keys, InputAction::Confirm) {
         return Some(AimRequest::Confirm);
     }
-    if keys.just_pressed(NEXT_TARGET_KEY) {
+    if bindings.just_pressed(keys, InputAction::NextTarget) {
         return Some(AimRequest::Next);
     }
-    if keys.just_pressed(CANCEL_KEY) {
+    if bindings.just_pressed(keys, InputAction::CancelCast) {
         return Some(AimRequest::Cancel);
     }
     None
