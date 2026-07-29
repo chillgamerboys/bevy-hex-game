@@ -988,7 +988,7 @@ mod tests {
             (
                 LIQUID_FOAM_SWATCH,
                 "Water Foam",
-                (0.896_24, 0.959_34, 0.991_16),
+                (0.896_243_8, 0.959_346_6, 0.991_156_4),
             ),
         ]
         .into_iter()
@@ -1059,7 +1059,7 @@ mod tests {
         let set = MaterialSet::create(
             FillMaterialRole::Water,
             Color::srgb(0.08, 0.32, 0.65),
-            Color::srgb(0.896_24, 0.959_34, 0.991_16),
+            Color::srgb(0.896_243_8, 0.959_346_6, 0.991_156_4),
             phase,
             &mut materials,
         );
@@ -1075,6 +1075,19 @@ mod tests {
                 material.extension.params.flow_phase_scale.z,
                 wrap_phase(phase),
             );
+            for (actual, previous) in material
+                .extension
+                .params
+                .foam_color
+                .to_array()
+                .into_iter()
+                .zip([0.78_f32, 0.91, 0.98, 1.0])
+            {
+                assert!(
+                    actual.to_bits().abs_diff(previous.to_bits()) <= 2,
+                    "the palette swatch must choose the nearest representable sRGB round-trip"
+                );
+            }
         }
     }
 

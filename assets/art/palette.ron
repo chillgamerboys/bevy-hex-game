@@ -3,7 +3,7 @@
     swatches: {
         "liquid/foam": (
             display_name: "Water Foam",
-            color: (red: 0.89624, green: 0.95934, blue: 0.99116),
+            color: (red: 0.8962438, green: 0.9593466, blue: 0.9911564),
             tags: ["accent", "liquid", "world"],
         ),
         "liquid/lava": (
