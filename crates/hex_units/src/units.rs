@@ -23,15 +23,17 @@ use hex_ai::{AiController, AiGroupId, AiProfileId};
 use hex_anim::Transformation;
 use hex_assets::{
     AiProfileCatalog, ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
-    FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
+    FormationCatalog, FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit,
+    SubstanceTable,
 };
 use hex_lattice::LatticeState;
 use std::collections::BTreeMap;
 
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause,
-    PendingDecision, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
+    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, PartyFormation,
+    PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady, TilePos,
+    TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
@@ -264,9 +266,12 @@ pub fn plugin(app: &mut App) {
         // shared types registers them.
         .register_type::<UnitId>()
         .register_type::<ControlOwner>()
+        .register_type::<PartyFormation>()
+        .register_type::<PartyMovementMode>()
         .init_resource::<UnitAllocator>()
         .init_resource::<UnitRegistry>()
         .init_resource::<Party>()
+        .init_resource::<PartyFormation>()
         // The funnel's queue. Initialised here as well as by `hex_combat` so
         // the click emitter works in an app composing either crate alone.
         .init_resource::<CommandQueue>()
@@ -290,6 +295,7 @@ fn despawn_units(
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
+    mut formation: ResMut<PartyFormation>,
 ) {
     for entity in &units {
         commands.entity(entity).despawn();
@@ -299,6 +305,7 @@ fn despawn_units(
     *allocator = UnitAllocator::default();
     registry.clear();
     party.members.clear();
+    *formation = PartyFormation::default();
 }
 
 /// Global picking observer: when any `HexTile` is clicked, resolve the route and
@@ -621,10 +628,12 @@ fn spawn_units(
     // them build a library to spawn a unit that does not cast.
     lattices: Option<Res<LatticeLibrary>>,
     profiles: Option<Res<AiProfileCatalog>>,
+    formations: Option<Res<FormationCatalog>>,
     anchors: Option<Res<MapAnchors>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
+    mut formation: ResMut<PartyFormation>,
 ) {
     let mut identity = UnitIdentity {
         allocator: &mut allocator,
@@ -706,6 +715,12 @@ fn spawn_units(
             },
             &mut identity,
         );
+    }
+    if let Some(preset) = formations
+        .as_deref()
+        .and_then(|catalog| catalog.get("Compact").or_else(|| catalog.presets.first()))
+    {
+        formation.select_preset(preset, &identity.party.members);
     }
 }
 

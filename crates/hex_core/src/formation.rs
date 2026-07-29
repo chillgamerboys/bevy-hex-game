@@ -140,6 +140,65 @@ pub struct PartyFormation {
     pub mode: PartyMovementMode,
 }
 
+impl PartyFormation {
+    /// Selects a preset and fills its slots in stable party order.
+    pub fn select_preset(&mut self, preset: &FormationPreset, members: &[UnitId]) {
+        self.preset.clone_from(&preset.name);
+        self.assignments.clear();
+        for (&member, slot) in members.iter().zip(&preset.slots) {
+            self.assignments.insert(member, slot.offset);
+        }
+    }
+
+    /// Assigns a member to a slot, swapping with its current occupant when needed.
+    ///
+    /// Returns the displaced member. A previously-unassigned member displaces the
+    /// occupant into the unassigned pool; [`Self::fill_unassigned`] can then place it.
+    pub fn assign(&mut self, member: UnitId, slot: HexCoord) -> Option<UnitId> {
+        let old_slot = self.assignments.get(&member).copied();
+        let occupant = self
+            .assignments
+            .iter()
+            .find_map(|(&unit, &at)| (unit != member && at == slot).then_some(unit));
+        self.assignments.insert(member, slot);
+        if let Some(displaced) = occupant {
+            if let Some(old_slot) = old_slot {
+                self.assignments.insert(displaced, old_slot);
+            } else {
+                self.assignments.remove(&displaced);
+            }
+        }
+        occupant
+    }
+
+    /// Fills free preset slots with unassigned members in stable party order.
+    pub fn fill_unassigned(&mut self, preset: &FormationPreset, members: &[UnitId]) {
+        for &member in members {
+            if self.assignments.contains_key(&member) {
+                continue;
+            }
+            let Some(slot) = preset.slots.iter().find(|slot| {
+                !self
+                    .assignments
+                    .values()
+                    .any(|assigned| *assigned == slot.offset)
+            }) else {
+                break;
+            };
+            self.assignments.insert(member, slot.offset);
+        }
+    }
+
+    /// Member assigned to the preset's anchor slot.
+    #[must_use]
+    pub fn anchor_member(&self, preset: &FormationPreset) -> Option<UnitId> {
+        let anchor = preset.anchor()?;
+        self.assignments
+            .iter()
+            .find_map(|(&member, &slot)| (slot == anchor).then_some(member))
+    }
+}
+
 /// One member's exact path inside an atomic party move.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PartyPath {
@@ -192,5 +251,33 @@ mod tests {
             ],
         };
         assert_eq!(preset.validate(), Err(FormationError::Disconnected));
+    }
+
+    #[test]
+    fn occupied_slot_assignment_swaps_deterministically() {
+        let preset = FormationPreset {
+            name: "Pair".to_owned(),
+            slots: vec![
+                FormationSlot {
+                    offset: HexCoord::ORIGIN,
+                    anchor: true,
+                },
+                FormationSlot {
+                    offset: HexCoord::from_axial(-1, 0),
+                    anchor: false,
+                },
+            ],
+        };
+        let members = [UnitId(1), UnitId(2)];
+        let mut formation = PartyFormation::default();
+        formation.select_preset(&preset, &members);
+        assert_eq!(
+            formation.assign(UnitId(2), HexCoord::ORIGIN),
+            Some(UnitId(1))
+        );
+        assert_eq!(
+            formation.assignments.get(&UnitId(1)),
+            Some(&HexCoord::from_axial(-1, 0))
+        );
     }
 }

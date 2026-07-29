@@ -89,6 +89,13 @@ trade is deliberate and temporary — the alternative was three PRs each editing
 two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
 the types it exposes.
 
+Party state follows the same split. `hex_core` owns the serializable formation
+vocabulary and session resource, `hex_assets` loads and validates named presets,
+`hex_units` owns roster identity and selection/focus projection, and `hex_game` renders
+and edits those facts. The UI never invents an entity ordering: keys and strip slots
+follow the `Party` resource's stable `UnitId` order. See
+[systems/party.md](systems/party.md).
+
 ### Ownership cuts both ways
 
 Two roles, named so the arrangement survives a change of people:
