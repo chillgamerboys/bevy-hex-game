@@ -229,9 +229,26 @@ impl HexCoord {
     }
 
     /// The six adjacent tiles.
+    ///
+    /// The order is fixed and is what [`Sextant`] names — index `n` of this
+    /// array is [`Sextant::ALL`]`[n]`.
     #[must_use]
     pub fn neighbors(&self) -> [Self; 6] {
         self.to_hex().all_neighbors().map(Self::from_hex)
+    }
+
+    /// The neighbour lying in one direction.
+    #[must_use]
+    pub fn neighbor(&self, sextant: Sextant) -> Self {
+        let [a, b, c, d, e, f] = self.neighbors();
+        match sextant {
+            Sextant::A => a,
+            Sextant::B => b,
+            Sextant::C => c,
+            Sextant::D => d,
+            Sextant::E => e,
+            Sextant::F => f,
+        }
     }
 
     /// The underlying [`hexx`] coordinate.
@@ -362,6 +379,77 @@ pub struct HexGrid;
 #[derive(Component, Reflect, Default)]
 #[reflect(Component)]
 pub struct HexTile;
+
+/// One of the six directions a hex grid admits.
+///
+/// A named direction rather than a bare index, because shapes that point
+/// somewhere — a line, a cone, an authored path — need to say *where* in the
+/// domain rather than agreeing on an integer convention by accident.
+///
+/// The six positions are exactly the order [`HexCoord::neighbors`] returns, so
+/// rotating a shape is arithmetic on this rather than a lookup table. Turning
+/// by one sextant is 60 degrees, which is exact on cube coordinates — an
+/// authored pattern keeps its shape in all six orientations, with no rounding
+/// and no special case for diagonals.
+#[derive(
+    Reflect,
+    Serialize,
+    Deserialize,
+    Debug,
+    Default,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
+pub enum Sextant {
+    /// The first of `neighbors()`, and the zero rotation.
+    #[default]
+    A,
+    /// One sextant clockwise from [`Self::A`].
+    B,
+    /// Two sextants clockwise from [`Self::A`].
+    C,
+    /// Three sextants clockwise — the opposite of [`Self::A`].
+    D,
+    /// Four sextants clockwise from [`Self::A`].
+    E,
+    /// Five sextants clockwise from [`Self::A`].
+    F,
+}
+
+impl Sextant {
+    /// Every direction, in the order [`HexCoord::neighbors`] uses.
+    pub const ALL: [Self; 6] = [Self::A, Self::B, Self::C, Self::D, Self::E, Self::F];
+
+    /// This direction turned `steps` sextants clockwise, wrapping.
+    ///
+    /// Rotation is modular arithmetic, so a full turn is the identity and a
+    /// shape rotated six times is congruent to itself — the property a
+    /// rotation test should assert.
+    #[must_use]
+    pub fn turned(self, steps: u32) -> Self {
+        // A match rather than an index: six is the whole domain, so the
+        // rotation is total by construction and carries no panic path.
+        match (self as u32 + steps) % 6 {
+            1 => Self::B,
+            2 => Self::C,
+            3 => Self::D,
+            4 => Self::E,
+            5 => Self::F,
+            _ => Self::A,
+        }
+    }
+
+    /// The direction pointing the opposite way.
+    #[must_use]
+    pub fn opposite(self) -> Self {
+        self.turned(3)
+    }
+}
 
 #[cfg(test)]
 mod tests {

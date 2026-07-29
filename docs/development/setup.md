@@ -65,7 +65,11 @@ see a hex-prism map, a red player piece, a blue enemy piece, and the sky.
 | Mouse wheel | Zoom |
 | Hover a hex tile | Preview the reachable area and route |
 | Left-click a hex tile | Move the piece along that route |
-| `SPACE` | End the player turn during combat |
+| Click a spell row, then a lit target | Aim a cast |
+| `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
+| `SPACE` | End the current player turn; hostile turns cannot be skipped |
+| `H` | Hide or show ordinary readouts; an active damage choice stays visible |
+| Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
 | `BACKSPACE` | Return to the title screen |
 | Click a scenario | Start that scenario |

@@ -3207,7 +3207,7 @@ checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
 
 [[package]]
 name = "hex_anim"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_core",
@@ -3215,10 +3215,11 @@ dependencies = [
 
 [[package]]
 name = "hex_assets"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_core",
+ "hex_lattice",
  "ron",
  "serde",
  "serde_json",
@@ -3227,18 +3228,21 @@ dependencies = [
 
 [[package]]
 name = "hex_combat"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_anim",
  "hex_assets",
  "hex_core",
+ "hex_lattice",
  "hex_units",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "hex_core"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "bevy_math",
@@ -3254,7 +3258,7 @@ dependencies = [
 
 [[package]]
 name = "hex_dev"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "bevy-inspector-egui",
@@ -3262,7 +3266,7 @@ dependencies = [
 
 [[package]]
 name = "hex_editor"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "atomicwrites",
  "bevy",
@@ -3277,7 +3281,7 @@ dependencies = [
 
 [[package]]
 name = "hex_game"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_assets",
@@ -3294,7 +3298,7 @@ dependencies = [
 
 [[package]]
 name = "hex_lattice"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy_ecs",
  "bevy_reflect",
@@ -3306,7 +3310,7 @@ dependencies = [
 
 [[package]]
 name = "hex_map"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_assets",
@@ -3319,12 +3323,13 @@ dependencies = [
 
 [[package]]
 name = "hex_units"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_anim",
  "hex_assets",
  "hex_core",
+ "hex_lattice",
  "ron",
  "serde",
  "serde_json",
@@ -3332,7 +3337,7 @@ dependencies = [
 
 [[package]]
 name = "hex_world"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_assets",

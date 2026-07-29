@@ -7,6 +7,56 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 16 — feat: add procedural V3 Waterfall biome (2026-07-28)
+
+- **PR**: #89 — `feat/v3-waterfall`
+- **Outcome**: green — 2 post-Wave-3 integration blockers fixed
+- **Lenses triggered**: 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 8, fresh-eyes | `assets/config/scenarios.ron`:105 | SHIP-BLOCKER | fixed during `dev` reconciliation — Waterfall now supplies PR #100's required `Map` category and shared anchored encounter instead of the removed inline `units` field |
+| 7 | `crates/hex_game/src/screens/title.rs`:842 | SHIP-BLOCKER | fixed during `dev` reconciliation — the shipped-lane assertion now includes Waterfall as the ninth Map scenario |
+| 8 | `crates/hex_game/src/walk.rs`:204 | NON-BLOCKER | fixed during merge-conflict resolution — the walk key parser retains both Waterfall's character-camera key and Wave 3's casting/HUD keys |
+
+**Notes**: all eight code lenses found no remaining blocker. The exact-surface
+traversal, route-redundancy, terrain-reprojection, lifecycle, and Waterfall renderer
+suites pass against the promoted Wave 3 tree. The dedicated scripted Waterfall walk
+remains the rendered integration gate.
+
+## Wave 15 — fix(assets): abandon reverted reload candidates (2026-07-28)
+
+- **PR**: #105 — `fix/promotion-hot-reload-latch`
+- **Outcome**: green — 3 ship-blocker variants and 4 non-blockers fixed
+- **Lenses triggered**: 2, 4, 7, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, fresh-eyes | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed in-branch — an internal restoration marker distinguishes builder writes from authored reloads; reversion attribution rebases only changed rejected halves before candidate selection, so repeated failures, opposite-half no-op reloads, and same-frame reversion-plus-edit events preserve the exact authored pair |
+| 7 | `crates/hex_assets/src/substances.rs`:1147 | NON-BLOCKER | fixed in-branch — both sequential and same-frame revert-then-edit directions, opposite-half no-op reloads, and the repeated-rejection/idle-frame/repair sequence are covered at Bevy resource-change altitude |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed in-branch — all four remaining crate-local `ron` declarations now inherit the workspace dependency |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed in-branch — all test-count skills describe the current eleven-crate workspace consistently |
+
+**Notes**: all eight code lenses, all four documentation lenses, and the fresh-eyes
+pass found no remaining blocker. Exact verification counted 881 passing tests.
+
+## Wave 14 — promote: dev → main (2026-07-28)
+
+- **PR**: #104 — `dev`
+- **Outcome**: green — 1 promotion blocker fixed in PR #105
+- **Lenses triggered**: 2, 4, 7, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_assets/src/substances.rs`:151 | SHIP-BLOCKER | fixed by PR #105 — reverting one rejected cross-file reload half now abandons the stale candidate before a later edit to the other source |
+| 2 | `crates/hex_assets/Cargo.toml`:11 | NON-BLOCKER | fixed by PR #105 — all `ron` consumers inherit the workspace source of truth |
+| D3, D4 | `.claude/skills/test-quick/SKILL.md`:34 | NON-BLOCKER | fixed by PR #105 — stale nine-crate and fixed-suite-count claims were removed from the test skills |
+| 7 | `crates/hex_map/src/procedural_v3/mod.rs`:36 | NON-BLOCKER | deferred to draft #89 — V3 publication, rebuild scheduling, and fall-curtain pixels remain unreachable until the first runnable V3 recipe lands; Wave 9 already owns that coverage boundary |
+
+**Notes**: the human promotion gate covered both `cargo dev` gameplay and the
+standalone `cargo editor`. The updated `dev` head is re-audited after PR #105
+lands, before PR #104 may merge.
+
 ## Wave 13 — test(walk): cover Volcanic Hills lava (2026-07-28)
 
 - **PR**: #103 — `fix/volcanic-visual-walk`

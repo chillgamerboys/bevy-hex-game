@@ -22,9 +22,11 @@ use hex_assets::{
 };
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
-    Headroom, HexCoord, HexSpan, HexTile, Mode, Screen, SubstanceId, TilePos, Turn, UnitId,
+    CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand,
+    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId,
     MAX_HEADROOM,
 };
+use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn};
 
 const GROUND: f32 = 2.0;
@@ -413,33 +415,171 @@ fn an_adjacent_enemy_attacks_without_moving() {
     );
 }
 
-/// Presses the end-turn key for one frame.
-///
-/// A real `KeyboardInput`, not a direct `ButtonInput::press`: Bevy clears the button
-/// state at the start of every frame before processing events, so a direct press
-/// never reaches an `Update` system.
-fn end_turn(app: &mut App) {
-    use bevy::input::keyboard::{Key, KeyboardInput};
-    use bevy::input::ButtonState;
+/// A hostile strike can park resolution on a human defender choice. The AI must not
+/// prequeue its end-turn beside that strike — the modal gate correctly refuses every
+/// command except the matching answer — but it must still end the spent turn once the
+/// answer and presentation have both finished.
+#[test]
+fn a_player_defence_choice_does_not_strand_the_enemy_turn() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(100),
+    ));
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+    );
+    let spec = LatticeSpec::default()
+        .with(LatticeCoord::ORIGIN, CellKind::Blank)
+        .with(LatticeCoord::new(1, 0), CellKind::Blank);
+    let stats = LatticeStats::default();
+    let state = LatticeState::new(&spec, &stats);
+    app.world_mut()
+        .entity_mut(player)
+        .insert((ControlOwner::default(), spec, state, stats));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert(ControlOwner::default());
+    enter_gameplay(&mut app);
 
-    let window = app.world_mut().spawn(()).id();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Pressed,
-        text: None,
-        repeat: false,
-        window,
-    });
+    let player_id = unit_id(&app, player);
+    let enemy_id = unit_id(&app, enemy);
+    end_turn(&mut app);
+
+    assert_eq!(
+        *app.world().resource::<PendingDecision>(),
+        PendingDecision::ChooseDisables {
+            decider: player_id,
+            count: 1,
+            source: enemy_id,
+        },
+        "the adjacent strike should wait for the player to name its disabled cell"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(enemy_id),
+        "the attacker owns the turn while its damage is unresolved"
+    );
+
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseDisables {
+                unit: player_id,
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        });
     app.update();
-    app.world_mut().write_message(KeyboardInput {
-        key_code: KeyCode::Space,
-        logical_key: Key::Space,
-        state: ButtonState::Released,
-        text: None,
-        repeat: false,
-        window,
-    });
+
+    for _ in 0..20 {
+        app.update();
+        if app.world().resource::<TurnOrder>().current() == Some(player_id) {
+            break;
+        }
+    }
+
+    assert!(
+        !app.world().resource::<PendingDecision>().is_open(),
+        "the matching player answer should resolve the parked damage"
+    );
+    assert_eq!(
+        app.world().resource::<TurnOrder>().current(),
+        Some(player_id),
+        "the AI should end its already-spent turn after the decision and lunge resolve"
+    );
+    assert!(
+        app.world().get::<Turn>(player).is_some(),
+        "the player should receive the next turn"
+    );
+}
+
+/// Resolving one defender choice must not make the hostile policy dependent on the
+/// keyboard for later rounds. The gameplay walk used to hide this by pressing Space
+/// while the hostile still held its second spent turn.
+#[test]
+fn repeated_player_defence_choices_do_not_strand_a_later_enemy_turn() {
+    let mut app = test_app();
+    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+        Duration::from_millis(4),
+    ));
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(1, -1, 0),
+        10,
+    );
+    let first = LatticeCoord::ORIGIN;
+    let second = LatticeCoord::new(1, 0);
+    let spec = LatticeSpec::default()
+        .with(first, CellKind::Blank)
+        .with(second, CellKind::Blank)
+        .with(LatticeCoord::new(0, 1), CellKind::Blank);
+    let stats = LatticeStats::default();
+    let state = LatticeState::new(&spec, &stats);
+    app.world_mut()
+        .entity_mut(player)
+        .insert((ControlOwner::default(), spec, state, stats));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert(ControlOwner::default());
+    enter_gameplay(&mut app);
+
+    let player_id = unit_id(&app, player);
+    for cell in [first, second] {
+        end_turn(&mut app);
+        assert!(
+            app.world().resource::<PendingDecision>().is_open(),
+            "each adjacent hostile turn should ask the player to choose a cell"
+        );
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(IssuedCommand {
+                seat: PlayerSeat::default(),
+                command: GameCommand::ChooseDisables {
+                    unit: player_id,
+                    cells: vec![cell],
+                },
+            });
+
+        for _ in 0..240 {
+            app.update();
+            if app.world().resource::<TurnOrder>().current() == Some(player_id) {
+                break;
+            }
+        }
+        assert_eq!(
+            app.world().resource::<TurnOrder>().current(),
+            Some(player_id),
+            "the hostile's spent turn should end after defence choice at {cell:?}"
+        );
+    }
+}
+
+/// Advances the simulation without coupling enemy-policy tests to an input binding.
+#[expect(
+    clippy::expect_used,
+    reason = "an active combatant is a precondition for this integration-test helper"
+)]
+fn end_turn(app: &mut App) {
+    let unit = app
+        .world()
+        .resource::<TurnOrder>()
+        .current()
+        .expect("combat should have a current unit");
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::EndTurn { unit },
+        });
+    // The command advances to the hostile during Apply/Advance. Its policy runs
+    // in Act on the following frame, preserving the production schedule boundary.
+    app.update();
     app.update();
 }
 
