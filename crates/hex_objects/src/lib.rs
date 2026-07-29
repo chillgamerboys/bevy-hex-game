@@ -19,6 +19,7 @@ use bevy::core_pipeline::oit::OrderIndependentTransparencySettings;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureUsages;
 use hex_assets::{
     GameAssets, HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint, ObjectInstance,
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
@@ -398,6 +399,7 @@ fn manage_object_oit(
     mut cameras: Query<
         (
             Entity,
+            &mut Camera3d,
             &mut Msaa,
             Has<OrderIndependentTransparencySettings>,
             Option<&ObjectOitCamera>,
@@ -406,8 +408,12 @@ fn manage_object_oit(
     >,
 ) {
     let needs_oit = !translucent_chunks.is_empty();
-    for (entity, mut msaa, has_oit, managed) in &mut cameras {
+    for (entity, mut camera_3d, mut msaa, has_oit, managed) in &mut cameras {
         if needs_oit {
+            let texture_binding = TextureUsages::TEXTURE_BINDING.bits();
+            if camera_3d.depth_texture_usages.0 & texture_binding == 0 {
+                camera_3d.depth_texture_usages.0 |= texture_binding;
+            }
             if managed.is_some() {
                 if !has_oit {
                     commands
@@ -435,8 +441,8 @@ fn manage_object_oit(
         let Some(managed) = managed else {
             continue;
         };
-        *msaa = managed.previous_msaa;
         let mut camera = commands.entity(entity);
+        camera.insert(managed.previous_msaa);
         if !managed.preserve_oit {
             camera.remove::<OrderIndependentTransparencySettings>();
         }
@@ -1577,6 +1583,12 @@ mod tests {
             .get::<OrderIndependentTransparencySettings>(camera)
             .is_some());
         assert!(app.world().get::<ObjectOitCamera>(camera).is_some());
+        let camera_3d = app
+            .world()
+            .get::<Camera3d>(camera)
+            .expect("camera must keep its Camera3d component");
+        assert!(TextureUsages::from(camera_3d.depth_texture_usages)
+            .contains(TextureUsages::TEXTURE_BINDING));
         assert_eq!(
             child_entities(&app, effect)
                 .into_iter()
@@ -1596,6 +1608,47 @@ mod tests {
             .get::<OrderIndependentTransparencySettings>(camera)
             .is_none());
         assert!(app.world().get::<ObjectOitCamera>(camera).is_none());
+        let camera_3d = app
+            .world()
+            .get::<Camera3d>(camera)
+            .expect("camera must keep its Camera3d component");
+        assert!(
+            TextureUsages::from(camera_3d.depth_texture_usages)
+                .contains(TextureUsages::TEXTURE_BINDING),
+            "the harmless sampling usage remains because another renderer may need it"
+        );
+    }
+
+    #[test]
+    fn a_camera_spawned_while_blend_is_live_gets_a_complete_oit_configuration() {
+        let mut app = test_app(fixture_catalog(0.18));
+        app.world_mut().spawn(instance(
+            "effect/material-test",
+            HexCoord::ORIGIN,
+            0,
+            0.4,
+            0,
+        ));
+        settle(&mut app);
+
+        let camera = app
+            .world_mut()
+            .spawn((Camera3d::default(), Msaa::Sample4))
+            .id();
+        app.update();
+
+        assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Off));
+        assert!(app
+            .world()
+            .get::<OrderIndependentTransparencySettings>(camera)
+            .is_some());
+        assert!(app.world().get::<ObjectOitCamera>(camera).is_some());
+        let camera_3d = app
+            .world()
+            .get::<Camera3d>(camera)
+            .expect("camera must keep its Camera3d component");
+        assert!(TextureUsages::from(camera_3d.depth_texture_usages)
+            .contains(TextureUsages::TEXTURE_BINDING));
     }
 
     #[test]

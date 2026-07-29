@@ -1,5 +1,6 @@
 //! Runtime acceptance gallery for tracked voxel objects.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use bevy::camera::RenderTarget;
@@ -7,7 +8,12 @@ use bevy::light::GlobalAmbientLight;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectInstance, RuntimeArtCatalog};
+use hex_assets::{
+    ConnectivityPolicy, EffectPart, HexObjectRotation, LocalVoxelCoord, ObjectAssetId,
+    ObjectBlueprint, ObjectBounds, ObjectCatalogFile, ObjectCategory, ObjectInstance, ObjectPart,
+    ObjectPlacement, PaletteSwatch, RuntimeArtCatalog, SrgbColor, SwatchId, VoxelEmission,
+    VoxelStyle, VoxelStyleId, VoxelSurfaceMode, OBJECT_BLUEPRINT_SCHEMA_VERSION,
+};
 use hex_core::{HexCoord, TilePos};
 use hex_objects::ObjectRenderChunk;
 
@@ -15,6 +21,8 @@ const OBJECT_ID: &str = "plant/small-broadleaf";
 const LEVEL_HEIGHT: f32 = 0.4;
 const RIG_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_RIG";
 const CAPTURE_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_CAPTURE";
+const FIXTURES_ENVIRONMENT: &str = "HEX_OBJECT_GALLERY_MATERIAL_FIXTURES";
+const MATERIAL_FIXTURE_ID: &str = "effect/runtime-material-fixture";
 const CAPTURE_WIDTH: u32 = 1600;
 const CAPTURE_HEIGHT: u32 = 900;
 
@@ -45,6 +53,11 @@ impl GalleryRig {
 struct GallerySpawned;
 
 #[derive(Resource)]
+struct GalleryOptions {
+    material_fixtures: bool,
+}
+
+#[derive(Resource)]
 struct GalleryCapture {
     path: PathBuf,
     target: Handle<Image>,
@@ -56,6 +69,9 @@ fn main() -> AppExit {
     let rig = GalleryRig::from_environment();
     App::new()
         .insert_resource(rig)
+        .insert_resource(GalleryOptions {
+            material_fixtures: std::env::var_os(FIXTURES_ENVIRONMENT).is_some(),
+        })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: format!("Object Gallery / {rig:?}"),
@@ -66,7 +82,10 @@ fn main() -> AppExit {
         }))
         .add_plugins((hex_assets::plugin, hex_objects::plugin))
         .add_systems(Startup, setup_gallery)
-        .add_systems(Update, (spawn_rotations, request_capture).chain())
+        .add_systems(
+            Update,
+            (install_material_fixture, spawn_rotations, request_capture).chain(),
+        )
         .run()
 }
 
@@ -154,10 +173,39 @@ fn gallery_camera_transform() -> Transform {
     Transform::from_xyz(0.0, 10.5, 17.0).looking_at(Vec3::new(0.0, 1.1, 0.0), Vec3::Y)
 }
 
+fn install_material_fixture(
+    options: Res<GalleryOptions>,
+    catalog: Option<ResMut<RuntimeArtCatalog>>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if !options.material_fixtures {
+        return;
+    }
+    let Some(mut catalog) = catalog else {
+        return;
+    };
+    let Ok(fixture_id) = ObjectAssetId::new(MATERIAL_FIXTURE_ID) else {
+        error!("material fixture id violates the stable-id contract");
+        exit.write(AppExit::error());
+        return;
+    };
+    if catalog.object(&fixture_id).is_some() {
+        return;
+    }
+    match catalog_with_material_fixture(&catalog, fixture_id) {
+        Ok(augmented) => *catalog = augmented,
+        Err(error) => {
+            error!("cannot build transient runtime material fixture: {error}");
+            exit.write(AppExit::error());
+        }
+    }
+}
+
 fn spawn_rotations(
     mut commands: Commands,
     catalog: Option<Res<RuntimeArtCatalog>>,
     spawned: Option<Res<GallerySpawned>>,
+    options: Res<GalleryOptions>,
     mut exit: MessageWriter<AppExit>,
 ) {
     if spawned.is_some() {
@@ -206,7 +254,141 @@ fn spawn_rotations(
             Name::new(format!("Small Broadleaf / rotation {steps}")),
         ));
     }
+    if options.material_fixtures {
+        let Ok(fixture_id) = ObjectAssetId::new(MATERIAL_FIXTURE_ID) else {
+            error!("material fixture id violates the stable-id contract");
+            exit.write(AppExit::error());
+            return;
+        };
+        if catalog.object(&fixture_id).is_none() {
+            return;
+        }
+        let Ok(instance) = ObjectInstance::new(
+            fixture_id,
+            TilePos::new(HexCoord::ORIGIN, 0),
+            LEVEL_HEIGHT,
+            HexObjectRotation::default(),
+        ) else {
+            error!("runtime material fixture instance is invalid");
+            exit.write(AppExit::error());
+            return;
+        };
+        commands.spawn((instance, Name::new("Runtime Material Fixture")));
+    }
     commands.insert_resource(GallerySpawned);
+}
+
+fn catalog_with_material_fixture(
+    catalog: &RuntimeArtCatalog,
+    fixture_id: ObjectAssetId,
+) -> Result<RuntimeArtCatalog, String> {
+    let mut palette = catalog.palette().clone();
+    let mut styles = catalog.styles().clone();
+    for (suffix, display_name, color, surface_mode, opacity, emission) in [
+        (
+            "opaque",
+            "Review Opaque",
+            (0.72, 0.28, 0.12),
+            VoxelSurfaceMode::Opaque,
+            1.0,
+            false,
+        ),
+        (
+            "cutout",
+            "Review Cutout",
+            (0.78, 0.72, 0.16),
+            VoxelSurfaceMode::Cutout,
+            0.65,
+            false,
+        ),
+        (
+            "translucent",
+            "Review Translucent",
+            (0.12, 0.62, 0.82),
+            VoxelSurfaceMode::Translucent,
+            0.42,
+            false,
+        ),
+        (
+            "additive",
+            "Review Additive",
+            (0.82, 0.18, 0.62),
+            VoxelSurfaceMode::Additive,
+            0.75,
+            true,
+        ),
+    ] {
+        let swatch_id =
+            SwatchId::new(format!("review/{suffix}")).map_err(|error| error.to_string())?;
+        let color = SrgbColor::new(color.0, color.1, color.2).map_err(|error| error.to_string())?;
+        let swatch = PaletteSwatch::new(
+            display_name,
+            color,
+            BTreeSet::from(["review".to_owned(), "runtime-fixture".to_owned()]),
+        )
+        .map_err(|error| error.to_string())?;
+        palette
+            .insert(swatch_id.clone(), swatch)
+            .map_err(|error| error.to_string())?;
+
+        let style_id =
+            VoxelStyleId::new(format!("review/{suffix}")).map_err(|error| error.to_string())?;
+        let emission = emission
+            .then(|| VoxelEmission::new(swatch_id.clone(), 3.0))
+            .transpose()
+            .map_err(|error| error.to_string())?;
+        let style = VoxelStyle::new(display_name, swatch_id, surface_mode, opacity, emission)
+            .map_err(|error| error.to_string())?;
+        styles
+            .insert(style_id, style)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let fixture = ObjectBlueprint {
+        schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+        id: fixture_id.clone(),
+        display_name: "Runtime Material Fixture".to_owned(),
+        category: ObjectCategory::Effect,
+        bounds: ObjectBounds {
+            radius: 2,
+            min_level: 0,
+            height: 2,
+        },
+        connectivity: ConnectivityPolicy::Free,
+        origin: LocalVoxelCoord::new(0, 0, 0),
+        placements: vec![
+            fixture_placement(0, 0, 0, "review/opaque", EffectPart::Core)?,
+            fixture_placement(-1, 0, 0, "review/cutout", EffectPart::Trail)?,
+            fixture_placement(1, -1, 0, "review/translucent", EffectPart::Accent)?,
+            fixture_placement(2, -1, 0, "review/translucent", EffectPart::Accent)?,
+            fixture_placement(0, 1, 1, "review/additive", EffectPart::Accent)?,
+        ],
+        blocker_footprint: Vec::new(),
+        canopy_occluders: Vec::new(),
+    };
+    fixture.validate(&styles)?;
+
+    let mut objects = catalog.objects().clone();
+    objects.insert(fixture_id.clone(), fixture);
+    let manifest =
+        ObjectCatalogFile::new(catalog.manifest().ids().iter().cloned().chain([fixture_id]))
+            .map_err(|error| error.to_string())?;
+    RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+        .map_err(|error| error.to_string())
+}
+
+fn fixture_placement(
+    q: i32,
+    r: i32,
+    level: i32,
+    style: &str,
+    part: EffectPart,
+) -> Result<ObjectPlacement, String> {
+    Ok(ObjectPlacement {
+        position: LocalVoxelCoord::new(q, r, level),
+        style: VoxelStyleId::new(style).map_err(|error| error.to_string())?,
+        part: ObjectPart::Effect(part),
+    })
 }
 
 fn request_capture(

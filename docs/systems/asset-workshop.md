@@ -358,7 +358,9 @@ Run `cargo object-gallery` to inspect all six rotations of the first production
 object under the neutral rig. Set `HEX_OBJECT_GALLERY_RIG=dark` for the matching dark
 render without changing the asset or its runtime material. Set
 `HEX_OBJECT_GALLERY_CAPTURE=<path.png>` to capture the selected rig through an
-offscreen target and exit automatically.
+offscreen target and exit automatically. Set
+`HEX_OBJECT_GALLERY_MATERIAL_FIXTURES=1` to add transient opaque, cutout, translucent,
+additive, and emissive samples without adding them to the tracked object catalog.
 
 The instance origin is the exact world voxel occupied by the blueprint origin, not
 the supporting terrain surface. Its validated level height supplies vertical scale,

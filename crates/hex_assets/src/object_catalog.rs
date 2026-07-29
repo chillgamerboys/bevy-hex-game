@@ -753,6 +753,10 @@ fn reject_candidate(
 }
 
 /// One of the six exact clockwise axial rotations of a voxel object.
+///
+/// This is a relative turn count: zero preserves the blueprint's authored
+/// orientation. [`hex_core::Sextant`] instead names an absolute grid direction,
+/// so the two six-way vocabularies are deliberately not interchangeable.
 #[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 #[reflect(opaque)]
 pub struct HexObjectRotation(u8);
