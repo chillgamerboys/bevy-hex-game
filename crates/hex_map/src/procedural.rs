@@ -90,6 +90,8 @@ pub enum ProceduralRecipeMetrics {
     Forest(ForestMetrics),
     /// Worked-stone defenses, circulation, and access measurements.
     Fort(FortMetrics),
+    /// Underground topology, clearance, roof, and local-light measurements.
+    Caves(CavesMetrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Hills plan.
@@ -250,6 +252,41 @@ pub struct FortMetrics {
     pub independent_gate_routes: u32,
     /// Exposed surfaces whose exact supporting material is worked stone.
     pub worked_stone_surfaces: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Caves plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CavesMetrics {
+    /// Rooted chamber count requested by the recipe.
+    pub chamber_count: u32,
+    /// Roofed floor surfaces, excluding the open entrance ramp.
+    pub covered_floors: u32,
+    /// Exact floors on the required lit route.
+    pub critical_floors: u32,
+    /// Optional interior floors deliberately left dark.
+    pub optional_dark_floors: u32,
+    /// Generated public gameplay-light sources.
+    pub gameplay_lights: u32,
+    /// Thinnest roof above any covered cave floor.
+    pub minimum_roof_thickness: Level,
+    /// Smallest clear-air interval above a covered floor.
+    pub minimum_clearance: Level,
+    /// Largest clear-air interval above a covered floor.
+    pub maximum_clearance: Level,
+    /// Relief across the rocky exterior surface.
+    pub surface_relief: Level,
+    /// Relief across the underground floor network.
+    pub floor_relief: Level,
+    /// Number of one-level transitions down the entrance ramp.
+    pub entrance_steps: u32,
+    /// Shortest walker route from party to hostile anchors.
+    pub critical_route_steps: u32,
+    /// Exact surfaces reachable from the entrance.
+    pub reachable_surfaces: u32,
+    /// Distinct levels reachable from the entrance.
+    pub reachable_elevation_levels: u32,
+    /// Percentage of exterior surfaces topped with gravel.
+    pub gravel_surface_percent: u32,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.

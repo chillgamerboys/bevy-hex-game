@@ -204,6 +204,32 @@ character-camera presentation. The current walk DSL cannot address map-space til
 so that script is not a route traversal: exact graph validation and recorded manual
 traversal cover topology until the tooling gains that capability.
 
+### Caves
+
+Plan one varied rocky exterior and one rooted underground network in the same stacked
+volume. The native V3 recipe creates six through twelve chambers at floor levels six
+through eight, connects the critical network with two-wide corridors, and descends
+through an open two-wide one-level entrance ramp. Corridors preserve at least three
+clear levels, chambers at least four, and every covered cell retains at least three
+solid cutaway roof levels. Exact interior floors and roof voxels remain the source of
+truth for perception domains and presentation.
+
+Generated cave lights are deterministic gameplay semantics. Bright sources with
+radii from four through seven cover the entrance, required actor route, and critical
+chambers, while at least one optional branch floor remains dark. `hex_map` publishes
+each source as an entity carrying its floor `TilePos` and `GameplayLight`;
+`hex_perception` derives the interior domain from `InteriorRegions`. Static sources
+make their supporting columns map-owned until terrain edits can replan light-bearing
+objects.
+
+The V3 recipe does not render a crystal itself. The later stacked object integration
+maps these ordered sources to `prop/crystal-low-cluster`,
+`prop/crystal-branched`, or `prop/crystal-spire`. Its authoritative
+`GameplayLight` and `TilePos` remain on the exact cave floor; the corresponding
+`ObjectInstance` origin is one voxel above it. Emissive materials and restrained
+physical point lights remain presentation and never determine gameplay illumination.
+The map-side light entity is intentionally valid without that optional visual layer.
+
 ### Fort
 
 Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and

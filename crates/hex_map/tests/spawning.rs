@@ -35,21 +35,22 @@ use hex_assets::{
     ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_core::{
-    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplaySetup,
+    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
     ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, MAX_HEADROOM,
 };
 use hex_map::{
-    CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
+    CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
     SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
-    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
-    V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V2HillsSettings, V2RecipeSettings, V3CavesSettings, V3EnvironmentSettings, V3ForestSettings,
+    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
+    VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -439,17 +440,29 @@ fn v2_mountains_app() -> App {
     app
 }
 
-fn v2_caves_app() -> App {
+fn v3_caves_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
-        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
-            environment: V2EnvironmentSettings::Rocky,
-            recipe: V2RecipeSettings::Caves(CavesSettings {
-                surface_level: 17,
-                cave_floor_level: 6,
-                chamber_count: 12,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::Rocky,
+                recipe: V3RecipeSettings::Caves(V3CavesSettings {
+                    surface_level: 17,
+                    cave_floor_level: 6,
+                    chamber_count: 12,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
             }),
         })),
     });
@@ -1082,8 +1095,8 @@ fn v2_mountains_publishes_route_anchors_and_geometry_derived_view() {
 }
 
 #[test]
-fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
-    let mut app = v2_caves_app();
+fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
+    let mut app = v3_caves_app();
     enter_gameplay(&mut app);
 
     assert!(
@@ -1102,10 +1115,24 @@ fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
     );
 
     let report = app.world().resource::<GenerationReport>();
-    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 736_283_041);
     assert_eq!(report.candidates_evaluated, 8);
     assert!(!report.used_fallback, "{:?}", report.notes);
+    let Some(ProceduralRecipeMetrics::Caves(CavesReportMetrics {
+        chamber_count,
+        gameplay_lights,
+        optional_dark_floors,
+        minimum_roof_thickness,
+        ..
+    })) = report.recipe_metrics
+    else {
+        panic!("V3 Caves should publish exact recipe metrics");
+    };
+    assert_eq!(chamber_count, 12);
+    assert!(gameplay_lights > 0);
+    assert!(optional_dark_floors > 0);
+    assert!(minimum_roof_thickness >= 3);
 
     let anchors = app.world().resource::<MapAnchors>();
     for name in [
@@ -1165,6 +1192,24 @@ fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
     assert!(
         projected_cutaways > 0,
         "exact roof voxels did not project onto rendered runs"
+    );
+    let generated_lights = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .inspect(|(position, light)| {
+                assert!((4..=7).contains(&light.radius));
+                assert!(
+                    floors.iter().any(|(floor, _region)| floor == *position),
+                    "generated gameplay light is not rooted on an interior floor"
+                );
+            })
+            .count()
+    };
+    assert_eq!(
+        generated_lights,
+        usize::try_from(gameplay_lights).unwrap_or(usize::MAX)
     );
 }
 
@@ -2656,8 +2701,8 @@ fn v2_mountains_teardown_and_reentry_preserve_generated_state() {
 }
 
 #[test]
-fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
-    let mut app = v2_caves_app();
+fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
+    let mut app = v3_caves_app();
     enter_gameplay(&mut app);
 
     assert!(
@@ -2686,9 +2731,18 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
         .resource::<InteriorRegions>()
         .roof_voxels()
         .collect();
+    let first_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
 
     assert!(!first_floors.is_empty());
     assert!(!first_roofs.is_empty());
+    assert!(!first_lights.is_empty());
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -2704,6 +2758,12 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
     assert!(!app.world().contains_resource::<MapViewHint>());
     assert!(!app.world().contains_resource::<GenerationReport>());
     assert!(!app.world().contains_resource::<TerrainReady>());
+    let light_count_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&GameplayLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(light_count_after_exit, 0);
 
     enter_gameplay(&mut app);
 
@@ -2745,9 +2805,18 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
         .resource::<InteriorRegions>()
         .roof_voxels()
         .collect();
+    let second_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_floors, first_floors);
     assert_eq!(second_roofs, first_roofs);
+    assert_eq!(second_lights, first_lights);
 }
 
 #[test]

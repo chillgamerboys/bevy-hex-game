@@ -68,6 +68,12 @@ impl MapPresentationProjection {
         &self.features
     }
 
+    /// Returns generated gameplay-light descriptors in stable map-local order.
+    #[must_use]
+    pub(crate) const fn lights(&self) -> &BTreeMap<LightId, PlannedGameplayLight> {
+        &self.lights
+    }
+
     /// Retains feature presentations whose exact authored support remains valid.
     ///
     /// Terrain edits may remove presentation-only features such as tall grass.
@@ -126,6 +132,18 @@ impl MapPresentationProjection {
                 && feature.root.coord == position.coord
                 && position.level >= feature.root.level
         })
+    }
+
+    /// Reports whether an edit would invalidate a generated static light source.
+    ///
+    /// Until light-bearing objects can be reprojected after terrain edits, the
+    /// complete source column is conservative map-owned geometry. This prevents
+    /// digging out its footing as well as building through its future crystal mesh.
+    #[must_use]
+    pub(crate) fn protects_light_edit(&self, position: TilePos) -> bool {
+        self.lights
+            .values()
+            .any(|light| light.origin.coord == position.coord)
     }
 
     #[cfg(test)]
@@ -1355,6 +1373,30 @@ mod tests {
         assert!(!output
             .presentation
             .protects_feature_edit(TilePos::new(grass.coord, grass.level.saturating_add(12))));
+    }
+
+    #[test]
+    fn gameplay_light_projection_is_ordered_and_protects_its_source_column() {
+        let output = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the valid world materializes");
+        let projected: Vec<_> = output
+            .presentation
+            .lights()
+            .iter()
+            .map(|(id, light)| (*id, *light))
+            .collect();
+        assert_eq!(projected.len(), 1);
+        let source = projected
+            .first()
+            .map(|(_id, light)| light.origin)
+            .expect("the fixture contains a gameplay light");
+        assert!(output.presentation.protects_light_edit(source));
+        assert!(output
+            .presentation
+            .protects_light_edit(TilePos::new(source.coord, source.level.saturating_add(20))));
+        assert!(!output
+            .presentation
+            .protects_light_edit(TilePos::new(HexCoord::from_axial(12, -12), source.level)));
     }
 
     #[test]

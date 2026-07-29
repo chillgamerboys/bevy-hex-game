@@ -423,14 +423,14 @@ mod tests {
         RosterEntry, ScenarioLibrary, SettingsRegistry, SubstanceFile, SubstanceTable,
     };
     use hex_core::{
-        AppSystems, CommandQueue, ExteriorIllumination, GameCommand, GameplaySetup,
+        AppSystems, CommandQueue, ExteriorIllumination, GameCommand, GameplayLight, GameplaySetup,
         GameplaySetupFailure, HexGrid, IlluminationLevel, InteriorRegions, IssuedCommand,
         KnowledgeState, LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode,
         PausableSystems, Pause, PerceptionSystems, PlayerSeat, ResolvedMapSeed, Screen,
         SpecialMovementRegion, SpecialMovementRegions, TerrainReady, TilePos, UnitId,
     };
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
-    use hex_perception::FactionMapKnowledge;
+    use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{either_in_reach, Body, Enemy, Faction, Footing, Player, Reach, StandsOn};
     use hex_world::TimeOfDay;
 
@@ -1807,6 +1807,55 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    #[test]
+    fn shipped_v3_cave_lights_resolve_inside_the_exact_generated_domain() {
+        let mut app = procedural_gameplay_app("Caves");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        let entrance = anchors
+            .get(&MapAnchorId::from("cave_entrance"))
+            .expect("Caves should publish cave_entrance");
+        let deep_chamber = anchors
+            .get(&MapAnchorId::from("deep_chamber"))
+            .expect("Caves should publish deep_chamber");
+        let interiors = app.world().resource::<InteriorRegions>().clone();
+        let illumination = app.world().resource::<ResolvedIllumination>().clone();
+        let generated_lights = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&TilePos, &GameplayLight)>();
+            query
+                .iter(world)
+                .map(|(position, light)| (*position, *light))
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!generated_lights.is_empty());
+        assert!(generated_lights.iter().all(|(position, light)| {
+            interiors.get(*position).is_some()
+                && light.level == IlluminationLevel::Bright
+                && (4..=7).contains(&light.radius)
+        }));
+        for required in [entrance, deep_chamber] {
+            let resolved = illumination
+                .get(required)
+                .expect("required cave floor should be in the resolved perception frame");
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+            assert_eq!(
+                Some(resolved.domain),
+                interiors.get(required).map(hex_core::LightDomain::Interior)
+            );
+        }
+        assert!(
+            interiors.surfaces().any(|(position, _region)| {
+                illumination
+                    .get(position)
+                    .is_some_and(|resolved| resolved.level == IlluminationLevel::Dark)
+            }),
+            "the generated cave should preserve at least one dark optional floor"
+        );
     }
 
     /// The shipped cave is only playable if the ECS terrain, command funnel, and

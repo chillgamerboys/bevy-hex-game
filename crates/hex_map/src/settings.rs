@@ -2780,7 +2780,7 @@ mod tests {
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-caves.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),

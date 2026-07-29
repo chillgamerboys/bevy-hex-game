@@ -13,9 +13,10 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
-    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
-    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -24,6 +25,7 @@ use materialize::{MaterializationError, MaterializedV3World};
 use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
+mod caves;
 mod fingerprint;
 mod forest;
 mod fort;
@@ -174,6 +176,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Waterfall(_)
                     | V3RecipeSettings::Forest(_)
                     | V3RecipeSettings::Fort(_)
+                    | V3RecipeSettings::Caves(_)
             ) =>
         {
             Ok(())
@@ -298,6 +301,20 @@ pub(crate) fn build(
                 started,
                 fort_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Fort(fort_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Caves(_)) => {
+            finish_build(
+                caves::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                caves_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Caves(caves_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -582,6 +599,41 @@ fn fort_recipe_metrics(metrics: &fort::FortMetrics) -> FortReportMetrics {
         critical_route_steps: metrics.critical_route_steps,
         independent_gate_routes: metrics.independent_gate_routes,
         worked_stone_surfaces: metrics.worked_stone_surfaces,
+    }
+}
+
+fn caves_report_metrics(metrics: &caves::CavesMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.surface_relief).unwrap_or(i32::MAX),
+        barrier_cells: 0,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: 0,
+        bank_high_ground_difference: 0,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics.gravel_surface_percent,
+    }
+}
+
+fn caves_recipe_metrics(metrics: &caves::CavesMetrics) -> CavesReportMetrics {
+    CavesReportMetrics {
+        chamber_count: metrics.chamber_count,
+        covered_floors: metrics.covered_floors,
+        critical_floors: metrics.critical_floors,
+        optional_dark_floors: metrics.optional_dark_floors,
+        gameplay_lights: metrics.gameplay_lights,
+        minimum_roof_thickness: metrics.minimum_roof_thickness,
+        minimum_clearance: metrics.minimum_clearance,
+        maximum_clearance: metrics.maximum_clearance,
+        surface_relief: i32::try_from(metrics.surface_relief).unwrap_or(i32::MAX),
+        floor_relief: i32::try_from(metrics.floor_relief).unwrap_or(i32::MAX),
+        entrance_steps: metrics.entrance_steps,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        gravel_surface_percent: metrics.gravel_surface_percent,
     }
 }
 

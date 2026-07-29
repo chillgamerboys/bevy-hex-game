@@ -18,11 +18,11 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 
 use hex_assets::{to_color, GameAssets, SubstanceTable};
 use hex_core::{
-    BiomeRegions, CanopyOccluder, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, MapAnchorId,
-    MapAnchors, MapViewHint, PerceptionSystems, PresentationOcclusion, ResolvedMapSeed, Screen,
-    SpecialMovementRegions, SubstanceId, TerrainEdit, TerrainReady, TilePos, TraversalBlockers,
-    TraversalProfile,
+    BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
+    GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
+    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
+    PresentationOcclusion, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
+    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
 use crate::feature_render::{self, FeaturePresentationAssets, FeaturePresentationError};
@@ -35,8 +35,8 @@ use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
 use crate::{
-    ForestReportMetrics, FortReportMetrics, GenerationReport, ProceduralRecipeMetrics,
-    WaterfallReportMetrics,
+    CavesReportMetrics, ForestReportMetrics, FortReportMetrics, GenerationReport,
+    ProceduralRecipeMetrics, WaterfallReportMetrics,
 };
 
 /// Registers world construction and tile spawning.
@@ -54,12 +54,14 @@ pub fn plugin(app: &mut App) {
         .register_type::<CutawayOccluder>()
         .register_type::<CanopyOccluder>()
         .register_type::<PresentationOcclusion>()
+        .register_type::<GameplayLight>()
         .register_type::<TerrainReady>()
         .register_type::<GenerationReport>()
         .register_type::<ProceduralRecipeMetrics>()
         .register_type::<WaterfallReportMetrics>()
         .register_type::<ForestReportMetrics>()
         .register_type::<FortReportMetrics>()
+        .register_type::<CavesReportMetrics>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -339,6 +341,7 @@ fn build_grid(
         )
         .map_err(MapPresentationError::Feature)?,
     );
+    children.extend(spawn_gameplay_lights(commands, presentation));
 
     for (coord, column) in map.columns() {
         for projected in projected_runs(coord, column, interiors) {
@@ -388,6 +391,27 @@ fn build_grid(
         ))
         .add_children(&children);
     Ok(())
+}
+
+fn spawn_gameplay_lights(
+    commands: &mut Commands,
+    presentation: Option<&MapPresentationProjection>,
+) -> Vec<Entity> {
+    presentation.map_or_else(Vec::new, |presentation| {
+        presentation
+            .lights()
+            .values()
+            .map(|light| {
+                commands
+                    .spawn((
+                        Name::new("GeneratedGameplayLight"),
+                        light.origin,
+                        GameplayLight::new(light.level, light.radius),
+                    ))
+                    .id()
+            })
+            .collect()
+    })
 }
 
 fn fail_presentation_setup(commands: &mut Commands, error: &MapPresentationError) {
@@ -559,6 +583,7 @@ fn apply_terrain_edits(
         let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
             projection.protects_liquid_edit(edit.pos())
                 || projection.protects_feature_edit(edit.pos())
+                || projection.protects_light_edit(edit.pos())
         });
         if apply_terrain_edit(&mut map, &table, edit, semantic_projection_protected) {
             changed = true;
