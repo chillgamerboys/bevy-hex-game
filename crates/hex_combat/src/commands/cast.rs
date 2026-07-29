@@ -60,7 +60,8 @@ pub(super) fn apply(
     // answer would resolve its damage against a lattice that is about to change.
     if ctx.pending.is_open() {
         let decider = match *ctx.pending {
-            PendingDecision::ChooseDisables { decider, .. } => decider,
+            PendingDecision::ChooseDisables { decider, .. }
+            | PendingDecision::ChooseRestores { decider, .. } => decider,
             PendingDecision::None => unit,
         };
         return Err(CommandRefusal::DecisionPending { decider });

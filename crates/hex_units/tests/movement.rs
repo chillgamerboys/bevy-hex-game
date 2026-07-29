@@ -100,6 +100,8 @@ fn roster(faction: EncounterFaction, placement: EncounterPlacement, archetypes: 
             .map(|archetype| RosterEntry {
                 archetype: (*archetype).to_owned(),
                 placement: None,
+                ai_profile: None,
+                ai_group: None,
             })
             .collect(),
     }
@@ -1990,6 +1992,7 @@ fn a_unit_spawns_with_its_archetypes_lattice_and_without_one_it_lacks() {
         hex_assets::Archetype {
             spec: hex_lattice::LatticeSpec::new(cells),
             stats: hex_lattice::LatticeStats::new(capacity, std::collections::BTreeMap::new()),
+            ai_profile: None,
         },
     );
     app.insert_resource(library);

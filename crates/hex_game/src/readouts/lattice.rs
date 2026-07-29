@@ -288,7 +288,7 @@ fn sync_disable_selection(
                     live,
                 }
             }),
-        PendingDecision::None => None,
+        PendingDecision::None | PendingDecision::ChooseRestores { .. } => None,
     };
     reconcile_selection(&mut selection, next);
 }

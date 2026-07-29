@@ -5,8 +5,9 @@
 //! spans, so floats never enter a save.
 
 use hex_core::{
-    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PendingDecision, PlayerSeat,
-    Sextant, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn, UnitId,
+    ControlOwner, GameCommand, HexCoord, IssuedCommand, LatticeCoord, PartyPath, PendingDecision,
+    PlayerSeat, Sextant, SimSeeds, SubstanceId, TerrainEdit, TilePos, TraversalProfile, Turn,
+    UnitId,
 };
 
 /// Serializes a value to JSON and back, asserting it comes back unchanged.
@@ -124,6 +125,11 @@ fn pending_decisions_round_trip() {
         count: 3,
         source: UnitId(1),
     });
+    assert_round_trips!(PendingDecision::ChooseRestores {
+        decider: UnitId(1),
+        target: UnitId(2),
+        count: 2,
+    });
     // The degenerate count, because `is_open()` gates resolution and a zero-hex
     // decision is still a decision somebody has to answer.
     assert_round_trips!(PendingDecision::ChooseDisables {
@@ -194,6 +200,13 @@ fn issued_commands_round_trip() {
                 TilePos::new(HexCoord::from_axial(1, 0), 1),
             ],
         },
+        GameCommand::MoveParty {
+            anchor: unit,
+            paths: vec![PartyPath {
+                member: unit,
+                path: vec![TilePos::new(HexCoord::ORIGIN, 1)],
+            }],
+        },
         GameCommand::Strike {
             unit,
             target: UnitId(9),
@@ -226,6 +239,12 @@ fn issued_commands_round_trip() {
             unit,
             cells: Vec::new(),
         },
+        GameCommand::ChooseRestores {
+            unit,
+            target: UnitId(9),
+            cells: vec![LatticeCoord::ORIGIN],
+        },
+        GameCommand::Rest { unit },
     ];
     for command in commands {
         assert_round_trips!(IssuedCommand {

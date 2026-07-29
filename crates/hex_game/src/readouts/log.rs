@@ -378,6 +378,33 @@ fn format_event(
             text: format!("{} went down", unit_name(*unit, registry, identities)),
             danger: true,
         },
+        CombatEvent::PartyMoved { paths, .. } => LogLine {
+            text: format!("Party moved in formation ({} members)", paths.len()),
+            danger: false,
+        },
+        CombatEvent::HexesRestored { target, cells, .. } => LogLine {
+            text: format!(
+                "{} restored {} lattice cells",
+                unit_name(*target, registry, identities),
+                cells.len()
+            ),
+            danger: false,
+        },
+        CombatEvent::Revived { unit, .. } => LogLine {
+            text: format!("{} was revived", unit_name(*unit, registry, identities)),
+            danger: false,
+        },
+        CombatEvent::Rested { unit, .. } => LogLine {
+            text: format!(
+                "{} recovered during rest",
+                unit_name(*unit, registry, identities)
+            ),
+            danger: false,
+        },
+        CombatEvent::EncounterResolved { outcome } => LogLine {
+            text: format!("Encounter resolved: {outcome:?}"),
+            danger: false,
+        },
         CombatEvent::CommandRefused { command, refusal } => LogLine {
             text: format!(
                 "{} could not {}: {}",
@@ -474,11 +501,14 @@ fn unit_name(unit: UnitId, registry: &UnitRegistry, identities: &IdentityQuery) 
 fn command_label(command: &GameCommand) -> &'static str {
     match command {
         GameCommand::MoveAlong { .. } => "move",
+        GameCommand::MoveParty { .. } => "move the party",
         GameCommand::Strike { .. } => "strike",
         GameCommand::EndTurn { .. } => "end the turn",
         GameCommand::Cast { .. } => "cast",
         GameCommand::Channel { .. } => "channel",
         GameCommand::ChooseDisables { .. } => "choose damaged cells",
+        GameCommand::ChooseRestores { .. } => "choose restored cells",
+        GameCommand::Rest { .. } => "rest",
     }
 }
 
@@ -511,6 +541,13 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::CastBlocked { .. } => "lattice cannot pay",
         CommandRefusal::CastPlanStale { .. } => "lattice changed",
         CommandRefusal::ChannelUnavailable => "channelling is unavailable",
+        CommandRefusal::PartyMovementUnavailable => "party movement is unavailable",
+        CommandRefusal::RestorationUnavailable => "restoration is unavailable",
+        CommandRefusal::RestUnavailable => "rest is unavailable",
+        CommandRefusal::PartyMove { .. } => "party move is invalid",
+        CommandRefusal::Restoration { .. } => "restoration answer is invalid",
+        CommandRefusal::RestExploringOnly => "rest is exploration only",
+        CommandRefusal::EncounterResolved { .. } => "the encounter is resolved",
         CommandRefusal::NoPendingDecision => "no decision is open",
         CommandRefusal::WrongDecisionUnit { .. } => "another unit must decide",
         CommandRefusal::WrongDisableCount { .. } => "wrong number of cells",

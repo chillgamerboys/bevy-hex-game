@@ -305,6 +305,7 @@ fn apply_commands(
                 entity,
                 path,
             ),
+            GameCommand::MoveParty { .. } => Err(CommandRefusal::PartyMovementUnavailable),
             GameCommand::Strike { target, .. } => strike::apply(
                 &mut verb,
                 &mut commands,
@@ -336,6 +337,8 @@ fn apply_commands(
             GameCommand::ChooseDisables { ref cells, .. } => {
                 choose_disables::apply(&mut verb, &mut lattices, unit, entity, cells)
             }
+            GameCommand::ChooseRestores { .. } => Err(CommandRefusal::RestorationUnavailable),
+            GameCommand::Rest { .. } => Err(CommandRefusal::RestUnavailable),
         };
 
         if let Err(refusal) = outcome {
@@ -348,12 +351,20 @@ fn apply_commands(
 /// While resolution is waiting on a defender, the answer is the whole command
 /// vocabulary. Nothing else may interleave with the lattice state it settles.
 fn modal_refusal(pending: &PendingDecision, command: &GameCommand) -> Option<CommandRefusal> {
-    let PendingDecision::ChooseDisables { decider, .. } = *pending else {
-        return None;
+    let decider = match *pending {
+        PendingDecision::None => return None,
+        PendingDecision::ChooseDisables { decider, .. }
+        | PendingDecision::ChooseRestores { decider, .. } => decider,
     };
-    match command {
-        GameCommand::ChooseDisables { unit, .. } if *unit == decider => None,
-        GameCommand::ChooseDisables { .. } => {
+    match (pending, command) {
+        (PendingDecision::ChooseDisables { .. }, GameCommand::ChooseDisables { unit, .. })
+        | (PendingDecision::ChooseRestores { .. }, GameCommand::ChooseRestores { unit, .. })
+            if *unit == decider =>
+        {
+            None
+        }
+        (PendingDecision::ChooseDisables { .. }, GameCommand::ChooseDisables { .. })
+        | (PendingDecision::ChooseRestores { .. }, GameCommand::ChooseRestores { .. }) => {
             Some(CommandRefusal::WrongDecisionUnit { expected: decider })
         }
         _ => Some(CommandRefusal::DecisionPending { decider }),

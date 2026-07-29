@@ -476,6 +476,8 @@ mod tests {
             units: vec![RosterEntry {
                 archetype: archetype.to_owned(),
                 placement: None,
+                ai_profile: None,
+                ai_group: None,
             }],
         };
         Encounter {
@@ -965,6 +967,8 @@ mod tests {
                 .map(|_| RosterEntry {
                     archetype: "hedge-mage".to_owned(),
                     placement: None,
+                    ai_profile: None,
+                    ai_group: None,
                 })
                 .collect(),
         };

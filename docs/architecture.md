@@ -8,6 +8,7 @@ contact with the next change.
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_units → hex_perception → hex_combat  (planned)
+hex_core → hex_ai → hex_assets   (AI contracts and profile content; combat host next)
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
@@ -26,6 +27,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 |---|---|---|---|
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
+| `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
