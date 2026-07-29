@@ -31,7 +31,6 @@ than agreed, the fallback the gameplay side ships without it is in
 | `TerrainReady` — terrain built and validated | world | gameplay | live | [systems/map.md](systems/map.md) |
 | `MapViewHint` — generated camera framing | world | presentation | live | [systems/map.md](systems/map.md) |
 | `InteriorRegions` / `CutawayOccluder` — interior membership and roof cutaway | world | presentation | live | [systems/map.md](systems/map.md) |
-| `CanopyOccluder` — exact tree-root identity for local canopy cutaway | world | presentation | live | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | `ResolvedMapSeed` — the seed a session actually used | game | world | live | [development/config.md](development/config.md) |
 | `TerrainEdit::Set` / `::Clear` — the write path | gameplay | world | live | [systems/map.md](systems/map.md) |
 | `BiomeRegions` — published by V3; gameplay consumer pending | world | gameplay | **partial** | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
