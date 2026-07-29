@@ -99,6 +99,7 @@ crates/
   hex_map/       ← YOURS. terrain, tiles, map settings
   hex_core/      shared vocabulary — HexCoord, HexSpan, TilePos, Headroom
   hex_assets/    loading files from disk
+  hex_objects/   static authored-object presentation
   hex_world/     camera and sky
   hex_units/     the player and movement
   hex_combat/    turns, commands, and combat policy

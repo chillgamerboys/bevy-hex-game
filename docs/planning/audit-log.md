@@ -172,7 +172,7 @@ the human release gate.
 | 1 | `crates/hex_editor/src/workshop.rs`:151 | NON-BLOCKER | fixed in `56ad5bb` — history labels are validated before the edit closure can mutate the object |
 | 2 | `crates/hex_editor/src/workshop.rs`:13 | NON-BLOCKER | fixed in the Wave 10 follow-up — global and object snapshot histories now share `DEFAULT_HISTORY_LIMIT` |
 | D3 | `docs/systems/asset-workshop.md`:157 | NON-BLOCKER | fixed in `56ad5bb` — persistence actions include confirmed Delete, and the document now distinguishes active external-change detection from future recovery drafts |
-| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | deferred — root discovery deliberately checks the two canonical catalog sentinels while persistence owns the broader `assets/art` root; both paths are contract-tested, and consolidating them would couple separate responsibilities without removing a mutable value |
+| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | resolved by the runtime object catalog — root discovery now requires palette, style, and object-catalog sentinels because all three are mandatory project inputs |
 
 **Notes**: all eight lenses and a silent-failure sweep found no remaining real
 candidate. The full gate passes with 792 tests, including the tracked-material App

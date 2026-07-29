@@ -5,8 +5,9 @@ development tooling: it creates durable RON assets for the game, but it is not a
 screen and does not run through the gameplay setup lifecycle.
 
 The contracts, tracked catalogs, and standalone `hex_editor` authoring application
-are live. Runtime object rendering, Forest migration, procedural plant generation,
-reference-image import, and animated effect timelines remain separate later work.
+are live. Static runtime object rendering is also live through `hex_objects`. Forest
+migration, procedural plant generation, reference-image import, and animated effect
+timelines remain separate later work.
 
 ## Launch
 
@@ -19,10 +20,9 @@ cargo editor
 This is a separate binary. `cargo dev` remains pinned to `hex_game` and never opens
 the Workshop.
 
-The editor walks upward from the current directory until it finds both
-`assets/art/palette.ron` and `assets/art/voxel_styles.ron`. To author a different
-checkout, or when the current directory is outside one, provide its repository root
-explicitly:
+The editor walks upward from the current directory until it finds the palette,
+voxel-style, and object catalogs under `assets/art/`. To author a different checkout,
+or when the current directory is outside one, provide its repository root explicitly:
 
 ```sh
 cargo editor -- --project-root /path/to/bevy-hex-game
@@ -52,6 +52,7 @@ Tracked output lives under `assets/art/`:
 |---|---|
 | `palette.ron` | The canonical named colour vocabulary |
 | `voxel_styles.ron` | Shared combinations of palette colour and render behavior |
+| `object_catalog.ron` | Sorted identities of every tracked runtime object |
 | `objects/plant/*.ron` | Grounded plant blueprints |
 | `objects/effect/*.ron` | Static effect sculptures, which may float |
 | `objects/prop/*.ron` | Grounded or free-standing prop blueprints |
@@ -78,6 +79,14 @@ and object semantics receive independent deterministic fingerprints, unaffected 
 whitespace or comments. An object fingerprint includes referenced ids, not the
 transitive RGB values behind those ids, so changing a shared swatch reports affected
 objects without pretending their geometry changed.
+
+`object_catalog.ron` is the packaged-build index; runtime code never scans an
+untyped directory of RON files. Its sorted ids must exactly match the tracked object
+files. Object Save As, Duplicate, and Delete publish the blueprint and catalog as one
+rollback-protected operation, so neither a stale catalog nor an orphan file becomes
+the visible project state. Each replacement is atomic, but the pair is not a
+journaled transaction across a process crash; a partial pair is rejected as an
+incoherent graph the next time the Workshop loads.
 
 Tracked Workshop RON files are machine-written. Explicit saves replace the complete
 document and do not preserve comments; contract rationale belongs in the documentation.
@@ -337,12 +346,37 @@ Static spell sculptures fit the object format. Timelines, emitters, moving parti
 and attachment events need a separate future VFX format rather than hidden fields in a
 static blueprint.
 
-The Workshop does not yet render objects in gameplay, replace Forest's temporary
-vegetation, synthesize plants, import reference images, animate spell effects, or
-provide a runtime construction system. The delivery order after representative
-authored exemplars exist is palette migration, a runtime object renderer, Forest
-integration, and only then procedural plant synthesis. Those stages consume this
-contract; they do not widen it with renderer- or biome-specific fields.
+## Runtime rendering
+
+`hex_assets` loads and validates the complete palette → style → object graph. Initial
+failure keeps the loading screen closed; a bad later edit retains the previous
+coherent graph. `hex_objects` consumes `ObjectInstance` components and draws cached
+mesh chunks grouped by style and canopy membership. Repeated instances share those
+meshes and materials, and object voxels never become one ECS entity each.
+
+Run `cargo object-gallery` to inspect all six rotations of the first production
+object under the neutral rig. Set `HEX_OBJECT_GALLERY_RIG=dark` for the matching dark
+render without changing the asset or its runtime material. Set
+`HEX_OBJECT_GALLERY_CAPTURE=<path.png>` to capture the selected rig through an
+offscreen target and exit automatically.
+
+The instance origin is the exact world voxel occupied by the blueprint origin, not
+the supporting terrain surface. Its validated level height supplies vertical scale,
+and rotation is one of six exact 60-degree turns. The renderer handles material
+appearance, shadows, ignored picking, and lifecycle only. It does not apply blocker
+footprints or infer gameplay from semantic parts.
+
+Blend chunks use Bevy's native order-independent transparency and remove shared
+internal faces before baking. Bevy 0.19 requires OIT cameras to use `Msaa::Off`, so
+Cutout styles temporarily render as single-sample threshold masks while any Blend
+object is live. The renderer restores each camera's previous MSAA setting after the
+last Blend chunk leaves, which restores true alpha-to-coverage for Cutout styles.
+
+The Workshop and renderer still do not replace Forest's temporary vegetation,
+synthesize plants, import reference images, animate spell effects, or provide a
+runtime construction system. Forest integration comes next, followed by procedural
+plant synthesis. Those stages consume this contract; they do not widen it with
+renderer- or biome-specific fields.
 
 Common launch, save, recovery, and review failures are indexed in
 [troubleshooting.md](../development/troubleshooting.md#asset-workshop).

@@ -3291,6 +3291,7 @@ dependencies = [
  "hex_dev",
  "hex_lattice",
  "hex_map",
+ "hex_objects",
  "hex_perception",
  "hex_units",
  "hex_world",
@@ -3321,6 +3322,15 @@ dependencies = [
  "ron",
  "serde",
  "xxhash-rust",
+]
+
+[[package]]
+name = "hex_objects"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "hex_assets",
+ "hex_core",
 ]
 
 [[package]]

@@ -128,16 +128,20 @@ version, sessions write a `hex_game.log` beside the executable (fresh per launch
 and a panic hook puts the last words in it.
 
 The standalone **Asset Workshop** is available through `cargo editor`. It loads the
-canonical palette and voxel-style catalogs, starts with an unsaved calibration object,
-and provides palette/style editing plus hex-voxel object authoring with semantic
-parts, masks, level slicing, deterministic preview rigs, camera controls, grouped
-undo/redo, explicit validated saves, external-change guards, and untracked crash
-recovery. A clean saved object can export a deterministic ten-view review pack,
-contact sheet, and semantic report under `.context/asset-workshop/`. Its RON schemas
-and fingerprints live in `hex_assets`. Terrain substances, liquids, construction
-metal, unit presentation, and temporary Forest vegetation now resolve exact palette
-swatches at runtime. Runtime object rendering, Forest object integration, and
-procedural plant generation have not landed yet.
+canonical palette, voxel-style, and object catalogs, starts with an unsaved
+calibration object, and provides palette/style editing plus hex-voxel object authoring
+with semantic parts, masks, level slicing, deterministic preview rigs, camera
+controls, grouped undo/redo, explicit validated saves, external-change guards, and
+untracked crash recovery. A clean saved object can export a deterministic ten-view
+review pack, contact sheet, and semantic report under `.context/asset-workshop/`.
+
+The runtime resolves that complete art graph atomically and retains its last valid
+revision across a bad hot reload. `hex_objects` renders static instances from cached
+mesh chunks using the game prism and exact palette-backed material modes. The first
+production exemplar is the six-level `plant/small-broadleaf`. Terrain substances,
+liquids, construction metal, unit presentation, and temporary Forest vegetation
+resolve exact palette swatches. Procedural Forest object integration and procedural
+plant generation have not landed yet.
 
 ## What is provisional
 

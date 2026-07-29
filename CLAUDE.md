@@ -104,6 +104,7 @@ every UI root pointed at the redirected camera.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → {hex_assets, hex_units} → hex_perception → hex_game
 hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
@@ -124,6 +125,10 @@ types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 **`hex_perception`** owns authoritative illumination, faction sight, and map
 knowledge. It depends on `hex_units` to observe unit positions.
 `hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`,
+
+`hex_objects` is the renderer for static Workshop-authored objects. Producers publish
+the shared `hex_assets::ObjectInstance` contract; they do not depend on the renderer,
+and the renderer does not project gameplay blockers.
 while `hex_combat` may consume the richer perception API. Neither gameplay crate may
 import map-generator internals.
 
