@@ -1,0 +1,14 @@
+[package]
+name = "hex_objects"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Runtime presentation for editor-authored voxel objects."
+
+[dependencies]
+bevy = { workspace = true }
+hex_assets = { path = "../hex_assets" }
+hex_core = { workspace = true }
+
+[lints]
+workspace = true

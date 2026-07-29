@@ -69,9 +69,10 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Owner | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `palette.ron` + `SwatchId` / `SrgbColor` — canonical authored-content colour vocabulary | shared visual contract | `hex_editor`, substance rendering, unit presentation; future object adapters | live | [design/visual-language.md](design/visual-language.md) |
-| `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`; future runtime adapters | live (authoring only) | [systems/asset-workshop.md](systems/asset-workshop.md) |
-| `ObjectBlueprint` — validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`; future runtime adapters | live (authoring only) | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `palette.ron` + `SwatchId` / `SrgbColor` — canonical authored-content colour vocabulary | shared visual contract | editor and runtime presentation | live | [design/visual-language.md](design/visual-language.md) |
+| `voxel_styles.ron` + `VoxelStyleCatalog` — palette-bound reusable surface treatments | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `object_catalog.ron` + `ObjectBlueprint` — deterministic catalog of validated local hex-voxel plants, effects, and props | shared visual contract | `hex_editor`, `hex_objects` | live | [systems/asset-workshop.md](systems/asset-workshop.md) |
+| `ObjectInstance` — exact object id, origin voxel, level height, and six-way rotation | shared visual contract | future world/effect publishers, `hex_objects` | live (renderer; no map publisher yet) | [systems/asset-workshop.md](systems/asset-workshop.md) |
 | `substances.ron` — substance names, exact palette references, solidity, diggability | world | both | live | [development/config.md](development/config.md) |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |

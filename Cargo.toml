@@ -9,6 +9,7 @@ default-members = ["crates/hex_game"]
 hex_core = { path = "crates/hex_core" }
 hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
+hex_objects = { path = "crates/hex_objects" }
 hex_anim = { path = "crates/hex_anim" }
 hex_combat = { path = "crates/hex_combat" }
 hex_world = { path = "crates/hex_world" }

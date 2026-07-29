@@ -194,6 +194,7 @@ impl Plugin for AppPlugin {
 
         app.add_plugins((
             hex_assets::plugin,
+            hex_objects::plugin,
             hex_map::plugin,
             hex_world::plugin,
             hex_units::plugin,

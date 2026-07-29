@@ -31,7 +31,7 @@ denied outside tests.)
 cargo test --workspace --all-features --profile ci
 ```
 
-Expected: all pass across all eleven crates plus doctests. Sum the
+Expected: all pass across all twelve crates plus doctests. Sum the
 `test result:` lines and report:
 
 ```

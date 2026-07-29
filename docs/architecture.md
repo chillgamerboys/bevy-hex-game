@@ -7,6 +7,7 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -27,6 +28,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_core` | Hex coordinates, voxel positions, substances, headroom, terrain edits, app states, ordering sets, lattice ids | Bevy sub-crates only — no renderer | gameplay |
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
+| `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
@@ -113,6 +115,12 @@ the crate graph or the contract-first process.
 Authored-art schemas and `assets/art/` are a shared visual-content contract: either
 owner may add assets, while schema changes receive both reviews. Runtime adapters stay
 with the crate that draws or consumes them.
+
+`hex_objects` consumes the shared `ObjectInstance` request and renders it without
+learning who requested it. Map generation, spell presentation, and future prop systems
+can therefore publish an exact object id, origin voxel, level height, and rotation
+without depending on the renderer. The renderer never publishes traversal blockers or
+interprets object semantic parts as gameplay policy.
 
 Where the two meet is [contracts.md](contracts.md); what each is still asking of the
 other is [planning/boundary.md](planning/boundary.md).
