@@ -27,6 +27,7 @@ use hex_core::{ElementId, Screen};
 use serde::Deserialize;
 use std::collections::HashSet;
 
+use crate::fingerprint::FingerprintEncoder;
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// One input a fusion draws from an adjacent gem or live fusion output.
@@ -217,6 +218,9 @@ pub struct ElementCatalog {
     /// Fusion recipes: output id to its resolved `(input id, mana)` inputs.
     #[reflect(ignore)]
     fusions: HashMap<ElementId, Vec<(ElementId, u16)>>,
+    /// Canonical semantics of the `ElementFile` this catalog was built from.
+    #[reflect(ignore)]
+    source_fingerprint: u64,
 }
 
 impl ElementCatalog {
@@ -250,8 +254,8 @@ impl ElementCatalog {
     /// The inputs a fusion producing `output` consumes, or [`None`] if `output` is a
     /// basic element rather than a fusion output.
     ///
-    /// Shaped to feed `hex_lattice::FusionTable::recipe` once that seam is wired
-    /// (HEX-12): each entry is an `(element, mana)` pair.
+    /// Shaped to feed `hex_lattice::FusionTable::recipe`: each entry is an
+    /// `(element, mana)` pair.
     #[must_use]
     pub fn recipe(&self, output: ElementId) -> Option<&[(ElementId, u16)]> {
         self.fusions.get(&output).map(Vec::as_slice)
@@ -285,6 +289,16 @@ impl ElementCatalog {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_id.is_empty()
+    }
+
+    /// Whether this catalog was built from the current authored element semantics.
+    #[must_use]
+    pub fn matches_source(&self, file: &ElementFile) -> bool {
+        self.source_fingerprint == element_file_fingerprint(file)
+    }
+
+    pub(crate) const fn source_fingerprint(&self) -> u64 {
+        self.source_fingerprint
     }
 
     /// Builds a catalog from a loaded file, assigning ids from sorted names.
@@ -332,8 +346,30 @@ impl ElementCatalog {
             by_name,
             wheel,
             fusions,
+            source_fingerprint: element_file_fingerprint(file),
         }
     }
+}
+
+fn element_file_fingerprint(file: &ElementFile) -> u64 {
+    let mut encoder = FingerprintEncoder::new(b"hex-element-file-v1");
+    encoder.usize(file.wheel.len());
+    for element in &file.wheel {
+        encoder.string(element);
+    }
+
+    let mut outputs: Vec<_> = file.fusions.iter().collect();
+    outputs.sort_by_key(|(name, _)| *name);
+    encoder.usize(outputs.len());
+    for (output, inputs) in outputs {
+        encoder.string(output);
+        encoder.usize(inputs.len());
+        for input in inputs {
+            encoder.string(&input.element);
+            encoder.u16(input.mana);
+        }
+    }
+    encoder.finish()
 }
 
 /// Registers the element catalog for loading.

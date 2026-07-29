@@ -8,7 +8,9 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
-| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and future objects |
+| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
+| `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
+| `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
@@ -16,11 +18,11 @@ you do not need to recompile the game.
 | `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
+| `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
-| `display.ron` | Vsync / frame rate behaviour |
+| `display.ron` | Authored Vsync / frame-rate default; the local Settings screen owns the persisted player choice |
 
 ## Seeing your changes
 
@@ -38,10 +40,11 @@ How quickly you *see* the change depends on which file:
 | File | When it takes effect |
 |---|---|
 | `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
-| `display.ron` | Straight away |
+| `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `art/palette.ron` | Substance and unit colours on the next world rebuild |
+| `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
+| `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `perception.ron` | Straight away; observation and knowledge use the new profile on the next frame |
@@ -52,12 +55,22 @@ How quickly you *see* the change depends on which file:
 | `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
-the scenario you want to start again. It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the title screen, then use
+New Game for Party Trial or relaunch the visible development fixture you are tuning.
+It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
+
+Elements, substances, spells, and lattices form one semantic revision at the Loading
+boundary. A bad cross-file edit may leave the last valid resolved catalogs available
+for inspection, but Loading does not treat their presence as readiness. It waits
+until canonical source fingerprints prove that every raw file, direct catalog,
+`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
+or reverting the edit publishes a new `AcceptedContentRevision` and allows the
+rebuild; leaving an invalid edit settled for several frames never admits a mixed
+revision.
 
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
@@ -539,10 +552,20 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-A scenario names a world, a sky, and an encounter, and makes one required menu
-placement decision. The title screen has independently scrollable `Map`, `Combat`,
-and `Demo` columns; `category` chooses one. Scenario-backed demos share the Demo
-column with the static **Lattice Demo** card.
+A scenario names a world, a sky, and an encounter. The library's `default_game`
+names the entry launched by New Game; that entry is hidden from the development lanes.
+Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
+`category`. Scenario-backed demos share the Demo lane with the static **Lattice Demo**
+card.
+
+```ron
+(
+    default_game: "Party Trial",
+    scenarios: [
+        // entries...
+    ],
+)
+```
 
 ```ron
 (
@@ -574,7 +597,7 @@ reproducible seed here:
 ),
 ```
 
-The title screen shows the resolved seed beside every generated scenario. Its
+The title screen shows the resolved seed beside every visible generated scenario. Its
 `reroll` button changes only the current session, and the exact replacement seed is
 shown and logged so a useful or broken map can be reproduced. It never edits
 `scenarios.ron`; restarting returns to the configured seed.
@@ -598,7 +621,8 @@ a warm horizon colour fills the screen with terracotta and reads as clay, not ev
 
 `world`, `lighting` and `encounter` are all paths, and none of them is checked by the
 compiler. A typo fails `cargo test` rather than at the loading screen, but only because
-tests open every file the scenarios name — keep it that way.
+tests open every file the scenarios name — keep it that way. `default_game` must also
+resolve to one uniquely named entry; it is validated independently from lane contents.
 
 ## Writing an encounter
 
@@ -720,7 +744,11 @@ waiting for a playtest.
 ```
 
 Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
-matters, not where it sits.
+matters, not where it sits. Every authored archetype must form one contiguous
+hex arrangement. A disconnected island is rejected while resolving
+`LatticeLibrary`, and the error names the offending archetype; it cannot survive as a
+valid-but-unreachable part of a character. Cell order in the RON file does not affect
+that check or the semantic content fingerprint.
 
 `attunement` is how much mana one gem of that element holds when full. `channelling` is
 how much a channel action puts back per turn. An element with no attunement entry resolves
@@ -860,13 +888,30 @@ the game logs exactly which one and keeps the last content that was valid — th
 way a broken `lighting.ron` keeps the last good sky. A test also opens every shipped
 file and fails if any reference dangles, so the shipped game never carries a broken one.
 
-## One thing that will not do anything on a Mac
+## Local Settings are not authored config
 
-`display.ron` controls vsync. On macOS it has no visible effect: the system
-composites every window and syncs it to the display regardless of what the game
-asks for, so the frame rate stays pinned to your screen's refresh rate either way.
-On a MacBook with a ProMotion display that means it moves between 60 and 120 on
-its own, depending on whether anything is animating.
+The in-game Settings screen writes `preferences.ron` beside the disposable
+`resume.ron`; it never edits `assets/config/display.ron`. Set `HEX_GAME_DATA_DIR` to
+an explicit directory when a test or review needs isolated local state. Otherwise the
+files live under:
+
+- macOS: `~/Library/Application Support/Hex Game/`
+- Windows: `%APPDATA%/Hex Game/`
+- Linux: `$XDG_DATA_HOME/hex-game/`, or `~/.local/share/hex-game/`
+
+A missing preferences file uses the authored display default and built-in volume
+defaults. A corrupt or incompatible file is reported on the Settings screen and those
+defaults are restored. The file is version-bound pre-alpha state, not a durable
+configuration format.
+
+## Frame presentation on macOS
+
+`display.ron` provides the authored presentation default until Settings saves a local
+choice. On macOS neither path has a visible effect: the system composites every
+window and syncs it to the display regardless of what the game asks for, so the frame
+rate stays pinned to your screen's refresh rate either way. On a MacBook with a
+ProMotion display that means it moves between 60 and 120 on its own, depending on
+whether anything is animating.
 
 This was measured rather than assumed. The setting does work on Windows and Linux,
 which is why it is still there.

@@ -7,9 +7,10 @@ compile against one boundary without reaching into one another's crates.
 
 > **Status:** authoritative headless illumination, pooled faction sight, and
 > Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
-> Fog/picking presentation, generated cave lights, unknown-frontier movement, and
-> combat/AI adapters remain later isolated PRs; movement and combat behavior is
-> unchanged by the headless milestone.
+> Casting anchors, hostile lattice disclosure, and AI observation/traversal now
+> consume that authority. Fog/picking presentation, generated cave lights,
+> unknown-frontier movement, engagement, and lost-contact search remain later
+> isolated work.
 
 ## Four facts, not one
 
@@ -28,7 +29,7 @@ the PBR light list.
 
 Enemy lattice knowledge is a fifth, independent information channel. Observing an
 enemy establishes its position; it does not reveal its lattice or intent. Divination
-owns those facts. The combat adapter will read faction knowledge, never Bevy's
+owns those facts. The live combat adapter reads faction knowledge, never Bevy's
 `Visibility` or the PBR light list.
 
 ## Illumination
@@ -106,7 +107,10 @@ character's immediate awareness in absolute darkness, not emitted light.
 Each faction pools the union of all its active characters' sight. Selection has no
 effect: a six-character party knows everything any one member currently observes.
 Illumination alone is insufficient; an allied observer must also be within the
-applicable band.
+applicable band. Visibility and the ability to observe are separate facts: a downed
+unit may remain visible to another observer, but does not contribute sight itself.
+Adding or removing `Downed` invalidates observation so this change is published in the
+same frame.
 
 Sight is computed on exact stacked surfaces. A bridge, cave floor, and ground surface
 at one `HexCoord` remain different `TilePos` values and may have different domains,
@@ -115,9 +119,10 @@ illumination, and knowledge.
 ## Faction knowledge
 
 `FactionMapKnowledge` owns separate authoritative `FactionKnowledge` slots for Player
-and Hostile and never passes facts between them. `LocalMapKnowledge` is only the local
-faction's compact, traversal-facing projection for exact surfaces; richer terrain and
-unit memory remains owned by `hex_perception`.
+and Hostile and never passes facts between them. It can build the compact
+`LocalMapKnowledge` traversal projection for either faction; the player publication
+is retained for the movement adapter, while AI asks explicitly for its controller's
+faction. Richer terrain and unit memory remains owned by `hex_perception`.
 
 | State | What the faction may know |
 |---|---|
@@ -155,8 +160,11 @@ do not leak hidden geometry.
 
 ## Combat contact
 
-This is the binding contract for the pending combat adapter; current combat does not
-consume perception.
+Spatial combat integration is partially live. Hostile lattice disclosure, cast
+anchors, and every AI observation and traversal input use faction knowledge.
+Engagement, lost-contact search, ordinary attack anchors, and unknown-frontier
+movement remain pending and must use the same authority rather than introducing a
+second visibility rule.
 
 Observation gates the existing reach trigger; it does not replace it. Combat begins
 when either faction currently observes a hostile **and** that hostile pair satisfies
@@ -164,13 +172,16 @@ the existing `engage_range` reach rule. Detection need not be mutual: an unseen
 hostile that observes and reaches the party still changes the game to combat tempo.
 Seeing a hostile beyond `engage_range` does not start combat by itself.
 
-Every attack, cast, or ability target anchor requires its exact `TilePos` to be
-currently Observed by the acting faction at command validation time. Remembered and
-Unknown positions cannot anchor those effects. Movement destinations remain governed
-by the separate remembered-route and one-step-frontier rule above. A valid area effect
-may extend beyond the Observed area after its anchor resolves and still affects hidden
-terrain and units. Its outcomes do not promote those positions to Observed or reveal
-them through presentation or logs.
+Every cast target anchor now requires its exact `TilePos` to be currently Observed by
+the acting faction at command validation time. Preview, target cycling, AI
+enumeration, and the authoritative applier all enforce the same rule. Remembered and
+Unknown positions cannot anchor a cast. The same rule is binding but not yet wired for
+ordinary attacks or future abilities. Movement destinations remain governed by the
+separate remembered-route and one-step-frontier rule above.
+
+A valid area effect may extend beyond the Observed area after its anchor resolves and
+still affects hidden terrain and units. Its outcomes do not promote those positions to
+Observed or reveal them through presentation or logs.
 
 Current position knowledge does not grant lattice or intent knowledge. AI is subject
 to its faction's knowledge rather than reading every hostile entity in the world.
@@ -214,8 +225,21 @@ final state from the same composition.
 `GameplaySetup::Perception` runs after actors exist and before generated view framing.
 The `hex_perception` crate owns illumination, sight, faction knowledge, and
 their authoritative queries. It may read units and shared map projections.
-`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`;
-`hex_combat` may use the richer perception API for engagement and target validation.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`
+for the pending movement adapter; `hex_combat` consumes the richer
+current-observation API through gameplay-owned adapters for hostile lattice
+knowledge, cast validation, and AI. Engagement and ordinary-attack adapters remain
+pending and must use the same authority.
+
+Later frames preserve the same authorization-critical ordering across crates:
+
+`PublishKnowledge` → combat spatial-knowledge synchronization →
+`CombatSystems::Act` → `CombatSystems::Apply`, followed by the normal `Resolve` and
+`Advance` phases.
+
+This is a semantic boundary and a Bevy synchronization boundary. A same-frame
+position, observer, or `Downed` change is visible to AI before it selects a command,
+and the applier validates against the publication for that frame.
 
 The live ECS adapter caches each ordered stage. Terrain, substance, interior, or
 blocker changes rebuild the exact `SurfaceSnapshots`; ambient or local-light changes
@@ -239,18 +263,22 @@ light-domain containment; inclusive local-light radii; maximum-tier overlap; poo
 party sight; downhill caps; exact stacked surfaces; and the alternative `24/8/1` and
 `18/6/1` review profiles.
 
-Knowledge tests must prove Unknown contains no snapshot, Remembered retains the exact
+Knowledge tests prove Unknown contains no snapshot, Remembered retains the exact
 last-seen terrain and blockers, unseen terrain edits and feature changes do not leak,
-units vanish outside observation, and re-observation replaces stale facts. Movement
-adapter tests must cover the one-step Unknown frontier without exposing hidden level,
-headroom, material, or rejection reason.
+units vanish outside observation, and re-observation replaces stale facts. The
+radius-40 matrix covers 4,921 exact surfaces across active/inactive observers, light
+changes, memory, and re-observation. Ten thousand unchanged gameplay frames produce
+zero recomputations. Movement adapter tests must eventually cover the one-step Unknown
+frontier without exposing hidden level, headroom, material, or rejection reason.
 
-Combat adapters require observation-gated engage reach, asymmetric detection,
-independent disengage-margin and lost-contact behavior, full one-round search,
-reacquisition, and search-expiry tests before they change live rules. Targeting tests
-require an Observed exact anchor, allow area spillover into hidden positions, and
-prove neither acknowledgments nor logs disclose those outcomes. Gameplay teardown
-and re-entry must clear ambient, observation, memory, contact, and presentation state.
+The live casting and AI tests require an Observed exact anchor, reject Remembered and
+Unknown anchors, allow area spillover into hidden positions without disclosure, and
+prove same-frame loss of the sole sight provider removes hidden identity and targets
+before AI decides. Engagement adapters still require observation-gated reach,
+asymmetric detection, independent disengage-margin and lost-contact behavior, full
+one-round search, reacquisition, and search-expiry tests before they change live
+rules. Gameplay teardown and re-entry tests run 100 cycles and require the exact
+expected entity and resource counts after each exit.
 
 Benchmarks record faction-knowledge recomputation after unit movement and terrain
 edits. Fog recomputation benchmarks and the visual review captures are deferred
@@ -267,7 +295,8 @@ disagreement between gameplay knowledge and picking.
 - automatically advancing time and gameplay effects beyond exterior illumination
 - carried, destructible, extinguishable, faction-private, and spell-created lights
 - stealth, concealment, hearing, and hidden-unit detection
-- divination implementation and persistent lattice knowledge
+- spatial divination that reveals unknown terrain; lattice divination and its
+  persistent knowledge are live in `hex_combat`
 - cross-domain sight through entrances and other portals
 - saved-game persistence for remembered terrain
 

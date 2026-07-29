@@ -1,0 +1,19 @@
+// README-only capture of the integrated New Game scenario reaching 3v3 combat.
+// Focused automated combat coverage remains in ability_lab.ron and
+// raider_mirror.ron; this script exists to keep the public screenshot reproducible.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Party Trial"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    // One atomic formation route reaches the combat threshold deterministically.
+    // Intermediate preset swaps belong to the focused formation fixtures, not this
+    // public screenshot walk.
+    Click(name: "Formation Preset Column"),
+    Settle(8),
+    ClickTile(q: 0, r: -4),
+    AwaitButton("Cast"),
+    Settle(30),
+    Capture("party-trial-combat"),
+]

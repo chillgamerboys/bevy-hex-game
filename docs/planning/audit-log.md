@@ -7,6 +7,33 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 21 — docs: reconcile boundaries, roadmap, and design (2026-07-29)
+
+- **PR**: #121 — `shrav-k/audit-alberto-draft-prs`
+- **Outcome**: green — 9 documentation blockers fixed
+- **Lenses triggered**: 7, D1, D3, D4, silent-failures, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 7 | `crates/hex_combat/src/commands/mod.rs`:114 | NON-BLOCKER | fixed — completed a dangling persistent-effect doc comment |
+| D1, D4 | `docs/planning/roadmap.md`:1 | SHIP-BLOCKER | fixed — removed the second Markdown table and delivered-status ledger so `/seed-tickets` sees exactly one Upcoming table and `status.md` remains the implementation source |
+| D4 | `docs/design/game.md`, `docs/planning/boundary.md`, `docs/systems/world-generation-v3.md` | SHIP-BLOCKER | fixed — removed duplicate current-state ledgers and linked the contracts/status authorities |
+| D3, fresh-eyes | `docs/contracts.md`, `docs/planning/boundary.md`, `docs/systems/asset-workshop.md` | SHIP-BLOCKER | fixed — current Forest cutaway is root-keyed; exact authored canopy chunks still need a separate adapter |
+| D3, fresh-eyes | `docs/design/game.md`, `docs/planning/status.md`, `docs/systems/casting.md`, downing Rust docs | SHIP-BLOCKER | fixed — downing retains the lattice for a future restoration flow, but no path reactivates a downed unit |
+| D3, fresh-eyes | `docs/planning/status.md`, `docs/systems/casting.md`, command-funnel Rust docs | SHIP-BLOCKER | fixed — the live queue is consumed, passive consequences run outside the applier, and replay persistence remains future work |
+| D3, fresh-eyes | `docs/planning/status.md`, `crates/hex_assets/src/settings.rs` | SHIP-BLOCKER | fixed — lattice-derived initiative remains one candidate, and the runtime refusal no longer claims completed HEX-12 wiring is pending |
+| D3, fresh-eyes | `docs/design/game.md`:380 | SHIP-BLOCKER | fixed — proposed negative-spiral brakes are no longer described as already implemented |
+| D4, fresh-eyes | `docs/planning/boundary.md`:221 | NON-BLOCKER | fixed — G/H are labeled accepted contracts consistently with the registry, while implementation remains deferred |
+
+**Notes**: PR #100's top-level description did not carry the policy decisions; its
+constituent PRs did. The audit confirmed that downing, initiative/action economy, and
+paid-on-resistance remain provisional; cave-breach daylight remains explicitly open;
+and feature damage must use a separate world-owned response contract rather than
+inferring gameplay from rendered object parts. The silent-failure sweep found no new
+investigate candidates in this documentation-focused diff. No runtime surface changed,
+so the automated visual walk does not apply; the prior manual dev run covered Close
+Quarters, Waterfall, and Forest.
+
 ## Wave 20 — feat(art): render authored voxel objects at runtime (2026-07-28)
 
 - **PR**: #106 — `feat/runtime-object-renderer`

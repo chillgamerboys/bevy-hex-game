@@ -124,7 +124,7 @@ struct CoverageAnalysis {
 ///
 /// Production callers go through [`write_png`]'s stats; the tests exercise the
 /// analyzer directly against synthetic frames.
-#[cfg(test)]
+#[cfg(all(test, feature = "map-review"))]
 pub(crate) fn has_visual_coverage(bytes: &[u8], width: usize, height: usize) -> bool {
     analyze_coverage(bytes, width, height).has_coverage
 }

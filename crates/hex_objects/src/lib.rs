@@ -1312,6 +1312,35 @@ mod tests {
     }
 
     #[test]
+    fn one_hundred_idle_frames_preserve_object_entities_assets_and_cache() {
+        let mut app = test_app(fixture_catalog(0.18));
+        let root = app
+            .world_mut()
+            .spawn(instance("plant/test", HexCoord::ORIGIN, 3, 0.4, 0))
+            .id();
+        settle(&mut app);
+        let chunks_before = chunk_handles(&app, root);
+        let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+        let materials_before = app.world().resource::<Assets<StandardMaterial>>().len();
+        app.world_mut().clear_trackers();
+
+        for _ in 0..100 {
+            app.update();
+        }
+
+        assert_eq!(chunk_handles(&app, root), chunks_before);
+        assert_eq!(app.world().resource::<Assets<Mesh>>().len(), meshes_before);
+        assert_eq!(
+            app.world().resource::<Assets<StandardMaterial>>().len(),
+            materials_before
+        );
+        assert!(
+            !app.world().resource_ref::<ObjectRenderCache>().is_changed(),
+            "idle reconciliation marked the unchanged object cache dirty"
+        );
+    }
+
+    #[test]
     fn chunk_materials_shadow_policy_picking_and_canopy_are_exact() {
         let mut app = test_app(fixture_catalog(0.18));
         let plant = app

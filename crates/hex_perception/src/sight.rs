@@ -167,8 +167,9 @@ pub fn can_observe(
 
 /// Resolves pooled observations for both factions.
 ///
-/// Every supplied unit is an active observer for its own faction. Callers therefore
-/// filter out inactive or incapacitated units before building these snapshots.
+/// Supplied units whose [`ObservedUnit::provides_sight`] flag is set are active
+/// observers for their own faction. Other supplied units remain eligible to be seen
+/// by an active observer without extending their faction's field of view.
 /// Current surfaces come from `illumination`. Formerly known positions that have
 /// disappeared from current truth are also tested using their last-seen domain and
 /// current ambient/local-light rules; if in sight they enter the observation so
@@ -235,7 +236,10 @@ fn resolve_faction(
     profile: SightProfile,
 ) -> Result<FactionObservation, PerceptionError> {
     let mut observers = Vec::new();
-    for unit in units.values().filter(|unit| unit.faction == faction) {
+    for unit in units
+        .values()
+        .filter(|unit| unit.faction == faction && unit.provides_sight)
+    {
         let Some(resolved) = illumination.get(unit.pos) else {
             return Err(PerceptionError::UnitMissingSurface {
                 id: unit.id,
@@ -338,6 +342,14 @@ mod tests {
             id: UnitId(id),
             faction,
             pos: position,
+            provides_sight: true,
+        }
+    }
+
+    fn inactive_unit(id: u64, faction: Faction, position: TilePos) -> ObservedUnit {
+        ObservedUnit {
+            provides_sight: false,
+            ..unit(id, faction, position)
         }
     }
 
@@ -517,6 +529,159 @@ mod tests {
         let player = observations.faction(Faction::Player);
         assert!(player.observes(target));
         assert_eq!(player.unit(hostile.id), Some(hostile));
+    }
+
+    #[test]
+    fn inactive_units_remain_visible_without_extending_faction_sight() {
+        let active = pos(0, 0, 5);
+        let inactive = pos(1, 0, 5);
+        let beyond = pos(2, 0, 5);
+        let illumination = ResolvedIllumination::try_resolve(
+            [
+                (active, LightDomain::Exterior),
+                (inactive, LightDomain::Exterior),
+                (beyond, LightDomain::Exterior),
+            ],
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+        )
+        .expect("illumination");
+        let inactive_player = inactive_unit(2, Faction::Player, inactive);
+        let hidden_hostile = unit(3, Faction::Hostile, beyond);
+
+        let observations = resolve_observations(
+            [
+                unit(1, Faction::Player, active),
+                inactive_player,
+                hidden_hostile,
+            ],
+            &illumination,
+            &FactionMapKnowledge::new(),
+            ExteriorIllumination::new(IlluminationLevel::Bright),
+            &[],
+            profile(1, 1, 1, 10),
+        )
+        .expect("observations");
+
+        let player = observations.faction(Faction::Player);
+        assert_eq!(player.unit(inactive_player.id), Some(inactive_player));
+        assert!(player.observes(inactive));
+        assert_eq!(player.unit(hidden_hostile.id), None);
+        assert!(
+            !player.observes(beyond),
+            "the inactive unit must not extend sight one more hex"
+        );
+    }
+
+    #[test]
+    fn radius_40_light_observer_and_remembered_surface_matrix_is_exact() {
+        let level = 15;
+        let snapshots = SurfaceSnapshots::try_from_iter(
+            HexCoord::ORIGIN
+                .within_radius(40)
+                .into_iter()
+                .map(|coord| surface(TilePos::new(coord, level))),
+        )
+        .expect("radius-40 surfaces should be unique");
+        let observer = TilePos::new(HexCoord::ORIGIN, level);
+        let at = |distance| TilePos::new(HexCoord::from_axial(distance, 0), level);
+        let samples = [at(0), at(1), at(2), at(20), at(21), at(40)];
+        let sight = profile(40, 20, 1, 10);
+        let bright = ExteriorIllumination::new(IlluminationLevel::Bright);
+        let dark = ExteriorIllumination::new(IlluminationLevel::Dark);
+        let active = unit(1, Faction::Player, observer);
+        let inactive = inactive_unit(1, Faction::Player, observer);
+        let mut knowledge = FactionMapKnowledge::new();
+
+        let bright_illumination = ResolvedIllumination::from_surfaces(&snapshots, bright, &[])
+            .expect("bright radius-40 illumination");
+        let initial = resolve_observations(
+            [active],
+            &bright_illumination,
+            &knowledge,
+            bright,
+            &[],
+            sight,
+        )
+        .expect("initial radius-40 observation");
+        assert_eq!(
+            initial.faction(Faction::Player).surface_count(),
+            snapshots.len()
+        );
+        apply_observations(&mut knowledge, &snapshots, &initial);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Observed
+            );
+        }
+
+        let mixed_lights = [
+            light(at(20), LightDomain::Exterior, IlluminationLevel::Dim, 0),
+            light(at(40), LightDomain::Exterior, IlluminationLevel::Bright, 0),
+        ];
+        let mixed_illumination =
+            ResolvedIllumination::from_surfaces(&snapshots, dark, &mixed_lights)
+                .expect("mixed radius-40 illumination");
+        let mixed = resolve_observations(
+            [active],
+            &mixed_illumination,
+            &knowledge,
+            dark,
+            &mixed_lights,
+            sight,
+        )
+        .expect("mixed-light radius-40 observation");
+        apply_observations(&mut knowledge, &snapshots, &mixed);
+        for (sample, expected) in [
+            (at(0), hex_core::KnowledgeState::Observed),
+            (at(1), hex_core::KnowledgeState::Observed),
+            (at(2), hex_core::KnowledgeState::Remembered),
+            (at(20), hex_core::KnowledgeState::Observed),
+            (at(21), hex_core::KnowledgeState::Remembered),
+            (at(40), hex_core::KnowledgeState::Observed),
+        ] {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                expected,
+                "unexpected mixed-light state at {sample:?}"
+            );
+        }
+
+        let no_active_observer = resolve_observations(
+            [inactive],
+            &mixed_illumination,
+            &knowledge,
+            dark,
+            &mixed_lights,
+            sight,
+        )
+        .expect("inactive observer projection");
+        assert!(no_active_observer.faction(Faction::Player).is_empty());
+        apply_observations(&mut knowledge, &snapshots, &no_active_observer);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Remembered
+            );
+        }
+
+        let restored = resolve_observations(
+            [active],
+            &bright_illumination,
+            &knowledge,
+            bright,
+            &[],
+            sight,
+        )
+        .expect("restored radius-40 observation");
+        apply_observations(&mut knowledge, &snapshots, &restored);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Observed
+            );
+        }
     }
 
     #[test]
