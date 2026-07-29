@@ -101,7 +101,7 @@ design remain ahead. The exact, regularly updated boundary is recorded in the
 
 ### Play the current build
 
-The title screen groups playable setups into Maps, Combat, and Demos. Eight map
+The title screen groups playable setups into Maps, Combat, and Demos. Nine map
 showcases exercise authored and procedural terrain, **Close Quarters** begins inside
 the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox.
 
