@@ -57,6 +57,9 @@ use crate::menus::widgets::element_color;
 mod panel;
 mod preview;
 
+#[cfg(feature = "visual-walk")]
+pub(crate) use preview::AnchorMarker;
+
 /// Height-per-range-bonus when `combat.ron` has not loaded.
 ///
 /// The same fallback and the same number as `hex_combat`'s cast applier, deliberately:

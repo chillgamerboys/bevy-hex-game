@@ -94,7 +94,7 @@ type TileQuery<'w, 's> =
 
 /// Marks a clickable marker over one legal anchor.
 #[derive(Component, Debug)]
-pub(super) struct AnchorMarker;
+pub(crate) struct AnchorMarker;
 
 /// Marks a cap over one surface inside the resolved volume.
 #[derive(Component, Debug)]
