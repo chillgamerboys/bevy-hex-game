@@ -327,6 +327,8 @@ pub(crate) fn construct_patch_with_streams(
                         liquid_ports
                             .iter()
                             .all(|port| port.accepts_nodes(nodes, river_level))
+                            && (liquid_sources.is_empty()
+                                || all_nodes_drain_to_sources(nodes, &liquid_sources, river_level))
                     })
                     .map(|nodes| (orientation, river_offset, crossings, nodes))
                 })
@@ -956,6 +958,34 @@ fn river_nodes(
         );
     }
     Ok(nodes)
+}
+
+fn all_nodes_drain_to_sources(
+    nodes: &BTreeMap<TilePos, LiquidNode>,
+    sources: &BTreeSet<HexCoord>,
+    level: Level,
+) -> bool {
+    let terminals = sources
+        .iter()
+        .copied()
+        .map(|coord| TilePos::new(coord, level))
+        .collect::<BTreeSet<_>>();
+    nodes.keys().copied().all(|start| {
+        let mut current = start;
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(current) {
+                return false;
+            }
+            let Some(node) = nodes.get(&current) else {
+                return false;
+            };
+            let Some(next) = node.downstream else {
+                return terminals.contains(&current);
+            };
+            current = next;
+        }
+    })
 }
 
 fn select_hill_centres(
