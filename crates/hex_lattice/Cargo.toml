@@ -20,7 +20,7 @@ rand = { workspace = true }
 # The serde round-trip property tests exercise the actual authoring format. RON
 # (unlike JSON) serializes maps with struct keys, which a `LatticeSpec`'s
 # `BTreeMap<LatticeCoord, _>` needs.
-ron = "0.12.2"
+ron = { workspace = true }
 
 [lints]
 workspace = true
