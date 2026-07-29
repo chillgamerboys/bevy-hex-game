@@ -489,7 +489,6 @@ const DEFAULT_MOVEMENT_PER_TURN: u32 = 4;
 fn check_for_downed(
     mut commands: Commands,
     mut turn_order: ResMut<TurnOrder>,
-    mut knowledge: ResMut<crate::knowledge::FactionKnowledge>,
     registry: Res<UnitRegistry>,
     settings: Option<Res<CombatSettings>>,
     units: Query<(Entity, &UnitId, &LatticeSpec, &LatticeState), Without<Downed>>,
@@ -503,9 +502,6 @@ fn check_for_downed(
         let held_the_turn = turn_order.current() == Some(unit);
         commands.entity(entity).insert(Downed).remove::<Turn>();
         turn_order.remove(unit);
-        // What anybody knew about this lattice goes with it. Keeping it would leave a
-        // faction reading a dead unit's contents out of the store forever.
-        knowledge.forget_subject(unit);
         info!("{unit:?} is down — every hex disabled");
 
         // **Hand the turn on, or the fight stalls forever.** `advance_turn` only acts

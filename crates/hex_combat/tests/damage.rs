@@ -15,10 +15,10 @@ use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_combat::{Initiative, TurnOrder};
+use hex_combat::{FactionKnowledge, Initiative, KnownCell, TurnOrder};
 use hex_core::{
-    CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, LatticeCoord, Mode,
-    PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
+    CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, KnowledgeExpiry,
+    KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
@@ -214,6 +214,21 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .is_some(),
         "the defender should start in the order"
     );
+    let learned = app.world_mut().resource_mut::<FactionKnowledge>().learn(
+        Faction::Player,
+        UnitId(1),
+        LatticeCoord::ORIGIN,
+        KnownCell {
+            kind: CellKind::Gem {
+                element: ElementId(0),
+            },
+            mana: Some(3),
+            disabled: false,
+            source: KnowledgeSource::Divination,
+            expiry: KnowledgeExpiry::Sustained,
+        },
+    );
+    assert!(learned, "precondition: the hostile lattice is known");
 
     // Take both hexes down through the real path: park a decision, answer it.
     *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseDisables {
@@ -248,6 +263,14 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .entity_of(UnitId(1))
             .is_some(),
         "and stay registered, because a restoring spell needs something to target"
+    );
+    assert!(
+        app.world()
+            .resource::<FactionKnowledge>()
+            .view(Faction::Player, UnitId(1))
+            .and_then(|known| known.cell(LatticeCoord::ORIGIN))
+            .is_some(),
+        "knowledge of a revivable downed unit must survive until actual despawn"
     );
 }
 

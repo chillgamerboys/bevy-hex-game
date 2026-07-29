@@ -41,13 +41,13 @@
 //! replay log. Bypassing the subtraction is not the same as bypassing the choice, and
 //! conflating the two would make burn the one damage source a fight could not replay.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use bevy::prelude::*;
 
 use hex_core::{
     AppSystems, EffectEnd, EffectId, EffectPayload, Mode, PausableSystems, PendingDecision,
-    PersistentEffect, RoundElapsed, Screen, UnitId,
+    PersistentEffect, RoundElapsed, Screen, Turn, UnitId,
 };
 use hex_lattice::LatticeState;
 use hex_units::UnitRegistry;
@@ -86,28 +86,6 @@ pub struct PersistentEffects {
     effects: BTreeMap<EffectId, PersistentEffect>,
     /// The next handle. Monotonic, never reused within a session.
     next: u64,
-    /// The round the set below is denominated in.
-    ticked_round: u32,
-    /// Everyone whose personal effects have already ticked **in `ticked_round`**.
-    ///
-    /// This is what makes the tick happen exactly once per unit per round no matter how
-    /// many frames a turn lasts — a turn is many frames long, so anything keyed on "the
-    /// acting unit is burning" would empty a lattice in about a second.
-    ///
-    /// **A set rather than the last turn alone**, and that is the whole point. A single
-    /// `(round, unit)` cursor cannot suppress a *repeat of an earlier turn in the same
-    /// round*, and that case is reachable: when the acting unit is last in the order and
-    /// goes down on its own turn, `TurnOrder::remove` wraps `current` to the front
-    /// **without** counting a round, so whoever is at the front gets a second turn under
-    /// a round that has already ticked them. A cursor compares that against the *downed*
-    /// unit's key, sees a difference, and burns the front unit twice — once for a turn it
-    /// already took. A set answers the question actually being asked: has this unit
-    /// ticked in this round.
-    ///
-    /// `BTreeSet` rather than `HashSet` because everything in resolution is ordered by
-    /// construction; membership does not depend on it, but nothing here gets to be the
-    /// one collection that iterates differently per run.
-    ticked: BTreeSet<UnitId>,
     /// Ticks that have come due but have not yet been handed to the decision seam.
     due: VecDeque<DueHit>,
 }
@@ -215,8 +193,6 @@ impl PersistentEffects {
     fn clear(&mut self) {
         self.effects.clear();
         self.next = 0;
-        self.ticked_round = 0;
-        self.ticked.clear();
         self.due.clear();
     }
 }
@@ -297,6 +273,7 @@ fn burn_source(effects: &PersistentEffects, target: UnitId) -> Option<UnitId> {
 /// be unordered against the system that answers it.
 fn tick_turn_effects(
     order: Res<TurnOrder>,
+    turns: Query<&UnitId, Added<Turn>>,
     registry: Res<UnitRegistry>,
     mut effects: ResMut<PersistentEffects>,
     // Read-only, and deliberately so: the tick no longer writes to a lattice at all, and
@@ -305,42 +282,36 @@ fn tick_turn_effects(
     // lattice writer for a borrow it never uses.
     lattices: Query<&LatticeState>,
 ) {
-    let Some(current) = order.current() else {
-        return;
-    };
-    // A new round retires the whole set at once, so the bookkeeping is one comparison
-    // rather than a sweep, and a fight cannot accumulate a set the size of its history.
-    if effects.ticked_round != order.round {
-        effects.ticked_round = order.round;
-        effects.ticked.clear();
-    }
-    // Recorded before the tick rather than after it, and unconditionally. A turn that
-    // ticked twice would double every burn in the fight; a turn that recorded only on
-    // success would re-tick every frame for a unit whose lattice is momentarily
-    // unreachable. Once, or not at all, is the only safe pair.
-    if !effects.ticked.insert(current) {
+    let mut started: Vec<UnitId> = turns.iter().copied().collect();
+    if started.is_empty() {
         return;
     }
+    // Query iteration order is not stable. There should be exactly one newly granted
+    // turn in ordinary play, but sorting keeps recovery from malformed multi-turn state
+    // deterministic too.
+    started.sort_unstable();
 
-    // The tick is entirely a ledger operation now: every live burn on this unit
-    // advances by one and contributes one hex. Nothing consults the lattice, because
-    // the lattice no longer knows anything about fire.
-    let due = effects.tick_personal(current);
+    for current in started {
+        // The tick is entirely a ledger operation now: every live burn on this unit
+        // advances by one and contributes one hex. `Added<Turn>` is the edge, so a turn
+        // lasting many frames ticks once while a real same-round handoff ticks again.
+        let due = effects.tick_personal(current);
 
-    if due > 0 {
-        let source = burn_source(&effects, current).unwrap_or_else(|| {
-            // The only writer is `apply_burn`, which always records a source, and the
-            // tick above only counts entries it just advanced — so this is unreachable
-            // short of a wiring bug. Loud rather than silent: an unattributed hit is
-            // how folklore about "random" damage starts.
-            warn!("{current:?} burned with no effect record; blaming the target");
-            current
-        });
-        effects.due.push_back(DueHit {
-            target: current,
-            count: due,
-            source,
-        });
+        if due > 0 {
+            let source = burn_source(&effects, current).unwrap_or_else(|| {
+                // The only writer is `apply_burn`, which always records a source, and the
+                // tick above only counts entries it just advanced — so this is unreachable
+                // short of a wiring bug. Loud rather than silent: an unattributed hit is
+                // how folklore about "random" damage starts.
+                warn!("{current:?} burned with no effect record; blaming the target");
+                current
+            });
+            effects.due.push_back(DueHit {
+                target: current,
+                count: due,
+                source,
+            });
+        }
     }
 
     let round = order.round;
@@ -446,16 +417,13 @@ fn clear_session_effects(mut effects: ResMut<PersistentEffects>) {
     effects.clear();
 }
 
-/// Ends the fight's half of the ledger: undelivered ticks, the tick cursor, and anything
+/// Ends the fight's half of the ledger: undelivered ticks and anything
 /// measured in rounds.
 ///
 /// A due hit that never reached the seam has nobody left to answer it, exactly like the
 /// open decision `commands::clear_pending_decision` drops beside it. It is a real loss —
 /// the tick that produced it was already spent against its effect's countdown — but the
 /// alternative is holding damage for a fight that is over.
-///
-/// The cursor goes because the next fight restarts the round counter, and a stale entry
-/// would match the first turn of that fight and silently skip its tick.
 ///
 /// # Turn-bounded effects survive; round-bounded ones cannot
 ///
@@ -468,8 +436,6 @@ fn clear_session_effects(mut effects: ResMut<PersistentEffects>) {
 /// here is the only reading that cannot silently make an effect permanent.
 fn clear_undelivered(mut effects: ResMut<PersistentEffects>) {
     effects.due.clear();
-    effects.ticked_round = 0;
-    effects.ticked.clear();
     effects.drop_round_bounded();
 }
 

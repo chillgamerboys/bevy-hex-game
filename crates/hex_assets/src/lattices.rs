@@ -350,7 +350,7 @@ fn area_effect_is_unapplied(spells: &SpellBook, spell: SpellId) -> bool {
     let Some(spell) = spells.spell(spell) else {
         return false;
     };
-    if matches!(spell.targeting.shape, TargetShape::Single) {
+    if !shape_can_cover_multiple_voxels(&spell.targeting.shape) {
         return false;
     }
     spell.effects.iter().any(|effect| {
@@ -363,6 +363,25 @@ fn area_effect_is_unapplied(spells: &SpellBook, spell: SpellId) -> bool {
                 | Effect::Reveal { .. }
         )
     })
+}
+
+/// Whether resolving `shape` can produce more than one distinct voxel.
+///
+/// This mirrors the cardinality boundaries in `hex_units::volumes` without resolving a
+/// concrete anchor or facing (and without introducing a dependency cycle back from
+/// assets to units). Content validation rejects the empty boundaries; treating them as
+/// non-area here still makes this predicate total for hand-built test content.
+fn shape_can_cover_multiple_voxels(shape: &TargetShape) -> bool {
+    match shape {
+        TargetShape::SelfCast | TargetShape::Single => false,
+        TargetShape::Sphere { radius } => *radius > 0,
+        TargetShape::Column { height } => *height > 1,
+        TargetShape::Line { length, width } => *length > 1 || (*length == 1 && *width > 0),
+        TargetShape::Cone { length, spread } => *length > 1 || (*length == 1 && *spread > 0),
+        TargetShape::Path { offsets } => offsets
+            .first()
+            .is_some_and(|first| offsets.iter().skip(1).any(|candidate| candidate != first)),
+    }
 }
 
 /// Resolves one element name, recording the failure and yielding `None` if it is unknown.
@@ -508,6 +527,87 @@ fn build_lattice_library(
                 error!("lattices: {error}");
             }
             // Keep the last valid library, mirroring the settings loader.
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hex_core::{HexCoord, Level};
+
+    use crate::spells::VoxelOffset;
+
+    use super::*;
+
+    const GROUND: Level = 0;
+
+    fn offset(q: i32, r: i32, level: Level) -> VoxelOffset {
+        VoxelOffset {
+            coord: HexCoord::from_axial(q, r),
+            level,
+        }
+    }
+
+    #[test]
+    fn only_shapes_that_can_resolve_to_multiple_distinct_voxels_are_area() {
+        let single_cardinality = [
+            TargetShape::SelfCast,
+            TargetShape::Single,
+            TargetShape::Sphere { radius: 0 },
+            TargetShape::Column { height: 1 },
+            TargetShape::Line {
+                length: 1,
+                width: 0,
+            },
+            TargetShape::Cone {
+                length: 1,
+                spread: 0,
+            },
+            TargetShape::Path {
+                offsets: vec![offset(0, 0, GROUND)],
+            },
+            TargetShape::Path {
+                offsets: vec![offset(0, 0, GROUND), offset(0, 0, GROUND)],
+            },
+        ];
+        for shape in single_cardinality {
+            assert!(
+                !shape_can_cover_multiple_voxels(&shape),
+                "{shape:?} resolves to at most one distinct voxel"
+            );
+        }
+
+        let multiple_cardinality = [
+            TargetShape::Sphere { radius: 1 },
+            TargetShape::Column { height: 2 },
+            TargetShape::Line {
+                length: 2,
+                width: 0,
+            },
+            TargetShape::Line {
+                length: 1,
+                width: 1,
+            },
+            TargetShape::Cone {
+                length: 2,
+                spread: 0,
+            },
+            TargetShape::Cone {
+                length: 1,
+                spread: 1,
+            },
+            TargetShape::Path {
+                offsets: vec![offset(0, 0, GROUND), offset(1, 0, GROUND)],
+            },
+            TargetShape::Path {
+                offsets: vec![offset(0, 0, GROUND), offset(0, 0, 1)],
+            },
+        ];
+        for shape in multiple_cardinality {
+            assert!(
+                shape_can_cover_multiple_voxels(&shape),
+                "{shape:?} can resolve to multiple distinct voxels"
+            );
         }
     }
 }

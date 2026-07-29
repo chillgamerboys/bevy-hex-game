@@ -24,7 +24,7 @@ use hex_assets::{
 use hex_combat::{Initiative, PersistentEffects, TurnOrder};
 use hex_core::{
     CommandQueue, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan, IssuedCommand,
-    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, UnitId,
+    LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_units::{Faction, Standing, StandsOn, UnitRegistry};
@@ -762,20 +762,18 @@ fn a_burn_on_a_lattice_less_unit_never_parks_an_unanswerable_decision() {
     );
 }
 
-/// A unit does not burn twice in one round because somebody else went down.
+/// Every newly granted turn burns, even when a downing handoff does not roll the round.
 ///
 /// `TurnOrder::remove` wraps `current` to the front **without** counting a round when the
 /// unit going down was last in the order, so the front unit gets a second turn inside a
-/// round it has already had one in. A cursor holding only the most recent `(round, unit)`
-/// compares that second turn against the *downed* unit's key, sees a difference, and
-/// ticks again — so every surviving burn takes an extra hex and its countdown runs down
-/// twice as fast, in the round it was supposed to sit out.
+/// round it has already had one in. That is still a real `Turn`, not a continuation of
+/// the old one, so a personal effect advances again.
 ///
 /// The wrap is forced directly rather than played out through a real downing: what is
-/// under test is the tick cursor, and driving it through combat would make the test
+/// under test is the turn edge, and driving it through combat would make the test
 /// depend on the AI, on strike damage and on how many hexes a fixture lattice has.
 #[test]
-fn a_second_turn_from_a_downing_wrap_does_not_tick_a_burn_twice() {
+fn a_second_turn_from_a_downing_wrap_ticks_a_burn_again() {
     let mut app = test_app(4);
     let fight = two_casters(&mut app);
 
@@ -798,9 +796,14 @@ fn a_second_turn_from_a_downing_wrap_does_not_tick_a_burn_twice() {
     // Hand the turn on, then drop the unit holding it — the wrap that grants the front
     // unit a second turn without counting a round.
     run_until_acting(&mut app, UnitId(2));
+    app.world_mut().entity_mut(fight.defender).remove::<Turn>();
     app.world_mut()
         .resource_mut::<TurnOrder>()
         .remove(UnitId(2));
+    app.world_mut().entity_mut(fight.caster).insert(Turn {
+        movement_left: 4,
+        acted: false,
+    });
     for _ in 0..8 {
         app.update();
     }
@@ -812,7 +815,7 @@ fn a_second_turn_from_a_downing_wrap_does_not_tick_a_burn_twice() {
     );
     assert_eq!(
         burn_turns_left(&app, fight.caster),
-        after_first,
-        "a repeat of a turn already taken this round must not spend another"
+        after_first.saturating_sub(1),
+        "a newly granted Turn must spend another tick even before a round rollover"
     );
 }

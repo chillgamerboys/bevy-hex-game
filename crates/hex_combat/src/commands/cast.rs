@@ -20,7 +20,7 @@
 
 use bevy::prelude::*;
 
-use hex_assets::{Effect, Spell, TargetShape};
+use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
 use hex_core::{Busy, LatticeCoord, PendingDecision, TilePos, UnitId};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
@@ -359,15 +359,19 @@ pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
 ///
 /// **Any, not all.** A partially built spell still does something, and refusing it would
 /// take away a real effect because a second one is pending; the applier already reports
-/// each unbuilt effect it skips. A spell with no effects at all is undeliverable by the
-/// same rule — `[]` does nothing, however legal it is.
+/// each unbuilt effect it skips. A spell with no effects is ordinarily undeliverable,
+/// except for a positive-defense enchantment: applying that enchantment is itself the
+/// delivered result even when its effect list is empty.
 ///
 /// Kept beside the match it mirrors so the two move together. Adding an effect arm above
 /// without adding it here fails closed, which is the safe direction: the spell stays
 /// unoffered until somebody notices.
 #[must_use]
 pub fn delivers_anything(spell: &Spell) -> bool {
-    spell.effects.iter().any(|effect| match effect {
+    matches!(
+        spell.casting,
+        CastingAxis::Enchantment { defense } if defense > 0
+    ) || spell.effects.iter().any(|effect| match effect {
         // Damage the defender chooses hexes for, and fire. Both land today.
         Effect::DisableHexes { targeted, .. } => !targeted,
         Effect::Burn { .. } => true,

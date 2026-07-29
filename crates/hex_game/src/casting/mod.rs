@@ -1282,12 +1282,12 @@ mod tests {
         }
         // The control, and the reason this is not just a ban on everything: the spells
         // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle"] {
+        for name in ["Ember", "Kindle", "Metal Shield"] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");
             assert!(
                 hex_combat::delivers_anything(definition),
-                "{name} lands damage today and must stay offered"
+                "{name} has a delivered combat result and must stay offered"
             );
         }
     }
