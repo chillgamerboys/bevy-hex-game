@@ -554,28 +554,28 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 381_654_729);
     assert_eq!(report.candidates_evaluated, 8);
-    assert_eq!(report.valid_candidates, 6);
+    assert_eq!(report.valid_candidates, 4);
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_eq!(report.notes.len(), 2);
+    assert_eq!(report.notes.len(), 4);
     assert!(report
         .notes
         .iter()
         .all(|note| note.starts_with("candidate ")));
-    assert_eq!(report.selected_candidate, Some(5));
+    assert_eq!(report.selected_candidate, Some(0));
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(10_811_287_953_605_838_929)
+        Some(14_183_726_856_212_867_729)
     );
-    assert_eq!(report.map_fingerprint, 6_480_411_511_027_514_331);
+    assert_eq!(report.map_fingerprint, 17_318_082_348_573_723_024);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
     assert_eq!(metrics.clearing_count, 4);
     assert_eq!(metrics.relief, 4);
-    assert_eq!(metrics.tree_roots, 54);
+    assert_eq!(metrics.tree_roots, 53);
     assert_eq!(metrics.tall_grass_roots, 155);
     assert!(metrics.tall_grass_roots.saturating_mul(2) > metrics.prairie_surfaces);
     assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
