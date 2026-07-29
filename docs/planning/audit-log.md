@@ -7,6 +7,30 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 10 — feat(editor): add the Asset Workshop (2026-07-28)
+
+- **PR**: #95 — `feat/asset-workshop-editor`
+- **Outcome**: green — 4 ship-blockers and 3 non-blockers fixed; 1 path-literal duplication deferred
+- **Lenses triggered**: 1, 2, 4, 5, 7, D3, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 5, 7 | `crates/hex_editor/src/viewport.rs`:503 | SHIP-BLOCKER | fixed in `9c358ac` — style edits now use tracked `Assets::get_mut`; a headless Bevy App regression observes the resulting `AssetEvent::Modified` for the cached material |
+| 1, 3 | `crates/hex_editor/src/model.rs`:210 | SHIP-BLOCKER | fixed in `56ad5bb` — unsaved documents use an explicit absent checkpoint, so deleting the only Effect or Prop voxel cannot make new work appear clean and bypass close/document-change protection |
+| 1 | `crates/hex_editor/src/app.rs`:696 | SHIP-BLOCKER | fixed in `56ad5bb` — Save As validates and builds a cloned editor before writing, then swaps it into the live draft only after persistence succeeds; rejected writes no longer leave a rename or undo entry behind |
+| 4, fresh-eyes | `crates/hex_editor/src/ui.rs`:1968 | SHIP-BLOCKER | fixed in `56ad5bb` — object inspector forms now track the last model values field-by-field, refreshing undo/redo changes without discarding live form input |
+| 1 | `crates/hex_editor/src/workshop.rs`:151 | NON-BLOCKER | fixed in `56ad5bb` — history labels are validated before the edit closure can mutate the object |
+| 2 | `crates/hex_editor/src/workshop.rs`:13 | NON-BLOCKER | fixed in the Wave 10 follow-up — global and object snapshot histories now share `DEFAULT_HISTORY_LIMIT` |
+| D3 | `docs/systems/asset-workshop.md`:157 | NON-BLOCKER | fixed in `56ad5bb` — persistence actions include confirmed Delete, and the document now distinguishes active external-change detection from future recovery drafts |
+| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | deferred — root discovery deliberately checks the two canonical catalog sentinels while persistence owns the broader `assets/art` root; both paths are contract-tested, and consolidating them would couple separate responsibilities without removing a mutable value |
+
+**Notes**: all eight lenses and a silent-failure sweep found no remaining real
+candidate. The full gate passes with 792 tests, including the tracked-material App
+regression and four state regressions added during review. The game visual walk is
+not an applicable editor check: it drives `hex_game`, while this PR adds the
+standalone `hex_editor`; the renderer failure is covered at the Bevy asset-event
+altitude instead.
+
 ## Wave 9 — feat(map): render animated opaque liquids (2026-07-28)
 
 - **PR**: #88 — `feat/v3-liquid-renderer`

@@ -8,9 +8,8 @@ use hex_assets::{
     ArtPalette, ObjectAssetId, PaletteSwatch, SwatchId, VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 
+use crate::history::DEFAULT_HISTORY_LIMIT;
 use crate::model::{EditorModel, EditorModelError};
-
-const GLOBAL_HISTORY_LIMIT: usize = 128;
 
 /// A recoverable workshop draft operation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -463,7 +462,7 @@ fn validated_label(label: impl Into<String>) -> Result<String, WorkshopDraftErro
 }
 
 fn trim_history(history: &mut VecDeque<GlobalHistoryEntry>) {
-    while history.len() > GLOBAL_HISTORY_LIMIT {
+    while history.len() > DEFAULT_HISTORY_LIMIT {
         drop(history.pop_front());
     }
 }
