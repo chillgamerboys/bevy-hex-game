@@ -234,13 +234,17 @@ one of six rotations in semantic and materialized fingerprints. Exact floor,
 clearance, roof, interior, and unoccupied visual-volume checks reject an invalid
 candidate.
 
-The V3 recipe does not render a crystal itself. The later stacked integration maps
-the ordered kinds to `prop/crystal-low-cluster`, `prop/crystal-branched`, or
-`prop/crystal-spire`. Its authoritative `GameplayLight` and `TilePos` remain on the
-exact cave floor; the corresponding `ObjectInstance` origin is one voxel above it.
-Emission and restrained physical point lights remain presentation and never
-determine gameplay illumination. The map-side light entity remains valid without
-that optional visual layer.
+Before candidate construction, Caves preflights all three possible authored assets:
+`prop/crystal-low-cluster`, `prop/crystal-branched`, and `prop/crystal-spire`. Their
+radius, height, origin, style modes, and empty blocker/canopy masks must match the
+reserved geometry. A missing or incompatible dependency fails setup before any map
+entities are published.
+
+The authoritative `GameplayLight` and `TilePos` remain together on the exact cave
+floor. A separate renderer-neutral `ObjectInstance` starts one voxel above it with
+the planned six-way rotation, and owns a restrained non-shadow-casting point light.
+The authored emission and physical light are presentation only; neither carries
+`GameplayLight` nor determines gameplay illumination.
 
 ### Fort
 

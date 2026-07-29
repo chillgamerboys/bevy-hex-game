@@ -27,6 +27,7 @@ use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
 mod caves;
+pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
 #[expect(
     dead_code,
     reason = "Ring7 recipe integration consumes checked patch composition in the next PR"
@@ -81,7 +82,9 @@ mod waterfall;
 mod world;
 #[cfg(test)]
 pub(crate) use world::PlannedFeature;
-pub(crate) use world::{FeatureId, FeatureKind};
+pub(crate) use world::{
+    CaveCrystalKind, FeatureId, FeatureKind, LightId, PlannedLightPresentation,
+};
 
 /// Failure to construct or validate one V3 world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -322,6 +325,13 @@ pub(crate) fn build(
             )
         }
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Caves(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Caves requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            CaveCrystalObjectSet::resolve(art_catalog)
+                .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
             finish_build(
                 caves::generate(grid_radius, level_height, settings, seed)?,
                 grid_radius,

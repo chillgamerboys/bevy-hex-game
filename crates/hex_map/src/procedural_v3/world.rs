@@ -101,6 +101,16 @@ pub(crate) enum CaveCrystalKind {
 }
 
 impl CaveCrystalKind {
+    /// Number of authored object levels in this silhouette.
+    #[must_use]
+    pub(crate) const fn height_u8(self) -> u8 {
+        match self {
+            Self::LowCluster => 2,
+            Self::Branched => 3,
+            Self::Spire => 4,
+        }
+    }
+
     /// Number of visual voxel levels reserved above the authoritative floor.
     #[must_use]
     pub(crate) const fn height(self) -> i32 {
