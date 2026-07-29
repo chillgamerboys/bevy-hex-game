@@ -110,7 +110,7 @@ enum WalkStep {
         #[serde(default)]
         index: usize,
     },
-    /// Press and release a key: `Backspace`, `Escape`, `Space`, or `Enter`.
+    /// Press and release a supported gameplay or navigation key.
     Key(String),
     /// Launch a scenario by exact name, bypassing the menu UI.
     StartScenario {
@@ -170,8 +170,9 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Escape" => Ok(KeyCode::Escape),
         "Space" => Ok(KeyCode::Space),
         "Enter" => Ok(KeyCode::Enter),
+        "C" => Ok(KeyCode::KeyC),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, or Enter"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, or C"
         )),
     }
 }
@@ -500,7 +501,11 @@ mod tests {
 
     #[test]
     fn the_shipped_walk_scripts_parse_and_validate() {
-        for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
+        for script in [
+            "../../walks/menus.ron",
+            "../../walks/gameplay.ron",
+            "../../walks/waterfall.ron",
+        ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
                 .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));

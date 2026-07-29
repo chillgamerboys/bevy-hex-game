@@ -173,6 +173,10 @@ impl V3Recipe for WaterfallRecipe {
         _round: u8,
         _issues: &[WorldValidationIssue],
     ) -> Result<RepairOutcome, CandidateAttemptError> {
+        // Waterfall repair is intentionally staged out. Candidates are admitted only
+        // when construction already satisfies the complete recipe contract; an
+        // invalid candidate is rejected and the separately validated fallback
+        // remains the bounded recovery path.
         Ok(RepairOutcome::NoChange)
     }
 
@@ -1492,7 +1496,7 @@ fn validate_bridge(plan: &GeneratedWorldPlan, issues: &mut Vec<WorldValidationIs
         }
     }
 
-    let ordinary = OrdinaryGraph::from_plan(plan);
+    let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
     for x in BRIDGE_FIRST_X..=BRIDGE_LAST_X {
         let lane: Vec<_> = (-BRIDGE_BANK_Y..=BRIDGE_BANK_Y)
             .map(|y| TilePos::new(HexCoord::from_axial(x, y), BRIDGE_DECK_LEVEL))
@@ -1717,25 +1721,46 @@ fn validate_route_redundancy(
     secondary: &[Vec<TilePos>; 2],
     issues: &mut Vec<WorldValidationIssue>,
 ) {
-    for (name, removed, retained) in [
-        ("critical", critical, secondary),
-        ("secondary", secondary, critical),
-    ] {
-        let blocked: BTreeSet<_> = removed.iter().flatten().copied().collect();
-        let Some((start, goal)) = retained
-            .first()
-            .and_then(|lane| lane.first().copied().zip(lane.last().copied()))
-        else {
-            issues.push(recipe_issue(format!(
-                "Waterfall has no alternate route around its {name} bypass"
-            )));
-            continue;
-        };
-        let reachable = ordinary.reachable_avoiding(start, &blocked);
-        if !reachable.contains(&goal) {
-            issues.push(recipe_issue(format!(
-                "removing the Waterfall {name} bypass disconnects the alternate high/low route"
-            )));
+    let routes = [("critical", critical), ("secondary", secondary)];
+    let route_tiles =
+        routes.map(|(_, route)| route.iter().flatten().copied().collect::<BTreeSet<_>>());
+
+    let overlap: Vec<_> = route_tiles[0]
+        .intersection(&route_tiles[1])
+        .copied()
+        .take(6)
+        .collect();
+    if !overlap.is_empty() {
+        issues.push(recipe_issue(format!(
+            "Waterfall high/low routes are not independent; shared surfaces: {overlap:?}"
+        )));
+    }
+
+    // Each validated lane is itself a concrete graph path. Exact high and low
+    // terminals plus disjoint route footprints therefore prove two independent
+    // high-to-low routes without inferring topology from authored names.
+    for (name, route) in routes {
+        for (lane_index, lane) in route.iter().enumerate() {
+            let Some((start, goal)) = lane.first().copied().zip(lane.last().copied()) else {
+                issues.push(recipe_issue(format!(
+                    "Waterfall {name} lane {lane_index} has no high/low terminals"
+                )));
+                continue;
+            };
+            if start.level != HIGH_LAND_LEVEL || goal.level != LOW_LAND_LEVEL {
+                issues.push(recipe_issue(format!(
+                    "Waterfall {name} lane {lane_index} spans levels {} -> {}, expected {HIGH_LAND_LEVEL} -> {LOW_LAND_LEVEL}",
+                    start.level, goal.level
+                )));
+            }
+            if lane
+                .windows(2)
+                .any(|pair| !matches!(pair, [from, to] if ordinary.admits(*from, *to)))
+            {
+                issues.push(recipe_issue(format!(
+                    "Waterfall {name} lane {lane_index} is not a complete ordinary high/low path"
+                )));
+            }
         }
     }
 }
@@ -1907,7 +1932,7 @@ mod tests {
         assert_eq!(structure.voxels, expected);
         assert_eq!(expected.len(), 14);
 
-        let ordinary = OrdinaryGraph::from_plan(plan);
+        let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
         for x in BRIDGE_FIRST_X..=BRIDGE_LAST_X {
             let lane: Vec<_> = (-BRIDGE_BANK_Y..=BRIDGE_BANK_Y)
                 .map(|y| TilePos::new(HexCoord::from_axial(x, y), BRIDGE_DECK_LEVEL))
@@ -2000,6 +2025,45 @@ mod tests {
             reachable, expected,
             "the cached ordinary graph should reach every surface"
         );
+    }
+
+    #[test]
+    fn route_redundancy_rejects_shared_and_false_high_low_paths() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Waterfall should generate");
+        let plan = &selected.validated.plan;
+        let critical = bypass_tiles(12, &plan.layout.footprint).expect("critical bypass");
+        let secondary =
+            secondary_bypass_tiles(12, &plan.layout.footprint).expect("secondary bypass");
+        let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
+
+        let mut shared = secondary.clone();
+        let critical_start = critical
+            .first()
+            .and_then(|lane| lane.first())
+            .copied()
+            .expect("critical high terminal");
+        let shared_start = shared
+            .first_mut()
+            .and_then(|lane| lane.first_mut())
+            .expect("secondary high terminal");
+        *shared_start = critical_start;
+        let mut issues = Vec::new();
+        validate_route_redundancy(&ordinary, &critical, &shared, &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("high/low routes are not independent")));
+
+        let mut false_terminal = secondary;
+        let terminal = false_terminal
+            .first_mut()
+            .and_then(|lane| lane.first_mut())
+            .expect("secondary high terminal");
+        terminal.level = terminal.level.saturating_sub(1);
+        let mut issues = Vec::new();
+        validate_route_redundancy(&ordinary, &critical, &false_terminal, &mut issues);
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("expected 27 -> 16")));
     }
 
     #[test]

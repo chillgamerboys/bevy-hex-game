@@ -134,6 +134,12 @@ Reports record generator version, resolved seed, candidate, repair actions, fall
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
 before reporting or hashing.
 
+After an admitted map is edited, `hex_map` keeps its published exact consequences
+honest. Edited columns discard buried `BiomeRegions` entries and classify every
+newly exposed solid run from the closest prior exact surface in that column.
+`TraversalBlockers` remain attached only while their exact footing is still
+walker-admitted; newly exposed footing never inherits a feature blocker.
+
 ## Recipe stages
 
 Every recipe produces semantics first and voxels last. Shared traversal validation
@@ -159,6 +165,12 @@ opposite bank. The second route has a broader irregular apron and remains usable
 the critical route is excluded. Until topology-aware rebuilding exists, the
 conservative V3 edit policy above protects each authored liquid run and every lower
 voxel in its column.
+
+Waterfall candidates do not yet attempt semantic repair. Construction-valid
+candidates pass the complete recipe contract unchanged; invalid candidates are
+rejected, and the separately validated canonical fallback is the only recovery path.
+The dedicated `walks/waterfall.ron` gate captures the default and close-character
+views of the same deterministic scenario for liquid-motion and cliff-scale review.
 
 ### Forest
 

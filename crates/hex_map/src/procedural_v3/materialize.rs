@@ -88,6 +88,16 @@ impl MapPresentationProjection {
             liquid.coord == position.coord && liquid.level.saturating_add(1) >= position.level
         })
     }
+
+    /// Whether one exact voxel is occupied by an authored liquid fill.
+    ///
+    /// Terrain-edit consequence projection uses this to retain the biome identity
+    /// of a non-standable liquid bed while still removing ordinary surfaces buried
+    /// by newly placed solid terrain.
+    #[must_use]
+    pub(crate) fn contains_liquid(&self, position: TilePos) -> bool {
+        self.liquids.contains_key(&position)
+    }
 }
 
 /// Presentation metadata expanded to every occupied voxel in one liquid run.
