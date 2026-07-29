@@ -78,10 +78,48 @@ pub struct GenerationReport {
 /// Exact metrics owned by the selected procedural V3 recipe.
 #[derive(Reflect, Debug, Clone, PartialEq, Eq)]
 pub enum ProceduralRecipeMetrics {
+    /// Rolling surface and ordinary-network measurements.
+    Hills(HillsMetrics),
+    /// Layered ground, island, bridge, and clearance measurements.
+    SkyIslands(SkyIslandsMetrics),
     /// Directed river, fall, and dry-bypass measurements.
     Waterfall(WaterfallMetrics),
     /// Vegetation, clearing, route, and terrain measurements.
     Forest(ForestMetrics),
+}
+
+/// Exact deterministic measurements of one selected V3 Hills plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct HillsMetrics {
+    /// Ordinary walker surfaces in the connected terrain network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations reachable by an ordinary walker.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Deterministic hill centres contributing to the terrain.
+    pub hill_centres: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Sky Islands plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SkyIslandsMetrics {
+    /// Ordinary surfaces on the finalized ground layer.
+    pub ground_surfaces: u32,
+    /// Exact upper-layer surfaces including bridges and satellites.
+    pub upper_surfaces: u32,
+    /// Percentage of horizontal patch columns occupied by the upper layer.
+    pub upper_coverage_percent: u32,
+    /// Internally connected primary islands.
+    pub primary_islands: u8,
+    /// Small disconnected flight-gated islands.
+    pub satellites: u8,
+    /// Metal upper-bridge surface cells.
+    pub bridge_surfaces: u32,
+    /// Minimum empty vertical separation above local ground.
+    pub vertical_clearance: Level,
 }
 
 /// Exact deterministic measurements of one selected V3 Waterfall plan.

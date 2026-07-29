@@ -13,8 +13,8 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    ForestMetrics as ForestReportMetrics, GenerationReport, ProceduralRecipeMetrics,
-    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    ForestMetrics as ForestReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
+    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -25,6 +25,7 @@ use world::WorldValidationIssue;
 
 mod fingerprint;
 mod forest;
+mod hills;
 #[expect(
     dead_code,
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
@@ -39,6 +40,7 @@ mod liquid;
 pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
+mod patch;
 mod seed;
 #[cfg_attr(
     not(test),
@@ -48,6 +50,7 @@ mod seed;
     )
 )]
 mod selection;
+mod sky;
 mod traversal;
 #[expect(
     dead_code,
@@ -162,7 +165,10 @@ pub(crate) fn ensure_recipe_available(
         V3LayoutSettings::Single(patch)
             if matches!(
                 patch.recipe,
-                V3RecipeSettings::Waterfall(_) | V3RecipeSettings::Forest(_)
+                V3RecipeSettings::Hills(_)
+                    | V3RecipeSettings::SkyIslands(_)
+                    | V3RecipeSettings::Waterfall(_)
+                    | V3RecipeSettings::Forest(_)
             ) =>
         {
             Ok(())
@@ -199,6 +205,36 @@ pub(crate) fn build(
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let started = Instant::now();
     match &settings.layout {
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Hills(_)) => {
+            finish_build(
+                hills::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                hills_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Hills(hills_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::SkyIslands(_)) =>
+        {
+            finish_build(
+                sky::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                sky_report_metrics,
+                |metrics| ProceduralRecipeMetrics::SkyIslands(sky_recipe_metrics(metrics)),
+            )
+        }
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
         {
@@ -233,6 +269,48 @@ pub(crate) fn build(
             &patch.recipe,
         ))),
         V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+    }
+}
+
+fn hills_report_metrics(metrics: &hills::HillsMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: 100,
+        ..Default::default()
+    }
+}
+
+fn hills_recipe_metrics(metrics: &hills::HillsMetrics) -> HillsReportMetrics {
+    HillsReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        hill_centres: metrics.hill_centres,
+    }
+}
+
+fn sky_report_metrics(metrics: &sky::SkyMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.vertical_clearance,
+        reachable_surfaces: metrics.ground_surfaces,
+        environment_signature_percent: metrics.upper_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn sky_recipe_metrics(metrics: &sky::SkyMetrics) -> crate::procedural::SkyIslandsMetrics {
+    crate::procedural::SkyIslandsMetrics {
+        ground_surfaces: metrics.ground_surfaces,
+        upper_surfaces: metrics.upper_surfaces,
+        upper_coverage_percent: metrics.upper_coverage_percent,
+        primary_islands: metrics.primary_islands,
+        satellites: metrics.satellites,
+        bridge_surfaces: metrics.bridge_surfaces,
+        vertical_clearance: metrics.vertical_clearance,
     }
 }
 
