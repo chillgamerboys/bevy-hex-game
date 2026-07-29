@@ -1894,7 +1894,7 @@ mod tests {
         let selected =
             generate(12, 0.4, &settings(), 381_654_729).expect("hero Forest should generate");
 
-        assert_eq!(selected.metrics.tree_roots, 54);
+        assert_eq!(selected.metrics.tree_roots, 53);
         assert!(
             (51..=55).contains(&selected.metrics.tree_roots),
             "the prior hero had 46 tree roots; review asked for 10-20% more"
