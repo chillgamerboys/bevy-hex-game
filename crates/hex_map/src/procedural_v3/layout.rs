@@ -516,11 +516,17 @@ fn resolve_shared_edge(
             LayoutIssue::AmbiguousPortApproaches(first_id, second_id),
         ));
     }
-    let mut requests =
-        vec![PortRequest::Walker(first.walker.width); usize::from(first.walker.count)];
+    let mut requests = Vec::with_capacity(
+        usize::from(first.walker.count)
+            + usize::from(matches!(liquid_request, LiquidRequest::Directed { .. })),
+    );
     if let LiquidRequest::Directed { width, .. } = liquid_request {
         requests.push(PortRequest::Liquid(width));
     }
+    requests.extend(std::iter::repeat_n(
+        PortRequest::Walker(first.walker.width),
+        usize::from(first.walker.count),
+    ));
     let selected = select_ports(
         &requests,
         &oriented_pairs,
