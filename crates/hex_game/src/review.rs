@@ -8,7 +8,8 @@
 //! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
 //! then exits. `HEX_REVIEW_TIME` and `HEX_REVIEW_CAMERA` optionally select the cyclic
 //! lighting hour and map/character perspective for that launch.
-//! `HEX_REVIEW_LIQUID_PHASE` freezes liquid presentation at a deterministic phase.
+//! `HEX_REVIEW_LIQUID_PHASE` freezes liquid presentation at a deterministic phase;
+//! captures default to phase `0.0` when no explicit phase is configured.
 //! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
@@ -220,6 +221,12 @@ impl ReviewRequest {
             }
             None => None,
         };
+
+        // A capture must be byte-reproducible, so freeze liquid presentation at phase
+        // zero unless the launch names an explicit phase. Launches without a capture
+        // keep the live animation.
+        let liquid_phase_seconds =
+            liquid_phase_seconds.or_else(|| capture.is_some().then_some(0.0));
 
         Ok(Some(Self {
             scenario,
@@ -943,6 +950,39 @@ mod tests {
         assert_eq!(capture.camera, ReviewCamera::Character);
         assert_eq!(capture.focus_anchor.as_deref(), Some("deep_chamber"));
         assert!(capture.full_cutaway);
+    }
+
+    #[test]
+    fn captures_default_to_a_frozen_liquid_phase_and_launches_do_not() {
+        let capture = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            Some(".context/review.png".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("capture configuration should parse")
+        .expect("capture configuration should be enabled");
+        assert_eq!(capture.liquid_phase_seconds, Some(0.0));
+
+        let launch = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("launch configuration should parse")
+        .expect("launch configuration should be enabled");
+        assert_eq!(launch.liquid_phase_seconds, None);
     }
 
     #[test]
