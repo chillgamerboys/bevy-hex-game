@@ -4,33 +4,43 @@
 //! `elements.ron` / `spells.ron` and lets a human exercise every rule the
 //! content can currently reach: binary casting with live blocked-reasons, mana
 //! capacity versus channelling throughput, damage disables, and enchantment
-//! mana locking. Fusion resolution and burn ticks are wired but dormant until
-//! content demands them — no shipped spell requires a higher-order element
-//! yet, and burn *effects* are applied above the engine, which is HEX-12's
-//! job. Nothing persists — the lattice is rebuilt from content on every entry,
-//! and `Reset` rebuilds the battle state. Reset is deliberately the only way
-//! back from a strike: the engine has no un-disable, so neither does the demo.
+//! mana locking. Fusion resolution now has content behind it — the hedge-mage's
+//! Lightning Bolt is the one shipped spell requiring a higher-order element —
+//! though this demo's own fixture does not use it. **Burn is not here at all**: it
+//! stopped being something a lattice carries and now lives in `hex_combat`'s effect
+//! ledger, which this screen deliberately cannot see — a burn needs a turn order to
+//! tick against, and a sandbox has none. Nothing
+//! persists — the lattice is rebuilt from content on every entry, and `Reset`
+//! rebuilds the battle state. Reset is no longer the *only* way back from a
+//! strike (`hex_lattice::restore` exists now), but it stays the demo's, because
+//! a restoring spell is a cast and the demo has no target but itself.
 //!
-//! # The tables adapter is demo-local by design
+//! # The tables adapter is no longer demo-local
 //!
-//! [`DemoTables`] maps `ContentIndex`/`ElementCatalog` onto the engine's
-//! `SpellTable`/`FusionTable` traits. The *permanent* wiring — where those
-//! implementations live, and how casts reach real combat — belongs to HEX-12;
-//! this screen only proves the mapping is 1:1, so it keeps its copy private
-//! rather than claiming the seam.
+//! This screen used to carry its own copy of the `SpellTable`/`FusionTable`
+//! adapter, because the permanent seat belonged to a ticket that had not
+//! landed. It has: [`ContentTables`] lives in
+//! `hex_assets` beside the content it reads, and the demo uses the same one
+//! the game does. Two copies of the unknown-spell fallback was one fix away
+//! from drifting apart.
 
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
-use hex_assets::{CastingAxis, ContentIndex, ElementCatalog, SpellBook};
+use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, tick_burns, CastBlocked, Casting, CellKind,
-    FusionTable, LatticeSpec, LatticeState, LatticeStats, Requirement, SpellTable,
+    apply_cast, apply_disables, castable, channel, Casting, CellKind, LatticeSpec, LatticeState,
+    LatticeStats, SpellTable,
 };
 
+use crate::casting::blocked_reason;
+use crate::menus::lattice_view::{
+    live_cell_view, spawn_lattice_cells, CellInteraction, LatticeScale,
+};
 use crate::menus::widgets::{
-    blurb, display, divider, fine, heading, label, panel, small_button, OwnColors, UiAssets, LABEL,
+    blurb, display, divider, fine, heading, label, panel, small_button, UiAssets,
+    SMALL_BUTTON_WIDTH,
 };
 
 use super::{despawn_screen, screen_root};
@@ -47,29 +57,8 @@ const DEMO_SPELLS: [&str; 4] = ["Ember", "Metal Shield", "Flamethrower", "Fireba
 /// rather than overwriting, at worst leaving a spell honestly unsatisfiable.
 const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 
-/// Pixel width of one hex cell sprite (pointy-top, so height runs longer).
-const CELL_SIZE: f32 = 62.0;
-
-/// Pixel height of the hex sprite: width times the 256/222 sprite ratio.
-const CELL_HEIGHT: f32 = 71.5;
-
-/// Horizontal distance between neighbouring cell centres — a slim gap keeps
-/// the cells reading as one bonded lattice rather than scattered dots.
-const CELL_STEP: f32 = 66.0;
-
-/// Vertical distance between rows: three quarters of the hex height.
-const ROW_STEP: f32 = 56.0;
-
 /// How many log lines the demo keeps.
 const LOG_LINES: usize = 6;
-
-/// Tints multiplied over the white hex sprite. Saturated and mostly opaque —
-/// the first walk photograph showed the old low-alpha fills washing out.
-const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
-const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
-const SPELL_COLOR: Color = Color::srgba(0.30, 0.33, 0.40, 0.95);
-const LOCKED_COLOR: Color = Color::srgba(0.72, 0.54, 0.18, 0.95);
-const DISABLED_COLOR: Color = Color::srgba(0.46, 0.13, 0.11, 0.95);
 
 pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
@@ -117,66 +106,13 @@ struct DemoCell(LatticeCoord);
 #[derive(Component)]
 struct CastsSpell(LatticeCoord);
 
-/// The button that channels mana back and ticks burns.
+/// The button that channels mana back toward capacity.
 #[derive(Component)]
 struct EndsTurn;
 
 /// The button that rebuilds the battle state from the inscription.
 #[derive(Component)]
 struct ResetsDemo;
-
-/// Bridges the loaded content tables to the engine's lookup traits.
-///
-/// Demo-local on purpose — see the module docs. The `None` arms matter: an
-/// unknown spell id must stay *uncastable*, and an empty requirement list would
-/// instead read as a tier-0 spell that costs nothing, so the fallback is a
-/// single `u16::MAX`-mana requirement — beyond any capacity the demo's stats
-/// fabricate, since those top out at the largest single cost in content.
-struct DemoTables<'a> {
-    index: &'a ContentIndex,
-    elements: &'a ElementCatalog,
-}
-
-impl SpellTable for DemoTables<'_> {
-    fn requirements(&self, spell: hex_core::SpellId) -> Vec<Requirement> {
-        match self.index.requirements(spell) {
-            Some(requirements) => requirements
-                .iter()
-                .map(|&(element, mana)| Requirement { element, mana })
-                .collect(),
-            None => vec![Requirement {
-                element: poison_element(self.elements),
-                mana: u16::MAX,
-            }],
-        }
-    }
-
-    fn casting(&self, spell: hex_core::SpellId) -> Casting {
-        match self.index.casting(spell) {
-            Some(CastingAxis::Enchantment { defense }) => Casting::Enchantment { defense },
-            Some(CastingAxis::Evocation) | None => Casting::Evocation,
-        }
-    }
-}
-
-impl FusionTable for DemoTables<'_> {
-    fn recipe(&self, output: ElementId) -> Option<Vec<Requirement>> {
-        self.elements.recipe(output).map(|inputs| {
-            inputs
-                .iter()
-                .map(|&(element, mana)| Requirement { element, mana })
-                .collect()
-        })
-    }
-}
-
-/// An element for the unknown-spell fallback requirement.
-///
-/// Any real element works — the `u16::MAX` cost is what blocks the cast — and
-/// an empty catalog blocks everything anyway, so the default id is fine there.
-fn poison_element(elements: &ElementCatalog) -> ElementId {
-    elements.wheel().first().copied().unwrap_or_default()
-}
 
 fn spawn_demo_screen(mut commands: Commands, assets: Res<UiAssets>) {
     commands
@@ -360,10 +296,7 @@ fn handle_cell_clicks(
     let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
         return;
     };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
     for (interaction, cell) in &clicked {
         if *interaction != Interaction::Pressed {
             continue;
@@ -389,10 +322,7 @@ fn handle_cast_buttons(
     let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
         return;
     };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
     for (interaction, cast) in &clicked {
         if *interaction == Interaction::Pressed {
             try_cast(&mut demo, cast.0, &tables, &spells);
@@ -417,18 +347,15 @@ fn handle_action_buttons(
             log,
         } = &mut *demo;
         channel(state, spec, stats);
-        let due = tick_burns(state);
-        if due == 0 {
-            push_log(
-                log,
-                "end of turn: channelled mana back toward capacity".to_owned(),
-            );
-        } else {
-            push_log(
-                log,
-                format!("end of turn: channelled, and {due} burn(s) came due"),
-            );
-        }
+        // No burn tick here any more. Burn stopped being something a lattice carries —
+        // it lives in `hex_combat`'s effect ledger, which this screen deliberately
+        // cannot see, because the demo is a sandbox for the *rules engine* rather than
+        // for the fight. A burn needs a turn order to tick against, and there is not one
+        // here.
+        push_log(
+            log,
+            "end of turn: channelled mana back toward capacity".to_owned(),
+        );
     }
     if resets
         .iter()
@@ -448,7 +375,12 @@ fn handle_action_buttons(
     }
 }
 
-fn try_cast(demo: &mut DemoLattice, cell: LatticeCoord, tables: &DemoTables, spells: &SpellBook) {
+fn try_cast(
+    demo: &mut DemoLattice,
+    cell: LatticeCoord,
+    tables: &ContentTables,
+    spells: &SpellBook,
+) {
     let name = match demo.spec.get(cell) {
         Some(CellKind::Spell { spell }) => spells.name(spell).unwrap_or("unknown spell").to_owned(),
         _ => return,
@@ -509,14 +441,6 @@ fn strike(demo: &mut DemoLattice, coord: LatticeCoord, spells: &SpellBook) {
     }
 }
 
-fn blocked_reason(blocked: &CastBlocked) -> &'static str {
-    match blocked {
-        CastBlocked::NotASpell => "no spell here",
-        CastBlocked::SpellDisabled => "spell hex disabled",
-        CastBlocked::Unsatisfiable => "not enough adjacent mana",
-    }
-}
-
 fn push_log(log: &mut Vec<String>, line: String) {
     log.push(line);
     while log.len() > LOG_LINES {
@@ -546,25 +470,13 @@ fn rebuild_readout(
         return;
     };
     let Ok(body) = bodies.single() else { return };
-    let tables = DemoTables {
-        index: &index,
-        elements: &elements,
-    };
+    let tables = index.tables(&elements);
 
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|panels| {
         spawn_lattice_panel(panels, &demo, &elements, &spells, &assets);
         spawn_control_panel(panels, &demo, &tables, &spells, &assets);
     });
-}
-
-fn cell_position(coord: LatticeCoord) -> (f32, f32) {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "demo coordinates are single digits; f32 is exact far beyond them"
-    )]
-    let (q, r) = (coord.q() as f32, coord.r() as f32);
-    (CELL_STEP * (q + r * 0.5), ROW_STEP * r)
 }
 
 fn spawn_lattice_panel(
@@ -574,164 +486,39 @@ fn spawn_lattice_panel(
     spells: &SpellBook,
     assets: &UiAssets,
 ) {
-    let mut min = (f32::MAX, f32::MAX);
-    let mut max = (f32::MIN, f32::MIN);
-    for (coord, _) in demo.spec.cells() {
-        let (x, y) = cell_position(coord);
-        min = (min.0.min(x), min.1.min(y));
-        max = (max.0.max(x), max.1.max(y));
-    }
     if demo.spec.capacity() == 0 {
         panels.spawn(blurb(assets, "the content defined no demo lattice"));
         return;
     }
+    let views: Vec<_> = demo
+        .spec
+        .cells()
+        .map(|(coord, kind)| {
+            live_cell_view(
+                coord,
+                kind,
+                &demo.stats,
+                &demo.state,
+                elements,
+                spells,
+                CellInteraction::Actionable,
+                false,
+            )
+        })
+        .collect();
 
     panels
         .spawn((Name::new("Lattice Panel"), panel()))
         .with_children(|framed| {
             framed.spawn(heading(assets, "the inscription"));
-            framed
-                .spawn((
-                    Name::new("Demo Lattice"),
-                    Node {
-                        width: Val::Px(max.0 - min.0 + CELL_SIZE),
-                        height: Val::Px(max.1 - min.1 + CELL_HEIGHT),
-                        ..default()
-                    },
-                ))
-                .with_children(|lattice| {
-                    spawn_lattice_cells(lattice, demo, elements, spells, assets, min);
-                });
+            spawn_lattice_cells(framed, &views, assets, LatticeScale::DEMO, "Demo", DemoCell);
         });
-}
-
-fn spawn_lattice_cells(
-    lattice: &mut ChildSpawnerCommands,
-    demo: &DemoLattice,
-    elements: &ElementCatalog,
-    spells: &SpellBook,
-    assets: &UiAssets,
-    min: (f32, f32),
-) {
-    for (coord, kind) in demo.spec.cells() {
-        let (x, y) = cell_position(coord);
-        let (color, title, line) = cell_face(coord, kind, demo, elements, spells);
-        lattice
-            .spawn((
-                // Coordinates in the name give the visual-walk scripts a
-                // deterministic handle on one specific cell.
-                Name::new(format!("Demo Cell ({}, {})", coord.q(), coord.r())),
-                Button,
-                DemoCell(coord),
-                OwnColors,
-                ImageNode {
-                    image: assets.hex_cell.clone(),
-                    color,
-                    ..default()
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(x - min.0),
-                    top: Val::Px(y - min.1),
-                    width: Val::Px(CELL_SIZE),
-                    height: Val::Px(CELL_HEIGHT),
-                    align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|cell| {
-                cell.spawn((
-                    Text::new(title),
-                    TextFont {
-                        font: assets.body.clone().into(),
-                        ..TextFont::from_font_size(11.0)
-                    },
-                    TextColor(LABEL),
-                    Pickable::IGNORE,
-                ));
-                cell.spawn((
-                    Text::new(line),
-                    TextFont {
-                        font: assets.body.clone().into(),
-                        ..TextFont::from_font_size(10.0)
-                    },
-                    TextColor(Color::srgba(1.0, 1.0, 1.0, 0.75)),
-                    Pickable::IGNORE,
-                ));
-            });
-    }
-}
-
-/// What one cell shows: its colour, headline, and detail line.
-fn cell_face(
-    coord: LatticeCoord,
-    kind: CellKind,
-    demo: &DemoLattice,
-    elements: &ElementCatalog,
-    spells: &SpellBook,
-) -> (Color, String, String) {
-    let disabled = demo.state.is_disabled(coord);
-    let locked = demo.state.is_locked(coord);
-    let color = if disabled {
-        DISABLED_COLOR
-    } else if locked {
-        LOCKED_COLOR
-    } else {
-        match kind {
-            CellKind::Gem { .. } => GEM_COLOR,
-            CellKind::Fusion { .. } => FUSION_COLOR,
-            _ => SPELL_COLOR,
-        }
-    };
-    let (title, mut line) = match kind {
-        CellKind::Gem { element } => (
-            short_name(elements.name(element).unwrap_or("gem")),
-            format!(
-                "{}/{}",
-                demo.state.mana(coord),
-                demo.stats.capacity(element)
-            ),
-        ),
-        CellKind::Fusion { output } => (
-            "fusion".to_owned(),
-            short_name(elements.name(output).unwrap_or("?")),
-        ),
-        CellKind::Spell { spell } => (
-            short_name(spells.name(spell).unwrap_or("spell")),
-            spells
-                .spell(spell)
-                .map(|entry| format!("tier {}", entry.tier()))
-                .unwrap_or_default(),
-        ),
-        CellKind::Blank => ("-".to_owned(), String::new()),
-    };
-    if disabled {
-        line = "disabled".to_owned();
-    } else if locked {
-        line = format!("{line} locked");
-    }
-    (color, title, line)
-}
-
-/// Truncates a name to what fits inside one hex cell; the control panel
-/// carries the full name.
-fn short_name(name: &str) -> String {
-    const FITS: usize = 8;
-    if name.chars().count() <= FITS {
-        name.to_owned()
-    } else {
-        let head: String = name.chars().take(FITS - 1).collect();
-        format!("{head}…")
-    }
 }
 
 fn spawn_control_panel(
     panels: &mut ChildSpawnerCommands,
     demo: &DemoLattice,
-    tables: &DemoTables,
+    tables: &ContentTables,
     spells: &SpellBook,
     assets: &UiAssets,
 ) {
@@ -779,7 +566,7 @@ fn spawn_control_panel(
                         },
                     ))
                     .with_children(|row| {
-                        // The action slot is a fixed 132px whether it holds a
+                        // The action slot is a button's width whether it holds a
                         // button or a blocked reason, so every row aligns.
                         match castable(&demo.spec, &demo.state, coord, tables) {
                             Ok(plan) => {
@@ -801,7 +588,7 @@ fn spawn_control_panel(
                                 row.spawn((
                                     Name::new("Blocked Reason"),
                                     Node {
-                                        width: Val::Px(132.0),
+                                        width: Val::Px(SMALL_BUTTON_WIDTH),
                                         ..default()
                                     },
                                     children![fine(
@@ -826,11 +613,10 @@ fn spawn_control_panel(
             controls.spawn(blurb(
                 assets,
                 format!(
-                    "free mana {}   ·   locked {}   ·   enchantments {}   ·   burns {}",
+                    "free mana {}   ·   locked {}   ·   enchantments {}",
                     demo.state.total_gem_mana(),
                     demo.state.total_locked_mana(),
                     demo.state.enchantment_count(),
-                    demo.state.burns().len(),
                 ),
             ));
 
@@ -917,10 +703,7 @@ mod tests {
 
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
 
         let spell_cells: Vec<LatticeCoord> = spec
             .cells()
@@ -945,10 +728,7 @@ mod tests {
         let (spec, _) = build_demo_spec(&elements, &spells, &index);
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let mut state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let ember = spells.id("Ember").expect("Ember ships");
         let cell = spec
             .cells()
@@ -979,10 +759,7 @@ mod tests {
         let (spec, _) = build_demo_spec(&elements, &spells, &index);
         let stats = build_demo_stats(&spec, &spells, &index, &elements);
         let mut state = LatticeState::new(&spec, &stats);
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let shield = spells.id("Metal Shield").expect("Metal Shield ships");
         assert!(
             matches!(tables.casting(shield), Casting::Enchantment { .. }),
@@ -1020,10 +797,7 @@ mod tests {
     #[test]
     fn unknown_spells_are_blocked_not_free() {
         let (elements, spells, index) = real_content();
-        let tables = DemoTables {
-            index: &index,
-            elements: &elements,
-        };
+        let tables = index.tables(&elements);
         let _ = &spells;
         let unknown = hex_core::SpellId(u16::MAX);
         let requirements = tables.requirements(unknown);

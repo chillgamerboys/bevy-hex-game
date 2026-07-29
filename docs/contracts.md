@@ -49,7 +49,8 @@ than agreed, the fallback the gameplay side ships without it is in
 | `GameplayLight` + derived `LightDomain` — consumer live; generated cave sources pending | world | perception | **partial** | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — publisher live; movement adapter pending | perception | `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
-| Richer faction-knowledge API — publisher live; combat adapter pending | perception | `hex_combat` | **partial** | [systems/perception.md](systems/perception.md) |
+| `FactionMapKnowledge` current-unit observations gate lattice views | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
+| `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — exact generated canopy cells for camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
 | `PresentationOcclusion` — live for cave/canopy; fog reason pending | shared | presentation | live | [systems/perception.md](systems/perception.md) |
 | `perception.ron` — sight tunables as designer-facing settings | world | perception | live | [planning/boundary.md](planning/boundary.md) J |
@@ -76,6 +77,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
+| `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
 

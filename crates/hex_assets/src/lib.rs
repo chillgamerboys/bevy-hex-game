@@ -18,6 +18,10 @@ use bevy::prelude::*;
 pub mod art_palette;
 pub mod content_index;
 pub mod elements;
+/// What stands on the map when a scenario starts.
+pub mod encounter;
+/// Who each of them is: archetype lattices, resolved from content.
+pub mod lattices;
 pub mod loader;
 pub mod object_blueprint;
 /// Validated gameplay sight settings.
@@ -33,8 +37,16 @@ pub use art_palette::{
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
-pub use content_index::{ContentError, ContentIndex};
+pub use content_index::{ContentError, ContentIndex, ContentTables};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
+pub use encounter::{
+    Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
+    RosteredUnit,
+};
+pub use lattices::{
+    Archetype, AxialPair, LatticeError, LatticeFile, LatticeLibrary, UnvalidatedArchetype,
+    UnvalidatedCell, UnvalidatedEntry,
+};
 pub use loader::{
     choose_settings, LoadSettings, RegisterSettings, SelectSettings, SettingsRegistry,
 };
@@ -44,16 +56,16 @@ pub use object_blueprint::{
     MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
 pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
-pub use scenario::{Scenario, ScenarioLibrary};
+pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
     ChannellingTrickle, CombatSettings, CubeCoord, DisplaySettings, InitiativePolicy,
     LightingKeyframe, LightingProfile, LightingSettings, MenuSettings, PlayerSettings,
-    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy, ScenarioPlacement, ScenarioSettings,
+    PresentModeSetting, ResolvedLighting, Rgb, RoutPolicy,
 };
 pub use spells::{
     CastingAxis, Effect, GemRequirement, ManaAxis, Spell, SpellBook, SpellFile, TargetShape,
-    TargetingSpec,
+    TargetingSpec, VoxelOffset,
 };
 pub use substances::{Substance, SubstanceFile, SubstanceTable, SubstanceTableError};
 
@@ -81,24 +93,25 @@ pub fn plugin(app: &mut App) {
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
-        .register_type::<ScenarioPlacement>()
-        .register_type::<ScenarioSettings>()
+        .register_type::<Encounter>()
+        .register_type::<EncounterPlacement>()
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
     app.add_plugins(elements::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
+    app.add_plugins(lattices::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //
-    // `ScenarioSettings` is still the resource `spawn_units` reads, but its value now
-    // comes from whichever scenario was chosen, so the library is what gets loaded and
-    // the placements come out of it.
+    // `Encounter` is the resource `spawn_units` reads, but which file it comes from is
+    // whichever the chosen scenario named, so the library is what gets loaded and the
+    // encounter is selected out of it.
     //
     // `LightingSettings` is chosen the same way, by `hex_game::scenarios` — a scenario
-    // names its own sky. Loading it here as well would run both `insert_settings` and
-    // `apply_settings_choice` against one resource, and hold the loading screen open
+    // names its own sky. Loading either here as well would run both `insert_settings`
+    // and `apply_settings_choice` against one resource, and hold the loading screen open
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)

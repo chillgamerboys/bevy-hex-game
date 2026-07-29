@@ -14,7 +14,7 @@ a strict lint wall, dependency auditing, a state machine, and a RON content pipe
 that refuses to start on a bad file rather than defaulting past it.
 
 The world is a voxel map with substances, destruction, and a deterministic
-procedural generator: seeded recipes with validated crossings, anchors that scenarios
+procedural generator: seeded recipes with validated crossings, anchors that encounters
 place units on by name, architecture probes for frozen and volcanic Hills, and
 dedicated Sky Islands, Mountains, and Caves biomes. Sky Islands preserves a complete
 playable Hills map below a high flight-gated upper network. Mountains covers most of
@@ -56,6 +56,17 @@ funnel**: clicks, the end-turn key, and the AI emit `GameCommand`s into a queue,
 and a single applier in `hex_combat` validates each against seat, turn, reach, and
 budget before anything moves — which is what makes an input log a replay.
 
+Who stands on a map is an **encounter**: `assets/config/encounters/*.ron`, a roster of
+units per side, each naming an archetype and one placement — an authored coordinate, a
+generated anchor, or a formation that spreads a group over the surfaces walkable from one
+centre. A scenario names its encounter by path exactly as it names its world and its sky,
+so several scenarios share one file, and every rostered unit is either placed or setup
+fails naming the entry and the reason. It replaced a two-coordinate scaffold that could
+express one player and one enemy and nothing else. **The archetype is looked up in
+`lattices.ron`**, so a roster line is most of what a unit is. The shipped encounters are
+still one unit a side, because a real party needs interface work the roster does not
+imply — see the note below.
+
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
 `spells.ron` (requirements as an element multiset with tier ≤ 6, casting and mana axes,
@@ -63,20 +74,49 @@ targeting, and a closed effect enum). A `ContentIndex` resolves every element an
 substance name a spell references; a dangling reference is logged and the last valid
 content kept, and a test opens everything shipped so a broken reference cannot ship.
 `ElementId` and `SpellId` are opaque `hex_core` ids assigned from sorted names, like
-`SubstanceId`. A dev-feature stub logs the resolved spell list to prove the pipeline
-end to end.
+`SubstanceId`. A dev-feature content dump remains available for inspecting the resolved
+spell list, while gameplay now consumes the same catalogs through its lattices and cast
+panel.
 
-The **lattice engine also exists** as a pure crate (`hex_lattice`): casting
-(`castable` → a `CastPlan` or a blocked reason), applying casts, disables that break
-enchantments and burn their locked mana, channelling, and a property suite carrying
-the design's geometric theorems — all headless. Content and engine are **not yet
-joined**: the `FusionTable`/`SpellTable` wiring and everything that spawns units with
-lattices, casts in-game, or deals damage is the "lattices wired" work (HEX-12). Bodies
-are one hex wide; there is no footprint for anything larger, and units do not obstruct
-each other — so a route may be drawn straight through another piece.
+**Damage exists.** The lattice engine (`hex_lattice`) is joined to the game at last:
+`lattices.ron` authors the three archetypes the design names — a wolf of four hexes and
+a bite, a raider of eight around a metal shield, a hedge-mage of thirteen with the
+roster's only fusion chain and Scrying Eye — and units spawn carrying them, keyed by the
+archetype their encounter rostered. A cast goes through the command funnel and the
+legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
+chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
+is in the replay log rather than made inside the applier. A unit whose every hex is
+disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
+deals damage the same way, through the same decision.
+
+**And casting has an interface.** A spell panel lists what the acting unit inscribes,
+each row carrying its live blocked reason from `castable` and, above the list, whichever
+of the applier's own refusals is standing in the way — not this unit's turn, action
+already spent, a decision still open. Choosing a spell starts aiming: every legal anchor
+takes a clickable marker, `hex_units::volumes` resolves the shape, and the surfaces
+inside that volume are painted in the spell's element colour. The anchor moves by
+clicking a lit surface or by cycling the units in range; `ENTER` casts and `Q` puts the
+spell down. Only *surfaces* are painted — gameplay cannot know how tall a level is in
+world units — so the panel reports the whole voxel count beside the number it could
+show. The `1`-casts-something placeholder that made the damage loop playable before any
+of this existed is gone.
+
+Bodies are one hex wide; there is no footprint for anything larger, and units do not
+obstruct each other — so a route may be drawn straight through another piece.
+
+The **knowledge seam is live** as `hex_combat::knowledge`:
+`FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
+World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
+the gameplay adapter publishes only existence and faction, while capacity and cells
+remain opaque until Reveal.
+Scrying Eye writes a complete, expiring projection whose known cells refresh from live
+mana and disabled state without extending its lifetime. The HUD renders that projection,
+retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
+enters the bounded log. The dev reveal-all toggle remains `K` under the `dev` feature.
 
 Around the game sits its own verification tooling. A **lattice-demo screen** on the
-title menu exercises the magic ruleset by hand ahead of HEX-12. A default-off
+title menu isolates the magic ruleset and shared lattice renderer from a full fight. A
+default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
@@ -109,10 +149,10 @@ place** — they are meant to be replaced.
 |---|---|---|
 | **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
-| **Damage** | none at all | Lattices *wired into units*. The engine (`hex_lattice`) exists and is property-tested; what is missing is spawning units with lattices and routing damage through `apply_disables` |
-| **Enemy behaviour** | close the distance, swing | Lattices to know what it can cast, hidden information to know what it knows, a rout threshold to know when to stop |
+| **Damage** | disables lattice hexes; a player defender chooses and confirms live cells in the HUD, while non-player defenders use a deterministic cheapest-first policy | The fight-length question — how many hexes a spell should take is a feel question nobody has played with yet |
+| **Enemy behaviour** | close the distance, swing | A rout threshold to know when to stop, and a reason to cast. Units carry lattices now, so the AI *could* read `view()` and choose a spell; it still only strikes, which is the placeholder it always was |
 | **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
-| **What height is worth** | +1 hex of range per 5 levels above the target | Abilities. The rule is real but has exactly one caller — engagement — until there are spells with ranges to apply it to |
+| **What height is worth** | +1 hex of range per 5 levels above the target | The value remains provisional; engagement and spell targeting now share the rule |
 | **How the tints look** | pale warm white, 0.22 alpha for range and 0.6 for the route | Nothing but taste. The constants are at the top of `hex_units::selection`; change the numbers rather than the structure |
 
 **No randomness** is *not* provisional. The design is explicit that uncertainty comes
@@ -120,15 +160,34 @@ from hidden information rather than dice, so the turn order is deterministic: ti
 break by the stable `UnitId` dealt at spawn, and the same units always
 produce the same order across runs and saves.
 
-### Why there is no damage
+### What damage does not settle
 
-Damage disables hexes in a lattice. With no lattices, any damage model would be a
-second system invented to be thrown away — and worse, it would fix numbers the design
-has deliberately left open (how many hexes a spell disables, how long a fight runs,
-whether functional death arrives before zero).
+It disables hexes and it can put a unit down, and that is deliberately as far as it
+goes. **Downed is provisional**: the design leaves both functional death — a threshold
+arriving before zero — and permadeath open, and a unit whose lattice is spent simply
+leaves the turn order revivable. How many hexes a spell disables, how long a fight runs,
+and what a strike costs are all knobs rather than answers; `strike_disables` sits in
+`combat.ron` beside the rest precisely so it can be moved without touching code.
+Further damage against an already downed target is refused before spending the action
+or mana, while non-damaging inspection such as Reveal can still reach the retained
+lattice.
 
-An attack is currently an animation and a log line. That is enough to see a turn pass,
-which is what the loop needed to exist at all.
+One thing a landed cast still cannot do: reach terrain, because rungs 4 and 5 of the
+ladder wait on `RunBottom` from the world lane. It refuses by name rather than silently
+doing nothing.
+
+**A cast can now outlast itself.** `Burn` runs through the persistent-effect runtime
+(`hex_combat::effects`, vocabulary in `hex_core::effects`): a cast books a countdown in
+the effect ledger, and one hex goes down at the start of each of that target's own turns.
+The countdown lives **only** there. An earlier shape parked a `Vec<Burn>` inside
+`LatticeState` and it was pulled back out before anything persisted it — a burn has a
+source the lattice has no vocabulary for, and a tick point a rules engine with no turn
+order cannot see. The two settled rules hold — the tick point is **personal, not the round
+boundary**, and burn **ignores armour** while still going through the defender's choice,
+so its damage lands in the replay log like every other hit. What that does *not* settle
+is anything about the negative spiral it accelerates: fight length, functional death, and
+the brakes the design names (rout, surrender) are all still deferred, and burn deliberately
+ships without one. See [systems/combat.md](../systems/combat.md#effects-that-outlast-their-cast).
 
 ## Not built, and not next
 
@@ -139,22 +198,47 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
   ice or a climb would each need a priority queue, and none of them are designed.
 - **Units obstructing each other.** Two units can occupy the same surface, and the
   pathfinder will happily route one straight through another. An occupancy map over
-  unit positions would fix both and lives entirely in `hex_combat`.
+  unit positions would fix both and lives entirely in `hex_combat`. Encounter placement
+  is the one exception: a roster never *starts* two units on one voxel, because
+  placement tracks the surfaces it has already used.
+- **A party you would want to play.** Rosters, formations and per-unit spawning are
+  built, and a four-unit party spawns correctly today — but the interface is still
+  written for one piece a side: `select_a_player` picks whichever member it finds first
+  and there is no way to switch, so the rest of the party cannot be ordered to move, and
+  the hostile AI has never been played against more than one attacker. That work belongs
+  to selection, the camera and `hex_combat`, which is why the shipped encounters still
+  field one unit a side.
 - **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
   stays in the fight forever: `approach` finds no route, so it spends its turn doing
   nothing, every round. Height makes this easier to fall into, since a fight now starts
   from further away when one side is above the other. Nothing is stuck — the player can
   still walk out past the disengage margin — but the enemy should give up rather than
   wait to be left. That is the rout threshold the design names and the enemy-behaviour
-  row above is waiting on.
+  row above is waiting on. **Rout was deferred deliberately on 2026-07-27**, not
+  overlooked: the threshold is a number nobody can pick honestly before fights have been
+  played. `rout_policy` stays an unbuilt knob, and this stalemate is the known cost of
+  waiting.
 - **Multi-hex bodies.** `Body` has room for a footprint; the rule for whether a wide
   body may straddle a one-level step has not been decided.
 
-## Casting: binding contracts and provisional first wave
+## Casting: the playable slice and its remaining boundary
 
-[casting.md](../systems/casting.md) is a contract for wave 3, not a description of the
-build. **Nothing casts a spell today** — `GameCommand::Cast` parses and is rejected
-with a reason.
+[casting.md](../systems/casting.md) records both the built 0.3 path and the terrain
+contract still ahead. `GameCommand::Cast` is authoritative, pays through the acting
+lattice, emits typed outcomes, and applies the implemented single-target unit effects:
+direct disables, Burn, and Reveal. The panel and aiming flow described above are the
+ordinary player path into that command.
+
+**The shape vocabulary resolves to exact voxels**
+(`hex_units::volumes`): `SelfCast`, `Single`, `Sphere`, `Column`, `Line`, `Cone` and
+`Path`, over `TilePos` in the grid-space metric where hexes and levels count equally,
+handing back the sorted, deduplicated form an announcement requires. `spells.ron`'s
+`TargetShape` carries the matching extents — `Blast` is now `Sphere(radius: N)` — and
+validation caps them. The casting preview resolves the aimed shape and paints every
+surface in it, and the cast applier refuses a shape that cannot resolve. What is still
+missing is the wider half: no cast announces a terrain volume, no unit effect iterates
+every occupant of a multi-voxel volume, and no volume clips itself to obstruction.
+Those are the rest of terrain magic.
 
 The binding parts are:
 
@@ -172,7 +256,7 @@ The binding parts are:
 
 The first implementation also ships with explicit limitations:
 
-- **Blast volumes will be geometric, not obstruction-aware.** A sphere next to a cave
+- **Volumes are geometric, not obstruction-aware.** A sphere next to a cave
   wall fills voxels inside the rock and the chamber beyond it. Clipping waits on the
   same line-of-sight work that `RunBottom` ([boundary.md](boundary.md) ask C) unlocks,
   and `needs_los` on spell content is parsed but unenforced until then.
@@ -181,9 +265,10 @@ The first implementation also ships with explicit limitations:
   so a chamber you blow open still counts as inside. Live perception therefore
   continues to classify the chamber as Interior and does not admit daylight
   ([boundary.md](boundary.md) ask I).
-- **Casting is provisionally combat-only**, because out-of-combat mana regeneration
-  has no answer yet, and **channelling and rituals are deferred** — `co_castable`
-  parses and labels rituals in the demo, but has no mechanical effect.
+- **Casting is provisionally combat-only.** Recovery between fights is intended to be
+  a rest action, but real-time casting still needs an interaction and rest flow.
+  **Channelling and rituals are deferred** — `co_castable` parses and labels rituals
+  in the demo, but has no mechanical effect.
 - **Paid-on-resistance is provisional.** The first wave charges mana and the action
   after a legal announcement even if every material resists.
 - **No-undermining is provisional.** The first wave rejects terrain creation through
@@ -191,6 +276,23 @@ The first implementation also ships with explicit limitations:
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
   turn order and remains revivable; functional death and permadeath remain open.
+- **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
+  area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
+  list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever
+  stands on the target voxel. The friendly-fire contract above is unchanged and
+  unweakened — nothing filters by faction — but a fireball *would* damage one unit
+  rather than every unit inside it.
+
+  Rather than ship that as a silent lie, `lattices.ron` **rejects an inscribed spell
+  whose shape covers more than the anchor and whose effects reach units**
+  (`LatticeError::AreaEffectUnapplied`). The interface can only paint what a lattice can
+  cast, so the preview cannot promise what the applier will not deliver. The refusal
+  lifts the day the applier iterates the volume and queues one decision per unit inside
+  it; it is the same seam `RunBottom` and the announce path close for terrain.
+- **Burn attributes one source per tick.** Several burns on one target come due as a
+  single count and therefore a single decision, which has room for one `source`. The
+  earliest-lit fire fills it. The rules never read `source`, so the imprecision is
+  confined to the combat log.
 
 ## Not yet done, at the toolchain level
 

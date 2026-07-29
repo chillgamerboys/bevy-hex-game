@@ -17,12 +17,12 @@ hex_perception = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
 # Only for the visual-walk feature's RON step scripts.
-ron = { version = "0.12.2", optional = true }
+ron = { workspace = true, optional = true }
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Only for the tests that open each scenario's world file and check it parses.
-ron = "0.12.2"
+ron = { workspace = true }
 
 [features]
 # Empty by default so `cargo build --release` ships without the inspector. Use

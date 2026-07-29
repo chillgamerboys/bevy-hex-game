@@ -7,7 +7,10 @@
 //! undocumented, unenforced, and one refactor away from a panic.
 
 use bevy::prelude::*;
-use hex_assets::{ArtPalette, GameAssets, SettingsRegistry, SubstanceFile, SubstanceTable};
+use hex_assets::{
+    ArtPalette, ContentIndex, GameAssets, LatticeFile, LatticeLibrary, SettingsRegistry, SpellFile,
+    SubstanceFile, SubstanceTable,
+};
 use hex_core::Screen;
 
 use super::{despawn_screen, screen_root};
@@ -64,6 +67,10 @@ fn enter_gameplay_when_ready(
     substance_file: Option<Res<SubstanceFile>>,
     substances: Option<Res<SubstanceTable>>,
     scenario_contract: Option<Res<ScenarioContractStatus>>,
+    content: Option<Res<ContentIndex>>,
+    lattices: Option<Res<LatticeLibrary>>,
+    spells: Option<Res<SpellFile>>,
+    lattice_file: Option<Res<LatticeFile>>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let substances_are_current = substance_file
@@ -78,10 +85,28 @@ fn enter_gameplay_when_ready(
         .as_deref()
         .is_some_and(|status| *status == ScenarioContractStatus::Ready);
 
+    // Currency, not presence, for the same reason `substances_are_current` is: both
+    // builders keep the last valid value on failure and insert nothing, so after one
+    // success neither resource can ever go *absent* again. A presence check would stall
+    // only the very first load and wave every later bad edit straight through — a
+    // designer renaming a gem's element at the title screen would see the error in the
+    // log, press Play, and get a fight built from the pre-edit library with nothing
+    // on screen saying so.
+    //
+    // Comparing against the files means a failed rebuild leaves the source changed and
+    // the resolved value stale, which holds the gate until the file is fixed.
+    let content_is_current = spells
+        .as_ref()
+        .is_some_and(|file| !file.is_changed() && content.is_some())
+        && lattice_file
+            .as_ref()
+            .is_some_and(|file| !file.is_changed() && lattices.is_some());
+
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current
         && scenario_is_valid
+        && content_is_current
     {
         next.set(Screen::Gameplay);
     }
@@ -139,6 +164,16 @@ mod tests {
     fn app_with_resolved_substances(file: SubstanceFile, palette: ArtPalette) -> App {
         let table = SubstanceTable::from_file(&file, &palette)
             .expect("the initial test substance sources should resolve");
+        let spells: SpellFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/spells.ron"
+        )))
+        .expect("the shipped spell fixture should parse");
+        let lattice_file: LatticeFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/lattices.ron"
+        )))
+        .expect("the shipped lattice fixture should parse");
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -169,6 +204,12 @@ mod tests {
         app.insert_resource(file);
         app.insert_resource(palette);
         app.insert_resource(table);
+        // These tests isolate substance/palette recovery. Satisfy the independent
+        // spell/lattice currency gate with stable fixtures so it cannot mask that seam.
+        app.insert_resource(spells);
+        app.insert_resource(lattice_file);
+        app.insert_resource(ContentIndex::default());
+        app.insert_resource(LatticeLibrary::default());
         plugin(&mut app);
         app
     }

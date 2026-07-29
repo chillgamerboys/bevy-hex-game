@@ -24,7 +24,7 @@
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use hex_core::{Screen, SpellId};
+use hex_core::{HexCoord, Level, Screen, SpellId};
 use serde::Deserialize;
 
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
@@ -63,23 +63,72 @@ pub enum ManaAxis {
     Variable,
 }
 
-/// The shape a spell's targeting covers. Pure data; `hex_units::targeting` resolves the
-/// geometry at cast time (a later ticket).
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// One authored voxel of a [`TargetShape::Path`], relative to the anchor and written
+/// in the **unrotated frame** — the one where the facing is
+/// [`Sextant::A`](hex_core::Sextant::A).
+///
+/// A path is the escape hatch for a shape the parameterised vocabulary cannot say,
+/// and so the only shape whose vertical extent an author controls voxel by voxel.
+/// `hex_units::volumes::rotated` turns it into the cast's facing; the `level` is not
+/// affected by that turn, because the rotation is about the vertical axis.
+#[derive(Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Deserialize)]
+pub struct VoxelOffset {
+    /// Horizontal displacement from the anchor, before rotation.
+    pub coord: HexCoord,
+    /// Vertical displacement from the anchor.
+    pub level: Level,
+}
+
+/// The shape a spell's targeting covers. Pure data; `hex_units::volumes` resolves it
+/// to exact voxels at cast time.
+///
+/// The parameters are the shape's own extent and are unrelated to
+/// [`TargetingSpec::range`], which bounds how far away the anchor may be.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub enum TargetShape {
     /// Cast on the caster itself; `range` is 0.
     SelfCast,
-    /// A single target surface.
+    /// A single target voxel.
     Single,
-    /// A line out from the caster.
-    Line,
-    /// An area around the target.
-    Blast,
+    /// A grid-space ball around the anchor, reaching as far up and down as it does
+    /// sideways.
+    Sphere {
+        /// Radius in grid space: hexes out, and levels up or down. `0` is the anchor
+        /// voxel alone.
+        radius: u8,
+    },
+    /// The anchor voxel and the voxels stacked above it.
+    Column {
+        /// How many voxels tall, **counting the anchor**. A conjured wall is `2`,
+        /// because the canonical walker is two voxels tall and climbs one.
+        height: u8,
+    },
+    /// Out from the caster along the facing, at the caster's level. The caster's own
+    /// voxel is never included.
+    Line {
+        /// How many hexes out.
+        length: u8,
+        /// Half-thickness in hexes; `0` is a single file.
+        width: u8,
+    },
+    /// Widening out from the caster along the facing, at the caster's level.
+    Cone {
+        /// How many hexes out.
+        length: u8,
+        /// How many 60-degree sectors open to **each** side of the facing: `0` is a
+        /// bare ray, `1` the familiar 120-degree cone, `3` a full disc.
+        spread: u8,
+    },
+    /// An authored voxel list, rotated into the facing and hung on the anchor.
+    Path {
+        /// The offsets from the anchor, in the unrotated frame.
+        offsets: Vec<VoxelOffset>,
+    },
 }
 
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
 /// geometry at cast time. Pure data here.
-#[derive(Reflect, Debug, Clone, Copy, Deserialize)]
+#[derive(Reflect, Debug, Clone, Deserialize)]
 pub struct TargetingSpec {
     /// Base range in hexes, before any high-ground bonus.
     pub range: u8,
@@ -102,10 +151,24 @@ pub enum Effect {
         /// Whether the caster picks which hexes, rather than an arbitrary count.
         targeted: bool,
     },
-    /// Burn locked mana out of the target.
+    /// Set the target alight, disabling one hex at the start of each of its own turns.
+    ///
+    /// Burn **ignores armour** — fire's identity is beating defences rather than
+    /// overpowering them — but still goes through the defender's choice of which hexes.
     Burn {
-        /// How much mana to burn.
-        amount: u16,
+        /// How many of the target's own turns it burns for.
+        ///
+        /// Each of those turns costs the target one hex, so `turns: 3` is three hexes
+        /// spread over three of its turns rather than three at once — which is the whole
+        /// difference between burn and a direct hit, and why it can be survived by
+        /// finishing the fight quickly.
+        ///
+        /// **Named `turns` rather than `amount` deliberately.** It was `amount` and
+        /// documented as locked mana; nothing ever implemented that reading, and a
+        /// designer could not tell from the schema whether `2` meant mana, hexes per
+        /// tick, or duration. Saves do not exist yet, so the rename is free now and
+        /// content-compatibility debt later.
+        turns: u16,
     },
     /// Restore a number of the target's disabled hexes.
     RestoreHexes {
@@ -118,9 +181,9 @@ pub enum Effect {
         /// The flat reduction.
         amount: u16,
     },
-    /// Reveal part of the target's hidden lattice; how much scales with `tier`.
+    /// Reveal the target's complete live lattice for a tier-scaled duration.
     Reveal {
-        /// The divination tier — how much of the lattice becomes visible.
+        /// The divination tier, multiplied by the configured rounds per tier.
         tier: u8,
     },
     /// Light an area, lifting fog around the caster.
@@ -197,6 +260,34 @@ impl Spell {
 /// The largest tier a spell can have: a full ring of six adjacent gems.
 const MAX_TIER: usize = 6;
 
+/// The largest extent a shape may name, in hexes or levels.
+///
+/// Not a balance decision — a guard rail. A resolved volume is a materialised
+/// `Vec<TilePos>`, so a radius of `200` typed in place of `2` is a prism of forty-odd
+/// million voxels, allocated inside a frame. The resolvers deliberately do not clamp,
+/// so this is where an implausible number has to be caught.
+const MAX_SHAPE_EXTENT: u8 = 16;
+
+/// The largest number of voxels an authored path may list.
+const MAX_PATH_VOXELS: usize = 64;
+
+/// Sectors of cone spread beyond which the cone is already a full disc.
+const MAX_CONE_SPREAD: u8 = 3;
+
+/// The widest line content may author, until a wide line's near end is decided.
+///
+/// `width` is a half-thickness around the spine, and the spine starts one hex ahead
+/// of the caster — so at `width` 2 the first spine hex's disc reaches back past the
+/// caster and covers *every* neighbour, including the one directly behind. A line
+/// that burns the ally standing behind you is not what the word means, and the fix is
+/// a decision about the near cap rather than a bug in the thickening: either the rear
+/// arc is subtracted, or the shape is renamed for what it is. Width 1 is safe — its
+/// near cap reaches the caster's voxel and no further, and that voxel is already
+/// excluded — so content is held there until [HEX-19b] settles the wider case.
+///
+/// [HEX-19b]: https://linear.app/hex-game/issue/HEX-19/terrain-magic
+const MAX_LINE_WIDTH: u8 = 1;
+
 /// The raw file, before names are turned into ids.
 ///
 /// `Deserialize` is hand-written (via `UnvalidatedSpellFile`) so tier bounds, mana
@@ -262,21 +353,111 @@ impl SpellFile {
                     spell.targeting.range
                 ));
             }
+            validate_shape(name, &spell.targeting.shape)?;
             validate_effects(name, spell)?;
         }
         Ok(())
     }
 }
 
+/// Checks a shape's extents are present and plausible.
+///
+/// The match is total on purpose: a new [`TargetShape`] variant should not compile
+/// until someone has decided what an implausible one of it looks like.
+fn validate_shape(name: &str, shape: &TargetShape) -> Result<(), String> {
+    let zero = |field: &str| format!("spell '{name}' shape {field} must be at least 1");
+    let over = |field: &str, value: u32, limit: u32| {
+        format!("spell '{name}' shape {field} is {value}; the maximum is {limit}")
+    };
+    let extent = u32::from(MAX_SHAPE_EXTENT);
+    match shape {
+        TargetShape::SelfCast | TargetShape::Single => {}
+        TargetShape::Sphere { radius } => {
+            if u32::from(*radius) > extent {
+                return Err(over("Sphere.radius", u32::from(*radius), extent));
+            }
+        }
+        TargetShape::Column { height } => {
+            if *height == 0 {
+                return Err(zero("Column.height"));
+            }
+            if u32::from(*height) > extent {
+                return Err(over("Column.height", u32::from(*height), extent));
+            }
+        }
+        TargetShape::Line { length, width } => {
+            if *length == 0 {
+                return Err(zero("Line.length"));
+            }
+            if u32::from(*length) > extent {
+                return Err(over("Line.length", u32::from(*length), extent));
+            }
+            if *width > MAX_LINE_WIDTH {
+                return Err(over(
+                    "Line.width",
+                    u32::from(*width),
+                    u32::from(MAX_LINE_WIDTH),
+                ));
+            }
+        }
+        TargetShape::Cone { length, spread } => {
+            if *length == 0 {
+                return Err(zero("Cone.length"));
+            }
+            if u32::from(*length) > extent {
+                return Err(over("Cone.length", u32::from(*length), extent));
+            }
+            if *spread > MAX_CONE_SPREAD {
+                return Err(over(
+                    "Cone.spread",
+                    u32::from(*spread),
+                    u32::from(MAX_CONE_SPREAD),
+                ));
+            }
+        }
+        TargetShape::Path { offsets } => {
+            if offsets.is_empty() {
+                return Err(format!("spell '{name}' has a Path shape with no voxels"));
+            }
+            if offsets.len() > MAX_PATH_VOXELS {
+                return Err(format!(
+                    "spell '{name}' Path lists {} voxels; the maximum is {MAX_PATH_VOXELS}",
+                    offsets.len()
+                ));
+            }
+            for offset in offsets {
+                let out = HexCoord::ORIGIN.distance(offset.coord);
+                if out > extent {
+                    return Err(over("Path offset", out, extent));
+                }
+                if offset.level.unsigned_abs() > extent {
+                    return Err(over(
+                        "Path offset level",
+                        offset.level.unsigned_abs(),
+                        extent,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Checks a spell's effects have sane fields and that the spell does *something*.
 fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
+    let mut defender_choice_effects = 0_u8;
     for effect in &spell.effects {
         let zero = |field: &str| format!("spell '{name}' effect {field} must be at least 1");
         match effect {
-            Effect::DisableHexes { count, .. } if *count == 0 => {
-                return Err(zero("DisableHexes.count"));
+            Effect::DisableHexes { count, targeted } => {
+                if *count == 0 {
+                    return Err(zero("DisableHexes.count"));
+                }
+                if !targeted {
+                    defender_choice_effects = defender_choice_effects.saturating_add(1);
+                }
             }
-            Effect::Burn { amount } if *amount == 0 => return Err(zero("Burn.amount")),
+            Effect::Burn { turns } if *turns == 0 => return Err(zero("Burn.turns")),
             Effect::RestoreHexes { count } if *count == 0 => {
                 return Err(zero("RestoreHexes.count"));
             }
@@ -295,6 +476,12 @@ fn validate_effects(name: &str, spell: &Spell) -> Result<(), String> {
             }
             _ => {}
         }
+    }
+    if defender_choice_effects > 1 {
+        return Err(format!(
+            "spell '{name}' has multiple non-targeted DisableHexes effects; only one \
+             defender choice can be pending at a time"
+        ));
     }
 
     // A spell must do something: at least one effect, or a defensive enchantment whose
@@ -456,10 +643,13 @@ mod tests {
                 co_castable: true,
                 targeting: TargetingSpec {
                     range: 2,
-                    shape: TargetShape::Line,
+                    shape: TargetShape::Line {
+                        length: 2,
+                        width: 0,
+                    },
                     needs_los: true,
                 },
-                effects: vec![Effect::Burn { amount: 2 }],
+                effects: vec![Effect::Burn { turns: 2 }],
             },
         );
         SpellFile { spells }
@@ -494,7 +684,7 @@ mod tests {
                 count: 1,
                 targeted: false,
             },
-            Effect::Burn { amount: 1 },
+            Effect::Burn { turns: 1 },
             Effect::RestoreHexes { count: 1 },
             Effect::ModifyIncomingDisables { amount: 1 },
             Effect::Reveal { tier: 1 },
@@ -593,6 +783,169 @@ mod tests {
         assert!(
             file.validate().is_ok(),
             "a defensive enchantment's point is its defense"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_multiple_effects_that_need_defender_choices() {
+        let mut file = test_file();
+        file.spells
+            .get_mut("Ember")
+            .expect("the fixture contains Ember")
+            .effects
+            .push(Effect::DisableHexes {
+                count: 2,
+                targeted: false,
+            });
+
+        let error = file
+            .validate()
+            .expect_err("one cast cannot overwrite its own pending damage decision");
+        assert!(
+            error.contains("multiple non-targeted DisableHexes"),
+            "{error}"
+        );
+    }
+
+    /// The shipped roster is what proves the schema is expressible, so pin the two
+    /// shapes carrying extents. A rename that silently reverted `Sphere` to a
+    /// parameterless shape would still parse a file that never named a radius.
+    #[test]
+    fn shipped_spells_carry_their_shape_extents() {
+        let file = shipped_file();
+        let shape = |name: &str| {
+            file.spells
+                .get(name)
+                .map(|spell| spell.targeting.shape.clone())
+                .expect("the shipped roster defines this spell")
+        };
+        assert_eq!(shape("Fireball"), TargetShape::Sphere { radius: 2 });
+        assert_eq!(
+            shape("Flamethrower"),
+            TargetShape::Line {
+                length: 2,
+                width: 0
+            }
+        );
+    }
+
+    /// A column of no voxels is a wall that does not exist. The resolver is total on
+    /// it, but no content should be able to author one.
+    #[test]
+    fn validate_rejects_a_zero_height_column() {
+        let mut file = test_file();
+        let mut flat = ember();
+        flat.targeting.shape = TargetShape::Column { height: 0 };
+        file.spells.insert("Flat Wall".to_owned(), flat);
+        assert!(file.validate().is_err(), "a wall needs at least one voxel");
+    }
+
+    /// The guard rail that matters: a resolved volume is a materialised vector, so a
+    /// radius typed with an extra digit allocates tens of millions of voxels inside a
+    /// frame. The resolvers do not clamp, so this is the only place it is caught.
+    #[test]
+    fn validate_rejects_an_implausible_extent() {
+        let mut file = test_file();
+        let mut huge = ember();
+        huge.targeting.shape = TargetShape::Sphere { radius: 200 };
+        file.spells.insert("Apocalypse".to_owned(), huge);
+        assert!(
+            file.validate().is_err(),
+            "radius 200 is a typo, not a spell"
+        );
+    }
+
+    /// A width-2 line's near end rounds back past the caster and takes in every
+    /// neighbour, the one directly behind included. Whether to subtract that rear arc
+    /// or rename the shape is a design call; until it is made, content may not express
+    /// the case. Width 1 stops at the caster's own voxel, which is excluded anyway.
+    #[test]
+    fn validate_rejects_a_line_wide_enough_to_reach_behind_the_caster() {
+        let mut file = test_file();
+        let mut wide = ember();
+        wide.targeting.shape = TargetShape::Line {
+            length: 4,
+            width: 2,
+        };
+        file.spells.insert("Backdraft".to_owned(), wide);
+        assert!(
+            file.validate().is_err(),
+            "a line that burns the ally behind you is not a line"
+        );
+
+        let mut narrow = ember();
+        narrow.targeting.shape = TargetShape::Line {
+            length: 4,
+            width: 1,
+        };
+        let mut ok = test_file();
+        ok.spells.insert("Lance".to_owned(), narrow);
+        assert!(
+            ok.validate().is_ok(),
+            "width 1 reaches no further than the caster's own voxel"
+        );
+    }
+
+    /// Spread beyond a full disc says nothing the disc does not, and the resolver
+    /// treats it as a disc. Accepting it in content would let a file mean something
+    /// other than what it says.
+    #[test]
+    fn validate_rejects_cone_spread_past_a_full_disc() {
+        let mut file = test_file();
+        let mut wide = ember();
+        wide.targeting.shape = TargetShape::Cone {
+            length: 3,
+            spread: 4,
+        };
+        file.spells.insert("Everywhere".to_owned(), wide);
+        assert!(
+            file.validate().is_err(),
+            "four sectors a side is not a shape"
+        );
+    }
+
+    /// A path with no voxels resolves to nothing, so a spell carrying one would parse,
+    /// cost mana and do nothing at all.
+    #[test]
+    fn validate_rejects_an_empty_path() {
+        let mut file = test_file();
+        let mut nowhere = ember();
+        nowhere.targeting.shape = TargetShape::Path { offsets: vec![] };
+        file.spells.insert("Nowhere".to_owned(), nowhere);
+        assert!(file.validate().is_err(), "an empty path affects nothing");
+    }
+
+    /// And a path voxel authored far outside the shape's plausible extent is the same
+    /// typo the radius check catches, wearing a different hat.
+    #[test]
+    fn validate_rejects_a_distant_path_voxel() {
+        let mut file = test_file();
+        let mut distant = ember();
+        distant.targeting.shape = TargetShape::Path {
+            offsets: vec![VoxelOffset {
+                coord: HexCoord::new_cubic(40, -40, 0),
+                level: 0,
+            }],
+        };
+        file.spells.insert("Far Wall".to_owned(), distant);
+        assert!(file.validate().is_err(), "forty hexes out is not an offset");
+    }
+
+    /// A rotation never moves a voxel vertically, so a path's authored level survives
+    /// the round trip through RON unchanged. The geometry lives in `hex_units`; this
+    /// only pins that the schema can say it.
+    #[test]
+    fn a_path_shape_round_trips_through_ron() {
+        let shape: TargetShape =
+            ron::from_str("Path(offsets: [(coord: (q: 1, r: 0), level: 2)])").expect("parses");
+        assert_eq!(
+            shape,
+            TargetShape::Path {
+                offsets: vec![VoxelOffset {
+                    coord: HexCoord::from_axial(1, 0),
+                    level: 2,
+                }],
+            }
         );
     }
 

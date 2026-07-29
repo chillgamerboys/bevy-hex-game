@@ -24,8 +24,8 @@ use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, CubeCoord, GameAssets, PaletteSwatch, PlayerSettings, ScenarioPlacement,
-    ScenarioSettings, SrgbColor, SwatchId,
+    ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
+    GameAssets, PaletteSwatch, PlayerSettings, Roster, RosterEntry, SrgbColor, SwatchId,
 };
 use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
@@ -84,6 +84,42 @@ const TREE_ROOT: HexCoord = HexCoord::new_cubic(0, 1, -1);
 /// test walks, so neither test can fail for the other's reason.
 const ENEMY_START: HexCoord = HexCoord::new_cubic(1, 1, -2);
 
+/// An encounter placement at an authored coordinate.
+fn fixed(coord: HexCoord) -> EncounterPlacement {
+    EncounterPlacement::Fixed(CubeCoord {
+        x: coord.x(),
+        y: coord.y(),
+        z: coord.z(),
+    })
+}
+
+/// A roster of `archetypes` on one side, all coming in through one placement.
+fn roster(faction: EncounterFaction, placement: EncounterPlacement, archetypes: &[&str]) -> Roster {
+    Roster {
+        faction,
+        placement,
+        units: archetypes
+            .iter()
+            .map(|archetype| RosterEntry {
+                archetype: (*archetype).to_owned(),
+                placement: None,
+            })
+            .collect(),
+    }
+}
+
+/// One player against one hostile — the shape every test here used before rosters,
+/// so the placement behaviour these tests cover is unchanged by the schema.
+fn duel(player: EncounterPlacement, hostile: EncounterPlacement) -> Encounter {
+    Encounter {
+        name: "Test Duel".to_owned(),
+        rosters: vec![
+            roster(EncounterFaction::Player, player, &["hedge-mage"]),
+            roster(EncounterFaction::Hostile, hostile, &["raider"]),
+        ],
+    }
+}
+
 /// A headless app with gameplay wired up, and a stand-in for the map.
 ///
 /// `hex_units` cannot depend on `hex_map` — that is the boundary this whole
@@ -139,14 +175,7 @@ fn test_app() -> App {
         speed: 5.0,
     });
     app.insert_resource(palette);
-    app.insert_resource(ScenarioSettings {
-        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
-        enemy: ScenarioPlacement::Fixed(CubeCoord {
-            x: ENEMY_START.x(),
-            y: ENEMY_START.y(),
-            z: ENEMY_START.z(),
-        }),
-    });
+    app.insert_resource(duel(fixed(HexCoord::ORIGIN), fixed(ENEMY_START)));
 
     app.add_plugins(hex_units::plugin);
 
@@ -872,30 +901,54 @@ fn the_enemy_spawns_where_the_scenario_says() {
     );
 }
 
-/// A coordinate whose components do not sum to zero is a designer's typo, not a
-/// crash. It falls back to the centre of the map and says so.
+/// A coordinate whose components do not sum to zero is not a hex.
+///
+/// **This assertion was inverted deliberately.** It used to require the unit to appear
+/// at the centre of the map with a warning, which is the failure this codebase is worst
+/// at seeing: the piece exists, the frame renders, and it is simply not where the
+/// designer put it. With a roster the same fallback also silently collides with whoever
+/// is standing at the centre. Every rostered unit is now either placed where it was
+/// asked for or setup fails naming the entry — and an encounter *file* carrying this
+/// coordinate no longer parses at all.
 #[test]
-fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
+fn an_impossible_encounter_coordinate_fails_setup_with_a_reason() {
     let mut app = test_app();
-    app.insert_resource(ScenarioSettings {
-        player: ScenarioPlacement::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
-        // 1 + 1 + 1 is not 0, so this is not a hex.
-        enemy: ScenarioPlacement::Fixed(CubeCoord { x: 1, y: 1, z: 1 }),
-    });
+    // 1 + 1 + 1 is not 0, so this is not a hex.
+    app.insert_resource(duel(
+        fixed(HexCoord::ORIGIN),
+        EncounterPlacement::Fixed(CubeCoord { x: 1, y: 1, z: 1 }),
+    ));
     enter_gameplay(&mut app);
 
-    let mut query = app.world_mut().query_filtered::<&StandsOn, With<Enemy>>();
-    let standing = query
-        .iter(app.world())
-        .next()
-        .copied()
-        .expect("a bad coordinate should still produce an enemy");
-
-    assert_eq!(
-        standing.0.pos.coord,
-        HexCoord::ORIGIN,
-        "an impossible coordinate should fall back to the centre"
+    assert!(
+        single::<With<Enemy>>(&mut app).is_none(),
+        "an impossible coordinate must not put a unit somewhere nobody asked for"
     );
+    let reason = &app.world().resource::<GameplaySetupFailure>().reason;
+    assert!(
+        reason.contains("sum to zero") && reason.contains("raider"),
+        "the failure should name the entry and what is wrong with it: {reason}"
+    );
+}
+
+/// An authored coordinate with nothing standable on it is the same class of typo, and
+/// gets the same answer: a named failure rather than a unit at the centre of the map.
+#[test]
+fn an_authored_coordinate_with_no_footing_fails_setup_with_a_reason() {
+    let mut app = test_app();
+    // Well outside the radius the fake terrain covers, so there is no surface at all.
+    app.insert_resource(duel(
+        fixed(HexCoord::ORIGIN),
+        fixed(HexCoord::new_cubic(9, -9, 0)),
+    ));
+    enter_gameplay(&mut app);
+
+    assert!(single::<With<Enemy>>(&mut app).is_none());
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("nothing can be stood on"));
 }
 
 /// Generated placement is a contract with the active map. A missing anchor must not
@@ -904,14 +957,10 @@ fn an_impossible_scenario_coordinate_falls_back_to_the_centre() {
 #[test]
 fn a_missing_generated_anchor_fails_required_actor_setup() {
     let mut app = test_app();
-    app.insert_resource(ScenarioSettings {
-        player: ScenarioPlacement::Anchor("missing_party_start".to_owned()),
-        enemy: ScenarioPlacement::Fixed(CubeCoord {
-            x: ENEMY_START.x(),
-            y: ENEMY_START.y(),
-            z: ENEMY_START.z(),
-        }),
-    });
+    app.insert_resource(duel(
+        EncounterPlacement::Anchor("missing_party_start".to_owned()),
+        fixed(ENEMY_START),
+    ));
     enter_gameplay(&mut app);
 
     assert!(
@@ -960,18 +1009,241 @@ fn a_generated_anchor_uses_its_exact_surface() {
         OnEnter(Screen::Gameplay),
         spawn_anchored_deck.in_set(GameplaySetup::Terrain),
     );
-    app.insert_resource(ScenarioSettings {
-        player: ScenarioPlacement::Anchor(DECK_ANCHOR.to_owned()),
-        enemy: ScenarioPlacement::Fixed(CubeCoord {
-            x: ENEMY_START.x(),
-            y: ENEMY_START.y(),
-            z: ENEMY_START.z(),
-        }),
-    });
+    app.insert_resource(duel(
+        EncounterPlacement::Anchor(DECK_ANCHOR.to_owned()),
+        fixed(ENEMY_START),
+    ));
     enter_gameplay(&mut app);
 
     let standing = standing_of(&mut app).expect("the anchored player should spawn");
     assert_eq!(standing.pos, TilePos::new(DECK_COORD, DECK_LEVEL));
+}
+
+// ---------------------------------------------------------------------------
+// Rosters and formations.
+//
+// The scaffold these replace could only say "one player here, one enemy there".
+// What is worth testing about a roster is everything the old shape could not be
+// wrong about: that a group of units gets *distinct* surfaces, that those
+// surfaces are ones the body can actually walk to, that the same encounter deals
+// the same ones every run, and that a unit with nowhere to stand is a reported
+// failure rather than a piece that quietly does not appear.
+// ---------------------------------------------------------------------------
+
+/// Every spawned unit's stable id and surface, in the order the ids were dealt.
+fn placed_units(app: &mut App) -> Vec<(hex_core::UnitId, TilePos)> {
+    let world = app.world_mut();
+    let mut query = world.query::<(&hex_core::UnitId, &StandsOn)>();
+    let mut placed: Vec<(hex_core::UnitId, TilePos)> = query
+        .iter(world)
+        .map(|(id, standing)| (*id, standing.0.pos))
+        .collect();
+    placed.sort_unstable();
+    placed
+}
+
+/// A party of four at one anchor is the case the two-coordinate scaffold could not
+/// express at all: they must end up on four *different* surfaces, each one the body
+/// could walk to from the anchor.
+#[test]
+fn a_formation_spreads_a_party_over_distinct_walkable_surfaces() {
+    let mut app = test_app();
+    app.insert_resource(Encounter {
+        name: "Warband".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 1,
+                },
+                &["hedge-mage", "raider", "raider", "wolf"],
+            ),
+            roster(EncounterFaction::Hostile, fixed(ENEMY_START), &["raider"]),
+        ],
+    });
+    enter_gameplay(&mut app);
+
+    let placed = placed_units(&mut app);
+    assert_eq!(placed.len(), 5, "every rostered unit should be placed");
+
+    let party: Vec<TilePos> = placed
+        .iter()
+        .take(4)
+        .map(|(_, pos)| *pos)
+        .collect::<Vec<_>>();
+    let mut distinct = party.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(
+        distinct.len(),
+        4,
+        "a formation stacked two units on one voxel: {party:?}"
+    );
+    assert_eq!(
+        party.first().copied(),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL)),
+        "the first unit of a formation should stand on its centre"
+    );
+    for pos in &party {
+        assert!(
+            pos.coord.distance(HexCoord::ORIGIN) <= 1,
+            "{pos:?} is outside the formation's spread of one step"
+        );
+        assert_eq!(
+            pos.level, GROUND_LEVEL,
+            "a formation put a unit on a buried run rather than a surface"
+        );
+    }
+    assert_eq!(
+        app.world().resource::<Party>().members.len(),
+        4,
+        "the party should hold every player-rostered unit"
+    );
+}
+
+/// The same encounter on the same terrain deals the same surfaces. `Reach` is a hash
+/// map, so nothing about its iteration order is a promise — a formation that sorted its
+/// candidates by accident would make one launch's fight different from the next.
+#[test]
+fn a_formation_deals_the_same_surfaces_every_run() {
+    let party_of_three = || Encounter {
+        name: "Warband".to_owned(),
+        rosters: vec![roster(
+            EncounterFaction::Player,
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                spread: 2,
+            },
+            &["hedge-mage", "raider", "wolf"],
+        )],
+    };
+
+    let mut first = test_app();
+    first.insert_resource(party_of_three());
+    enter_gameplay(&mut first);
+
+    let mut second = test_app();
+    second.insert_resource(party_of_three());
+    enter_gameplay(&mut second);
+
+    assert_eq!(placed_units(&mut first), placed_units(&mut second));
+}
+
+/// Exact placements are resolved before formations, so the unit that has to be
+/// somewhere precise keeps its surface and the crowd flows around it.
+#[test]
+fn a_formation_flows_around_an_exact_placement() {
+    let mut app = test_app();
+    app.insert_resource(Encounter {
+        name: "Sentry".to_owned(),
+        rosters: vec![
+            // Declared *second*, and centred on the surface the sentry holds.
+            roster(
+                EncounterFaction::Hostile,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 1,
+                },
+                &["wolf", "wolf"],
+            ),
+            roster(
+                EncounterFaction::Player,
+                fixed(HexCoord::ORIGIN),
+                &["sentry"],
+            ),
+        ],
+    });
+    enter_gameplay(&mut app);
+
+    let centre = TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL);
+    assert_eq!(
+        standing_of(&mut app).map(|standing| standing.pos),
+        Some(centre),
+        "the exact placement lost its surface to a formation"
+    );
+    let hostiles: Vec<TilePos> = {
+        let world = app.world_mut();
+        let mut query = world.query_filtered::<&StandsOn, With<Enemy>>();
+        query.iter(world).map(|standing| standing.0.pos).collect()
+    };
+    assert_eq!(hostiles.len(), 2);
+    assert!(
+        !hostiles.contains(&centre),
+        "a formation stood on top of an exact placement"
+    );
+}
+
+/// A roster with more units than its formation has room for is a setup failure naming
+/// the entry — never a unit that silently does not appear.
+#[test]
+fn a_formation_with_no_room_fails_setup_with_a_reason() {
+    let mut app = test_app();
+    app.insert_resource(Encounter {
+        name: "Crowded".to_owned(),
+        rosters: vec![roster(
+            EncounterFaction::Player,
+            // Spread zero is the centre and nothing else, so the second unit has
+            // nowhere to go.
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                spread: 0,
+            },
+            &["hedge-mage", "raider"],
+        )],
+    });
+    enter_gameplay(&mut app);
+
+    assert!(
+        placed_units(&mut app).is_empty(),
+        "a roster that cannot be placed must not half-spawn"
+    );
+    let reason = &app.world().resource::<GameplaySetupFailure>().reason;
+    assert!(
+        reason.contains("no free surface") && reason.contains("raider"),
+        "the failure should name the entry that had nowhere to stand: {reason}"
+    );
+}
+
+/// Every unit carries the archetype its roster named. Nothing resolves it yet — this is
+/// the key an archetype's lattice will be looked up by, and the test that it survives
+/// the spawn path at all.
+#[test]
+fn a_spawned_unit_carries_its_archetype_and_a_stable_id() {
+    let mut app = test_app();
+    app.insert_resource(Encounter {
+        name: "Named".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                EncounterPlacement::Formation {
+                    center: FormationCenter::Fixed(CubeCoord { x: 0, y: 0, z: 0 }),
+                    spread: 1,
+                },
+                &["hedge-mage", "raider"],
+            ),
+            roster(EncounterFaction::Hostile, fixed(ENEMY_START), &["wolf"]),
+        ],
+    });
+    enter_gameplay(&mut app);
+
+    let world = app.world_mut();
+    let mut query = world.query::<(&hex_core::UnitId, &hex_units::Archetype)>();
+    let mut named: Vec<(u64, String)> = query
+        .iter(world)
+        .map(|(id, archetype)| (id.0, archetype.0.clone()))
+        .collect();
+    named.sort_unstable();
+
+    // Ids are dealt in declaration order, so the roster order *is* the id order.
+    assert_eq!(
+        named,
+        vec![
+            (0, "hedge-mage".to_owned()),
+            (1, "raider".to_owned()),
+            (2, "wolf".to_owned()),
+        ]
+    );
 }
 
 fn remove_terrain_ready(mut commands: Commands) {
@@ -1718,4 +1990,96 @@ fn unit_ids_follow_spawn_order_and_reset_between_sessions() {
         "a fresh session re-deals from zero"
     );
     assert_eq!(enemy_again, UnitId(1));
+}
+
+/// A unit spawns carrying the lattice its archetype names, and one whose archetype has
+/// no lattice spawns without one.
+///
+/// The content-level tests prove `lattices.ron` resolves and that the drawings work;
+/// **none of them touches the spawn path**, so deleting the insert in `spawn_unit`
+/// would leave every one of them green. This runs the real `GameplaySetup` chain with a
+/// real `LatticeLibrary` resource and asserts on the components that came out.
+///
+/// The negative half matters as much: an archetype the library does not define must
+/// still spawn a unit — walkable, strikeable, and merely inert — rather than failing
+/// setup, because that is the behaviour the loud CI check is allowed to rely on.
+#[test]
+fn a_unit_spawns_with_its_archetypes_lattice_and_without_one_it_lacks() {
+    let mut app = test_app();
+
+    // Two archetypes, one defined and one not. `known` is a single gem, which is the
+    // smallest thing that is still recognisably a lattice.
+    let mut cells = std::collections::BTreeMap::new();
+    cells.insert(
+        hex_core::LatticeCoord::ORIGIN,
+        hex_lattice::CellKind::Gem {
+            element: hex_core::ElementId(0),
+        },
+    );
+    let mut capacity = std::collections::BTreeMap::new();
+    capacity.insert(hex_core::ElementId(0), 3);
+    let mut library = hex_assets::LatticeLibrary::default();
+    library.insert(
+        "known".to_owned(),
+        hex_assets::Archetype {
+            spec: hex_lattice::LatticeSpec::new(cells),
+            stats: hex_lattice::LatticeStats::new(capacity, std::collections::BTreeMap::new()),
+        },
+    );
+    app.insert_resource(library);
+
+    app.insert_resource(Encounter {
+        name: "Lattices".to_owned(),
+        rosters: vec![
+            roster(
+                EncounterFaction::Player,
+                fixed(HexCoord::ORIGIN),
+                &["known"],
+            ),
+            roster(
+                EncounterFaction::Hostile,
+                fixed(ENEMY_START),
+                &["undefined"],
+            ),
+        ],
+    });
+    enter_gameplay(&mut app);
+
+    let world = app.world_mut();
+    let mut query = world.query::<(
+        &hex_units::Archetype,
+        Option<&hex_lattice::LatticeSpec>,
+        Option<&hex_lattice::LatticeState>,
+        Option<&hex_lattice::LatticeStats>,
+    )>();
+    let mut seen: Vec<(String, bool, bool, bool)> = query
+        .iter(world)
+        .map(|(archetype, spec, state, stats)| {
+            (
+                archetype.0.clone(),
+                spec.is_some(),
+                state.is_some(),
+                stats.is_some(),
+            )
+        })
+        .collect();
+    seen.sort();
+
+    assert_eq!(
+        seen,
+        vec![
+            ("known".to_owned(), true, true, true),
+            ("undefined".to_owned(), false, false, false),
+        ],
+        "the defined archetype should carry all three components and the undefined one none"
+    );
+
+    // And the state was built against *this* spec: one gem, filled to its attunement.
+    let mut states = world.query::<&hex_lattice::LatticeState>();
+    let state = states.iter(world).next().expect("one unit has a lattice");
+    assert_eq!(
+        state.mana(hex_core::LatticeCoord::ORIGIN),
+        3,
+        "a fresh gem should hold its element's attunement, not zero"
+    );
 }

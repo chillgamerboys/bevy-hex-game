@@ -20,21 +20,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
-use hex_assets::{Scenario, ScenarioLibrary};
+use hex_assets::{Scenario, ScenarioCategory, ScenarioLibrary};
 use hex_core::{GameplaySetupFailure, ResolvedMapSeed, Screen};
 
 use crate::menus::widgets::{
-    blurb, button, display, divider, fine, heading, label, small_button, UiAssets, ACCENT_EDGE,
-    BLURB_SIZE,
+    blurb, button, display, fine, heading, label, small_button, UiAssets, ACCENT_EDGE, BLURB_SIZE,
+    DANGER,
 };
 use crate::scenarios::ScenarioToLoad;
 
 use super::{despawn_screen, screen_root};
 
-/// The scenario table and the static controls below it share this alignment.
-const SCENARIO_LIST_WIDTH: f32 = 564.0;
-/// Keeps the menu compact on tall windows while flexing down on the default 720p view.
-const SCENARIO_LIST_MAX_HEIGHT: f32 = 600.0;
+/// Stops the three columns becoming unreadably wide on an ultrawide display.
+const CATEGORY_DECK_MAX_WIDTH: f32 = 1_500.0;
+/// The horizontal breathing room between framed category lanes.
+const CATEGORY_GAP: f32 = 16.0;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<SessionSeeds>();
@@ -54,9 +54,17 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnExit(Screen::Title), despawn_screen(Screen::Title));
 }
 
-/// The node the scenario buttons hang off.
+/// The node the three framed category lanes hang off.
 #[derive(Component)]
-struct ScenarioList;
+struct CategoryDeck;
+
+/// One framed title-screen lane.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct ScenarioColumn(ScenarioCategory);
+
+/// The independently scrollable list inside a category lane.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct ScenarioList(ScenarioCategory);
 
 /// One row in the list, including its optional seed control.
 #[derive(Component)]
@@ -77,6 +85,10 @@ struct RerollsScenario {
 /// The button that opens the lattice ruleset demo.
 #[derive(Component)]
 struct OpensLatticeDemo;
+
+/// The static mechanics demo card, which is not reconciled from scenario content.
+#[derive(Component)]
+struct StaticDemoEntry;
 
 /// The line that stands in for the list until the library has loaded.
 #[derive(Component)]
@@ -158,13 +170,6 @@ fn spawn_title(
         .spawn(screen_root(Screen::Title, "Title Screen"))
         .with_children(|parent| {
             parent.spawn(display(&assets, "Hex Game"));
-            parent.spawn((
-                Node {
-                    margin: UiRect::bottom(Val::Px(10.0)),
-                    ..default()
-                },
-                children![heading(&assets, "scenarios")],
-            ));
             if let Some(reason) = failure_reason {
                 parent.spawn((
                     Name::new("Gameplay Setup Failure"),
@@ -174,49 +179,42 @@ fn spawn_title(
                         font: assets.body.clone().into(),
                         ..TextFont::from_font_size(BLURB_SIZE)
                     },
-                    TextColor(Color::srgb(0.95, 0.45, 0.40)),
+                    TextColor(DANGER),
                     Node {
-                        max_width: Val::Px(720.0),
+                        max_width: Val::Px(1_100.0),
                         ..default()
                     },
                 ));
             }
             parent
                 .spawn((
-                    Name::new("Scenario List"),
-                    ScenarioList,
-                    ScrollArea,
+                    Name::new("Scenario Category Deck"),
+                    CategoryDeck,
                     Node {
-                        width: Val::Px(SCENARIO_LIST_WIDTH),
+                        width: Val::Percent(96.0),
+                        max_width: Val::Px(CATEGORY_DECK_MAX_WIDTH),
                         min_height: Val::Px(0.0),
-                        max_height: Val::Px(SCENARIO_LIST_MAX_HEIGHT),
                         flex_basis: Val::Px(0.0),
                         flex_grow: 1.0,
                         flex_shrink: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
-                        align_items: AlignItems::Center,
-                        overflow: Overflow::scroll_y(),
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(CATEGORY_GAP),
+                        align_items: AlignItems::Stretch,
                         ..default()
                     },
                 ))
-                .with_children(|list| {
-                    list.spawn((ListPlaceholder, blurb(&assets, "loading scenarios...")));
-                });
-            parent.spawn(divider(SCENARIO_LIST_WIDTH));
-            parent
-                .spawn((button("Lattice Demo"), OpensLatticeDemo))
-                .insert(BorderColor::all(ACCENT_EDGE))
-                .with_children(|entry| {
-                    entry.spawn(label(&assets, "Lattice Demo"));
-                    entry.spawn(blurb(
-                        &assets,
-                        "Poke the magic ruleset: cast, channel, strike, break enchantments.",
-                    ));
+                .with_children(|deck| {
+                    for category in [
+                        ScenarioCategory::Map,
+                        ScenarioCategory::Combat,
+                        ScenarioCategory::Demo,
+                    ] {
+                        spawn_category_column(deck, category, &assets);
+                    }
                 });
             parent.spawn((
                 Node {
-                    margin: UiRect::top(Val::Px(8.0)),
+                    margin: UiRect::bottom(Val::Px(4.0)),
                     ..default()
                 },
                 children![blurb(&assets, "click a scenario to play   ·   ESC to quit")],
@@ -237,11 +235,113 @@ fn spawn_title(
         });
 }
 
-/// Fills the list once the library is known, and again if it changes on disk.
+fn category_label(category: ScenarioCategory) -> &'static str {
+    match category {
+        ScenarioCategory::Map => "maps",
+        ScenarioCategory::Combat => "combat",
+        ScenarioCategory::Demo => "demos",
+    }
+}
+
+fn spawn_category_column(
+    deck: &mut ChildSpawnerCommands,
+    category: ScenarioCategory,
+    assets: &UiAssets,
+) {
+    deck.spawn((
+        Name::new(format!("{} Scenario Column", category_label(category))),
+        ScenarioColumn(category),
+        crate::menus::widgets::panel(),
+    ))
+    .insert(Node {
+        min_width: Val::Px(0.0),
+        height: Val::Percent(100.0),
+        flex_basis: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(10.0),
+        padding: UiRect::all(Val::Px(14.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    })
+    .with_children(|column| {
+        column.spawn(heading(assets, category_label(category)));
+        column
+            .spawn((
+                Name::new(format!("{} Scenario List", category_label(category))),
+                ScenarioList(category),
+                ScrollArea,
+                Node {
+                    width: Val::Percent(100.0),
+                    min_height: Val::Px(0.0),
+                    flex_basis: Val::Px(0.0),
+                    flex_grow: 1.0,
+                    flex_shrink: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    align_items: AlignItems::Stretch,
+                    overflow: Overflow::scroll_y(),
+                    ..default()
+                },
+            ))
+            .with_children(|list| {
+                list.spawn((ListPlaceholder, blurb(assets, "loading scenarios...")));
+                if category == ScenarioCategory::Demo {
+                    spawn_lattice_demo_card(list, assets);
+                }
+            });
+    });
+}
+
+fn scenario_card_node() -> Node {
+    Node {
+        width: Val::Percent(100.0),
+        padding: UiRect::axes(Val::Px(14.0), Val::Px(11.0)),
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(4.0),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(6.0)),
+        ..default()
+    }
+}
+
+fn spawn_lattice_demo_card(list: &mut ChildSpawnerCommands, assets: &UiAssets) {
+    list.spawn((
+        Name::new("Static Lattice Demo Entry"),
+        StaticDemoEntry,
+        Node {
+            width: Val::Percent(100.0),
+            ..default()
+        },
+    ))
+    .with_children(|entry| {
+        entry
+            .spawn((button("Lattice Demo"), OpensLatticeDemo))
+            .insert(scenario_card_node())
+            .insert(BorderColor::all(ACCENT_EDGE))
+            .with_children(|button| {
+                button.spawn(label(assets, "Lattice Demo"));
+                button.spawn((
+                    blurb(
+                        assets,
+                        "Poke the magic ruleset: cast, channel, strike, break enchantments.",
+                    ),
+                    Node {
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
+            });
+    });
+}
+
+/// Fills all three category lists once the library is known, and again if it changes.
 fn rebuild_scenario_list(
     mut commands: Commands,
     library: Option<Res<ScenarioLibrary>>,
-    lists: Query<Entity, With<ScenarioList>>,
+    lists: Query<(Entity, &ScenarioList)>,
     placeholders: Query<Entity, With<ListPlaceholder>>,
     existing: Query<Entity, With<ScenarioEntry>>,
     clicked_starts: Query<&Interaction, (Changed<Interaction>, With<StartsScenario>)>,
@@ -250,7 +350,9 @@ fn rebuild_scenario_list(
     assets: Res<UiAssets>,
 ) {
     let Some(library) = library else { return };
-    let Ok(list) = lists.single() else { return };
+    if lists.iter().count() != 3 {
+        return;
+    }
 
     // A hot reload and a pointer press can land in the same frame. The button carries
     // the exact scenario snapshot, so let its click system consume it before rebuilding
@@ -282,18 +384,28 @@ fn rebuild_scenario_list(
     }
 
     for scenario in &library.scenarios {
-        // A fixed-width row with a permanent right-hand slot: rows with and
-        // without a seed control keep identical left edges. The first walk
-        // photograph showed the zig-zag the old optional slot produced.
+        let Some(list) = lists
+            .iter()
+            .find_map(|(entity, list)| (list.0 == scenario.category).then_some(entity))
+        else {
+            // Closed category vocabulary plus three columns makes this unreachable,
+            // but refusing to drop content silently is the important invariant.
+            warn!(
+                "title screen has no {:?} column for scenario {:?}",
+                scenario.category, scenario.name
+            );
+            continue;
+        };
+
         let row = commands
             .spawn((
-                Name::new("Scenario Entry"),
+                Name::new(format!("Scenario Entry: {}", scenario.name)),
                 ScenarioEntry,
                 Node {
-                    width: Val::Px(SCENARIO_LIST_WIDTH),
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(12.0),
-                    align_items: AlignItems::Center,
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(6.0),
+                    align_items: AlignItems::Stretch,
                     ..default()
                 },
             ))
@@ -307,15 +419,22 @@ fn rebuild_scenario_list(
                     scenario: scenario.clone(),
                 },
             ))
+            .insert(scenario_card_node())
             .with_children(|entry| {
                 entry.spawn(label(&assets, scenario.name.clone()));
-                entry.spawn(blurb(&assets, scenario.blurb.clone()));
+                entry.spawn((
+                    blurb(&assets, scenario.blurb.clone()),
+                    Node {
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
             })
             .id();
         commands.entity(row).add_child(launch);
 
-        let slot = if let Some(seed) = seed {
-            commands
+        if let Some(seed) = seed {
+            let reroll = commands
                 .spawn((
                     small_button("Reroll Seed"),
                     RerollsScenario {
@@ -326,19 +445,9 @@ fn rebuild_scenario_list(
                     control.spawn(blurb(&assets, "reroll"));
                     control.spawn(fine(&assets, format!("seed {seed}")));
                 })
-                .id()
-        } else {
-            commands
-                .spawn((
-                    Name::new("Seed Slot Spacer"),
-                    Node {
-                        width: Val::Px(132.0),
-                        ..default()
-                    },
-                ))
-                .id()
-        };
-        commands.entity(row).add_child(slot);
+                .id();
+            commands.entity(row).add_child(reroll);
+        }
 
         commands.entity(list).add_child(row);
     }
@@ -401,48 +510,47 @@ fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit
 mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
-    use hex_assets::{CubeCoord, Scenario, ScenarioPlacement, ScenarioSettings};
+    use hex_assets::{Scenario, ScenarioCategory};
 
     use super::*;
 
-    fn at(x: i32, y: i32, z: i32) -> CubeCoord {
-        CubeCoord { x, y, z }
-    }
-
-    fn scenario(name: &str, enemy: CubeCoord) -> Scenario {
+    fn scenario(name: &str) -> Scenario {
         Scenario {
             name: name.to_owned(),
+            category: ScenarioCategory::Map,
             blurb: "A map.".to_owned(),
             world: "config/world.ron".to_owned(),
             lighting: "config/lighting.ron".to_owned(),
             generation_seed: None,
             starting_time_hours: None,
-            units: ScenarioSettings {
-                player: ScenarioPlacement::Fixed(at(0, 0, 0)),
-                enemy: ScenarioPlacement::Fixed(enemy),
-            },
+            encounter: "config/encounters/bridge-crossing.ron".to_owned(),
         }
     }
 
     fn seeded_scenario(name: &str, seed: u64) -> Scenario {
         Scenario {
             generation_seed: Some(seed),
-            ..scenario(name, at(1, -1, 0))
+            encounter: "config/encounters/anchored-skirmish.ron".to_owned(),
+            ..scenario(name)
+        }
+    }
+
+    fn in_category(name: &str, category: ScenarioCategory) -> Scenario {
+        Scenario {
+            category,
+            ..scenario(name)
         }
     }
 
     fn library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![scenario("First", at(1, -1, 0))],
+            scenarios: vec![scenario("First")],
         }
     }
 
     fn two_scenario_library() -> ScenarioLibrary {
         ScenarioLibrary {
-            scenarios: vec![
-                scenario("First", at(1, -1, 0)),
-                scenario("Second", at(2, -2, 0)),
-            ],
+            scenarios: vec![scenario("First"), scenario("Second")],
         }
     }
 
@@ -496,25 +604,39 @@ mod tests {
         query.iter(app.world()).count()
     }
 
-    fn assert_scrollable_scenario_list(app: &mut App) {
+    fn assert_scrollable_scenario_lists(app: &mut App) {
         let world = app.world_mut();
         let mut lists = world.query_filtered::<
-            (&Node, Option<&ScrollPosition>),
+            (&ScenarioList, &Node, Option<&ScrollPosition>),
             (With<ScenarioList>, With<ScrollArea>),
         >();
-        let (node, scroll) = lists
-            .single(world)
-            .expect("the title should have exactly one scrollable scenario list");
-
-        assert_eq!(node.width, Val::Px(SCENARIO_LIST_WIDTH));
-        assert_eq!(node.min_height, Val::Px(0.0));
-        assert_eq!(node.max_height, Val::Px(SCENARIO_LIST_MAX_HEIGHT));
-        assert_eq!(node.flex_basis, Val::Px(0.0));
-        assert!((node.flex_grow - 1.0).abs() <= f32::EPSILON);
-        assert_eq!(node.overflow.y, OverflowAxis::Scroll);
-        assert!(
-            scroll.is_some(),
-            "ScrollArea should require the ScrollPosition its wheel observer updates"
+        let mut categories = Vec::new();
+        for (list, node, scroll) in lists.iter(world) {
+            categories.push(list.0);
+            assert_eq!(node.width, Val::Percent(100.0));
+            assert_eq!(node.min_height, Val::Px(0.0));
+            assert_eq!(node.flex_basis, Val::Px(0.0));
+            assert!((node.flex_grow - 1.0).abs() <= f32::EPSILON);
+            assert_eq!(node.overflow.y, OverflowAxis::Scroll);
+            assert!(
+                scroll.is_some(),
+                "{:?} needs its own ScrollPosition for independent wheel input",
+                list.0
+            );
+        }
+        categories.sort_by_key(|category| match category {
+            ScenarioCategory::Map => 0,
+            ScenarioCategory::Combat => 1,
+            ScenarioCategory::Demo => 2,
+        });
+        assert_eq!(
+            categories,
+            vec![
+                ScenarioCategory::Map,
+                ScenarioCategory::Combat,
+                ScenarioCategory::Demo
+            ],
+            "every closed category needs one independently scrollable lane"
         );
     }
 
@@ -525,6 +647,43 @@ mod tests {
             .iter(world)
             .find_map(|(entity, starts)| (starts.scenario.name == name).then_some(entity))
             .expect("the requested scenario button should exist")
+    }
+
+    fn button_category(app: &mut App, button: Entity) -> ScenarioCategory {
+        let world = app.world();
+        let entry = world
+            .get::<ChildOf>(button)
+            .expect("a scenario button belongs to its entry")
+            .parent();
+        let list = world
+            .get::<ChildOf>(entry)
+            .expect("a scenario entry belongs directly to a list")
+            .parent();
+        world
+            .get::<ScenarioList>(list)
+            .expect("the entry parent is a category list")
+            .0
+    }
+
+    fn rendered_names(app: &mut App, category: ScenarioCategory) -> Vec<String> {
+        let list = {
+            let world = app.world_mut();
+            let mut lists = world.query::<(Entity, &ScenarioList)>();
+            lists
+                .iter(world)
+                .find_map(|(entity, list)| (list.0 == category).then_some(entity))
+                .expect("the requested category list exists")
+        };
+        let world = app.world();
+        world
+            .get::<Children>(list)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| world.get::<Children>(*entry))
+            .flat_map(|children| children.iter())
+            .filter_map(|button| world.get::<StartsScenario>(button))
+            .map(|starts| starts.scenario.name.clone())
+            .collect()
     }
 
     fn reroll_button_named(app: &mut App, name: &str) -> Entity {
@@ -567,6 +726,74 @@ mod tests {
     }
 
     #[test]
+    fn every_category_renders_scenarios_and_demo_keeps_its_static_card() {
+        let mut app = test_app_with(ScenarioLibrary {
+            scenarios: vec![
+                in_category("Map One", ScenarioCategory::Map),
+                in_category("Combat One", ScenarioCategory::Combat),
+                in_category("Demo One", ScenarioCategory::Demo),
+                in_category("Map Two", ScenarioCategory::Map),
+            ],
+        });
+        go_to(&mut app, Screen::Title);
+
+        for (name, category) in [
+            ("Map One", ScenarioCategory::Map),
+            ("Combat One", ScenarioCategory::Combat),
+            ("Demo One", ScenarioCategory::Demo),
+            ("Map Two", ScenarioCategory::Map),
+        ] {
+            let button = button_named(&mut app, name);
+            assert_eq!(
+                button_category(&mut app, button),
+                category,
+                "{name} disappeared from its authored lane"
+            );
+            let node = app
+                .world()
+                .get::<Node>(button)
+                .expect("the launch card has layout");
+            assert_eq!(node.width, Val::Percent(100.0));
+            assert_eq!(
+                node.height,
+                Val::Auto,
+                "cards grow with wrapped blurbs instead of clipping to a fixed height"
+            );
+        }
+        assert_eq!(
+            rendered_names(&mut app, ScenarioCategory::Map),
+            vec!["Map One".to_owned(), "Map Two".to_owned()],
+            "filtering into a lane must preserve source-file order"
+        );
+
+        let world = app.world_mut();
+        let mut static_entries = world.query_filtered::<Entity, With<StaticDemoEntry>>();
+        assert_eq!(
+            static_entries.iter(world).count(),
+            1,
+            "scenario-backed demos must not replace the static rules demo"
+        );
+        let mut demo_buttons = world.query_filtered::<(&Name, Entity), With<OpensLatticeDemo>>();
+        let (name, static_button) = demo_buttons
+            .single(world)
+            .expect("the static demo has one exact button");
+        assert_eq!(name.as_str(), "Lattice Demo");
+
+        let static_entry = world
+            .get::<ChildOf>(static_button)
+            .expect("the static button belongs to its card")
+            .parent();
+        let demo_list = world
+            .get::<ChildOf>(static_entry)
+            .expect("the static card belongs to a category list")
+            .parent();
+        assert_eq!(
+            world.get::<ScenarioList>(demo_list),
+            Some(&ScenarioList(ScenarioCategory::Demo))
+        );
+    }
+
+    #[test]
     fn gameplay_setup_failure_is_visible_on_the_title_screen() {
         let mut app = test_app();
         app.insert_resource(GameplaySetupFailure::new(
@@ -602,7 +829,21 @@ mod tests {
 
         assert_eq!(scenario_entries(&mut app), expected_rows);
         assert_eq!(buttons(&mut app), expected_rows);
-        assert_scrollable_scenario_list(&mut app);
+        assert_scrollable_scenario_lists(&mut app);
+        let mut by_category = (0_usize, 0_usize, 0_usize);
+        for scenario in &app.world().resource::<ScenarioLibrary>().scenarios {
+            let count = match scenario.category {
+                ScenarioCategory::Map => &mut by_category.0,
+                ScenarioCategory::Combat => &mut by_category.1,
+                ScenarioCategory::Demo => &mut by_category.2,
+            };
+            *count += 1;
+        }
+        assert_eq!(
+            by_category,
+            (10, 1, 0),
+            "the eleven shipped entries should retain their deliberate lanes"
+        );
     }
 
     /// The menu still has its scenarios when you come back to it.
@@ -624,7 +865,7 @@ mod tests {
             1,
             "the first visit should list a scenario"
         );
-        assert_scrollable_scenario_list(&mut app);
+        assert_scrollable_scenario_lists(&mut app);
 
         go_to(&mut app, Screen::Gameplay);
         assert_eq!(
@@ -639,7 +880,7 @@ mod tests {
             1,
             "coming back left the menu empty — the list was never repopulated"
         );
-        assert_scrollable_scenario_list(&mut app);
+        assert_scrollable_scenario_lists(&mut app);
     }
 
     /// A library that arrives after the screen does still gets listed.
@@ -716,10 +957,7 @@ mod tests {
     #[test]
     fn only_seeded_scenarios_offer_rerolls_and_capture_the_seed() {
         let mut app = test_app_with(ScenarioLibrary {
-            scenarios: vec![
-                scenario("Authored", at(1, -1, 0)),
-                seeded_scenario("Generated", 42),
-            ],
+            scenarios: vec![scenario("Authored"), seeded_scenario("Generated", 42)],
         });
         go_to(&mut app, Screen::Title);
 

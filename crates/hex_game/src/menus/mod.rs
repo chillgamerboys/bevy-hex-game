@@ -9,11 +9,13 @@
 
 use bevy::prelude::*;
 
+pub(crate) mod lattice_view;
 mod pause;
 pub mod widgets;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_plugins((pause::plugin, widgets::plugin));
+    app.add_systems(Update, lattice_view::paint_interactions);
 }
 
 /// A full-screen overlay that dims whatever is behind it.

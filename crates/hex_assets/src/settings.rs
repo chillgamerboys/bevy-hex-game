@@ -1088,35 +1088,11 @@ pub struct CubeCoord {
     pub z: i32,
 }
 
-/// One unit's starting point in a scenario.
-///
-/// Authored maps use an exact cube coordinate. Generated maps publish named anchors
-/// after generation, so their scenarios remain valid when a different seed moves the
-/// useful parts of the map.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
-pub enum ScenarioPlacement {
-    /// An exact coordinate on an authored map.
-    Fixed(CubeCoord),
-    /// A generated position resolved from [`hex_core::MapAnchors`].
-    Anchor(String),
-}
-
-/// Where a scenario's units start.
-///
-/// **Not loaded from a file of its own.** It is the placements out of whichever
-/// scenario was chosen, inserted by `hex_game` before gameplay spawns — see
-/// [`ScenarioLibrary`](crate::scenario::ScenarioLibrary).
-///
-/// A scaffold for trying maps out, not an encounter format: a real one will describe
-/// many units, their lattices, and what triggers them.
-#[derive(Asset, Resource, Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
-#[reflect(Resource)]
-pub struct ScenarioSettings {
-    /// Where the player starts.
-    pub player: ScenarioPlacement,
-    /// Where the single enemy starts.
-    pub enemy: ScenarioPlacement,
-}
+// Unit placement used to live here, as a `ScenarioSettings` holding exactly one player
+// coordinate and one enemy coordinate. It is a roster in `crate::encounter` now, which a
+// scenario names by path the same way it names its world and its lighting. `CubeCoord`
+// stayed: an authored placement is still a cube coordinate, and so is a formation's
+// centre.
 
 /// `assets/config/combat.ron` — the combat policy knobs.
 ///
@@ -1138,6 +1114,20 @@ pub struct CombatSettings {
     pub default_initiative: u32,
     /// Levels of height that buy one extra hex of range.
     pub levels_per_bonus_range: u32,
+    /// Hexes a melee strike disables, before the defender's own defences subtract.
+    ///
+    /// A strike is the one attack every unit has, spell or not — a wolf is four hexes
+    /// and a bite — so it needs a number and there is no content file for it: content
+    /// describes spells. One is the smallest thing damage can be, and matches Ember,
+    /// the cheapest spell in the roster. It is a knob because it is a balance number
+    /// nobody has played with yet, not because it is settled.
+    pub strike_disables: u16,
+    /// Further round rollovers a tier of divination survives.
+    ///
+    /// A tier-one Reveal written midway through a round is visible for the remainder
+    /// of that partial round and one complete following round, then expires at the
+    /// next rollover when this value is `1`.
+    pub divination_rounds_per_tier: u32,
     /// How turn order is decided. Only [`InitiativePolicy::FlatComponent`] is built.
     pub initiative_policy: InitiativePolicy,
     /// What a turn affords. Only [`ActionEconomy::MoveAndAction`] is built.
@@ -1220,6 +1210,20 @@ impl CombatSettings {
                     .to_owned(),
             );
         }
+        if self.strike_disables == 0 {
+            return Err(
+                "combat.ron: strike_disables must be at least 1 — zero makes melee do \
+                 nothing, which looks exactly like the game before damage existed"
+                    .to_owned(),
+            );
+        }
+        if self.divination_rounds_per_tier == 0 {
+            return Err(
+                "combat.ron: divination_rounds_per_tier must be at least 1 — zero \
+                 would make Reveal lapse at the first rollover"
+                    .to_owned(),
+            );
+        }
         match self.initiative_policy {
             InitiativePolicy::FlatComponent => {}
             other => {
@@ -1272,6 +1276,8 @@ impl Default for CombatSettings {
             movement_per_turn: 4,
             default_initiative: 10,
             levels_per_bonus_range: 5,
+            strike_disables: 1,
+            divination_rounds_per_tier: 1,
             initiative_policy: InitiativePolicy::FlatComponent,
             action_economy: ActionEconomy::MoveAndAction,
             channelling_trickle: ChannellingTrickle::BurstOnly,
@@ -1288,6 +1294,8 @@ struct UnvalidatedCombatSettings {
     movement_per_turn: u32,
     default_initiative: u32,
     levels_per_bonus_range: u32,
+    strike_disables: u16,
+    divination_rounds_per_tier: u32,
     initiative_policy: InitiativePolicy,
     action_economy: ActionEconomy,
     channelling_trickle: ChannellingTrickle,
@@ -1306,6 +1314,8 @@ impl<'de> Deserialize<'de> for CombatSettings {
             movement_per_turn: raw.movement_per_turn,
             default_initiative: raw.default_initiative,
             levels_per_bonus_range: raw.levels_per_bonus_range,
+            strike_disables: raw.strike_disables,
+            divination_rounds_per_tier: raw.divination_rounds_per_tier,
             initiative_policy: raw.initiative_policy,
             action_economy: raw.action_economy,
             channelling_trickle: raw.channelling_trickle,
@@ -2173,6 +2183,11 @@ mod tests {
                 "levels_per_bonus_range: 0",
                 "levels_per_bonus_range",
             ),
+            (
+                "divination_rounds_per_tier: 1",
+                "divination_rounds_per_tier: 0",
+                "divination_rounds_per_tier",
+            ),
         ];
         for (from, to, named) in cases {
             let invalid = shipped.replace(from, to);
@@ -2184,6 +2199,19 @@ mod tests {
                 "the rejection should name {named}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn divination_duration_is_required() {
+        let shipped = include_str!("../../../assets/config/combat.ron");
+        let missing = shipped.replace("    divination_rounds_per_tier: 1,\n", "");
+        let error = ron::from_str::<CombatSettings>(&missing)
+            .expect_err("a missing divination duration must not default silently")
+            .to_string();
+        assert!(
+            error.contains("divination_rounds_per_tier"),
+            "the missing-field error should name the required knob: {error}"
+        );
     }
 
     #[test]

@@ -9,6 +9,14 @@
     movement_per_turn: 4,
     default_initiative: 10,
     levels_per_bonus_range: 5,
+
+    // Hexes a melee strike takes down, before defences subtract. The smallest
+    // damage can be, and the same as Ember — the cheapest spell there is.
+    strike_disables: 1,
+
+    // Further rollovers each Reveal tier survives. One means a reveal cast during
+    // a partial round remains for the next full round and lapses at the rollover after.
+    divination_rounds_per_tier: 1,
     initiative_policy: FlatComponent,
     action_economy: MoveAndAction,
     channelling_trickle: BurstOnly,

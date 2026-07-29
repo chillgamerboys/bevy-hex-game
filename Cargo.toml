@@ -40,7 +40,7 @@ xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 serde = { version = "1.0.229", features = ["derive"] }
 
 [workspace.package]
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 
 [workspace.lints.rust]

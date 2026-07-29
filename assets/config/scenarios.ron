@@ -8,151 +8,121 @@
 // FIELDS
 //
 //   name      what the button says
+//   category  REQUIRED title-screen column: Map, Combat, or Demo
 //   blurb     one line underneath, saying what is interesting about this one
 //   world     the map file, as a path under `assets/`
 //   lighting  OPTIONAL sun/sky/cloud file. Omit it for the shipped look
 //   generation_seed  OPTIONAL Some(reproducible seed) for generated maps
 //   starting_time_hours  OPTIONAL Some(hour in [0, 24)) for cyclic lighting
-//   units     where the pieces start: Fixed(cube coordinate) or Anchor("name")
+//   encounter who is on the map and where they start, as a path under `assets/`
 //
 // `lighting` is what makes one scenario feel unlike another as much as its terrain
 // does -- it carries the sun's angle and colour, so it decides which way the shadows
 // fall, not just what the sky looks like.
 //
-// The `world` and `lighting` paths are NOT checked by the compiler — nothing here knows what a map is,
-// deliberately, so that this file does not have to be edited whenever the map format
-// changes. A typo is caught by a test that opens every world named here, so a wrong
-// path fails `cargo test` rather than at the loading screen.
+// The `world`, `lighting` and `encounter` paths are NOT checked by the compiler —
+// nothing here knows what a map is, deliberately, so that this file does not have to be
+// edited whenever the map format changes. A typo is caught by tests that open every file
+// named here, so a wrong path fails `cargo test` rather than at the loading screen.
 //
-// Fixed COORDINATES are CUBE coordinates and MUST SUM TO ZERO: x + y + z == 0. That
-// is what makes them a hex grid rather than three loose numbers.
-// See https://www.redblobgames.com/grids/hexagons/
+// An `encounter` is a roster: many units a side, each naming an archetype and a
+// placement. Several scenarios share one — every generated map below uses the same
+// anchored skirmish. The placement vocabulary and how to add a party member are
+// documented in `config/encounters/anchored-skirmish.ron`.
 //
-// Generated maps use Anchor("stable_name") instead. The generator publishes the exact
-// TilePos for each anchor after validating the map, so rerolling does not require
-// rewriting unit coordinates. A missing or non-standable anchor is logged and that unit
-// is not spawned; it never silently moves to the centre.
+// Authored maps place units on exact CUBE coordinates; generated maps use the named
+// anchors the generator publishes after validating the map, so rerolling a seed does not
+// require rewriting coordinates. Either way, a unit that cannot be placed returns to the
+// title screen with the reason — it never silently moves to the centre of the map.
 (
     scenarios: [
         (
             name: "The Crossing",
+            category: Map,
             blurb: "A river with one bridge over it, a mountain, and a switchback up the side.",
             world: "config/world.ron",
             // No `lighting`, so this one gets `config/lighting.ron`.
-            units: (
-                // Opposite ends of the bridge, so the first movement test is the
-                // crossing this scenario is built around.
-                player: Fixed((x: 0, y: 4, z: -4)),
-
-                enemy: Fixed((x: 0, y: -4, z: 4)),
-            ),
+            encounter: "config/encounters/bridge-crossing.ron",
         ),
         (
             name: "Procedural Hills",
+            category: Map,
             blurb: "Seeded temperate hills split by a river, with a bridge and a longer alternate crossing.",
             world: "config/worlds/procedural-hills.ron",
             generation_seed: Some(1592598566),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Rolling Hills",
+            category: Map,
             blurb: "Open procedural ground under heavy cloud. Nowhere to funnel through, so distance is the only obstacle.",
             world: "config/worlds/rolling-hills.ron",
             lighting: "config/lighting/overcast.ron",
-            units: (
-                player: Fixed((x: 0, y: 0, z: 0)),
-
-                // Closer than on the Crossing, because there is no terrain in the way
-                // to make the walk interesting.
-                enemy: Fixed((x: 5, y: -5, z: 0)),
-            ),
+            encounter: "config/encounters/open-ground.ron",
         ),
         (
             name: "Frozen Hills",
+            category: Map,
             blurb: "A cold-environment probe using the same crossing guarantees as the temperate hills.",
             world: "config/worlds/procedural-frozen.ron",
             lighting: "config/lighting/overcast.ron",
             generation_seed: Some(484450342),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Volcanic Hills",
+            category: Map,
             blurb: "A basalt and lava probe with a cooled alternate crossing.",
             world: "config/worlds/procedural-volcanic.ron",
             generation_seed: Some(444211238),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Sky Islands",
+            category: Map,
             blurb: "A playable hills map beneath a high, flight-gated city of floating islands.",
             world: "config/worlds/procedural-sky-islands.ron",
             generation_seed: Some(94445606),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Mountains",
+            category: Map,
             blurb: "A broad frozen massif split by a high saddle and a longer low-valley bypass.",
             world: "config/worlds/procedural-mountains.ron",
             generation_seed: Some(129704046),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Caves",
+            category: Map,
             blurb: "A varied rocky surface opening into a dense network of full-height underground passages.",
             world: "config/worlds/procedural-caves.ron",
             generation_seed: Some(736283041),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Waterfall",
+            category: Map,
             blurb: "An elevated river accelerates into a broad fall, with short and long dry routes around it.",
             world: "config/worlds/procedural-waterfall.ron",
             generation_seed: Some(771203419),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Forest",
+            category: Map,
             blurb: "Low wooded hills open onto a tall-grass prairie through protected clearings and trails.",
             world: "config/worlds/procedural-forest.ron",
             generation_seed: Some(381654729),
-            units: (
-                player: Anchor("party_start"),
-                enemy: Anchor("hostile_start"),
-            ),
+            encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
             name: "Close Quarters",
+            category: Combat,
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
             world: "config/world.ron",
-            units: (
-                // The Crossing's player spawn and its off-bridge neighbour on the
-                // same bank: adjacent, so combat begins on entry and the enemy's
-                // first turn is a strike rather than a march.
-                player: Fixed((x: 0, y: 4, z: -4)),
-
-                enemy: Fixed((x: 1, y: 4, z: -5)),
-            ),
+            encounter: "config/encounters/close-quarters.ron",
         ),
     ],
 )

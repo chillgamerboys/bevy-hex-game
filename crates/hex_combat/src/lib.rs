@@ -12,15 +12,15 @@
 //! `assets/config/combat.ron` where they are obviously knobs rather than decisions:
 //!
 //! - **Initiative** is a component with a fixed value, ordered high-to-low. The design
-//!   proposes deriving it from lattice size, which would also solve boss action
-//!   economy by giving a large lattice several slots in the order. Not built, because
-//!   lattices do not exist.
+//!   proposes deriving it from lattice size, which could also solve boss action
+//!   economy by giving a large lattice several slots in the order. That policy remains
+//!   provisional even though lattices now exist.
 //! - **A turn** is a movement budget and one action. The design's current preference
 //!   is free movement of one or two hexes plus one action; this is that, with the
 //!   budget exposed so it can be tried.
-//! - **Nothing deals damage.** Damage disables lattice hexes, and there are no
-//!   lattices, so an attack here is an animation and a log line. Building a stand-in
-//!   damage model would bake in the numbers the design explicitly has not chosen.
+//! - **Damage disables lattice cells.** Strikes and damage spells name a count,
+//!   defences subtract, and the defender chooses the exact cells through the command
+//!   funnel. The configured counts remain provisional balance knobs.
 //!
 //! **No randomness**, which is not provisional — the design is explicit that
 //! uncertainty comes from hidden information rather than dice. Ties in initiative
@@ -34,10 +34,22 @@ use hex_core::AppSystems;
 mod ai;
 /// The applier: the one place a command becomes a change to the sim.
 mod commands;
+/// Effects that outlast the action that caused them.
+pub mod effects;
+/// What a faction knows about a hostile lattice.
+pub mod knowledge;
+/// Structured outcomes produced by combat resolution.
+pub mod outcomes;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
+pub use commands::{delivers_anything, UNDELIVERABLE};
+pub use effects::PersistentEffects;
 pub use hex_core::Turn;
+pub use knowledge::{
+    BaseVisibility, FactionLatticeKnowledge, KnownCell, LatticeKnowledge, RevealAll,
+};
+pub use outcomes::{CastBlockReason, CombatData, CombatEvent, CommandRefusal, UnitData};
 pub use turns::{Initiative, TurnOrder};
 
 /// The order a turn resolves in.
@@ -73,6 +85,7 @@ pub enum CombatSystems {
 
 /// Adds the combat loop.
 pub fn plugin(app: &mut App) {
+    app.add_message::<CombatEvent>();
     app.configure_sets(
         Update,
         (
@@ -83,5 +96,11 @@ pub fn plugin(app: &mut App) {
             .chain()
             .in_set(AppSystems::Update),
     );
-    app.add_plugins((turns::plugin, ai::plugin, commands::plugin));
+    app.add_plugins((
+        turns::plugin,
+        ai::plugin,
+        commands::plugin,
+        effects::plugin,
+        knowledge::plugin,
+    ));
 }

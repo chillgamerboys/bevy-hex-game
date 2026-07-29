@@ -11,13 +11,15 @@
 //!
 //! It is rebuilt only outside [`Screen::Gameplay`], like the tables it draws on, so
 //! resolved ids never shift under a live world. It also holds the spell requirements
-//! **resolved to [`ElementId`]s**, the exact shape `hex_lattice::SpellTable` will read
-//! once that seam is wired (HEX-12): this crate does not depend on `hex_lattice`, so
-//! the trait implementation lands there, not here.
+//! **resolved to [`ElementId`]s**, the exact shape `hex_lattice::SpellTable` reads. The
+//! `hex_lattice` edge is drawn as of HEX-12's prep, so the trait implementation belongs
+//! in this crate, beside the content it reads — the engine's designed seat. Nothing
+//! implements it yet; the accessors below are the whole input it needs.
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{ElementId, Screen, SpellId};
+use hex_lattice::{Casting, FusionTable, Requirement, SpellTable};
 use thiserror::Error;
 
 use crate::elements::ElementCatalog;
@@ -135,6 +137,18 @@ impl ContentIndex {
         self.spells.get(&spell).map(|resolved| resolved.casting)
     }
 
+    /// Bridges the loaded content tables to the engine's lookup traits.
+    ///
+    /// Borrows rather than owns, so it is built where it is used and never goes stale
+    /// against the tables it reads.
+    #[must_use]
+    pub fn tables<'a>(&'a self, elements: &'a ElementCatalog) -> ContentTables<'a> {
+        ContentTables {
+            index: self,
+            elements,
+        }
+    }
+
     /// How many spells the index holds.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -145,6 +159,56 @@ impl ContentIndex {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.spells.is_empty()
+    }
+}
+
+/// The engine's content lookups, over the loaded tables.
+///
+/// Build one with [`ContentIndex::tables`]. The two `None` arms are the load-bearing
+/// part and must stay as they are: an unknown spell has to remain **uncastable**, and an
+/// empty requirement list would instead read as a tier-0 spell that costs nothing — so
+/// the fallback is a single `u16::MAX`-mana requirement, beyond any attunement content
+/// can name. An unknown casting axis falls to `Evocation`, the one that spends rather
+/// than locks, because an unknown spell that quietly tied mana up forever would be worse.
+pub struct ContentTables<'a> {
+    index: &'a ContentIndex,
+    elements: &'a ElementCatalog,
+}
+
+impl SpellTable for ContentTables<'_> {
+    fn requirements(&self, spell: SpellId) -> Vec<Requirement> {
+        match self.index.requirements(spell) {
+            Some(requirements) => requirements
+                .iter()
+                .map(|&(element, mana)| Requirement { element, mana })
+                .collect(),
+            None => vec![Requirement {
+                // Any real element does — the cost is what blocks the cast — and an
+                // empty catalog blocks everything anyway, so the default is fine there.
+                element: self.elements.wheel().first().copied().unwrap_or_default(),
+                mana: u16::MAX,
+            }],
+        }
+    }
+
+    fn casting(&self, spell: SpellId) -> Casting {
+        match self.index.casting(spell) {
+            Some(CastingAxis::Enchantment { defense }) => Casting::Enchantment { defense },
+            Some(CastingAxis::Evocation) | None => Casting::Evocation,
+        }
+    }
+}
+
+impl FusionTable for ContentTables<'_> {
+    fn recipe(&self, output: ElementId) -> Option<Vec<Requirement>> {
+        // `None` passes straight through, and correctly: it means "a basic element, not
+        // a fusion output", which is not a failure.
+        self.elements.recipe(output).map(|inputs| {
+            inputs
+                .iter()
+                .map(|&(element, mana)| Requirement { element, mana })
+                .collect()
+        })
     }
 }
 
@@ -301,7 +365,7 @@ mod tests {
     fn a_dangling_element_reference_fails() {
         let book = book(vec![(
             "Ghost",
-            spell(vec![gem("Aether")], vec![Effect::Burn { amount: 1 }]),
+            spell(vec![gem("Aether")], vec![Effect::Burn { turns: 1 }]),
         )]);
         let errors = ContentIndex::build(&elements(), &book, &substances())
             .expect_err("Aether is not an element");
@@ -364,7 +428,7 @@ mod tests {
         // A spell book with a dangling element replaces the old one; the rebuild fails.
         app.insert_resource(book(vec![(
             "Broken",
-            spell(vec![gem("Aether")], vec![Effect::Burn { amount: 1 }]),
+            spell(vec![gem("Aether")], vec![Effect::Burn { turns: 1 }]),
         )]));
         app.update();
 

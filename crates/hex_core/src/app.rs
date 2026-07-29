@@ -87,6 +87,18 @@ pub struct Turn {
     pub acted: bool,
 }
 
+/// A full cycle of the turn order has completed.
+///
+/// Written by the combat loop when the order wraps to the front. Anything with
+/// per-round bookkeeping — effects that expire, knowledge that decays, fight
+/// length — reads this instead of watching a round counter for changes, so
+/// every consumer agrees on exactly when a round ended.
+///
+/// Lives here rather than in `hex_combat` for the same reason [`Turn`] does:
+/// crates that cannot see each other need the same word for it.
+#[derive(Message, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RoundElapsed;
+
 /// Systems that must stop while the game is paused.
 ///
 /// Attach with `.in_set(PausableSystems)`. Movement and animation belong here;

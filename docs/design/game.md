@@ -154,7 +154,8 @@ channelling in it for free; more requires further points.
 
 There is no HP. Damage disables hexes.
 
-- Spells disable a **flat count**, roughly 1–4. Ember disables 1, fireball 3.
+- Spells disable a **flat count**, roughly 1–4. Ember disables 1 and burns for two
+  affected-unit turns; fireball disables 3.
 - **The defender chooses which hexes are disabled**, except for abilities that target
   hexes directly. Those are the counter to tight packing — a shared gem is a
   two-for-one kill and no defender surrenders one voluntarily. They should be rare and
@@ -212,6 +213,19 @@ thing that can go wrong is something they could in principle have known.
   turn order and is **downed**, revivable by a restoring spell. This is a testable
   starting behavior, not the answer to functional death or the
   [permadeath question](#permadeath).
+- **Ruled 2026-07-27: out-of-combat recovery is an explicit rest action.** Channelling
+  is a per-turn model and has nothing to say about the time between fights, so the
+  alternative was inventing a regeneration curve before there was a fight to pace it
+  against. Rest doubles as a testing affordance: it is the shortest path from "a fight
+  ended badly" back to "try that again". It does **not** settle whether casting is
+  possible outside combat — that is [magic outside combat](#magic-outside-combat)'s
+  question and stays open.
+- **Ruled 2026-07-27: rout and surrender are deferred.** Both are named above as brakes
+  on the negative spiral and as the thing that ends a fight before the slog, and both
+  need a threshold number nobody can pick honestly yet. `rout_policy` stays an unbuilt
+  knob in `combat.ron` that parses and fails with a reason. The known consequence is
+  that a melee enemy which cannot reach the party never gives up, so a fight can
+  stalemate — a recorded gap, not an oversight.
 
 ### Information and divination
 
@@ -244,8 +258,8 @@ an observed retreat, while losing sight starts a separate one-round search.
 
 **An enemy's lattice is its entire stat block.** There is no separate authoring
 system. A wolf is four hexes with a bite. A raider is eight with a metal shield. A
-hedge-mage is twelve with a fusion chain. Difficulty is the size and complexity of the
-drawing, and every enemy runs on the player's rules.
+hedge-mage is thirteen with a fusion chain and Scrying Eye. Difficulty is the size and
+complexity of the drawing, and every enemy runs on the player's rules.
 
 This makes the information layer self-balancing. Small enemies are learnable — once
 you know a wolf, divining one is a wasted action. Bosses and novel enemies stay
@@ -366,6 +380,12 @@ healing can restore hexes mid-combat.
 Brakes not yet in: desperation effects that strengthen as a lattice weakens, a floor
 on boss action count, cheap partial recovery as a standard action.
 
+**Ruled 2026-07-27: all of the missing brakes are deferred.** Not because they are
+wrong, but because you cannot tune a spiral you have not felt. Wave 3 ships the loop
+that produces the spiral; whether it actually reads as *nothing, nothing, nothing,
+collapse* is a question for playing it. Fitting brakes first would be tuning against a
+guess, and each one of them changes what the others need to do.
+
 ### Initiative
 
 Unresolved and crucial.
@@ -436,6 +456,23 @@ two tags that sometimes co-occur.
 What can the player do with a surrendered enemy? If killing them is free, surrender is
 a victory banner. If sparing has a payoff — they flee, or something accrues across the
 campaign — the choice has teeth. Probably a quest-design question.
+
+### What a fight yields
+
+Unanswered, and **ruled 2026-07-27 that it stays unanswered for now**: a fight ends in a
+victory or defeat screen and a return to exploring, and yields nothing else. No loot, no
+experience, no currency.
+
+The ruling is about sequencing rather than taste. Rewards are the tightest coupling in a
+campaign — they set progression pace, they decide whether an avoidable fight is worth
+taking, and content starts depending on them the moment they exist. Inventing that
+vocabulary before a fight is playable would be guessing at all three. The concrete
+consequence is that the encounter schema carries **rosters and placement only**; adding
+rewards later extends it without breaking any file, which is exactly the property that
+makes waiting cheap.
+
+Related, and equally open: whether a fight is avoidable at all, which is the same
+question as [surrender consequences](#surrender-consequences) from the other end.
 
 ---
 

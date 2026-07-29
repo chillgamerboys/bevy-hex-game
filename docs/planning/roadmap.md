@@ -41,7 +41,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game | <!-- linear: HEX-14 owner: shravan-kumaran -->
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
-| Knowledge and divination seam | `FactionKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
+| Knowledge and divination seam | `FactionLatticeKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
 | Ship-hygiene basics | panic hook, log-to-file, version display in the title, diagnostics logging off in release | game | <!-- linear: HEX-9 owner: shravan-kumaran -->
 | Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
 | Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
@@ -248,11 +248,11 @@ re-derived.
 ### Knowledge and divination seam
 
 Hidden information is the game's uncertainty mechanism, and one accessor is
-both the feature and the future anti-cheat filter: `FactionKnowledge` maps
+both the feature and the future anti-cheat filter: `FactionLatticeKnowledge` maps
 (viewer faction, subject) to what has been revealed and until when; UI and AI
 read hostile lattices only through `view()`; a decay system ticks reveals at
-round ends. Ships with a dev reveal-all toggle and a v1 "unknown lattice,
-N hexes" readout from base visibility.
+round ends. Ships with a dev reveal-all toggle and an opaque "lattice unknown"
+readout from base visibility; capacity is itself divination-gated.
 
 ### Ship-hygiene basics
 
