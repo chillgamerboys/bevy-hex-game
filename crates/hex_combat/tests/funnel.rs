@@ -742,7 +742,7 @@ fn an_over_budget_path_is_dropped() {
     );
 }
 
-/// The future verbs parse, queue, and die in validation — never silently.
+/// A command missing required runtime content is refused and changes nothing.
 #[test]
 fn an_unbuilt_verb_is_dropped_and_changes_nothing() {
     let mut app = test_app();

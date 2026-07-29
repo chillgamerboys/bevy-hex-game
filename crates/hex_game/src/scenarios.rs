@@ -1273,6 +1273,67 @@ mod tests {
         );
     }
 
+    /// Automated combat UI walks use minimal flat fixtures instead of making ability
+    /// assertions depend on the Crossing's routing and six-unit initiative.
+    #[test]
+    fn focused_ui_trials_are_flat_and_roster_only_the_roles_they_need() {
+        let library = library();
+        let ability = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Ability Lab")
+            .expect("the shipped library should contain Ability Lab");
+        let mirror = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Raider Mirror")
+            .expect("the shipped library should contain Raider Mirror");
+
+        assert_eq!(ability.world, "config/worlds/flat-combat.ron");
+        assert_eq!(mirror.world, ability.world);
+        let world_path = assets_dir().join(&ability.world);
+        let world_text = fs::read_to_string(&world_path)
+            .unwrap_or_else(|error| panic!("cannot read {}: {error}", world_path.display()));
+        let world: MapSettings =
+            ron::from_str(&world_text).expect("the flat combat world should parse");
+        let TerrainSettings::Perlin(perlin) = world.terrain else {
+            panic!("the flat combat fixture must not carry authored terrain features");
+        };
+        assert!(
+            perlin.steps.is_empty(),
+            "an empty height recipe is level everywhere"
+        );
+
+        let ability = encounter_of(ability);
+        assert_eq!(ability.unit_count(EncounterFaction::Player), 2);
+        assert_eq!(ability.unit_count(EncounterFaction::Hostile), 1);
+        assert_eq!(
+            ability
+                .entries()
+                .map(|unit| (unit.faction, unit.archetype))
+                .collect::<Vec<_>>(),
+            vec![
+                (EncounterFaction::Player, "hedge-mage"),
+                (EncounterFaction::Player, "wolf"),
+                (EncounterFaction::Hostile, "raider"),
+            ]
+        );
+
+        let mirror = encounter_of(mirror);
+        assert_eq!(mirror.unit_count(EncounterFaction::Player), 1);
+        assert_eq!(mirror.unit_count(EncounterFaction::Hostile), 1);
+        assert_eq!(
+            mirror
+                .entries()
+                .map(|unit| (unit.faction, unit.archetype))
+                .collect::<Vec<_>>(),
+            vec![
+                (EncounterFaction::Player, "raider"),
+                (EncounterFaction::Hostile, "raider"),
+            ]
+        );
+    }
+
     /// A harness that can actually reach gameplay, with no renderer.
     ///
     /// `BEVY_ASSET_ROOT` is set for test binaries too, so `config/world.ron` and the

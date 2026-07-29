@@ -26,9 +26,9 @@
 //! - **No rewards, loot, or victory conditions.** Nothing yet knows what a fight should
 //!   yield, and a field invented now would be wrong in a way content would then depend
 //!   on.
-//! - **No lattices.** An entry names its archetype as a string and nothing resolves it.
-//!   That is the seam: when `lattices.ron` lands, one archetype-to-lattice lookup goes
-//!   inside the spawn loop rather than into per-unit spawn code.
+//! - **No embedded lattices.** An entry names its archetype as a stable string. The unit
+//!   spawn path resolves that key through `lattices.ron`, keeping combat structure out
+//!   of encounter placement content.
 //! - **No triggers, quests, or dialogue.** Those are fields added to this schema later,
 //!   not gaps in it today.
 
@@ -69,8 +69,7 @@ pub struct Roster {
 pub struct RosterEntry {
     /// What kind of unit this is, by name.
     ///
-    /// Resolved to nothing today. It is the key an archetype's lattice will be
-    /// looked up by, which is why it is named now rather than when lattices land.
+    /// The stable key used to resolve the archetype's lattice and default AI profile.
     pub archetype: String,
     /// This unit's own placement, overriding its roster's.
     ///

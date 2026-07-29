@@ -43,9 +43,9 @@ use hex_assets::{
 };
 use hex_combat::TurnOrder;
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, HexCoord, IssuedCommand,
-    LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen, Sextant, SpellId,
-    TilePos, Turn, UnitId,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord,
+    IssuedCommand, LatticeCoord, Mode, PausableSystems, PendingDecision, PlayerSeat, Screen,
+    Sextant, SpellId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
@@ -80,6 +80,7 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 pub fn plugin(app: &mut App) {
     app.init_resource::<CastReadout>();
     app.init_resource::<Aiming>();
+    app.init_resource::<AimExit>();
     app.init_resource::<preview::AimVolume>();
     app.init_resource::<preview::DrawnPreviewKey>();
     // Global, like every picking observer in this codebase. It is written for that —
@@ -87,14 +88,21 @@ pub fn plugin(app: &mut App) {
     // observer instead of one for each of the hundred surfaces an aim can light.
     app.add_observer(preview::on_anchor_clicked);
 
-    app.add_systems(OnEnter(Screen::Gameplay), panel::spawn_panel);
+    app.add_systems(
+        OnEnter(Screen::Gameplay),
+        panel::spawn_panel.in_set(crate::readouts::HudSetup::Panels),
+    );
     app.add_systems(
         OnExit(Screen::Gameplay),
         (forget_aim, preview::clear_preview),
     );
     app.add_systems(
         Update,
-        (refresh_readout, resolve_aim_input)
+        (
+            refresh_readout,
+            resolve_aim_input,
+            panel::end_turn_from_button,
+        )
             .chain()
             .in_set(AppSystems::RecordInput)
             .in_set(PausableSystems)
@@ -108,6 +116,14 @@ pub fn plugin(app: &mut App) {
         (preview::redraw_preview, panel::rebuild_panel)
             .chain()
             .after(resolve_aim_input)
+            .after(GameplaySystems::UiContext)
+            .in_set(PausableSystems)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    app.add_systems(
+        Update,
+        refresh_readout
+            .in_set(GameplaySystems::Casting)
             .in_set(PausableSystems)
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -171,6 +187,22 @@ pub struct SpellRow {
 /// The spell currently being aimed, if any.
 #[derive(Resource, Default, Debug)]
 pub struct Aiming(pub Option<Aim>);
+
+/// How the most recent aim ended.
+///
+/// A confirmed aim leaves its target available for inspection, while an explicit
+/// cancellation clears it. This pulse is consumed by the lattice readout later in the
+/// same frame.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AimExit {
+    /// No aim ended this frame.
+    #[default]
+    None,
+    /// The cast was emitted and its target should remain pinned.
+    Confirmed,
+    /// The player explicitly put the aim down.
+    Cancelled,
+}
 
 /// A spell chosen, and the anchor it is pointed at.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -586,6 +618,7 @@ fn shape_label(shape: &TargetShape) -> String {
 fn resolve_aim_input(
     readout: Res<CastReadout>,
     mut aiming: ResMut<Aiming>,
+    mut exit: ResMut<AimExit>,
     mut queue: ResMut<CommandQueue>,
     pending: Res<PendingDecision>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -604,8 +637,12 @@ fn resolve_aim_input(
     };
 
     let next = match request {
-        AimRequest::Cancel => None,
+        AimRequest::Cancel => {
+            *exit = AimExit::Cancelled;
+            None
+        }
         AimRequest::Choose(spell) => {
+            *exit = AimExit::None;
             let Some(row) = readout.row(&spell) else {
                 return;
             };
@@ -622,6 +659,7 @@ fn resolve_aim_input(
             })
         }
         AimRequest::Next => {
+            *exit = AimExit::None;
             let Some(aim) = aiming.0.clone() else { return };
             let Some(row) = readout.row(&aim.spell) else {
                 return;
@@ -637,6 +675,7 @@ fn resolve_aim_input(
             if !emit_cast(&mut queue, &readout, &caster, &aim) {
                 return;
             }
+            *exit = AimExit::Confirmed;
             // The intent is spent whether or not the applier likes it. Leaving the aim
             // up would invite a second confirm against a lattice that is about to
             // change, and the applier's own answer arrives a schedule later.

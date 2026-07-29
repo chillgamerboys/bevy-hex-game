@@ -482,10 +482,7 @@ fn enumerate_turn_actions(
             if !delivers_anything(spell) {
                 continue;
             }
-            let Some(cell) = spec.cells().find_map(|(coord, kind)| {
-                matches!(kind, CellKind::Spell { spell: found } if found == spell_id)
-                    .then_some(coord)
-            }) else {
+            let Some(cell) = crate::commands::cast::spell_cell(spec, state, spell_id) else {
                 continue;
             };
             if castable(spec, state, cell, &tables).is_err() {

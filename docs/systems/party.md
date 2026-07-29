@@ -9,6 +9,20 @@ Combat owns selection while a player unit has the turn. The acting player is sel
 and focused automatically; number keys and the party strip cannot redirect commands
 to another member. Outside combat, exactly one live player remains selected.
 
+## Party UI contract
+
+Party order is presentation identity, not merely input order. Every ally heading starts
+with `ALLY n` from the stable `Party.members` slot and then names the archetype and
+session unit id. Initiative changes, selection changes, and matching hostile
+archetypes never change that slot.
+
+The party rail occupies the 224px left safe-frame column in both modes. Exploration
+also shows the formation editor in the 300px right inspector column: Group/Solo, Rest,
+presets, and the assignment grid remain together instead of floating over independent
+screen coordinates. Combat hides the formation editor and uses that column for the
+explicit ally and target lattice roles described in
+[combat.md](combat.md#tactical-hud-and-role-resolution).
+
 The party strip reports each member's stable id, archetype, live lattice cells, downed
 state, selection, and whether that member occupies the formation anchor. It also owns
 two explicit exploration movement modes:
@@ -75,3 +89,13 @@ enchantments, their locks, and locked mana remain intact. Enchantments already b
 by damage are not recreated. Positions, terrain, the encounter roster, and downed
 hostiles are untouched, and one structured `Rested` event records each member's exact
 cells and refilled mana.
+
+## Test boundary
+
+Party Trial on the authored Crossing is the human integration test for the full
+three-member rail, formation editing, compression, reformation, terrain entry into
+combat, and six-unit initiative readability. Focused automated combat UI checks use
+the flat Ability Lab and Raider Mirror fixtures instead. This keeps a spell, decision,
+or identity regression from being hidden behind bridge routing or unrelated AI turns;
+the Crossing remains responsible only for the party dynamics that smaller fixtures
+cannot represent.

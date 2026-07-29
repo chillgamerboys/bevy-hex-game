@@ -32,8 +32,8 @@ use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos,
-    TraversalBlockers, Turn, UnitId,
+    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems, Screen,
+    TilePos, TraversalBlockers, Turn, UnitId,
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
@@ -182,6 +182,7 @@ pub fn plugin(app: &mut App) {
             )
                 .chain()
                 .in_set(PausableSystems)
+                .in_set(GameplaySystems::Selection)
                 .after(track_terrain_changes)
                 .after(crate::movement::MovementSystems::Reconcile),
         )

@@ -45,9 +45,8 @@ use crate::voxel::TilePos;
 /// and in every save. The applier grounds them against the live world and
 /// refuses the ones that no longer make sense.
 ///
-/// The last three variants are the design's future verbs, defined now so the
-/// wire format is stable. The applier rejects them loudly; see each variant
-/// for what it waits on.
+/// Implemented verbs share this vocabulary with the still-deferred [`Self::Channel`].
+/// The applier rejects that future verb loudly; see the variant for what it waits on.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum GameCommand {
     /// Walk this exact surface path, whose first step is where the unit stands.

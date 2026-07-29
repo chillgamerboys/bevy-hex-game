@@ -893,7 +893,7 @@ fn a_short_answer_is_accepted_when_the_lattice_has_no_more_to_give() {
     );
 }
 
-/// A downed unit's lattice remains reachable for a possible future restoration flow.
+/// A downed unit's lattice remains reachable for the restoration flow.
 ///
 /// Filtering the applier's lattice query by `Downed` would have been the obvious thing
 /// and would have quietly made the design's stated recovery impossible: downed exists
@@ -918,7 +918,8 @@ fn a_downed_units_lattice_can_still_be_restored() {
         "a spent lattice should put its unit down"
     );
 
-    // The engine's restore reaches the retained lattice; combat reactivation is not built.
+    // The engine primitive reaches the retained lattice. Command-level tests cover
+    // removing Downed and scheduling the unit's initiative re-entry.
     let mut entity = app.world_mut().entity_mut(defender);
     let mut state = entity
         .get_mut::<LatticeState>()

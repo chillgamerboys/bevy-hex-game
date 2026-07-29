@@ -658,11 +658,13 @@ pub struct Archetype(pub String);
 /// **The provisional first implementation of death**, and provisional is the operative
 /// word — the design leaves both functional death (a threshold before zero) and
 /// permadeath open, and this settles neither. A downed unit leaves the turn order and is
-/// retained with its lattice for a future restoration flow. Reactivation is not built.
+/// retained with its lattice. Renewal can restore one or more cells, remove `Downed`,
+/// and schedule it to rejoin initiative at the next round boundary; exploration Rest
+/// also recovers downed party members.
 ///
 /// A marker rather than a despawn, for two reasons. `UnitRegistry` has no `unregister`
 /// and its own doc says death must add one or it will serve a dead entity — a marker
-/// avoids needing it at all. A future restoration flow also needs something to target:
+/// avoids needing it at all. The restoration flow also needs something to target:
 /// a despawned unit cannot be brought back, so despawning would preclude that design
 /// option.
 ///
@@ -740,8 +742,8 @@ fn spawn_units(
         registry: &mut registry,
         party: &mut party,
     };
-    // Every unit shares a body for now. When lattices land, size becomes a property of
-    // the archetype rather than a global setting, and this is where that starts.
+    // Every unit shares a body for now. When traversal size becomes an archetype
+    // property rather than a global setting, this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
     let footing = Footing::from_tiles(tiles.iter(), &table, body, content.blockers.as_deref());
 

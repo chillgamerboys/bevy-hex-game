@@ -429,7 +429,7 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 /// lowest `LatticeCoord` makes the choice deterministic rather than dependent on
 /// iteration; `spec.cells()` is already ordered, so first-match is that. The alternative
 /// — refusing an ambiguous lattice — would turn a redundancy into an authoring error.
-fn spell_cell(
+pub(crate) fn spell_cell(
     spec: &LatticeSpec,
     state: &LatticeState,
     spell: hex_core::SpellId,
@@ -564,7 +564,7 @@ fn unit_standing_on(
 
 /// Whether this implemented effect would further damage a unit on the anchor.
 ///
-/// Downed lattices stay queryable because future restoration needs them. Damage is a
+/// Downed lattices stay queryable because restoration needs them. Damage is a
 /// narrower rule: it refuses a spent target before payment instead of opening a
 /// defender choice that can only answer with zero cells.
 fn effect_damages_unit(effect: &Effect) -> bool {
@@ -584,8 +584,30 @@ fn effect_damages_unit(effect: &Effect) -> bool {
 /// one query at once. Keeping them apart makes each access a short scope rather than a
 /// lifetime puzzle.
 ///
-/// **Deliberately unfiltered by `Downed`.** A future restoration flow needs access to
-/// the retained lattice even though reactivation is not built. Being downed stops a
-/// unit *acting*, which is the turn order's job, not its lattice's.
+/// **Deliberately unfiltered by `Downed`.** Renewal needs access to the retained lattice
+/// before it can reactivate the target. Being downed stops a unit *acting*, which is the
+/// turn order's job, not its lattice's.
 pub(super) type LatticeQuery<'w, 's> =
     Query<'w, 's, (&'static LatticeSpec, &'static mut LatticeState)>;
+
+#[cfg(test)]
+mod tests {
+    use hex_core::{LatticeCoord, SpellId};
+    use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+
+    use super::spell_cell;
+
+    #[test]
+    fn redundant_spell_resolution_prefers_a_live_copy() {
+        let spell = SpellId(4);
+        let first = LatticeCoord::ORIGIN;
+        let second = LatticeCoord::new(1, 0);
+        let spec = LatticeSpec::default()
+            .with(first, CellKind::Spell { spell })
+            .with(second, CellKind::Spell { spell });
+        let mut state = LatticeState::new(&spec, &LatticeStats::default());
+        apply_disables(&mut state, &[first]);
+
+        assert_eq!(spell_cell(&spec, &state, spell), Some(second));
+    }
+}

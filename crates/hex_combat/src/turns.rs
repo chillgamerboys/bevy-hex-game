@@ -539,8 +539,9 @@ const DEFAULT_MOVEMENT_PER_TURN: u32 = 4;
 /// **Downed, not dead.** The design leaves both functional death — a threshold arriving
 /// before zero — and permadeath open, and this settles neither: a unit whose every hex
 /// is disabled leaves the turn order, gains [`Downed`], and stays on the map with its
-/// lattice available to a future restoration flow. Reactivation is not implemented.
-/// That is a testable starting behaviour, not an answer.
+/// lattice available to restoration. Renewal removes `Downed` after restoring a cell
+/// and schedules the unit to rejoin initiative at the next round boundary. That is a
+/// testable starting behaviour, not an answer.
 ///
 /// Runs after the applier, because that is what disables hexes, and before the turn
 /// advances, so a unit that goes down on its own turn does not get to take it.
