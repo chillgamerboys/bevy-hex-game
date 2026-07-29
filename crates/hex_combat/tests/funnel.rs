@@ -22,7 +22,7 @@ use hex_assets::{
     SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_combat::{
-    CombatData, CombatEvent, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
+    CombatData, CombatEvent, CombatSummary, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
 };
 use hex_core::{
     Busy, CommandQueue, ControlOwner, FormationPreset, FormationSlot, GameCommand, Headroom,
@@ -524,7 +524,8 @@ fn combat_interrupts_every_party_member_on_a_whole_surface() {
 ///
 /// This is the funnel's reason to exist: every sim mutation flows through the
 /// drained queue, so the sequence *is* the input, and applying it twice must
-/// be indistinguishable — same turn order, same positions, same budgets.
+/// be indistinguishable — same turn order, positions, budgets, successful commands,
+/// and structured events.
 #[test]
 fn a_replayed_sequence_lands_identically() {
     let script = [
@@ -566,6 +567,7 @@ fn a_replayed_sequence_lands_identically() {
             standing_of(&mut app, player),
             standing_of(&mut app, hostile),
             budget_of(&app, player),
+            app.world().resource::<CombatSummary>().clone(),
         )
     };
 

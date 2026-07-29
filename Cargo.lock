@@ -3299,6 +3299,7 @@ version = "0.3.0"
 dependencies = [
  "bevy",
  "hex_ai",
+ "hex_anim",
  "hex_assets",
  "hex_combat",
  "hex_core",

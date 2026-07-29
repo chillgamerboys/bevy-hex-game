@@ -1,0 +1,74 @@
+// Wave 4's integrated party checkpoint. Run at both review sizes:
+//
+//   HEX_WALK_SCRIPT=walks/party_trial.ron \
+//   HEX_WALK_OUT=.context/walks/party-trial-1280 \
+//   HEX_WALK_SIZE=1280x720 \
+//   cargo run --release --features visual-walk
+//
+// The first half drives formation editing and real tile clicks through the same
+// observer and command funnel as a player. Combat/recovery steps follow once the
+// party has crossed and the turn UI is live.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Party Trial"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("40-party-trial-start"),
+
+    Click(name: "Formation Preset Wedge"),
+    Click(name: "Party Member 2"),
+    Click(name: "Formation Slot (0, -1)"),
+    Settle(8),
+    Capture("41-formation-edited"),
+    Key("KeyR"),
+    Settle(8),
+    Capture("42-party-rest"),
+
+    Click(name: "Formation Preset Column"),
+    Settle(8),
+    ClickTile(q: 0, r: 4),
+    Settle(180),
+    Capture("43-column-approach"),
+    ClickTile(q: 0, r: -2),
+    Settle(240),
+    Capture("44-bridge-compression"),
+
+    Click(name: "Formation Preset Wedge"),
+    Settle(8),
+    ClickTile(q: 1, r: -2),
+    Settle(120),
+    Capture("45-reformed"),
+    ClickTile(q: 0, r: -4),
+    AwaitButton("Cast"),
+    Settle(30),
+    Capture("46-party-combat"),
+
+    // Drive only the player side; hostile actions still come from the configured
+    // baseline algorithm and every automated answer remains an ordinary command.
+    AutoUntilAiCast,
+    Settle(2),
+    Capture("47-hostile-cast"),
+    AutoUntilButton("Cast Renewal"),
+    Click(name: "Cast Renewal"),
+    AimAtDamagedPlayer,
+    AwaitButton("Confirm Cast"),
+    Settle(8),
+    Capture("48-renewal-aim"),
+    Click(name: "Confirm Cast"),
+    AwaitButton("Own Cell"),
+    Settle(2),
+    Capture("49-renewal-decision"),
+    AnswerDecision,
+    Settle(20),
+    Capture("50-renewal-restored"),
+
+    AutoUntilButton("Retry"),
+    Capture("51-defeat"),
+    Click(name: "Retry"),
+    AwaitScreen("Loading"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("52-identical-retry"),
+]

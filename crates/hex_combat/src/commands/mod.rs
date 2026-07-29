@@ -144,6 +144,7 @@ struct ResolutionStores<'w> {
     knowledge: ResMut<'w, crate::knowledge::FactionKnowledge>,
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
+    summary: ResMut<'w, crate::CombatSummary>,
 }
 
 #[derive(SystemParam)]
@@ -325,6 +326,7 @@ fn apply_commands(
             in_combat,
         };
 
+        let recorded = issued.command.clone();
         let outcome = match issued.command {
             GameCommand::MoveAlong { ref path, .. } => move_along::apply(
                 &mut verb,
@@ -399,6 +401,8 @@ fn apply_commands(
 
         if let Err(refusal) = outcome {
             drop_command(&mut emitted, &issued, refusal);
+        } else {
+            stores.summary.record_command(&recorded);
         }
     }
     stores.events.write_batch(emitted);

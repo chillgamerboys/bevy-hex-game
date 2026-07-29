@@ -568,10 +568,16 @@ pub struct AiDecisionTrace {
     pub group: Option<AiGroupId>,
     /// Decision point being answered.
     pub kind: AiDecisionKind,
+    /// Exact authorized observation supplied to the algorithm.
+    pub observation: AiObservation,
+    /// Canonical commands and request-scoped keys offered to the algorithm.
+    pub legal_actions: LegalActionSet,
     /// Fingerprint of the offered legal set.
     pub fingerprint: LegalActionFingerprint,
     /// Returned key.
     pub selected: ActionKey,
+    /// Command ultimately sent through the applier, including deterministic fallback.
+    pub command: Option<GameCommand>,
     /// Failure when the key could not resolve.
     pub failure: Option<AiDecisionFailure>,
 }

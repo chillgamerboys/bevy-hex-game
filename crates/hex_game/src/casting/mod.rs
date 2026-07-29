@@ -1245,7 +1245,7 @@ mod tests {
     #[test]
     fn a_spell_with_nothing_built_is_blocked_rather_than_offered() {
         let (_, spells) = shipped_content();
-        let undeliverable = ["Renewal", "Earthen Wall", "Stone Shaper", "Daylight"];
+        let undeliverable = ["Earthen Wall", "Stone Shaper", "Daylight"];
         for name in undeliverable {
             let id = spells.id(name).expect("the test names a shipped spell");
             let definition = spells.spell(id).expect("a shipped spell has a definition");
@@ -1256,7 +1256,7 @@ mod tests {
         }
         // The control, and the reason this is not just a ban on everything: the spells
         // the wave actually delivers stay castable.
-        for name in ["Ember", "Kindle", "Metal Shield", "Scrying Eye"] {
+        for name in ["Ember", "Kindle", "Metal Shield", "Renewal", "Scrying Eye"] {
             let Some(id) = spells.id(name) else { continue };
             let definition = spells.spell(id).expect("a shipped spell has a definition");
             assert!(
