@@ -23,7 +23,7 @@ pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
 
-V3 now has its first two complete recipe lanes. Waterfall authors deterministic
+V3 now has three complete recipe lanes. Waterfall authors deterministic
 directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
 basin, outlet, and redundant land routes; an opaque animated renderer consumes the
 same exact flow facts. Forest plans rolling terrain and clearings, places its denser
@@ -35,6 +35,10 @@ blockers and tall grass is presentation-only. Map validation, movement previews,
 click routing, command validation, spawning, review relocation, and enemy pathfinding
 all consume the same exact blocker projection through a separate adapter now awaiting
 gameplay-owner review.
+Native V3 Caves plans the rocky exterior and stacked underground network together:
+six through twelve chambers, two-wide corridors and entrance ramp, varied floor and
+clearance levels, exact cutaway roofs, and deterministic Bright gameplay lights that
+cover the required network while leaving optional branches dark.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -43,7 +47,8 @@ lights, pooled faction sight, and independent faction memory over stacked `TileP
 surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
 edits, unseen units disappear immediately, and the player-side traversal projection
 is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
-live in `perception.ron`. Fog/picking presentation, generated cave lamps/crystals,
+live in `perception.ron`. V3 cave sources now publish directly into this headless
+pipeline. Fog/picking presentation, visible cave crystals and physical lights,
 unknown-frontier routing, and combat/AI consumers are not wired yet.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
