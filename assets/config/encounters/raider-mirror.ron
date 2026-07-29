@@ -1,0 +1,23 @@
+// Same archetype, opposite factions, no other moving parts.
+//
+// This is the regression fixture for an enemy raider ever being presented as the
+// player's selected or active raider.
+(
+    name: "Raider Mirror",
+    rosters: [
+        (
+            faction: Player,
+            placement: Fixed((x: -1, y: 0, z: 1)),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+        (
+            faction: Hostile,
+            placement: Fixed((x: 1, y: 0, z: -1)),
+            units: [
+                (archetype: "raider"),
+            ],
+        ),
+    ],
+)

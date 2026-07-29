@@ -24,10 +24,10 @@ disagrees with its span floats or sinks. All of them pass CI. The automated walk
 lists layout findings; motion, feel, and taste still need human eyes — /promote
 gates on the human box, never the automated one.
 
-If the change touches rendering, movement, or state transitions, walk it:
-splash -> title -> click a scenario -> gameplay, orbit, click a tile, click the tile
-you are standing on, ESC to pause and resume, BACKSPACE to the title, click a scenario
-to rebuild.
+If the change touches rendering, movement, persistence, or state transitions, walk it:
+splash -> title -> New Game -> Party Trial, orbit, move the party, ESC to pause,
+save with F5, BACKSPACE to the title, Continue, then open Settings and persist one
+change across restart. Launch an affected Map or focused Demo separately.
 -->
 
 ## Boundaries

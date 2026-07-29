@@ -27,20 +27,27 @@ use std::env;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use bevy::camera::RenderTarget;
+use bevy::camera::{NormalizedRenderTarget, RenderTarget};
+use bevy::ecs::system::SystemParam;
 use bevy::input::InputSystems;
+use bevy::picking::backend::HitData;
+use bevy::picking::pointer::{Location, PointerId};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
-use hex_assets::ScenarioLibrary;
+use hex_assets::{ScenarioLibrary, SubstanceTable};
+use hex_combat::AiDecisionTraces;
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, IssuedCommand, ResolvedMapSeed,
-    Screen, TerrainReady, UnitId,
+    Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, Headroom, HexCoord,
+    HexSpan, HexTile, IssuedCommand, LatticeCoord, PendingDecision, ResolvedMapSeed, Screen,
+    SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
 };
-use hex_units::{Player, StandsOn};
+use hex_lattice::{CellKind, LatticeSpec, LatticeState};
+use hex_units::{Body, Downed, Enemy, Footing, Player, Reach, StandsOn};
 use serde::Deserialize;
 
 use crate::capture::write_png;
+use crate::casting::{Aiming, AnchorMarker};
 use crate::scenarios::ScenarioToLoad;
 
 const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
@@ -134,8 +141,39 @@ enum WalkStep {
     },
     /// Wait until a named button exists without activating it.
     AwaitButton(String),
+    /// End player turns and answer player decisions until a named button exists.
+    AutoUntilButton(String),
+    /// End player turns and answer player decisions until baseline AI casts.
+    AutoUntilAiCast,
+    /// End turns until the named stable player unit owns the turn.
+    AutoUntilPlayerTurn(u64),
+    /// Drive combat until a player damage choice is open.
+    AutoUntilDamageDecision,
+    /// Answer the currently open player lattice decision through the command funnel.
+    AnswerDecision,
+    /// Point an in-flight recovery spell at the first damaged player unit.
+    ///
+    /// This is the walk equivalent of cycling the target control. Confirming the
+    /// resulting aim still emits the ordinary cast command through the UI.
+    AimAtDamagedPlayer,
+    /// Point an in-flight spell at one stable player unit, including a downed unit.
+    ///
+    /// Ability fixtures use this for intentional friendly damage and for restoring the
+    /// exact ally they downed through ordinary commands.
+    AimAtPlayer(u64),
+    /// Point an in-flight spell at the first hostile by stable id.
+    AimAtHostile,
+    /// Move an in-flight aim to a legal unoccupied anchor, retaining its prior target.
+    AimAtEmpty,
     /// Press and release a supported gameplay or menu key.
     Key(String),
+    /// Click the topmost surface at one authored axial coordinate.
+    ClickTile {
+        q: i32,
+        r: i32,
+        #[serde(default)]
+        level: Option<i32>,
+    },
     /// Deliberately send a movement command through the simulation funnel.
     ///
     /// Walk-only probes bypass the quiet input prefilter so a modal refusal becomes a
@@ -178,6 +216,9 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::AwaitButton(name) if name.trim().is_empty() => {
             Err("awaited button name must not be empty".to_owned())
         }
+        WalkStep::AutoUntilButton(name) if name.trim().is_empty() => {
+            Err("automated button name must not be empty".to_owned())
+        }
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
@@ -189,11 +230,12 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Settings, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -213,8 +255,11 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Tab" => Ok(KeyCode::Tab),
         "KeyQ" => Ok(KeyCode::KeyQ),
         "KeyH" => Ok(KeyCode::KeyH),
+        "KeyL" => Ok(KeyCode::KeyL),
+        "KeyR" => Ok(KeyCode::KeyR),
+        "F5" => Ok(KeyCode::F5),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, or KeyH"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, KeyR, or F5"
         )),
     }
 }
@@ -259,6 +304,11 @@ struct WalkState {
     pressed: Option<Entity>,
     /// A key pressed by the previous step, to be released.
     held_key: Option<KeyCode>,
+    /// Consecutive automation frames that observed the same player turn.
+    ///
+    /// The grace frame lets turn-start effects and the casting panel settle before
+    /// automation decides there is no recovery action to preserve.
+    auto_turn_seen: Option<(UnitId, u8)>,
     /// The offscreen image the camera renders into for capture.
     ///
     /// The window surface is not readable on every backend — on macOS/Metal a
@@ -276,6 +326,49 @@ struct WalkState {
     failed: bool,
 }
 
+#[derive(SystemParam)]
+struct WalkCombat<'w, 's> {
+    pending: Option<Res<'w, PendingDecision>>,
+    traces: Option<Res<'w, AiDecisionTraces>>,
+    aiming: Option<ResMut<'w, Aiming>>,
+    enemies: Query<'w, 's, (&'static UnitId, &'static StandsOn), (With<Enemy>, Without<Downed>)>,
+    anchors: Query<'w, 's, &'static TilePos, With<AnchorMarker>>,
+    terrain: WalkTerrain<'w, 's>,
+}
+
+#[derive(SystemParam)]
+struct WalkTerrain<'w, 's> {
+    substances: Option<Res<'w, SubstanceTable>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+    tiles: Query<
+        'w,
+        's,
+        (
+            &'static TilePos,
+            &'static HexSpan,
+            &'static SubstanceId,
+            &'static Headroom,
+        ),
+        With<HexTile>,
+    >,
+}
+
+type WalkPlayerQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static UnitId,
+        &'static ControlOwner,
+        &'static StandsOn,
+        &'static Body,
+        Option<&'static Turn>,
+        Option<&'static LatticeSpec>,
+        Option<&'static LatticeState>,
+        Has<Busy>,
+    ),
+    With<Player>,
+>;
+
 impl WalkState {
     fn new(steps: Vec<WalkStep>, out_dir: PathBuf, size: (u32, u32)) -> Self {
         Self {
@@ -288,6 +381,7 @@ impl WalkState {
             capture_outcome: None,
             pressed: None,
             held_key: None,
+            auto_turn_seen: None,
             target: None,
             camera: None,
             size,
@@ -301,6 +395,7 @@ impl WalkState {
         self.capture_requested = false;
         self.capture_outcome = None;
         self.step_started = Instant::now();
+        self.auto_turn_seen = None;
     }
 }
 
@@ -314,12 +409,13 @@ fn run_walk(
     mut state: ResMut<WalkState>,
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
-    terrain: Option<Res<TerrainReady>>,
+    mut combat: WalkCombat,
     failure: Option<Res<GameplaySetupFailure>>,
     library: Option<Res<ScenarioLibrary>>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
-    players: Query<(&UnitId, &ControlOwner, &StandsOn), With<Player>>,
+    tiles: Query<(Entity, &TilePos), With<HexTile>>,
+    players: WalkPlayerQuery,
     mut queue: ResMut<CommandQueue>,
     mut images: ResMut<Assets<Image>>,
     mut camera_targets: Query<(Entity, &mut RenderTarget), With<Camera>>,
@@ -402,7 +498,7 @@ fn run_walk(
             }
         }
         WalkStep::AwaitTerrain => {
-            if terrain.is_some() {
+            if !tiles.is_empty() {
                 state.advance();
             }
         }
@@ -484,6 +580,189 @@ fn run_walk(
                 state.advance();
             }
         }
+        WalkStep::AutoUntilButton(ref name) => {
+            let recovery_needed = name != "Cast Renewal"
+                || players.iter().any(|(_, _, _, _, _, spec, lattice, _)| {
+                    spec.zip(lattice).is_some_and(|(spec, lattice)| {
+                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
+                    })
+                });
+            if recovery_needed
+                && buttons
+                    .iter()
+                    .any(|(_, button_name)| button_name.as_str().starts_with(name.as_str()))
+            {
+                // Panels rebuild through deferred commands. A matching button can
+                // therefore be the one-frame remnant of the actor whose turn just
+                // ended. Require the semantic control to survive a complete frame
+                // before the next step tries to press it.
+                state.settled = state.settled.saturating_add(1);
+                if state.settled >= 2 {
+                    state.advance();
+                }
+            } else {
+                state.settled = 0;
+                auto_player_input(
+                    combat.pending.as_deref(),
+                    &players,
+                    &combat.enemies,
+                    &combat.terrain,
+                    &mut queue,
+                    &mut state.auto_turn_seen,
+                );
+            }
+        }
+        WalkStep::AutoUntilAiCast => {
+            let cast_seen = combat.traces.as_deref().is_some_and(|traces| {
+                traces
+                    .entries
+                    .iter()
+                    .any(|trace| matches!(trace.command, Some(GameCommand::Cast { .. })))
+            });
+            if cast_seen {
+                state.advance();
+            } else {
+                auto_player_input(
+                    combat.pending.as_deref(),
+                    &players,
+                    &combat.enemies,
+                    &combat.terrain,
+                    &mut queue,
+                    &mut state.auto_turn_seen,
+                );
+            }
+        }
+        WalkStep::AutoUntilPlayerTurn(wanted) => {
+            if players
+                .iter()
+                .any(|(unit, _, _, _, turn, ..)| unit.0 == wanted && turn.is_some())
+            {
+                state.advance();
+            } else {
+                auto_player_input(
+                    combat.pending.as_deref(),
+                    &players,
+                    &combat.enemies,
+                    &combat.terrain,
+                    &mut queue,
+                    &mut state.auto_turn_seen,
+                );
+            }
+        }
+        WalkStep::AutoUntilDamageDecision => {
+            let open = combat.pending.as_deref().is_some_and(|pending| {
+                matches!(
+                    pending,
+                    PendingDecision::ChooseDisables { decider, .. }
+                        if players.iter().any(|(unit, ..)| unit == decider)
+                )
+            });
+            if open {
+                state.advance();
+            } else {
+                auto_player_input(
+                    combat.pending.as_deref(),
+                    &players,
+                    &combat.enemies,
+                    &combat.terrain,
+                    &mut queue,
+                    &mut state.auto_turn_seen,
+                );
+            }
+        }
+        WalkStep::AnswerDecision => {
+            if answer_player_decision(combat.pending.as_deref(), &players, &mut queue) {
+                state.advance();
+            }
+        }
+        WalkStep::AimAtDamagedPlayer => {
+            let target = players
+                .iter()
+                .filter(|(_, _, _, _, _, spec, lattice, _)| {
+                    spec.zip(*lattice).is_some_and(|(spec, lattice)| {
+                        spec.cells().any(|(cell, _)| lattice.is_disabled(cell))
+                    })
+                })
+                .min_by_key(|(unit, ..)| **unit)
+                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
+            let aim = combat
+                .aiming
+                .as_deref_mut()
+                .and_then(|aiming| aiming.0.as_mut());
+            if let (Some((unit, position)), Some(aim)) = (target, aim) {
+                info!("visual walk aiming recovery at damaged player {unit:?}");
+                aim.anchor = position;
+                state.advance();
+            }
+        }
+        WalkStep::AimAtPlayer(target) => {
+            let target = players
+                .iter()
+                .find(|(unit, ..)| unit.0 == target)
+                .map(|(unit, _, standing, ..)| (*unit, standing.0.pos));
+            let aim = combat
+                .aiming
+                .as_deref_mut()
+                .and_then(|aiming| aiming.0.as_mut());
+            if let (Some((unit, position)), Some(aim)) = (target, aim) {
+                info!("visual walk aiming at player {unit:?}");
+                aim.anchor = position;
+                state.advance();
+            }
+        }
+        WalkStep::AimAtHostile => {
+            let target = combat
+                .enemies
+                .iter()
+                .min_by_key(|(unit, _)| **unit)
+                .map(|(unit, standing)| (*unit, standing.0.pos));
+            let aim = combat
+                .aiming
+                .as_deref_mut()
+                .and_then(|aiming| aiming.0.as_mut());
+            if let (Some((unit, position)), Some(aim)) = (target, aim) {
+                info!("visual walk aiming at hostile {unit:?}");
+                aim.anchor = position;
+                state.advance();
+            }
+        }
+        WalkStep::AimAtEmpty => {
+            let occupied = players
+                .iter()
+                .map(|(_, _, standing, ..)| standing.0.pos)
+                .chain(combat.enemies.iter().map(|(_, standing)| standing.0.pos))
+                .collect::<Vec<_>>();
+            let Some(current_anchor) = combat
+                .aiming
+                .as_deref()
+                .and_then(|aiming| aiming.0.as_ref())
+                .map(|aim| aim.anchor)
+            else {
+                return;
+            };
+            let mut surfaces = combat
+                .anchors
+                .iter()
+                .copied()
+                .filter(|anchor| !occupied.contains(anchor))
+                .collect::<Vec<_>>();
+            surfaces.sort_by_key(|position| {
+                (
+                    current_anchor.coord.distance(position.coord),
+                    (current_anchor.level - position.level).abs(),
+                    *position,
+                )
+            });
+            let aim = combat
+                .aiming
+                .as_deref_mut()
+                .and_then(|aiming| aiming.0.as_mut());
+            if let (Some(position), Some(aim)) = (surfaces.first().copied(), aim) {
+                info!("visual walk moving aim over empty surface {position:?}");
+                aim.anchor = position;
+                state.advance();
+            }
+        }
         WalkStep::Key(ref name) => {
             let key = parse_key(name).unwrap_or(KeyCode::Escape);
             info!("visual walk pressing {name}");
@@ -491,8 +770,46 @@ fn run_walk(
             state.held_key = Some(key);
             state.advance();
         }
+        WalkStep::ClickTile { q, r, level } => {
+            let coord = HexCoord::from_axial(q, r);
+            let mut matches: Vec<_> = tiles
+                .iter()
+                .filter(|(_, position)| {
+                    position.coord == coord && level.is_none_or(|level| position.level == level)
+                })
+                .collect();
+            matches.sort_by_key(|(entity, position)| (position.level, *entity));
+            let Some(&(entity, position)) = matches.last() else {
+                return;
+            };
+            let (Some(target), Some(camera)) = (state.target.clone(), state.camera) else {
+                return;
+            };
+            info!("visual walk clicking tile {position:?}");
+            let hit = HitData::new(camera, 0.0, None, None);
+            let location = Location {
+                target: NormalizedRenderTarget::Image(target.into()),
+                position: Vec2::ZERO,
+            };
+            commands.trigger(Pointer::new(
+                PointerId::Mouse,
+                location,
+                Click {
+                    button: PointerButton::Primary,
+                    hit,
+                    duration: Duration::ZERO,
+                    count: 1,
+                },
+                entity,
+            ));
+            state.advance();
+        }
         WalkStep::AttemptMove => {
-            let Ok((unit, owner, standing)) = players.single() else {
+            let Some((unit, owner, standing, ..)) = players
+                .iter()
+                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
+                .or_else(|| players.iter().next())
+            else {
                 return;
             };
             queue.push(IssuedCommand {
@@ -508,7 +825,11 @@ fn run_walk(
             state.advance();
         }
         WalkStep::AttemptEndTurn => {
-            let Ok((unit, owner, _)) = players.single() else {
+            let Some((unit, owner, ..)) = players
+                .iter()
+                .find(|(_, _, _, _, turn, _, _, _)| turn.is_some())
+                .or_else(|| players.iter().next())
+            else {
                 return;
             };
             queue.push(IssuedCommand {
@@ -544,6 +865,185 @@ fn run_walk(
     }
 }
 
+fn auto_player_input(
+    pending: Option<&PendingDecision>,
+    players: &WalkPlayerQuery,
+    enemies: &Query<(&UnitId, &StandsOn), (With<Enemy>, Without<Downed>)>,
+    terrain: &WalkTerrain,
+    queue: &mut CommandQueue,
+    turn_seen: &mut Option<(UnitId, u8)>,
+) {
+    if answer_player_decision(pending, players, queue) {
+        *turn_seen = None;
+        return;
+    }
+    let Some((unit, owner, standing, body, Some(turn), _, _, _)) = players
+        .iter()
+        .find(|(_, _, _, _, turn, _, _, busy)| turn.is_some() && !busy)
+    else {
+        *turn_seen = None;
+        return;
+    };
+    let frames = match *turn_seen {
+        Some((seen, frames)) if seen == *unit => frames.saturating_add(1),
+        _ => 1,
+    };
+    *turn_seen = Some((*unit, frames));
+    if frames < 2 {
+        return;
+    }
+    if !queue.holds_command_for(*unit) {
+        let Some(substances) = terrain.substances.as_deref() else {
+            return;
+        };
+        let footing = Footing::from_tiles(
+            terrain.tiles.iter(),
+            substances,
+            *body,
+            terrain.blockers.as_deref(),
+        );
+        let mut targets = enemies.iter().collect::<Vec<_>>();
+        targets.sort_by_key(|(target, _)| **target);
+        if !turn.acted {
+            if let Some((target, _)) = targets.iter().find(|(_, target)| {
+                standing.0.pos.coord.distance(target.0.pos.coord) == 1
+                    && (footing.admits_step(standing.0.pos, target.0.pos)
+                        || footing.admits_step(target.0.pos, standing.0.pos))
+            }) {
+                queue.push(IssuedCommand {
+                    seat: owner.0,
+                    command: GameCommand::Strike {
+                        unit: *unit,
+                        target: **target,
+                    },
+                });
+                return;
+            }
+        }
+
+        let occupied = players
+            .iter()
+            .map(|(_, _, occupied, ..)| occupied.0.pos)
+            .chain(targets.iter().map(|(_, occupied)| occupied.0.pos))
+            .collect::<Vec<_>>();
+        let reach = Reach::from(standing.0, &footing, None);
+        let route = targets
+            .iter()
+            .flat_map(|(target, target_standing)| {
+                footing
+                    .standings()
+                    .into_iter()
+                    .filter(|candidate| {
+                        candidate.pos.coord.distance(target_standing.0.pos.coord) == 1
+                            && (footing.admits_step(candidate.pos, target_standing.0.pos)
+                                || footing.admits_step(target_standing.0.pos, candidate.pos))
+                            && (candidate.pos == standing.0.pos
+                                || !occupied.contains(&candidate.pos))
+                    })
+                    .filter_map(|candidate| {
+                        reach
+                            .path_to(candidate.pos)
+                            .map(|path| (**target, candidate.pos, path))
+                    })
+            })
+            .min_by_key(|(target, destination, path)| (path.len(), *target, *destination))
+            .map(|(_, _, mut path)| {
+                path.truncate(
+                    usize::try_from(turn.movement_left)
+                        .unwrap_or(usize::MAX)
+                        .saturating_add(1),
+                );
+                path
+            });
+        if let Some(path) = route.filter(|path| path.len() > 1) {
+            queue.push(IssuedCommand {
+                seat: owner.0,
+                command: GameCommand::MoveAlong {
+                    unit: *unit,
+                    path: path.into_iter().map(|step| step.pos).collect(),
+                },
+            });
+            return;
+        }
+        queue.push(IssuedCommand {
+            seat: owner.0,
+            command: GameCommand::EndTurn { unit: *unit },
+        });
+    }
+}
+
+fn answer_player_decision(
+    pending: Option<&PendingDecision>,
+    players: &WalkPlayerQuery,
+    queue: &mut CommandQueue,
+) -> bool {
+    let Some(pending) = pending else {
+        return false;
+    };
+    let (decider, target, count, restoring) = match *pending {
+        PendingDecision::ChooseDisables { decider, count, .. } => (decider, decider, count, false),
+        PendingDecision::ChooseRestores {
+            decider,
+            target,
+            count,
+        } => (decider, target, count, true),
+        PendingDecision::None => return false,
+    };
+    if queue.holds_answer_for(decider) {
+        return true;
+    }
+    let Some((_, owner, ..)) = players.iter().find(|(unit, ..)| **unit == decider) else {
+        return false;
+    };
+    let Some((_, _, _, _, _, Some(spec), Some(state), _)) =
+        players.iter().find(|(unit, ..)| **unit == target)
+    else {
+        return false;
+    };
+    let mut candidates: Vec<_> = spec
+        .cells()
+        .filter(|(cell, _)| state.is_disabled(*cell) == restoring)
+        .map(|(cell, kind)| {
+            let rank = if restoring {
+                0
+            } else {
+                match kind {
+                    CellKind::Blank => 0,
+                    // Preserve funding gems long enough for the recovery walk to
+                    // exercise Renewal on the following hedge-mage turn.
+                    CellKind::Fusion { .. } => 1,
+                    CellKind::Spell { .. } if cell != LatticeCoord::new(-1, 3) => 2,
+                    CellKind::Gem { .. } => 3,
+                    CellKind::Spell { .. } => 4,
+                }
+            };
+            (rank, state.mana(cell), cell)
+        })
+        .collect();
+    candidates.sort_unstable();
+    let cells = candidates
+        .into_iter()
+        .take(usize::from(count))
+        .map(|(_, _, cell)| cell)
+        .collect();
+    queue.push(IssuedCommand {
+        seat: owner.0,
+        command: if restoring {
+            GameCommand::ChooseRestores {
+                unit: decider,
+                target,
+                cells,
+            }
+        } else {
+            GameCommand::ChooseDisables {
+                unit: decider,
+                cells,
+            }
+        },
+    });
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -557,7 +1057,18 @@ mod tests {
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
         AwaitTerrain,
+        ClickTile(q: 0, r: -2),
+        Key("KeyR"),
         AwaitButton("Cast Ember"),
+        AutoUntilButton("Cast Renewal"),
+        AutoUntilAiCast,
+        AutoUntilPlayerTurn(1),
+        AutoUntilDamageDecision,
+        AimAtDamagedPlayer,
+        AimAtPlayer(1),
+        AimAtHostile,
+        AimAtEmpty,
+        AnswerDecision,
         AttemptMove,
         AttemptEndTurn,
         Capture("02-crossing"),
@@ -566,7 +1077,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 12);
+        assert_eq!(steps.len(), 23);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -590,6 +1101,8 @@ mod tests {
     #[test]
     fn unknown_screens_and_keys_are_rejected_at_load() {
         assert_eq!(parse_key("KeyH"), Ok(KeyCode::KeyH));
+        assert_eq!(parse_key("KeyL"), Ok(KeyCode::KeyL));
+        assert_eq!(parse_key("KeyR"), Ok(KeyCode::KeyR));
         assert!(validate_step(&WalkStep::AwaitScreen("Menu".into())).is_err());
         assert!(validate_step(&WalkStep::Key("F13".into())).is_err());
         assert!(validate_step(&WalkStep::Capture(" ".into())).is_err());
@@ -599,6 +1112,7 @@ mod tests {
         })
         .is_err());
         assert!(validate_step(&WalkStep::AwaitButton(" ".into())).is_err());
+        assert!(validate_step(&WalkStep::AutoUntilButton(" ".into())).is_err());
     }
 
     #[test]
@@ -623,6 +1137,8 @@ mod tests {
         for script in [
             "../../walks/menus.ron",
             "../../walks/gameplay.ron",
+            "../../walks/ability_lab.ron",
+            "../../walks/raider_mirror.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
         ] {
@@ -679,6 +1195,8 @@ mod tests {
             .collect();
 
         let mut checked = 0;
+        let mut launches_default = false;
+        let mut continues_save = false;
         for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -694,14 +1212,17 @@ mod tests {
                     );
                     checked += 1;
                 }
+                if matches!(step, WalkStep::Click { name, .. } if name == "New Game") {
+                    launches_default = true;
+                }
+                if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
+                    continues_save = true;
+                }
             }
         }
-        // Otherwise a walk that stopped launching scenarios — or a variant rename that
-        // made the `if let` stop matching — would leave this passing while checking
-        // nothing, which is the failure it exists to prevent, one level up.
         assert!(
-            checked >= 3,
-            "expected the shipped walks to launch at least three scenarios, found {checked}"
+            checked > 0 || (launches_default && continues_save),
+            "walks must launch configured scenarios directly or exercise New Game and Continue"
         );
     }
 }

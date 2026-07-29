@@ -24,11 +24,13 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Persistent pre-alpha display and volume preferences.
+    Settings,
     /// Interactive sandbox for the lattice ruleset, reached from the title menu.
     ///
-    /// Exists so the magic rules — casting, fusions, mana, disables,
-    /// enchantments — have a manual-verification surface before they are wired
-    /// into real combat (HEX-12). Slated for gating or removal before release.
+    /// Exists as an isolated manual-verification surface for magic rules — casting,
+    /// fusions, mana, disables, and enchantments. Slated for gating or removal
+    /// before release.
     LatticeDemo,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
@@ -134,6 +136,11 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
+    /// Apply a validated exploration resume after default actors spawn.
+    ///
+    /// This phase is intentionally before perception: restored positions must be the
+    /// positions observed on the first gameplay frame.
+    Restore,
     /// Derive illumination and initial faction knowledge from terrain and actors.
     ///
     /// This phase lets later presentation depend on published knowledge without
@@ -168,4 +175,18 @@ pub enum AppSystems {
     RecordInput,
     /// Everything else. Split this further as the game grows.
     Update,
+}
+
+/// Shared gameplay reconciliation boundaries used across crate ownership.
+///
+/// These are narrower than [`AppSystems`]: they name completed projections that a
+/// presentation consumer may safely read after deferred component commands flush.
+#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum GameplaySystems {
+    /// Selected unit, camera focus, rings, and movement overlays agree.
+    Selection,
+    /// Casting controls are projected from the reconciled actor and selection.
+    Casting,
+    /// The explicit gameplay UI role context is ready for panels to consume.
+    UiContext,
 }

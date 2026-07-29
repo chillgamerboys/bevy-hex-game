@@ -6,7 +6,7 @@
 //! No variant stores an `Entity`, a session-local `SpellId`, or a preformatted line.
 
 use bevy::prelude::Message;
-use hex_core::{GameCommand, LatticeCoord, PlayerSeat, TilePos, UnitId};
+use hex_core::{GameCommand, LatticeCoord, PartyPath, PlayerSeat, TilePos, UnitId};
 use hex_units::Faction;
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,8 @@ pub enum CombatData {
     ContentTables,
     /// Terrain substance properties used to validate movement and reach.
     SubstanceTable,
+    /// Faction-scoped current and remembered spatial knowledge.
+    SpatialKnowledge,
 }
 
 /// One per-unit fact required to apply a command.
@@ -49,6 +51,81 @@ pub enum CastBlockReason {
     SpellDisabled,
     /// Adjacent gems and fusions could not meet the spell's requirements.
     Unsatisfiable,
+}
+
+/// Exact atomic party-movement validation failure.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartyMoveRefusal {
+    /// The named anchor was not the active formation anchor.
+    WrongAnchor,
+    /// A path named a unit outside the player party.
+    NotPartyMember {
+        /// Invalid member.
+        member: UnitId,
+    },
+    /// The same member appeared more than once.
+    DuplicateMember {
+        /// Repeated member.
+        member: UnitId,
+    },
+    /// A player-party member had no path in the atomic command.
+    MissingMember {
+        /// Omitted member.
+        member: UnitId,
+    },
+    /// A path did not begin at its member's current position.
+    InvalidStart {
+        /// Member with the invalid start.
+        member: UnitId,
+    },
+    /// A member path was not completely traversable.
+    InvalidMemberPath {
+        /// Member with the invalid path.
+        member: UnitId,
+    },
+    /// Two members would finish on the same surface.
+    DuplicateDestination {
+        /// Contested surface.
+        destination: TilePos,
+    },
+    /// A party member had no safe compressed route.
+    NoSafeCompressedSlot {
+        /// Unplaceable member.
+        member: UnitId,
+    },
+}
+
+/// Exact restoration-answer validation failure.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestorationRefusal {
+    /// No restoration decision was open.
+    NoDecision,
+    /// The command named a target other than the open decision.
+    WrongTarget {
+        /// Required target.
+        expected: UnitId,
+    },
+    /// The answer supplied the wrong quota.
+    WrongCount {
+        /// Required count.
+        expected: u16,
+        /// Supplied count.
+        actual: u16,
+    },
+    /// A named cell was not disabled on the target.
+    CellNotDisabled {
+        /// Invalid cell.
+        cell: LatticeCoord,
+    },
+}
+
+/// Terminal result of an encounter.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncounterOutcome {
+    /// At least one player remains active and no hostile does.
+    Victory,
+    /// No player remains active, including simultaneous elimination.
+    Defeat,
 }
 
 /// A closed, serializable reason why the command applier rejected an intent.
@@ -186,6 +263,29 @@ pub enum CommandRefusal {
     },
     /// Channelling is part of the command vocabulary but has no applier yet.
     ChannelUnavailable,
+    /// Atomic party movement is contracted but its applier is not active yet.
+    PartyMovementUnavailable,
+    /// Restoration choice is contracted but its applier is not active yet.
+    RestorationUnavailable,
+    /// Exploration rest is contracted but its applier is not active yet.
+    RestUnavailable,
+    /// An atomic party movement contract failed validation.
+    PartyMove {
+        /// Exact party-movement reason.
+        reason: PartyMoveRefusal,
+    },
+    /// A restoration answer failed validation.
+    Restoration {
+        /// Exact restoration reason.
+        reason: RestorationRefusal,
+    },
+    /// Rest is legal only while exploring.
+    RestExploringOnly,
+    /// A modal encounter outcome currently freezes simulation commands.
+    EncounterResolved {
+        /// Outcome retaining the world behind the modal.
+        outcome: EncounterOutcome,
+    },
     /// A disable answer arrived while no decision was open.
     NoPendingDecision,
     /// The answer came from a different unit than the open decision named.
@@ -309,6 +409,43 @@ pub enum CombatEvent {
         /// The downed unit.
         unit: UnitId,
     },
+    /// An atomic party movement committed for every member.
+    PartyMoved {
+        /// Stable anchor member.
+        anchor: UnitId,
+        /// Exact committed per-member paths.
+        paths: Vec<PartyPath>,
+    },
+    /// A restoration answer restored exact disabled cells.
+    HexesRestored {
+        /// Caster who owned the decision.
+        caster: UnitId,
+        /// Restored unit.
+        target: UnitId,
+        /// Exact restored cells.
+        cells: Vec<LatticeCoord>,
+    },
+    /// A restored downed unit became eligible for next-round initiative.
+    Revived {
+        /// Revived unit.
+        unit: UnitId,
+        /// Round boundary at which it re-enters.
+        reenters_round: u32,
+    },
+    /// Exploration rest recovered one party member.
+    Rested {
+        /// Recovered party member.
+        unit: UnitId,
+        /// Exact disabled cells restored.
+        cells: Vec<LatticeCoord>,
+        /// Total mana refilled across live unlocked gems.
+        refilled_mana: u16,
+    },
+    /// Combat reached a terminal result exactly once.
+    EncounterResolved {
+        /// Retained-world modal result.
+        outcome: EncounterOutcome,
+    },
     /// The command applier rejected an intent without mutating for it.
     CommandRefused {
         /// The exact stable command that was rejected.
@@ -350,6 +487,9 @@ mod tests {
             },
             CommandRefusal::MissingCombatData {
                 data: CombatData::SubstanceTable,
+            },
+            CommandRefusal::MissingCombatData {
+                data: CombatData::SpatialKnowledge,
             },
             CommandRefusal::MissingUnitData {
                 unit: UnitId(1),
@@ -430,6 +570,19 @@ mod tests {
                 spell: "Ember".to_owned(),
             },
             CommandRefusal::ChannelUnavailable,
+            CommandRefusal::PartyMovementUnavailable,
+            CommandRefusal::RestorationUnavailable,
+            CommandRefusal::RestUnavailable,
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::WrongAnchor,
+            },
+            CommandRefusal::Restoration {
+                reason: RestorationRefusal::NoDecision,
+            },
+            CommandRefusal::RestExploringOnly,
+            CommandRefusal::EncounterResolved {
+                outcome: EncounterOutcome::Victory,
+            },
             CommandRefusal::NoPendingDecision,
             CommandRefusal::WrongDecisionUnit {
                 expected: UnitId(4),
@@ -505,6 +658,30 @@ mod tests {
                 rounds: 1,
             },
             CombatEvent::Downed { unit: target_unit },
+            CombatEvent::PartyMoved {
+                anchor: source,
+                paths: vec![PartyPath {
+                    member: source,
+                    path: vec![target],
+                }],
+            },
+            CombatEvent::HexesRestored {
+                caster: source,
+                target: target_unit,
+                cells: vec![cell],
+            },
+            CombatEvent::Revived {
+                unit: target_unit,
+                reenters_round: 2,
+            },
+            CombatEvent::Rested {
+                unit: source,
+                cells: vec![cell],
+                refilled_mana: 3,
+            },
+            CombatEvent::EncounterResolved {
+                outcome: EncounterOutcome::Defeat,
+            },
             CombatEvent::CommandRefused {
                 command: GameCommand::Cast {
                     unit: source,

@@ -166,11 +166,11 @@ impl FactionMapKnowledge {
         }
     }
 
-    /// Builds the compact movement-facing projection for the local player faction.
+    /// Builds the compact movement-facing projection for one faction.
     #[must_use]
-    pub fn player_local_map_knowledge(&self) -> LocalMapKnowledge {
+    pub fn local_map_knowledge(&self, faction: Faction) -> LocalMapKnowledge {
         let mut local = LocalMapKnowledge::new();
-        for (_, known) in self.player.surfaces() {
+        for (_, known) in self.faction(faction).surfaces() {
             let snapshot = known.snapshot();
             local.set(
                 known.state(),
@@ -181,9 +181,20 @@ impl FactionMapKnowledge {
         local
     }
 
+    /// Replaces an existing compact projection with one faction's current knowledge.
+    pub fn publish_local_map_knowledge(&self, faction: Faction, local: &mut LocalMapKnowledge) {
+        *local = self.local_map_knowledge(faction);
+    }
+
+    /// Builds the compact movement-facing projection for the local player faction.
+    #[must_use]
+    pub fn player_local_map_knowledge(&self) -> LocalMapKnowledge {
+        self.local_map_knowledge(Faction::Player)
+    }
+
     /// Replaces an existing local-player projection with the current knowledge.
     pub fn publish_player_local_map_knowledge(&self, local: &mut LocalMapKnowledge) {
-        *local = self.player_local_map_knowledge();
+        self.publish_local_map_knowledge(Faction::Player, local);
     }
 }
 
@@ -350,6 +361,7 @@ mod tests {
             id: UnitId(7),
             faction: Faction::Hostile,
             pos: position,
+            provides_sight: true,
         };
         let mut knowledge = FactionMapKnowledge::new();
 
@@ -380,6 +392,7 @@ mod tests {
             id: UnitId(7),
             faction: Faction::Hostile,
             pos: position,
+            provides_sight: true,
         };
         let mut observation = FactionObservation::new();
         observation
@@ -423,6 +436,14 @@ mod tests {
             Some(TraversalEndpoint::new(player_pos, true, Headroom(2)))
         );
         assert!(!local.get(player_pos).expect("known player surface").blocked);
+
+        let hostile_local = knowledge.local_map_knowledge(Faction::Hostile);
+        assert_eq!(
+            hostile_local.state(player_pos),
+            KnowledgeState::Unknown,
+            "a faction-generic projection must select only the requested slot"
+        );
+        assert_eq!(hostile_local.state(hostile_pos), KnowledgeState::Observed);
     }
 
     #[test]

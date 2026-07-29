@@ -46,6 +46,10 @@ impl SurfaceSnapshot {
 ///
 /// Faction knowledge stores these only while the unit is observed. The type contains
 /// no renderer entity id, so its ordering and equality are stable across runs.
+///
+/// `provides_sight` is deliberately independent from visibility. An incapacitated
+/// unit may remain visible to another observer without extending its faction's field
+/// of view itself.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObservedUnit {
     /// Stable simulation identity.
@@ -54,6 +58,8 @@ pub struct ObservedUnit {
     pub faction: Faction,
     /// Exact surface occupied by the unit.
     pub pos: TilePos,
+    /// Whether this unit may actively contribute sight for its faction.
+    pub provides_sight: bool,
 }
 
 /// Current exposed surfaces in deterministic exact-position order.

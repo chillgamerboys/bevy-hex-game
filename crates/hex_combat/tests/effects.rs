@@ -54,7 +54,8 @@ fn elements() -> ElementCatalog {
     })
 }
 
-/// Two spells: one that sets a target alight, one that raises a flat defence.
+/// Implemented effect fixtures plus one area-shaped burn used to prove that spatial
+/// authorization applies only to the cast anchor.
 ///
 /// The pair is the whole point of the fixture. "Ward" subtracts 1 from an incoming
 /// disable count, which is exactly enough to absorb an ember — and exactly what burn is
@@ -127,6 +128,24 @@ fn spells(burn_turns: u16) -> SpellBook {
                 needs_los: false,
             },
             effects: vec![Effect::Reveal { tier: 1 }],
+        },
+    );
+    by_name.insert(
+        "Wildfire".to_owned(),
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 3,
+                shape: TargetShape::Sphere { radius: 2 },
+                needs_los: false,
+            },
+            effects: vec![Effect::Burn { turns: burn_turns }],
         },
     );
     SpellBook::from_file(&SpellFile { spells: by_name })
@@ -317,7 +336,12 @@ fn publish_spatial_knowledge(app: &mut App) {
         for &(id, faction, pos, _) in &rows {
             observation.insert_surface(pos);
             observation
-                .try_insert_unit(ObservedUnit { id, faction, pos })
+                .try_insert_unit(ObservedUnit {
+                    id,
+                    faction,
+                    pos,
+                    provides_sight: true,
+                })
                 .expect("test unit ids are unique");
         }
         observation
@@ -422,6 +446,41 @@ fn two_ember_casters(app: &mut App) -> Fight {
         HexCoord::ORIGIN,
         20,
         lattice_casting(&book, &catalog, "Ember", "Fire", 2),
+    );
+    let defender = spawn(
+        app,
+        UnitId(2),
+        Faction::Hostile,
+        defender_coord,
+        10,
+        lattice_casting(&book, &catalog, "Ward", "Metal", 3),
+    );
+    publish_spatial_knowledge(app);
+
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+
+    Fight {
+        caster,
+        defender,
+        defender_pos: TilePos::new(defender_coord, GROUND),
+    }
+}
+
+fn two_wildfire_casters(app: &mut App) -> Fight {
+    let catalog = app.world().resource::<ElementCatalog>().clone();
+    let book = app.world().resource::<SpellBook>().clone();
+    let defender_coord = HexCoord::new_cubic(1, -1, 0);
+
+    let caster = spawn(
+        app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::ORIGIN,
+        20,
+        lattice_casting(&book, &catalog, "Wildfire", "Fire", 2),
     );
     let defender = spawn(
         app,
@@ -758,6 +817,141 @@ fn successful_direct_spell_damage_reuses_the_target_recoil() {
 }
 
 #[test]
+fn casting_fails_closed_until_the_anchor_is_currently_observed() {
+    let mut app = test_app(2);
+    let fight = two_ember_casters(&mut app);
+    let command = GameCommand::Cast {
+        unit: UnitId(1),
+        spell: "Ember".to_owned(),
+        target: fight.defender_pos,
+        facing: None,
+        mana: None,
+    };
+    let before = app
+        .world()
+        .get::<LatticeState>(fight.caster)
+        .expect("the caster has a lattice")
+        .total_gem_mana();
+
+    app.world_mut().remove_resource::<FactionMapKnowledge>();
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: command.clone(),
+            refusal: CommandRefusal::MissingCombatData {
+                data: hex_combat::CombatData::SpatialKnowledge,
+            },
+        }]
+    );
+
+    app.insert_resource(FactionMapKnowledge::new());
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: command.clone(),
+            refusal: CommandRefusal::TargetUnobserved {
+                spell: "Ember".to_owned(),
+                target: fight.defender_pos,
+            },
+        }],
+        "Unknown terrain must not be a cast anchor"
+    );
+
+    publish_spatial_knowledge(&mut app);
+    let no_surfaces = SurfaceSnapshots::default();
+    let no_observations = FactionObservations::default();
+    apply_observations(
+        &mut app.world_mut().resource_mut::<FactionMapKnowledge>(),
+        &no_surfaces,
+        &no_observations,
+    );
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command: command.clone(),
+            refusal: CommandRefusal::TargetUnobserved {
+                spell: "Ember".to_owned(),
+                target: fight.defender_pos,
+            },
+        }],
+        "Remembered terrain must not be a cast anchor"
+    );
+
+    assert_eq!(
+        app.world()
+            .get::<LatticeState>(fight.caster)
+            .expect("refusals preserve the caster lattice")
+            .total_gem_mana(),
+        before,
+        "no failed observation check may spend mana"
+    );
+    assert!(
+        !app.world()
+            .get::<Turn>(fight.caster)
+            .expect("the caster retains the turn")
+            .acted,
+        "no failed observation check may spend the action"
+    );
+
+    publish_spatial_knowledge(&mut app);
+    push(&mut app, command);
+    app.update();
+    assert!(
+        take_events(&mut app)
+            .iter()
+            .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })),
+        "the same anchor becomes legal when currently Observed"
+    );
+}
+
+#[test]
+fn an_observed_anchor_allows_area_spillover_into_unknown_space() {
+    let mut app = test_app(2);
+    let fight = two_wildfire_casters(&mut app);
+    let player = app
+        .world()
+        .resource::<FactionMapKnowledge>()
+        .faction(Faction::Player);
+    assert_eq!(
+        player.state(fight.defender_pos),
+        hex_core::KnowledgeState::Observed
+    );
+    let hidden_neighbor = TilePos::new(
+        fight.defender_pos.coord.neighbor(hex_core::Sextant::A),
+        fight.defender_pos.level,
+    );
+    assert_eq!(
+        player.state(hidden_neighbor),
+        hex_core::KnowledgeState::Unknown,
+        "the fixture needs genuinely hidden spillover space"
+    );
+
+    cast_named(&mut app, UnitId(1), "Wildfire", fight.defender_pos);
+
+    let events = take_events(&mut app);
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, CombatEvent::CommandRefused { .. })),
+        "only the anchor is an authorization boundary; hidden area spillover remains legal"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        CombatEvent::BurnApplied {
+            source: UnitId(1),
+            target: UnitId(2),
+            turns: 2,
+        }
+    )));
+}
+
+#[test]
 fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
     let mut app = test_app(2);
     let fight = two_ember_casters(&mut app);
@@ -795,10 +989,15 @@ fn a_damage_cast_on_a_downed_unit_is_refused_before_payment() {
     assert!(!app.world().resource::<PendingDecision>().is_open());
     assert_eq!(
         take_events(&mut app),
-        vec![CombatEvent::CommandRefused {
-            command,
-            refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
-        }]
+        vec![
+            CombatEvent::CommandRefused {
+                command,
+                refusal: CommandRefusal::TargetDowned { target: UnitId(2) },
+            },
+            CombatEvent::EncounterResolved {
+                outcome: hex_combat::EncounterOutcome::Victory,
+            },
+        ]
     );
 }
 
@@ -921,7 +1120,8 @@ fn a_burn_comes_due_at_the_start_of_its_targets_turn() {
     );
 }
 
-/// The burn's damage goes through `ChooseDisables`, so it lands in the replay log.
+/// The burn's damage goes through `ChooseDisables`, so a future replay can preserve
+/// the choice.
 ///
 /// Burn ignoring armour is **not** burn ignoring the defender's choice. A runtime that
 /// disabled hexes itself would satisfy every other test in this file — the hex would
