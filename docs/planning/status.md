@@ -127,6 +127,18 @@ selected ally, decision owner, aimed target, and retained target as explicit rol
 Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
 Mirror remain its focused automated companions.
 
+The **Wave 5 pre-alpha app shell is live**. The title deck exposes Maps, focused
+Demos, and Actions; New Game resolves the hidden Party Trial default, while Continue
+restores one explicit save made from paused exploration. That atomic, build-bound
+resume captures scenario/content identity, generator identity, party lattices, and
+exploration positions, rejects corrupt or incompatible files visibly, and cannot be
+written during combat. Settings atomically persists window, presentation, and volume
+preferences, with fixed centralized input actions and audio buses as replaceable
+seams. Builds also carry the Hex Game app identity/icon, normalized package layout,
+and retained crash symbols. These are disposable continuity and artifact scaffolds,
+not a durable save contract, rebinding UI, audio content, signing, storefront, crash
+reporting, or telemetry.
+
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
@@ -143,8 +155,9 @@ default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate, and the *Close Quarters* scenario exists so a walk (or a person)
-reaches combat in one click. The menus wear vendored Cinzel/Inter type over a
+mechanical gate. New Game reaches the 3v3 Party Trial in one click, while Ability Lab
+and Raider Mirror isolate ability and identity checks. The menus wear vendored
+Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
 time-of-day is available to those that opt in. The title screen shows the workspace
 version, sessions write a `hex_game.log` beside the executable (fresh per launch),
@@ -333,12 +346,14 @@ The first implementation also ships with explicit limitations:
 
 ## The production gap
 
-Most of what makes this a product does not exist yet: no saves, no settings menu,
-no audio, no input rebinding, and no signing or store packaging. The first hygiene
+Most of what makes this a product does not exist yet: no durable saves, audio content,
+input rebinding, signing, or store packaging. Wave 5 now provides one atomic,
+build-bound exploration resume, a persistent settings menu, centralized fixed input
+actions, empty audio buses, normalized release artifacts, and retained symbol
+material. The first hygiene
 slice has landed — a per-session log file beside the executable, a panic hook that
 writes into it, and the version on the title screen — but full crash *reporting*
-(symbolication, upload, a dialog) has not. Wave 5 adds disposable pre-alpha continuity
-and replaceable app-shell, settings, audio/input, and artifact seams; it does not close
-the production gap or promise compatibility. The full checklist and evidence remain
+(symbolication, upload, a dialog) has not. These replaceable seams do not close the
+production gap or promise compatibility. The full checklist and evidence remain
 frozen in [production-audit.md](production-audit.md); the sequenced scaffold is in
 [roadmap.md](roadmap.md).

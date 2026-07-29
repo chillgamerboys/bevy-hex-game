@@ -57,6 +57,7 @@ impl Default for HudVisibility {
 }
 
 pub(crate) fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.init_resource::<HudVisibility>()
         .configure_sets(
             Update,
@@ -195,8 +196,12 @@ fn reset_hud(mut hud: ResMut<HudVisibility>) {
     hud.shown = true;
 }
 
-fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut hud: ResMut<HudVisibility>) {
-    if keys.just_pressed(KeyCode::KeyH) {
+fn toggle_hud(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut hud: ResMut<HudVisibility>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ToggleHud) {
         hud.shown = !hud.shown;
     }
 }

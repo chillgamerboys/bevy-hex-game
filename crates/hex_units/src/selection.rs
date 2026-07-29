@@ -32,8 +32,8 @@ use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, Mode, PausableSystems, Screen,
-    TilePos, TraversalBlockers, Turn, UnitId,
+    CameraFocusTarget, GameplaySetup, GameplaySystems, HexTile, InputBindings, Mode,
+    PausableSystems, Screen, TilePos, TraversalBlockers, Turn, UnitId,
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
@@ -161,6 +161,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<HoveredSurface>()
         .init_resource::<MovementPreview>()
         .init_resource::<TerrainRevision>()
+        .init_resource::<InputBindings>()
         .add_systems(
             OnEnter(Screen::Gameplay),
             create_overlay_assets.in_set(GameplaySetup::Resources),
@@ -275,6 +276,7 @@ fn create_overlay_assets(
 
 fn select_party_member_from_keys(
     keys: Option<Res<ButtonInput<KeyCode>>>,
+    bindings: Res<InputBindings>,
     mode: Option<Res<State<Mode>>>,
     party: Res<Party>,
     registry: Res<UnitRegistry>,
@@ -290,16 +292,7 @@ fn select_party_member_from_keys(
     {
         return;
     }
-    let pressed = [
-        KeyCode::Digit1,
-        KeyCode::Digit2,
-        KeyCode::Digit3,
-        KeyCode::Digit4,
-        KeyCode::Digit5,
-        KeyCode::Digit6,
-    ]
-    .into_iter()
-    .position(|key| keys.just_pressed(key));
+    let pressed = bindings.pressed_party_member(&keys);
     let Some(index) = pressed else {
         return;
     };
@@ -751,10 +744,12 @@ mod tests {
     #[test]
     fn number_keys_select_members_in_stable_party_order() {
         let mut app = App::new();
-        app.init_resource::<ButtonInput<KeyCode>>().add_systems(
-            Update,
-            (select_party_member_from_keys, reconcile_selection).chain(),
-        );
+        app.init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .add_systems(
+                Update,
+                (select_party_member_from_keys, reconcile_selection).chain(),
+            );
         let first_id = UnitId(4);
         let second_id = UnitId(8);
         let first = app.world_mut().spawn((Player, first_id, Selected)).id();
@@ -780,6 +775,8 @@ mod tests {
     fn combat_forces_selection_to_the_acting_player() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
             .init_state::<Mode>()
             .add_systems(
                 Update,

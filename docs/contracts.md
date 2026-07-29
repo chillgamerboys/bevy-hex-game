@@ -59,7 +59,7 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `GameplaySetup` — `Resources → Terrain → Actors → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
+| `GameplaySetup` — `Resources → Terrain → Actors → Restore → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
@@ -77,7 +77,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
+| `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
