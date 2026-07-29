@@ -53,6 +53,7 @@ mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
 mod patch;
+mod seam;
 mod seed;
 #[cfg_attr(
     not(test),

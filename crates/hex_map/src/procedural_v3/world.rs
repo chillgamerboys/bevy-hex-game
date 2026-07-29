@@ -200,6 +200,7 @@ impl GeneratedWorldPlan {
 
         append_liquid_issues(&mut issues, &self.liquids.validate(&self.volume));
         self.validate_liquid_seams(&mut issues);
+        super::seam::validate_world_walker_seams(self, &mut issues);
         self.validate_features_and_blockers(&mut issues);
         self.validate_structures(&mut issues);
         self.validate_biomes(&mut issues);
@@ -951,6 +952,7 @@ pub(crate) enum WorldIssueCode {
     Layout,
     Volume,
     Liquid,
+    Traversal,
     Feature,
     Structure,
     Blocker,

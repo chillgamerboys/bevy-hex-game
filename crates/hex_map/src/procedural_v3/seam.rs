@@ -1,0 +1,420 @@
+//! Shared ordinary-walker contracts for V3 patch seams.
+//!
+//! Patch recipes shape their local approach surfaces before voxelization. The
+//! complete world validator later proves that only the exact declared lanes cross
+//! between patches.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use hex_core::{HexCoord, Level, SpecialMovementRegion, TilePos, TraversalProfile};
+
+use super::layout::{PatchId, ResolvedEdgeContract, ResolvedLiquidPort};
+use super::patch::PatchRecipeContext;
+use super::traversal::OrdinaryGraph;
+use super::volume::{SurfaceAccess, VolumePlan};
+use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
+
+const SEAM_CLOSURE_REGION_BASE: u32 = 0x0ffe_0000;
+
+/// Exact local consequences of shaping one patch's shared walker seams.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct WalkerSeamShape {
+    boundary_regions: BTreeMap<HexCoord, SpecialMovementRegion>,
+    open_surfaces: BTreeSet<TilePos>,
+}
+
+impl WalkerSeamShape {
+    /// Exact ordinary surface required at this protected approach coordinate.
+    #[must_use]
+    pub(crate) fn required_surface(&self, coord: HexCoord) -> Option<TilePos> {
+        self.open_surfaces
+            .iter()
+            .find(|surface| surface.coord == coord)
+            .copied()
+    }
+
+    /// Whether a column participates in any shared boundary.
+    #[must_use]
+    pub(crate) fn is_boundary(&self, coord: HexCoord) -> bool {
+        self.boundary_regions.contains_key(&coord)
+    }
+
+    /// Projects every non-aperture boundary surface into special movement.
+    pub(crate) fn apply(&self, volume: &mut VolumePlan) -> Result<(), Vec<WorldValidationIssue>> {
+        let mut issues = Vec::new();
+        for (surface, metadata) in &mut volume.surfaces {
+            let Some(region) = self.boundary_regions.get(&surface.coord).copied() else {
+                continue;
+            };
+            if !self.open_surfaces.contains(surface) && metadata.access == SurfaceAccess::Ordinary {
+                metadata.access = SurfaceAccess::SpecialMovement(region);
+            }
+        }
+        for surface in &self.open_surfaces {
+            if !matches!(
+                volume.surfaces.get(surface).map(|metadata| metadata.access),
+                Some(SurfaceAccess::Ordinary)
+            ) {
+                issues.push(seam_issue(format!(
+                    "declared seam aperture has no exact ordinary surface at {surface:?}"
+                )));
+            }
+        }
+        if issues.is_empty() {
+            Ok(())
+        } else {
+            Err(issues)
+        }
+    }
+}
+
+/// Fits exact two-wide walker ports to their shared datum and identifies closures.
+pub(crate) fn shape_walker_seams(
+    patch: &PatchRecipeContext<'_>,
+    levels: &mut BTreeMap<HexCoord, Level>,
+) -> Result<WalkerSeamShape, Vec<WorldValidationIssue>> {
+    let mut issues = Vec::new();
+    let mut open_coords = BTreeSet::new();
+    let mut open_surfaces = BTreeSet::new();
+    let mut edges = Vec::new();
+
+    for edge in patch.shared_edges() {
+        if !matches!(edge.contract.liquid, ResolvedLiquidPort::Dry) {
+            issues.push(seam_issue(format!(
+                "patch {} dry-recipe seam {:?} declares directed liquid",
+                patch.id.0, edge.id
+            )));
+            continue;
+        }
+        let ports = edge.walker_ports();
+        if !valid_two_wide_contract(
+            edge.contract.walker.count,
+            edge.contract.walker.width,
+            &ports,
+        ) {
+            issues.push(seam_issue(format!(
+                "patch {} seam {:?} must declare exact two-wide walker ports",
+                patch.id.0, edge.id
+            )));
+            continue;
+        }
+        for port in &ports {
+            open_coords.extend(port.first_approach.iter().copied());
+        }
+        edges.push((edge, ports));
+    }
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+
+    for (edge, ports) in &edges {
+        let preferred = edge.preferred_level();
+        let approaches: BTreeSet<_> = ports
+            .iter()
+            .flat_map(|port| port.first_approach.iter().copied())
+            .collect();
+        for (coord, level) in levels.iter_mut() {
+            let distance = approaches
+                .iter()
+                .map(|approach| approach.distance(*coord))
+                .min()
+                .unwrap_or(u32::MAX);
+            let distance = i32::try_from(distance).unwrap_or(i32::MAX);
+            *level = (*level)
+                .min(preferred.saturating_add(distance))
+                .max(preferred.saturating_sub(distance));
+        }
+        for coord in approaches {
+            match levels.get_mut(&coord) {
+                Some(level) => {
+                    *level = preferred;
+                    open_surfaces.insert(TilePos::new(coord, preferred));
+                }
+                None => issues.push(seam_issue(format!(
+                    "patch {} seam {:?} approach {coord:?} is outside its level plan",
+                    patch.id.0, edge.id
+                ))),
+            }
+        }
+    }
+    if !issues.is_empty() {
+        return Err(issues);
+    }
+
+    let mut boundary_regions = BTreeMap::new();
+    for (edge, _) in edges {
+        let region = SpecialMovementRegion(SEAM_CLOSURE_REGION_BASE.saturating_add(edge.id.0));
+        for (local, _) in edge.boundary_pairs() {
+            if !levels.contains_key(&local) {
+                issues.push(seam_issue(format!(
+                    "patch {} seam {:?} boundary {local:?} is outside its level plan",
+                    patch.id.0, edge.id
+                )));
+                continue;
+            }
+            boundary_regions
+                .entry(local)
+                .and_modify(|existing| {
+                    if region < *existing {
+                        *existing = region;
+                    }
+                })
+                .or_insert(region);
+        }
+    }
+
+    if issues.is_empty() {
+        debug_assert!(open_surfaces
+            .iter()
+            .all(|surface| open_coords.contains(&surface.coord)));
+        Ok(WalkerSeamShape {
+            boundary_regions,
+            open_surfaces,
+        })
+    } else {
+        Err(issues)
+    }
+}
+
+/// Checks one patch's exact local endpoint, approach, and closure contract.
+#[must_use]
+pub(crate) fn validate_patch_walker_seams(
+    patch: &PatchRecipeContext<'_>,
+    volume: &VolumePlan,
+) -> Vec<WorldValidationIssue> {
+    let mut issues = Vec::new();
+    let ordinary = OrdinaryGraph::from_volume(volume, None);
+    let mut globally_open = BTreeSet::new();
+
+    for edge in patch.shared_edges() {
+        let ports = edge.walker_ports();
+        if !valid_two_wide_contract(
+            edge.contract.walker.count,
+            edge.contract.walker.width,
+            &ports,
+        ) {
+            issues.push(seam_issue(format!(
+                "patch {} seam {:?} does not retain exact two-wide walker ports",
+                patch.id.0, edge.id
+            )));
+            continue;
+        }
+        for port in &ports {
+            let mut landings = BTreeSet::new();
+            for (local, _) in &port.lanes {
+                let position = TilePos::new(*local, edge.preferred_level());
+                validate_local_surface(patch.id, edge.id, position, volume, &ordinary, &mut issues);
+                landings.insert(position);
+            }
+            for coord in &port.first_approach {
+                let position = TilePos::new(*coord, edge.preferred_level());
+                globally_open.insert(position);
+                validate_local_surface(patch.id, edge.id, position, volume, &ordinary, &mut issues);
+                if !landings
+                    .iter()
+                    .any(|landing| ordinary.distances_from(*landing).contains_key(&position))
+                {
+                    issues.push(seam_issue(format!(
+                        "patch {} seam {:?} approach {position:?} is disconnected from its port",
+                        patch.id.0, edge.id
+                    )));
+                }
+            }
+        }
+    }
+
+    for edge in patch.shared_edges() {
+        for (local, _) in edge.boundary_pairs() {
+            for (surface, metadata) in volume
+                .surfaces
+                .iter()
+                .filter(|(surface, _)| surface.coord == local)
+            {
+                if metadata.access == SurfaceAccess::Ordinary && !globally_open.contains(surface) {
+                    issues.push(seam_issue(format!(
+                        "patch {} seam {:?} leaves undeclared boundary surface {surface:?} ordinary",
+                        patch.id.0, edge.id
+                    )));
+                }
+            }
+        }
+    }
+    issues
+}
+
+/// Checks exact declared transitions and rejects every other ordinary seam crossing.
+pub(crate) fn validate_world_walker_seams(
+    plan: &GeneratedWorldPlan,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+    for (edge_id, edge) in &plan.layout.shared_edges {
+        if !valid_two_wide_contract(edge.walker.count, edge.walker.width, &edge.walker.ports) {
+            issues.push(seam_issue(format!(
+                "shared seam {edge_id:?} does not retain exact two-wide walker ports"
+            )));
+            continue;
+        }
+        let declared_lanes: BTreeSet<_> = edge
+            .walker
+            .ports
+            .iter()
+            .flat_map(|port| port.lanes.iter().copied())
+            .collect();
+        let admitted_pairs = admitted_walker_boundary_pairs(edge);
+
+        for (first, second) in &declared_lanes {
+            let first = TilePos::new(*first, edge.elevation.preferred);
+            let second = TilePos::new(*second, edge.elevation.preferred);
+            validate_world_surface(*edge_id, first, &plan.volume, &ordinary, issues);
+            validate_world_surface(*edge_id, second, &plan.volume, &ordinary, issues);
+            if !ordinary.admits(first, second) || !ordinary.admits(second, first) {
+                issues.push(seam_issue(format!(
+                    "shared seam {edge_id:?} exact lane {first:?} -> {second:?} lacks a symmetric walker aperture"
+                )));
+            }
+        }
+
+        for (patch, approaches) in &edge.protected_approaches {
+            for coord in approaches {
+                validate_world_surface(
+                    *edge_id,
+                    TilePos::new(*coord, edge.elevation.preferred),
+                    &plan.volume,
+                    &ordinary,
+                    issues,
+                );
+            }
+            if !plan.layout.patches.contains_key(patch) {
+                issues.push(seam_issue(format!(
+                    "shared seam {edge_id:?} protects an unknown patch {}",
+                    patch.0
+                )));
+            }
+        }
+
+        for (first_coord, second_coord) in &edge.boundary_pairs {
+            let first = ordinary
+                .positions()
+                .filter(|surface| surface.coord == *first_coord)
+                .collect::<Vec<_>>();
+            let second = ordinary
+                .positions()
+                .filter(|surface| surface.coord == *second_coord)
+                .collect::<Vec<_>>();
+            for first in &first {
+                for second in &second {
+                    if ordinary.admits(*first, *second) || ordinary.admits(*second, *first) {
+                        let declared_exact = admitted_pairs
+                            .contains(&(*first_coord, *second_coord))
+                            && first.level == edge.elevation.preferred
+                            && second.level == edge.elevation.preferred;
+                        if !declared_exact {
+                            issues.push(seam_issue(format!(
+                                "shared seam {edge_id:?} admits undeclared crossing {first:?} -> {second:?}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn admitted_walker_boundary_pairs(edge: &ResolvedEdgeContract) -> BTreeSet<(HexCoord, HexCoord)> {
+    edge.boundary_pairs
+        .iter()
+        .copied()
+        .filter(|(first, second)| {
+            edge.walker.ports.iter().any(|port| {
+                port.lanes.iter().any(|(coord, _)| coord == first)
+                    && port.lanes.iter().any(|(_, coord)| coord == second)
+            })
+        })
+        .collect()
+}
+
+fn validate_local_surface(
+    patch: PatchId,
+    edge: super::layout::ResolvedEdgeId,
+    position: TilePos,
+    volume: &VolumePlan,
+    ordinary: &OrdinaryGraph,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if !matches!(
+        volume
+            .surfaces
+            .get(&position)
+            .map(|metadata| metadata.access),
+        Some(SurfaceAccess::Ordinary)
+    ) {
+        issues.push(seam_issue(format!(
+            "patch {} seam {edge:?} requires exact ordinary surface {position:?}",
+            patch.0
+        )));
+        return;
+    }
+    if volume
+        .surface_headroom(position)
+        .is_none_or(|headroom| headroom.0 < TraversalProfile::WALKER.levels_tall)
+    {
+        issues.push(seam_issue(format!(
+            "patch {} seam {edge:?} surface {position:?} lacks two-level headroom",
+            patch.0
+        )));
+    }
+    if !ordinary.contains(position) {
+        issues.push(seam_issue(format!(
+            "patch {} seam {edge:?} surface {position:?} is absent from ordinary traversal",
+            patch.0
+        )));
+    }
+}
+
+fn validate_world_surface(
+    edge: super::layout::ResolvedEdgeId,
+    position: TilePos,
+    volume: &VolumePlan,
+    ordinary: &OrdinaryGraph,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if !matches!(
+        volume
+            .surfaces
+            .get(&position)
+            .map(|metadata| metadata.access),
+        Some(SurfaceAccess::Ordinary)
+    ) {
+        issues.push(seam_issue(format!(
+            "shared seam {edge:?} requires exact ordinary surface {position:?}"
+        )));
+        return;
+    }
+    if volume
+        .surface_headroom(position)
+        .is_none_or(|headroom| headroom.0 < TraversalProfile::WALKER.levels_tall)
+    {
+        issues.push(seam_issue(format!(
+            "shared seam {edge:?} surface {position:?} lacks two-level headroom"
+        )));
+    }
+    if !ordinary.contains(position) {
+        issues.push(seam_issue(format!(
+            "shared seam {edge:?} surface {position:?} is blocked from ordinary traversal"
+        )));
+    }
+}
+
+fn seam_issue(detail: impl Into<String>) -> WorldValidationIssue {
+    WorldValidationIssue::new(WorldIssueCode::Traversal, detail)
+}
+
+fn valid_two_wide_contract(count: u8, width: u32, ports: &[super::layout::ResolvedPort]) -> bool {
+    if count == 0 {
+        return width == 0 && ports.is_empty();
+    }
+    width == 2
+        && usize::from(count) == ports.len()
+        && ports.iter().all(|port| port.lanes.len() == 2)
+}

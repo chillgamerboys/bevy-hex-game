@@ -9,15 +9,39 @@ use std::collections::BTreeSet;
 use hex_core::{BiomeRegionId, HexCoord, Level};
 
 use super::layout::{
-    HexSide, PatchId, ResolvedEdgeContract, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+    HexSide, PatchId, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
+    ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
 };
 use super::seed::SeedStreams;
 use super::V3GenerationError;
 
+/// Deterministic construction mode shared by every patch-ready V3 recipe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PatchBuildMode {
+    /// One member of the complete world's eight-candidate selection run.
+    Candidate { world_seed: u64, candidate: u8 },
+    /// Separately authored fallback with no seed or candidate state.
+    CanonicalFallback,
+}
+
+impl PatchBuildMode {
+    /// Candidate streams namespaced by the resolved patch, or none for fallback.
+    #[must_use]
+    pub(crate) fn seed_streams(self, patch: &PatchRecipeContext<'_>) -> Option<SeedStreams> {
+        match self {
+            Self::Candidate {
+                world_seed,
+                candidate,
+            } => Some(patch.seed_streams(world_seed, candidate)),
+            Self::CanonicalFallback => None,
+        }
+    }
+}
+
 /// One shared edge as seen from a particular patch.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PatchSharedEdge<'a> {
+    pub(crate) id: ResolvedEdgeId,
     #[cfg_attr(
         not(test),
         expect(
@@ -67,6 +91,20 @@ impl<'a> PatchSharedEdge<'a> {
             .iter()
             .map(|port| orient_port(port, self.patch_is_first))
             .collect()
+    }
+
+    /// Every adjacent cross-patch pair, oriented outward from this patch.
+    #[must_use]
+    pub(crate) fn boundary_pairs(&self) -> BTreeSet<(HexCoord, HexCoord)> {
+        if self.patch_is_first {
+            self.contract.boundary_pairs.clone()
+        } else {
+            self.contract
+                .boundary_pairs
+                .iter()
+                .map(|(first, second)| (*second, *first))
+                .collect()
+        }
     }
 
     /// Directed liquid aperture when this patch is the source or sink.
@@ -132,6 +170,7 @@ impl<'a> PatchRecipeContext<'a> {
             let contract = self.layout.shared_edges.get(edge_id)?;
             let patch_is_first = contract.first == (self.id, side);
             Some(PatchSharedEdge {
+                id: *edge_id,
                 side,
                 contract,
                 patch_is_first,
@@ -153,6 +192,18 @@ impl<'a> PatchRecipeContext<'a> {
     #[must_use]
     pub(crate) fn seed_streams(&self, seed: u64, candidate: u8) -> SeedStreams {
         SeedStreams::new(seed, candidate, self.id.0)
+    }
+
+    /// Complete resolved layout which owns this patch.
+    #[must_use]
+    pub(crate) const fn layout(&self) -> &'a ResolvedLayoutPlan {
+        self.layout
+    }
+
+    /// Whole-world radius used for semantic and camera scaling.
+    #[must_use]
+    pub(crate) const fn grid_radius(&self) -> u32 {
+        self.layout.grid_radius
     }
 }
 
