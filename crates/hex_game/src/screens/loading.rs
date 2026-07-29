@@ -54,7 +54,8 @@ fn spawn_loading(mut commands: Commands, assets: Res<UiAssets>) {
 /// resolved from both by a separate `Update` system. This check runs in `PostUpdate`,
 /// after deferred resource insertions, and waits until both sources are unchanged and
 /// match the derived table. That prevents an existing table from satisfying the check
-/// during either kind of hot reload.
+/// during either kind of hot reload, while a rejected pair can settle back to the
+/// resolver's last accepted source snapshot.
 fn enter_gameplay_when_ready(
     assets: Res<GameAssets>,
     asset_server: Res<AssetServer>,
@@ -133,6 +134,56 @@ mod tests {
 
     fn queue_palette_replacement(mut commands: Commands) {
         commands.insert_resource(test_palette(0.8));
+    }
+
+    fn app_with_resolved_substances(file: SubstanceFile, palette: ArtPalette) -> App {
+        let table = SubstanceTable::from_file(&file, &palette)
+            .expect("the initial test substance sources should resolve");
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin {
+                file_path: std::env::temp_dir()
+                    .join("hex-game-loading-test-no-assets")
+                    .to_string_lossy()
+                    .into_owned(),
+                ..default()
+            },
+            StatesPlugin,
+        ));
+        app.insert_state(Screen::Loading);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
+        app.insert_resource(GameAssets {
+            hex_tile: Handle::default(),
+            player_pieces: [Handle::default(), Handle::default()],
+        });
+        app.add_plugins(hex_assets::substances::plugin);
+        // This test installs the cross-file sources directly, so the fixed-file
+        // loader registered by the substances plugin has nothing to wait for.
+        app.insert_resource(SettingsRegistry::default());
+        app.insert_resource(ScenarioContractStatus::Invalid);
+        app.insert_resource(file);
+        app.insert_resource(palette);
+        app.insert_resource(table);
+        plugin(&mut app);
+        app
+    }
+
+    fn assert_loading_accepts_restored_sources(app: &mut App) {
+        app.world_mut()
+            .insert_resource(ScenarioContractStatus::Ready);
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<NextState<Screen>>(),
+                &NextState::Pending(Screen::Gameplay)
+            ),
+            "Loading should proceed after the accepted source pair has settled"
+        );
     }
 
     /// A settings replacement queued in `Update` must be visible before readiness is
@@ -246,5 +297,55 @@ mod tests {
             matches!(world.resource::<NextState<Screen>>(), &NextState::Unchanged),
             "gameplay must wait for palette colors to reach the derived table"
         );
+    }
+
+    #[test]
+    fn loading_recovers_after_an_invalid_substance_reference_hot_reload() {
+        let file = substance_file("stone");
+        let palette = test_palette(0.5);
+        let mut app = app_with_resolved_substances(file, palette);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<SubstanceFile>()
+            .substances
+            .get_mut("stone")
+            .expect("stone should exist")
+            .swatch = Some(swatch_id("missing"));
+        app.update();
+
+        let world = app.world();
+        assert!(
+            world.resource::<SubstanceTable>().matches_sources(
+                world.resource::<SubstanceFile>(),
+                world.resource::<ArtPalette>()
+            ),
+            "the rejected substance source should be restored before Loading retries"
+        );
+        assert_loading_accepts_restored_sources(&mut app);
+    }
+
+    #[test]
+    fn loading_recovers_after_a_palette_only_cross_file_failure() {
+        let file = substance_file("stone");
+        let palette = test_palette(0.5);
+        let mut app = app_with_resolved_substances(file, palette);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<ArtPalette>()
+            .remove(&swatch_id("stone"))
+            .expect("the test palette should permit removing stone");
+        app.update();
+
+        let world = app.world();
+        assert!(
+            world.resource::<SubstanceTable>().matches_sources(
+                world.resource::<SubstanceFile>(),
+                world.resource::<ArtPalette>()
+            ),
+            "the rejected palette should be restored before Loading retries"
+        );
+        assert_loading_accepts_restored_sources(&mut app);
     }
 }
