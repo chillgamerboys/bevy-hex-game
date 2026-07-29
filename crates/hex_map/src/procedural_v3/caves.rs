@@ -10,6 +10,7 @@ use hex_core::{HexCoord, IlluminationLevel, InteriorRegionId, MapViewHint, TileP
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams, WalkerSeamShape};
 use super::seed::SeedStream;
@@ -19,8 +20,8 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::volume::{
-    LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
-    VolumeElement, VolumePlan,
+    FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
+    SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
     CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeaturePlan, GeneratedWorldPlan,
@@ -36,6 +37,7 @@ use crate::settings::{
 const CORRIDOR_CLEARANCE: i32 = 3;
 const CHAMBER_CLEARANCE: i32 = 4;
 const MIN_ROOF_THICKNESS: i32 = 3;
+const SURFACE_WATER_LEVEL: i32 = 14;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
@@ -120,6 +122,14 @@ struct PatchFrame {
     center: HexCoord,
     scale: i32,
     max_entrance_inset: i32,
+}
+
+#[derive(Debug, Clone)]
+struct CaveLiquidSink {
+    body: LiquidBodyId,
+    top_level: i32,
+    boundary: BTreeSet<HexCoord>,
+    coordinates: BTreeSet<HexCoord>,
 }
 
 /// Runs the common eight-candidate selector for one V3 Caves world.
@@ -370,6 +380,11 @@ fn construct_patch_with_streams(
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     validate_patch_capacity(&patch, settings)
         .map_err(|error| vec![recipe_issue(error.to_string())])?;
+    let liquid_sinks = cave_liquid_sinks(&patch)?;
+    let liquid_coordinates = liquid_sinks
+        .iter()
+        .flat_map(|sink| sink.coordinates.iter().copied())
+        .collect::<BTreeSet<_>>();
     let mask = patch.mask().clone();
     let biome_region = patch.biome_region();
     let topology_mask = cave_topology_mask(&patch);
@@ -384,6 +399,7 @@ fn construct_patch_with_streams(
         requested_orientation,
         settings,
         streams,
+        &liquid_coordinates,
     )?;
     let ramp_levels: BTreeMap<_, _> = topology
         .entrance
@@ -406,13 +422,33 @@ fn construct_patch_with_streams(
     let mut entrances = BTreeSet::new();
     let mut roof_voxels = BTreeSet::new();
     let mut surface_by_coord = BTreeMap::new();
+    let liquid_levels = liquid_sinks
+        .iter()
+        .flat_map(|sink| {
+            sink.coordinates
+                .iter()
+                .copied()
+                .map(move |coord| (coord, sink.top_level))
+        })
+        .collect::<BTreeMap<_, _>>();
     for coord in &mask {
         let surface_level = surface_heights.get(coord).copied().ok_or_else(|| {
             vec![recipe_issue(format!(
                 "Caves surface plan omitted coordinate {coord:?}"
             ))]
         })?;
-        if let Some(ramp_level) = ramp_levels.get(coord).copied() {
+        if let Some(water_level) = liquid_levels.get(coord).copied() {
+            let (column, bed) = surface_water_column(*coord, water_level);
+            columns.insert(*coord, column);
+            surfaces.insert(
+                bed,
+                SurfaceMetadata {
+                    access: SurfaceAccess::NonStandable,
+                    interior: None,
+                },
+            );
+            surface_by_coord.insert(*coord, bed);
+        } else if let Some(ramp_level) = ramp_levels.get(coord).copied() {
             let position = TilePos::new(*coord, ramp_level);
             columns.insert(*coord, entrance_column(ramp_level));
             surfaces.insert(position, ordinary_surface(Some(interior)));
@@ -496,7 +532,13 @@ fn construct_patch_with_streams(
 
     let critical_targets = exact_interior_positions(&volume, &topology.critical_coords);
     let optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
-    let protected_positions = anchors.values().copied().collect();
+    let mut protected_positions = anchors.values().copied().collect::<BTreeSet<_>>();
+    protected_positions.extend(
+        patch
+            .protected_approaches()
+            .into_iter()
+            .map(|coord| TilePos::new(coord, 0)),
+    );
     let lights = plan_lights(
         &volume,
         &critical_targets,
@@ -529,7 +571,33 @@ fn construct_patch_with_streams(
     let fragment = GeneratedPatchPlan {
         patch_id: patch.id,
         volume,
-        liquids: Default::default(),
+        liquids: LiquidPlan {
+            bodies: liquid_sinks
+                .iter()
+                .map(|sink| {
+                    (
+                        sink.body,
+                        LiquidBodyPlan {
+                            material: FillMaterialRole::Water,
+                            nodes: sink
+                                .coordinates
+                                .iter()
+                                .copied()
+                                .map(|coord| {
+                                    (
+                                        TilePos::new(coord, sink.top_level),
+                                        LiquidNode {
+                                            state: LiquidFlowState::Still,
+                                            downstream: None,
+                                        },
+                                    )
+                                })
+                                .collect(),
+                        },
+                    )
+                })
+                .collect(),
+        },
         features: FeaturePlan::default(),
         structures: StructurePlan::default(),
         blockers: BTreeSet::new(),
@@ -549,6 +617,7 @@ fn construct_patch_with_streams(
         view_hint,
     };
     let mut issues = validate_patch_walker_seams(&patch, &fragment.volume);
+    issues.extend(validate_cave_liquid_sinks(&patch, &fragment, &liquid_sinks));
     issues.extend(
         fragment
             .validate_against(patch.layout())
@@ -574,6 +643,7 @@ fn compatible_patch_geometry(
     requested_orientation: u8,
     settings: &V3CavesSettings,
     streams: Option<CaveStreams<'_>>,
+    liquid_coordinates: &BTreeSet<HexCoord>,
 ) -> Result<(u8, CaveTopology, BTreeMap<HexCoord, i32>, WalkerSeamShape), Vec<WorldValidationIssue>>
 {
     let mut last_issues = Vec::new();
@@ -616,9 +686,21 @@ fn compatible_patch_geometry(
             .floor_levels
             .keys()
             .any(|coord| seam_shape.is_boundary(*coord));
-        if ramp_conflicts || underground_seam_crossing {
+        let underground_liquid_overlap = topology
+            .floor_levels
+            .keys()
+            .chain(
+                topology
+                    .entrance
+                    .rows
+                    .iter()
+                    .flatten()
+                    .map(|position| &position.coord),
+            )
+            .any(|coord| liquid_coordinates.contains(coord));
+        if ramp_conflicts || underground_seam_crossing || underground_liquid_overlap {
             last_issues = vec![recipe_issue(format!(
-                "Caves orientation {orientation} overlaps a protected shared seam"
+                "Caves orientation {orientation} overlaps a protected shared seam or liquid sink"
             ))];
             continue;
         }
@@ -630,6 +712,193 @@ fn compatible_patch_geometry(
         ));
     }
     Err(last_issues)
+}
+
+fn cave_liquid_sinks(
+    patch: &PatchRecipeContext<'_>,
+) -> Result<Vec<CaveLiquidSink>, Vec<WorldValidationIssue>> {
+    let mut sinks = Vec::new();
+    let mut occupied = BTreeSet::new();
+    for edge in patch.shared_edges() {
+        let Some((is_source, port)) = edge.liquid_port() else {
+            continue;
+        };
+        if is_source {
+            return Err(vec![recipe_issue(format!(
+                "Caves patch {:?} cannot source directed liquid edge {:?}",
+                patch.id, edge.id
+            ))]);
+        }
+
+        let top_level =
+            SURFACE_WATER_LEVEL.clamp(edge.contract.elevation.min, edge.contract.elevation.max);
+        let boundary = port
+            .lanes
+            .iter()
+            .map(|(local, _neighbor)| *local)
+            .collect::<BTreeSet<_>>();
+        let coordinates = boundary
+            .iter()
+            .copied()
+            .chain(port.first_approach.iter().copied())
+            .collect::<BTreeSet<_>>();
+        if boundary.len() != port.lanes.len()
+            || coordinates.is_empty()
+            || coordinates
+                .iter()
+                .any(|coord| !patch.mask().contains(coord))
+            || !connected_coords(&coordinates)
+        {
+            return Err(vec![recipe_issue(format!(
+                "Caves incoming liquid edge {:?} does not form one connected in-patch sink",
+                edge.id
+            ))]);
+        }
+        if coordinates.iter().any(|coord| !occupied.insert(*coord)) {
+            return Err(vec![recipe_issue(
+                "Caves incoming liquid sink footprints overlap",
+            )]);
+        }
+        sinks.push(CaveLiquidSink {
+            body: LiquidBodyId(u32::try_from(sinks.len()).unwrap_or(u32::MAX)),
+            top_level,
+            boundary,
+            coordinates,
+        });
+    }
+    Ok(sinks)
+}
+
+fn validate_cave_liquid_sinks(
+    patch: &PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    expected: &[CaveLiquidSink],
+) -> Vec<WorldValidationIssue> {
+    let mut issues = Vec::new();
+    if patch.layout().kind == super::layout::LayoutKind::Single && !expected.is_empty() {
+        issues.push(recipe_issue(
+            "Single Caves must not declare a directed liquid sink",
+        ));
+    }
+    if fragment.liquids.bodies.len() != expected.len() {
+        issues.push(recipe_issue(format!(
+            "Caves has {} liquid bodies, expected {} incoming sink bodies",
+            fragment.liquids.bodies.len(),
+            expected.len()
+        )));
+    }
+
+    for sink in expected {
+        let Some(body) = fragment.liquids.bodies.get(&sink.body) else {
+            issues.push(recipe_issue(format!(
+                "Caves is missing incoming liquid body {:?}",
+                sink.body
+            )));
+            continue;
+        };
+        let expected_nodes = sink
+            .coordinates
+            .iter()
+            .copied()
+            .map(|coord| TilePos::new(coord, sink.top_level))
+            .collect::<BTreeSet<_>>();
+        let actual_nodes = body.nodes.keys().copied().collect::<BTreeSet<_>>();
+        if body.material != FillMaterialRole::Water || actual_nodes != expected_nodes {
+            issues.push(recipe_issue(format!(
+                "Caves liquid body {:?} does not exactly cover its incoming port and approach",
+                sink.body
+            )));
+        }
+        if body
+            .nodes
+            .values()
+            .any(|node| node.state != LiquidFlowState::Still || node.downstream.is_some())
+        {
+            issues.push(recipe_issue(format!(
+                "Caves liquid body {:?} must be a terminal still-water sink",
+                sink.body
+            )));
+        }
+        for coord in &sink.boundary {
+            if !body
+                .nodes
+                .contains_key(&TilePos::new(*coord, sink.top_level))
+            {
+                issues.push(recipe_issue(format!(
+                    "Caves liquid body {:?} omits boundary endpoint {coord:?}",
+                    sink.body
+                )));
+            }
+        }
+        for position in expected_nodes {
+            let bed = TilePos::new(position.coord, position.level.saturating_sub(1));
+            let bed_is_non_standable = fragment.volume.surfaces.get(&bed).is_some_and(|metadata| {
+                metadata.access == SurfaceAccess::NonStandable && metadata.interior.is_none()
+            });
+            let valid_column = fragment
+                .volume
+                .columns
+                .get(&position.coord)
+                .is_some_and(|column| {
+                    let gravel_bed = column.elements.iter().any(|element| {
+                        matches!(
+                            element,
+                            VolumeElement::Solid(SolidMass {
+                                levels,
+                                material: SolidMaterialRole::Gravel,
+                                cutaway_for: None,
+                            }) if *levels
+                                == LevelInterval::new(
+                                    position.level.saturating_sub(1),
+                                    position.level
+                                )
+                        )
+                    });
+                    let exact_fill = column.elements.iter().any(|element| {
+                        matches!(
+                            element,
+                            VolumeElement::Fill(NonSolidFill {
+                                levels,
+                                material: FillMaterialRole::Water,
+                            }) if *levels
+                                == LevelInterval::new(
+                                    position.level,
+                                    position.level.saturating_add(1)
+                                )
+                        )
+                    });
+                    gravel_bed && exact_fill
+                });
+            let overlaps_interior = fragment.interiors.by_id.values().any(|interior| {
+                interior
+                    .floors
+                    .iter()
+                    .any(|floor| floor.coord == position.coord)
+            });
+            if !bed_is_non_standable || !valid_column || overlaps_interior {
+                issues.push(recipe_issue(format!(
+                    "Caves liquid sink {position:?} lacks its exact exterior water-bed contract"
+                )));
+            }
+        }
+    }
+    issues
+}
+
+fn connected_coords(coordinates: &BTreeSet<HexCoord>) -> bool {
+    let Some(start) = coordinates.first().copied() else {
+        return false;
+    };
+    let mut reached = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(coord) = frontier.pop_front() {
+        for neighbor in coord.neighbors() {
+            if coordinates.contains(&neighbor) && reached.insert(neighbor) {
+                frontier.push_back(neighbor);
+            }
+        }
+    }
+    reached.len() == coordinates.len()
 }
 
 fn build_topology(
@@ -1659,18 +1928,20 @@ fn carve_crystal_alcove_column(
     Ok(VolumeColumn { elements })
 }
 
-fn validate_caves(
+pub(crate) fn validate_caves(
     plan: &GeneratedWorldPlan,
     settings: &V3CavesSettings,
 ) -> WorldValidation<CavesMetrics> {
     let mut issues = plan.validate();
-    if !plan.liquids.bodies.is_empty()
-        || !plan.features.by_id.is_empty()
+    if plan.layout.kind == super::layout::LayoutKind::Single && !plan.liquids.bodies.is_empty() {
+        issues.push(recipe_issue("Single Caves must not contain liquids"));
+    }
+    if !plan.features.by_id.is_empty()
         || !plan.structures.by_id.is_empty()
         || !plan.blockers.is_empty()
     {
         issues.push(recipe_issue(
-            "Caves must not contain liquids, surface features, structures, or blockers",
+            "Caves must not contain surface features, structures, or blockers",
         ));
     }
     let Some((region, interior)) = plan.interiors.by_id.first_key_value() else {
@@ -1777,10 +2048,9 @@ fn validate_caves(
         .surfaces
         .keys()
         .filter(|surface| {
-            plan.volume
-                .surfaces
-                .get(surface)
-                .is_some_and(|metadata| metadata.interior.is_none())
+            plan.volume.surfaces.get(surface).is_some_and(|metadata| {
+                metadata.interior.is_none() && metadata.access == SurfaceAccess::Ordinary
+            })
         })
         .map(|surface| (surface.coord, surface.level))
         .collect();
@@ -2133,6 +2403,24 @@ fn rocky_column(surface: i32, gravel: bool) -> VolumeColumn {
     VolumeColumn { elements }
 }
 
+fn surface_water_column(coord: HexCoord, water_level: i32) -> (VolumeColumn, TilePos) {
+    let bed_level = water_level.saturating_sub(1);
+    (
+        VolumeColumn {
+            elements: vec![
+                solid(0, 1, SolidMaterialRole::Bedrock, None),
+                solid(1, bed_level, SolidMaterialRole::Stone, None),
+                solid(bed_level, water_level, SolidMaterialRole::Gravel, None),
+                VolumeElement::Fill(NonSolidFill {
+                    levels: LevelInterval::new(water_level, water_level.saturating_add(1)),
+                    material: FillMaterialRole::Water,
+                }),
+            ],
+        },
+        TilePos::new(coord, bed_level),
+    )
+}
+
 fn entrance_column(surface: i32) -> VolumeColumn {
     VolumeColumn {
         elements: vec![
@@ -2356,10 +2644,15 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
 mod tests {
     use super::*;
     use crate::settings::{
+        EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings,
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
+        SharedEdgeSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3MountainsSettings,
+        V3Ring7Settings, V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
     };
     use crate::terrain::TerrainPalette;
     use hex_core::SubstanceId;
+
+    use super::super::layout::HexSide;
 
     const BEDROCK: SubstanceId = SubstanceId(1);
     const STONE: SubstanceId = SubstanceId(2);
@@ -2401,6 +2694,145 @@ mod tests {
         }
     }
 
+    fn cave_inlet_ring_settings() -> ProceduralV3Settings {
+        let hills = V3HillsSettings {
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        };
+        let mut ring = V3Ring7Settings {
+            center: generated_patch(
+                V3EnvironmentSettings::TemperateGrassland,
+                V3RecipeSettings::Hills(hills.clone()),
+            ),
+            mountains: generated_patch(
+                V3EnvironmentSettings::Frozen,
+                V3RecipeSettings::Mountains(V3MountainsSettings {
+                    base_level: 15,
+                    relief: 18,
+                    peak_count: 5,
+                }),
+            ),
+            waterfall: generated_patch(
+                V3EnvironmentSettings::TemperateGrassland,
+                V3RecipeSettings::Waterfall(V3WaterfallSettings),
+            ),
+            forest: generated_patch(
+                V3EnvironmentSettings::TemperateGrassland,
+                V3RecipeSettings::Forest(V3ForestSettings),
+            ),
+            fort: generated_patch(
+                V3EnvironmentSettings::TemperateGrassland,
+                V3RecipeSettings::Fort(V3FortSettings),
+            ),
+            caves: generated_patch(
+                V3EnvironmentSettings::Rocky,
+                V3RecipeSettings::Caves(V3CavesSettings {
+                    surface_level: 16,
+                    cave_floor_level: 7,
+                    chamber_count: 9,
+                }),
+            ),
+            sky_islands: generated_patch(
+                V3EnvironmentSettings::TemperateGrassland,
+                V3RecipeSettings::SkyIslands(V3SkyIslandsSettings {
+                    ground: hills,
+                    min_clearance: 14,
+                    upper_coverage_percent: 20,
+                }),
+            ),
+        };
+        for (first, first_side, second, second_side) in [
+            (0, HexSide::NorthEast, 1, HexSide::SouthWest),
+            (0, HexSide::East, 2, HexSide::West),
+            (0, HexSide::SouthEast, 3, HexSide::NorthWest),
+            (0, HexSide::SouthWest, 4, HexSide::NorthEast),
+            (0, HexSide::West, 5, HexSide::East),
+            (0, HexSide::NorthWest, 6, HexSide::SouthEast),
+            (1, HexSide::SouthEast, 2, HexSide::NorthWest),
+            (2, HexSide::SouthWest, 3, HexSide::NorthEast),
+            (3, HexSide::West, 4, HexSide::East),
+            (4, HexSide::NorthWest, 5, HexSide::SouthEast),
+            (5, HexSide::NorthEast, 6, HexSide::SouthWest),
+            (6, HexSide::East, 1, HexSide::West),
+        ] {
+            set_ring_edge(
+                ring_patch_mut(&mut ring, first),
+                first_side,
+                ring_shared(EdgeLiquidSettings::Dry),
+            );
+            set_ring_edge(
+                ring_patch_mut(&mut ring, second),
+                second_side,
+                ring_shared(EdgeLiquidSettings::Dry),
+            );
+        }
+        set_ring_edge(
+            &mut ring.center,
+            HexSide::West,
+            ring_shared(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+                width: 3,
+            })),
+        );
+        set_ring_edge(
+            &mut ring.caves,
+            HexSide::East,
+            ring_shared(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+                width: 3,
+            })),
+        );
+        ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring7(ring),
+        }
+    }
+
+    fn generated_patch(environment: V3EnvironmentSettings, recipe: V3RecipeSettings) -> PatchSpec {
+        PatchSpec {
+            environment,
+            recipe,
+            overlays: Vec::new(),
+            mask: PatchMaskSettings::GeneratedRegion,
+            edges: world_edges(),
+        }
+    }
+
+    fn ring_patch_mut(ring: &mut V3Ring7Settings, id: u32) -> &mut PatchSpec {
+        match id {
+            0 => &mut ring.center,
+            1 => &mut ring.mountains,
+            2 => &mut ring.waterfall,
+            3 => &mut ring.forest,
+            4 => &mut ring.fort,
+            5 => &mut ring.caves,
+            6 => &mut ring.sky_islands,
+            _ => unreachable!("fixed Ring7 patch id"),
+        }
+    }
+
+    fn set_ring_edge(patch: &mut PatchSpec, side: HexSide, contract: PatchEdgeContractSettings) {
+        *match side {
+            HexSide::East => &mut patch.edges.east,
+            HexSide::SouthEast => &mut patch.edges.south_east,
+            HexSide::SouthWest => &mut patch.edges.south_west,
+            HexSide::West => &mut patch.edges.west,
+            HexSide::NorthWest => &mut patch.edges.north_west,
+            HexSide::NorthEast => &mut patch.edges.north_east,
+        } = contract;
+    }
+
+    fn ring_shared(liquid: EdgeLiquidSettings) -> PatchEdgeContractSettings {
+        PatchEdgeContractSettings::Shared(SharedEdgeSettings {
+            elevation: EdgeElevationSettings {
+                preferred: 15,
+                min: 14,
+                max: 16,
+            },
+            walker: WalkerPortSettings { count: 2, width: 2 },
+            liquid,
+            approach_depth: 3,
+        })
+    }
+
     fn palette() -> TerrainPalette {
         TerrainPalette {
             bedrock: BEDROCK,
@@ -2434,6 +2866,78 @@ mod tests {
         assert!(selected.metrics.maximum_clearance >= 4);
         assert!(selected.metrics.minimum_roof_thickness >= 3);
         assert_eq!(selected.validated.plan.validate(), Vec::new());
+    }
+
+    #[test]
+    fn single_caves_remain_liquid_free() {
+        for seed in [0, 33, 445, 736_283_041] {
+            let selected =
+                generate(12, 0.4, &settings(), seed).expect("Single Caves should remain valid");
+            assert!(
+                selected.validated.plan.liquids.bodies.is_empty(),
+                "Single seed {seed} unexpectedly materialized surface water"
+            );
+        }
+    }
+
+    #[test]
+    fn ring_cave_sink_exactly_covers_its_inlet_and_approach() {
+        let settings = cave_inlet_ring_settings();
+        let layout = resolve_layout(33, &settings).expect("liquid Ring7 fixture should resolve");
+        let patch =
+            PatchRecipeContext::resolve(&layout, PatchId(5)).expect("Caves patch should resolve");
+        let expected = cave_liquid_sinks(&patch).expect("Caves inlet should resolve");
+        assert_eq!(expected.len(), 1);
+        assert_eq!(expected[0].top_level, SURFACE_WATER_LEVEL);
+        assert_eq!(expected[0].boundary.len(), 3);
+
+        let caves = match &settings.layout {
+            V3LayoutSettings::Ring7(ring) => match &ring.caves.recipe {
+                V3RecipeSettings::Caves(caves) => caves,
+                _ => unreachable!(),
+            },
+            _ => unreachable!(),
+        };
+        for mode in [
+            PatchBuildMode::Candidate {
+                world_seed: 0,
+                candidate: 2,
+            },
+            PatchBuildMode::CanonicalFallback,
+        ] {
+            let fragment = construct_patch(patch, caves, 0.4, mode)
+                .expect("Caves should fit around its exact incoming liquid sink");
+            assert_eq!(fragment.validate_against(&layout), Vec::new());
+            assert_eq!(
+                validate_cave_liquid_sinks(&patch, &fragment, &expected),
+                Vec::new()
+            );
+
+            let body = fragment
+                .liquids
+                .bodies
+                .get(&LiquidBodyId(0))
+                .expect("Caves should publish one sink body");
+            assert_eq!(
+                body.nodes.keys().copied().collect::<BTreeSet<_>>(),
+                expected[0]
+                    .coordinates
+                    .iter()
+                    .copied()
+                    .map(|coord| TilePos::new(coord, SURFACE_WATER_LEVEL))
+                    .collect()
+            );
+            assert!(expected[0].boundary.iter().all(|coord| {
+                body.nodes
+                    .contains_key(&TilePos::new(*coord, SURFACE_WATER_LEVEL))
+            }));
+            assert!(fragment.interiors.by_id.values().all(|interior| {
+                interior
+                    .floors
+                    .iter()
+                    .all(|floor| !expected[0].coordinates.contains(&floor.coord))
+            }));
+        }
     }
 
     #[test]
