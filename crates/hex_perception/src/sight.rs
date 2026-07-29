@@ -574,6 +574,117 @@ mod tests {
     }
 
     #[test]
+    fn radius_40_light_observer_and_remembered_surface_matrix_is_exact() {
+        let level = 15;
+        let snapshots = SurfaceSnapshots::try_from_iter(
+            HexCoord::ORIGIN
+                .within_radius(40)
+                .into_iter()
+                .map(|coord| surface(TilePos::new(coord, level))),
+        )
+        .expect("radius-40 surfaces should be unique");
+        let observer = TilePos::new(HexCoord::ORIGIN, level);
+        let at = |distance| TilePos::new(HexCoord::from_axial(distance, 0), level);
+        let samples = [at(0), at(1), at(2), at(20), at(21), at(40)];
+        let sight = profile(40, 20, 1, 10);
+        let bright = ExteriorIllumination::new(IlluminationLevel::Bright);
+        let dark = ExteriorIllumination::new(IlluminationLevel::Dark);
+        let active = unit(1, Faction::Player, observer);
+        let inactive = inactive_unit(1, Faction::Player, observer);
+        let mut knowledge = FactionMapKnowledge::new();
+
+        let bright_illumination = ResolvedIllumination::from_surfaces(&snapshots, bright, &[])
+            .expect("bright radius-40 illumination");
+        let initial = resolve_observations(
+            [active],
+            &bright_illumination,
+            &knowledge,
+            bright,
+            &[],
+            sight,
+        )
+        .expect("initial radius-40 observation");
+        assert_eq!(
+            initial.faction(Faction::Player).surface_count(),
+            snapshots.len()
+        );
+        apply_observations(&mut knowledge, &snapshots, &initial);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Observed
+            );
+        }
+
+        let mixed_lights = [
+            light(at(20), LightDomain::Exterior, IlluminationLevel::Dim, 0),
+            light(at(40), LightDomain::Exterior, IlluminationLevel::Bright, 0),
+        ];
+        let mixed_illumination =
+            ResolvedIllumination::from_surfaces(&snapshots, dark, &mixed_lights)
+                .expect("mixed radius-40 illumination");
+        let mixed = resolve_observations(
+            [active],
+            &mixed_illumination,
+            &knowledge,
+            dark,
+            &mixed_lights,
+            sight,
+        )
+        .expect("mixed-light radius-40 observation");
+        apply_observations(&mut knowledge, &snapshots, &mixed);
+        for (sample, expected) in [
+            (at(0), hex_core::KnowledgeState::Observed),
+            (at(1), hex_core::KnowledgeState::Observed),
+            (at(2), hex_core::KnowledgeState::Remembered),
+            (at(20), hex_core::KnowledgeState::Observed),
+            (at(21), hex_core::KnowledgeState::Remembered),
+            (at(40), hex_core::KnowledgeState::Observed),
+        ] {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                expected,
+                "unexpected mixed-light state at {sample:?}"
+            );
+        }
+
+        let no_active_observer = resolve_observations(
+            [inactive],
+            &mixed_illumination,
+            &knowledge,
+            dark,
+            &mixed_lights,
+            sight,
+        )
+        .expect("inactive observer projection");
+        assert!(no_active_observer.faction(Faction::Player).is_empty());
+        apply_observations(&mut knowledge, &snapshots, &no_active_observer);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Remembered
+            );
+        }
+
+        let restored = resolve_observations(
+            [active],
+            &bright_illumination,
+            &knowledge,
+            bright,
+            &[],
+            sight,
+        )
+        .expect("restored radius-40 observation");
+        apply_observations(&mut knowledge, &snapshots, &restored);
+        for sample in samples {
+            assert_eq!(
+                knowledge.faction(Faction::Player).state(sample),
+                hex_core::KnowledgeState::Observed
+            );
+        }
+    }
+
+    #[test]
     fn target_light_can_make_detection_asymmetric() {
         let player_pos = pos(0, 0, 5);
         let hostile_pos = pos(3, 0, 5);
