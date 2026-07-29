@@ -151,7 +151,8 @@ pub(crate) enum DecisionControl {
 }
 
 pub(super) fn plugin(app: &mut App) {
-    app.init_resource::<LatticeReadouts>()
+    app.init_resource::<hex_core::InputBindings>()
+        .init_resource::<LatticeReadouts>()
         .init_resource::<RetainedTarget>()
         .init_resource::<DisableSelection>()
         .add_systems(
@@ -692,6 +693,7 @@ pub(crate) fn spawn_decision_controls(
 )]
 fn handle_decision_input(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
     pending: Res<PendingDecision>,
     registry: Res<UnitRegistry>,
     mut queue: ResMut<CommandQueue>,
@@ -737,7 +739,7 @@ fn handle_decision_input(
     };
 
     let mut clear = false;
-    let mut confirm = keys.just_pressed(KeyCode::Enter);
+    let mut confirm = bindings.just_pressed(&keys, hex_core::InputAction::Confirm);
     for (interaction, control) in &controls {
         if *interaction != Interaction::Pressed {
             continue;
@@ -1016,6 +1018,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<hex_core::InputBindings>()
             .init_resource::<PendingDecision>()
             .init_resource::<UnitRegistry>()
             .init_resource::<CommandQueue>()
@@ -1083,6 +1086,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<hex_core::InputBindings>()
             .init_resource::<PendingDecision>()
             .init_resource::<UnitRegistry>()
             .init_resource::<CommandQueue>()

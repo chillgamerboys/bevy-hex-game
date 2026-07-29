@@ -1,0 +1,24 @@
+// README-only capture of the integrated New Game scenario reaching 3v3 combat.
+// Focused automated combat coverage remains in ability_lab.ron and
+// raider_mirror.ron; this script exists to keep the public screenshot reproducible.
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Party Trial"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Click(name: "Formation Preset Column"),
+    Settle(8),
+    ClickTile(q: 0, r: 4),
+    Settle(180),
+    ClickTile(q: 0, r: -2),
+    Settle(240),
+    Click(name: "Formation Preset Wedge"),
+    Settle(8),
+    ClickTile(q: 1, r: -2),
+    Settle(120),
+    ClickTile(q: 0, r: -4),
+    AwaitButton("Cast"),
+    Settle(30),
+    Capture("party-trial-combat"),
+]

@@ -4,6 +4,17 @@ Release sections are prepended here and dated when their promoted `main` commit 
 tagged. The repository has no earlier release tags; `v0.3.0` is planned as its first
 tagged build.
 
+## Unreleased
+
+### Features
+
+- Replace the Combat scenario lane with Maps, focused Demos, and Actions; New Game now
+  launches Party Trial as the hidden integrated default.
+- Add one atomic, build-bound exploration resume slot, persistent display/volume
+  settings, centralized fixed input actions, and empty audio-bus seams.
+- Normalize release artifacts under the Hex Game identity, retain symbol material,
+  and document future signing, Steam, and crash-reporting credential boundaries.
+
 ## v0.3.0 — 2026-07-28
 
 ### Features

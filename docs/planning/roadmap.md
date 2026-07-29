@@ -32,10 +32,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
-| Pre-alpha app shell and default game | Three title lanes — Maps, focused Demos, and Actions — with Party Trial as the hidden New Game default; Continue and Settings are stable hooks for the following scaffolds | game |
-| Save and load | one atomic, exploration-only resume slot with explicit scenario, seed/version, content digests, party state, and exploration state; restore through Loading and visibly refuse corrupt or incompatible data | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
-| Settings menu, persistence, and audio | persisted display and volume values, centralized input actions without rebinding UI, and an audio facade with empty buses ready for later content | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
-| Steam packaging and crash reporting | app identity and icon, normalized release artifacts, retained debug symbols, and documented future signing, Steam, and crash-reporting credential slots; no live integrations | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
@@ -59,6 +55,10 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
 | Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
+| Pre-alpha app shell | Wave 5: Maps, focused Demos, and Actions; Party Trial is the hidden New Game default and Close Quarters retired |
+| Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
+| Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
+| Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -109,7 +109,7 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   co-casting, initiative, action economy, and rout remain future gameplay decisions.
   Perception adapters and `RunBottom`-dependent obstruction/trajectory work are
   optional satellites, not retroactive Wave 4 gates.
-- **Wave 5 — pre-alpha continuity.** A stable app shell and default New Game,
+- **Wave 5 — pre-alpha continuity (delivered).** A stable app shell and default New Game,
   one disposable exploration-resume slot, persistent settings and audio/input seams,
   and release-artifact scaffolding. This wave gets ahead of productization without
   promising save compatibility or live storefront, signing, telemetry, or crash
@@ -134,35 +134,36 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ### Pre-alpha app shell and default game
 
-Keep the development-friendly three-column title deck, but make its lanes Maps,
-focused Demos, and Actions. Party Trial is the one integrated default game and is
-launched by New Game rather than listed beside diagnostic fixtures. Ability Lab and
-Raider Mirror remain visible focused combat demos; Close Quarters and the Combat
-category retire. Continue and Settings begin as stable actions and are activated by
-their Wave 5 scaffolds. Starting a New Game never overwrites the resume slot.
+The development-friendly three-column title deck now has Maps, focused Demos, and
+Actions lanes. Party Trial is the one integrated default game and launches through
+New Game rather than appearing beside diagnostic fixtures. Ability Lab and Raider
+Mirror remain visible focused combat demos; Close Quarters and the Combat category
+are retired. Continue and Settings are active, while starting a New Game never reads
+or overwrites the resume slot.
 
 ### Save and load
 
-Wave 5 owns one hand-shaped, versioned, atomic resume file in `hex_game/src/save/` —
-domain state, not ECS reflection. It is written only from a quiescent Exploring state
-and records the scenario reference, explicit resolved seed and generator version,
-settings/content digests, and the party's exploration state. Restore rides the
-existing Loading flow. Corrupt or incompatible data is refused visibly rather than
-partially loaded. Combat state, migrations, durable compatibility, and a terrain edit
-log are outside this scaffold; the resume slot can be discarded between builds.
+Wave 5 ships one hand-shaped, versioned, atomic resume file through
+`crates/hex_game/src/save.rs` — domain state, not ECS reflection. It is written only
+from paused, quiescent exploration and records the scenario reference, explicit
+resolved seed and generator version, coarse scenario/content digests, and the party's
+exploration state. Restore rides the existing Loading flow. Corrupt or incompatible
+data is refused visibly rather than partially loaded. Combat state, migrations,
+durable compatibility, and a terrain edit log are outside this scaffold; the resume
+slot can be discarded between builds.
 
 ### Settings menu, persistence, and audio
 
-The pre-alpha options surface persists display/window, presentation, and volume values
-across sessions. Input actions are centralized so systems stop owning raw keys, but
-there is no rebinding UI. Audio sits behind music/SFX/UI buses ready for later content;
-Wave 5 does not need to ship any audio. The frozen production audit remains the
-research record, not a requirement to adopt every integration now.
+The pre-alpha options surface persists display/window presentation and music, SFX,
+and UI volume values across sessions. Input actions are centralized so systems stop
+owning raw keys, but there is no rebinding UI. Audio sits behind music/SFX/UI buses
+ready for later content; Wave 5 does not ship audio. The frozen production audit
+remains the research record, not a requirement to adopt every integration now.
 
 ### Steam packaging and crash reporting
 
-Wave 5 gives builds an app identity and icon, normalizes release artifact names and
-layout, and retains debug symbols. Release documentation reserves the future
+Wave 5 builds use an app identity and icon, normalized release artifact names and
+layout, and retained debug symbols. Release documentation reserves the future
 credential and configuration slots for signing, Steam upload, and crash reporting.
 Live integrations, codesigning, notarization, upload, consent UI, and telemetry remain
 later productization work.

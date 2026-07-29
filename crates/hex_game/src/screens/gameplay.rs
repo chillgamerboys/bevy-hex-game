@@ -15,8 +15,8 @@ use bevy::prelude::*;
 use hex_assets::FormationCatalog;
 use hex_combat::{EncounterOutcome, EncounterResolution, Turn, TurnOrder};
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord, IssuedCommand, Mode,
-    PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, UnitId,
+    CommandQueue, ControlOwner, GameCommand, GameplaySystems, HexCoord, InputAction, InputBindings,
+    IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
@@ -29,6 +29,7 @@ use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup
 use crate::scenarios::ActiveScenario;
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<InputBindings>();
     app.add_sub_state::<Pause>();
     app.register_type::<Pause>();
     // A second sub-state of `Screen::Gameplay`, independent of `Pause`. Both are
@@ -409,6 +410,7 @@ fn handle_party_strip(
     slot_clicks: Query<(&Interaction, &PartySlotButton), Changed<Interaction>>,
     rest_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyRestButton>)>,
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     mut queue: ResMut<CommandQueue>,
     selected: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
     owners: Query<&ControlOwner>,
@@ -466,7 +468,7 @@ fn handle_party_strip(
             formation.fill_unassigned(preset, &party.members);
         }
     }
-    let rest_requested = keys.just_pressed(KeyCode::KeyR)
+    let rest_requested = bindings.just_pressed(&keys, InputAction::Rest)
         || rest_clicks
             .iter()
             .any(|interaction| *interaction == Interaction::Pressed);
@@ -895,8 +897,12 @@ fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static 
 /// Logs the new state as well as updating the hostile lattice panel. The line is
 /// useful when a designer is validating disclosure and the HUD itself is hidden.
 #[cfg(feature = "dev")]
-fn toggle_reveal_all(keys: Res<ButtonInput<KeyCode>>, mut reveal: ResMut<hex_combat::RevealAll>) {
-    if keys.just_pressed(KeyCode::KeyK) {
+fn toggle_reveal_all(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
+    mut reveal: ResMut<hex_combat::RevealAll>,
+) {
+    if bindings.just_pressed(&keys, InputAction::RevealAll) {
         reveal.0 = !reveal.0;
         info!("reveal-all {}", if reveal.0 { "on" } else { "off" });
     }
@@ -953,15 +959,16 @@ fn reset_mode(mut next: ResMut<NextState<Mode>>) {
 
 fn handle_input(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     pause: Res<State<Pause>>,
     mut next_pause: ResMut<NextState<Pause>>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
+    if bindings.just_pressed(&keys, InputAction::Pause) {
         next_pause.set(Pause(!pause.get().0));
     }
     // Backspace rather than Escape, which is taken by pause.
-    if keys.just_pressed(KeyCode::Backspace) {
+    if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
         next_screen.set(Screen::Title);
     }
 }

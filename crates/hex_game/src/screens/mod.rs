@@ -12,8 +12,9 @@ use hex_core::Screen;
 mod gameplay;
 mod lattice_demo;
 mod loading;
+mod settings;
 mod splash;
-mod title;
+pub(crate) mod title;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_state::<Screen>();
@@ -22,6 +23,7 @@ pub(super) fn plugin(app: &mut App) {
     app.add_plugins((
         splash::plugin,
         title::plugin,
+        settings::plugin,
         lattice_demo::plugin,
         loading::plugin,
         gameplay::plugin,

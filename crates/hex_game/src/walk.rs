@@ -230,11 +230,12 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
     match name {
         "Splash" => Ok(Screen::Splash),
         "Title" => Ok(Screen::Title),
+        "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Settings, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -256,8 +257,9 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "KeyH" => Ok(KeyCode::KeyH),
         "KeyL" => Ok(KeyCode::KeyL),
         "KeyR" => Ok(KeyCode::KeyR),
+        "F5" => Ok(KeyCode::F5),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, or KeyR"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, KeyL, KeyR, or F5"
         )),
     }
 }
@@ -1186,6 +1188,8 @@ mod tests {
             .collect();
 
         let mut checked = 0;
+        let mut launches_default = false;
+        let mut continues_save = false;
         for script in ["../../walks/menus.ron", "../../walks/gameplay.ron"] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -1201,14 +1205,17 @@ mod tests {
                     );
                     checked += 1;
                 }
+                if matches!(step, WalkStep::Click { name, .. } if name == "New Game") {
+                    launches_default = true;
+                }
+                if matches!(step, WalkStep::Click { name, .. } if name == "Continue") {
+                    continues_save = true;
+                }
             }
         }
-        // Otherwise a walk that stopped launching scenarios — or a variant rename that
-        // made the `if let` stop matching — would leave this passing while checking
-        // nothing, which is the failure it exists to prevent, one level up.
         assert!(
-            checked >= 3,
-            "expected the shipped walks to launch at least three scenarios, found {checked}"
+            checked > 0 || (launches_default && continues_save),
+            "walks must launch configured scenarios directly or exercise New Game and Continue"
         );
     }
 }
