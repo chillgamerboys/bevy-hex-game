@@ -275,11 +275,16 @@ If tracked files changed after the recovery snapshot, Restore preserves the draf
 marks a recovery conflict. **Reconcile** performs a three-way merge between the
 recovery checkpoint, recovered catalog edits, and current tracked catalogs. Independent
 changes are retained from both sides; same-id conflicts are named and remain blocked
-until the author chooses the desired draft value or reloads. A dirty recovered tracked
-object must be preserved through Save As before its old destination can be overwritten.
+until the author explicitly chooses **Recovered Wins** or **Tracked Wins** (the choice
+applies only to same-id conflicts), or reloads. If tracked catalogs change again after
+reconciliation, saving blocks until the author reconciles the new baseline. A dirty
+recovered tracked object whose source also changed must be preserved through Save As
+before its old destination can be overwritten. A clean recovered object instead adopts
+the current tracked version.
 Reconciled catalogs may be saved first when that new object depends on a recovered
 style. Closing a dirty session first flushes recovery, then requires Save All and Quit,
-Discard and Quit, or Cancel. A clean explicit save removes obsolete recovery state.
+Keep Recovery and Quit, Discard and Quit, or Cancel. A clean explicit save removes
+obsolete recovery state.
 
 ## Review output
 
@@ -295,12 +300,12 @@ frames and publishes deterministic artifacts beneath
 - a canonical `report.ron` with identity, bounds, origin, connectivity, occupied-cell
   counts by style and part, exact masks, resolved style and swatch dependencies,
   framing, validation, and independent object, style-catalog, and palette
-  fingerprints.
+  fingerprints plus the exact renderer-mesh byte revision.
 
 Review framing, the neutral render rig, file order, and report format are versioned.
 The report excludes absolute paths, timings, and machine or GPU details. The composite
 review fingerprint changes when the object, style catalog, or palette semantics
-change, regardless of RON formatting.
+change, regardless of RON formatting, and when the shared voxel mesh bytes change.
 
 Frames are rendered to an offscreen target and rejected if they are blank, black, or
 the wrong size. The tool stages the complete pack beside its final directory and
@@ -309,11 +314,13 @@ the same bytes again reuses the existing directory; a different pack claiming th
 same fingerprint is reported as a collision and never overwrites it. Review output is
 derived and untracked. A saved object remains the only source of truth.
 
-Request creation, renderer startup, and publication each verify the exact tracked
-source-byte revisions used to prepare the review. Publication checks once before
-staging and again immediately before the atomic rename. A source change at any of
-those points aborts the export, removes its staging directory, and requires a project
-reload.
+At startup, the Workshop copies `assets/meshes/hex.glb` to an untracked,
+content-addressed cache and renders that immutable copy. Request creation, renderer
+startup, and publication each verify the exact tracked art-source revisions and mesh
+bytes used to prepare the review.
+Publication checks once before staging and again immediately before the atomic rename.
+A source change at any of those points aborts the export, removes its staging
+directory, and requires a project reload or fresh review request.
 
 ## Procedural follow-up
 

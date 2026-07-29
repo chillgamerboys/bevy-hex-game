@@ -928,19 +928,97 @@ pub(crate) fn current_project_revisions(
     Ok(revision_set_from_sources(&sources))
 }
 
+/// Reads the exact byte revision of one repository-relative renderer source.
+pub(crate) fn current_file_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<ByteRevision, ProjectError> {
+    current_file_bytes_and_revision(repository_root, relative_path).map(|(_, revision)| revision)
+}
+
+/// Reads one repository-relative renderer source and its exact byte revision.
+pub(crate) fn current_file_bytes_and_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(Vec<u8>, ByteRevision), ProjectError> {
+    let path = repository_root.join(relative_path);
+    let source =
+        fs::read(&path).map_err(|error| ProjectError::at("read renderer source", &path, error))?;
+    let revision = byte_revision(&source);
+    Ok((source, revision))
+}
+
+/// Copies a renderer source to an immutable, content-addressed AssetServer path.
+pub(crate) fn cache_renderer_source(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(String, ByteRevision), ProjectError> {
+    let (source, revision) = current_file_bytes_and_revision(repository_root, relative_path)?;
+    let extension = relative_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin");
+    let asset_relative = format!(
+        ".asset-workshop-cache/renderer-{}-{:016x}.{extension}",
+        revision.byte_len, revision.fingerprint
+    );
+    let destination = repository_root.join("assets").join(&asset_relative);
+    let parent = destination.parent().ok_or_else(|| {
+        ProjectError::at(
+            "prepare renderer cache",
+            &destination,
+            "destination has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| ProjectError::at("create renderer cache", parent, error))?;
+
+    if destination.exists() {
+        let cached = fs::read(&destination)
+            .map_err(|error| ProjectError::at("read renderer cache", &destination, error))?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "content-addressed cache path contains different bytes",
+            ));
+        }
+    } else if let Err(write_error) =
+        AtomicFile::new(&destination, DisallowOverwrite).write(|file| file.write_all(&source))
+    {
+        let cached = fs::read(&destination).map_err(|read_error| {
+            ProjectError::at(
+                "write renderer cache",
+                &destination,
+                format!(
+                    "atomic write failed ({write_error}); reading a possible concurrent result also failed ({read_error})"
+                ),
+            )
+        })?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "concurrent cache writer produced different bytes",
+            ));
+        }
+    }
+
+    Ok((asset_relative, revision))
+}
+
+fn byte_revision(source: &[u8]) -> ByteRevision {
+    ByteRevision {
+        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
+        fingerprint: xxh3_64(source),
+    }
+}
+
 fn revision_set_from_sources(sources: &BTreeMap<PathBuf, Vec<u8>>) -> ProjectRevisionSet {
     ProjectRevisionSet {
         files: sources
             .iter()
-            .map(|(path, source)| {
-                (
-                    normalized_relative_path(path),
-                    ByteRevision {
-                        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
-                        fingerprint: xxh3_64(source),
-                    },
-                )
-            })
+            .map(|(path, source)| (normalized_relative_path(path), byte_revision(source)))
             .collect(),
     }
 }
@@ -1018,7 +1096,7 @@ fn normalized_relative_path(path: &Path) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
@@ -1032,12 +1110,12 @@ mod tests {
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory {
+    pub(crate) struct TestDirectory {
         path: PathBuf,
     }
 
     impl TestDirectory {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "hex-editor-project-test-{}-{sequence}",
@@ -1047,7 +1125,11 @@ mod tests {
             Self { path }
         }
 
-        fn art_root(&self) -> PathBuf {
+        pub(crate) fn repository_root(&self) -> &Path {
+            &self.path
+        }
+
+        pub(crate) fn art_root(&self) -> PathBuf {
             self.path.join(ART_PATH)
         }
     }
@@ -1070,7 +1152,7 @@ mod tests {
         ObjectAssetId::new(value).expect("test object id should be valid")
     }
 
-    fn fixture_catalog() -> VoxelStyleCatalog {
+    pub(crate) fn fixture_catalog() -> VoxelStyleCatalog {
         let mut styles = BTreeMap::new();
         styles.insert(
             style_id("plant/trunk"),
@@ -1170,7 +1252,7 @@ mod tests {
         }
     }
 
-    fn prepare_project() -> TestDirectory {
+    pub(crate) fn prepare_project() -> TestDirectory {
         let directory = TestDirectory::new();
         let art_root = directory.art_root();
         fs::create_dir_all(&art_root).expect("fixture art directory should be created");
@@ -1634,6 +1716,45 @@ mod tests {
             .expect("current revisions should include the palette");
         assert_eq!(current_palette.byte_len, loaded_palette.byte_len);
         assert_ne!(current_palette.fingerprint, loaded_palette.fingerprint);
+    }
+
+    #[test]
+    fn renderer_cache_is_content_addressed_and_preserves_the_loaded_bytes() {
+        let directory = TestDirectory::new();
+        let source_path = Path::new("assets/meshes/hex.glb");
+        let absolute_source = directory.repository_root().join(source_path);
+        fs::create_dir_all(
+            absolute_source
+                .parent()
+                .expect("renderer source should have a parent"),
+        )
+        .expect("mesh directory should be created");
+        fs::write(&absolute_source, b"mesh version one").expect("mesh fixture should write");
+
+        let (asset_path, revision) =
+            cache_renderer_source(directory.repository_root(), source_path)
+                .expect("renderer source should be cached");
+        let cached_path = directory.repository_root().join("assets").join(asset_path);
+        assert_eq!(
+            fs::read(&cached_path).expect("cached mesh should be readable"),
+            b"mesh version one"
+        );
+        assert_eq!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("original mesh should remain readable")
+        );
+
+        fs::write(&absolute_source, b"mesh version two").expect("mesh fixture should change");
+        assert_ne!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("changed mesh should remain readable")
+        );
+        assert_eq!(
+            fs::read(cached_path).expect("cached mesh should remain immutable"),
+            b"mesh version one"
+        );
     }
 
     #[test]
