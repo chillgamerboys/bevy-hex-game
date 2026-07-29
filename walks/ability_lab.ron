@@ -5,7 +5,7 @@
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     AwaitButton("Cast Scrying Eye"),
-    Settle(20),
+    Settle(60),
     Capture("60-ability-lab-start"),
 
     Click(name: "Cast Scrying Eye"),
