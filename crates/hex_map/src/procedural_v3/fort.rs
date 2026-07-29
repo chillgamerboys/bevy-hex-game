@@ -9,8 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, MapViewHint, SpecialMovementRegion, TilePos};
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
-use super::seed::{SeedStream, SeedStreams};
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
+use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
@@ -159,13 +162,23 @@ impl V3Recipe for FortRecipe {
                 ),
             ));
         }
-        let streams = SeedStreams::new(context.seed, context.candidate, PatchId(0).0);
-        let streams = FortStreams {
-            orientation: streams.stage("fort.orientation"),
-            keep: streams.stage("fort.keep"),
-        };
-        construct_plan(self.layout.clone(), Some(streams), self.level_height)
-            .map_err(CandidateAttemptError::Rejected)
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
+            .map_err(CandidateAttemptError::Fatal)?;
+        let fragment = construct_patch(
+            patch,
+            &V3FortSettings,
+            self.level_height,
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
+        )
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Fatal(V3GenerationError::RecipeContract(format!(
+                "Fort single-patch composition failed: {error:?}"
+            )))
+        })
     }
 
     fn validate(
@@ -213,7 +226,14 @@ impl V3Recipe for FortRecipe {
                 "Fort fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(self.layout.clone(), None, self.level_height).map_err(|issues| {
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
+            &V3FortSettings,
+            self.level_height,
+            PatchBuildMode::CanonicalFallback,
+        )
+        .map_err(|issues| {
             V3GenerationError::RecipeContract(
                 issues
                     .into_iter()
@@ -221,6 +241,11 @@ impl V3Recipe for FortRecipe {
                     .collect::<Vec<_>>()
                     .join("; "),
             )
+        })?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "Fort fallback composition failed: {error:?}"
+            ))
         })
     }
 }
@@ -260,24 +285,37 @@ fn validate_footprint_capacity(layout: &ResolvedLayoutPlan) -> Result<(), V3Gene
     Ok(())
 }
 
-fn construct_plan(
-    layout: ResolvedLayoutPlan,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    _settings: &V3FortSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let streams = mode.seed_streams(&patch);
+    construct_patch_with_streams(
+        patch,
+        streams.map(|streams| FortStreams {
+            orientation: streams.stage("fort.orientation"),
+            keep: streams.stage("fort.keep"),
+        }),
+        level_height,
+    )
+}
+
+fn construct_patch_with_streams(
+    patch: PatchRecipeContext<'_>,
     streams: Option<FortStreams<'_>>,
     level_height: f32,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch = layout
-        .patches
-        .get(&PatchId(0))
-        .ok_or_else(|| vec![recipe_issue("Single Fort layout has no patch zero")])?;
-    let mask = patch.mask.clone();
-    let biome_region = patch.biome_region;
-    let protected = protected_approaches(&layout, PatchId(0));
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let mask = patch.mask().clone();
+    let biome_region = patch.biome_region();
+    let protected = patch.protected_approaches();
     let center = choose_site_center(&mask, &protected).ok_or_else(|| {
         vec![recipe_issue(format!(
             "Fort footprint cannot fit an unobstructed radius-{SITE_RADIUS} site"
         ))]
     })?;
-    let ground_level = patch_ground_level(&layout, PatchId(0));
+    let ground_level = patch_ground_level(patch.layout(), patch.id);
     let rotation = streams.map_or(0, |streams| {
         u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
@@ -293,6 +331,12 @@ fn construct_plan(
         &protected,
     )?;
 
+    let mut surface_by_coord = mask
+        .iter()
+        .copied()
+        .map(|coord| (coord, ground_level))
+        .collect();
+    let seam_shape = shape_walker_seams(&patch, &mut surface_by_coord)?;
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
     for coord in &mask {
@@ -304,10 +348,15 @@ fn construct_plan(
         } else {
             SolidMaterialRole::Grass
         };
+        let local_ground = surface_by_coord.get(coord).copied().ok_or_else(|| {
+            vec![recipe_issue(format!(
+                "Fort seam shaping omitted ground level for {coord:?}"
+            ))]
+        })?;
         match template.cells.get(coord).copied() {
             None => {
-                columns.insert(*coord, ground_column(ground_level, ground_material));
-                surfaces.insert(TilePos::new(*coord, ground_level), ordinary_surface());
+                columns.insert(*coord, ground_column(local_ground, ground_material));
+                surfaces.insert(TilePos::new(*coord, local_ground), ordinary_surface());
             }
             Some(FortCell::Gate { .. }) => {
                 let wall_level = ground_level.saturating_add(CURTAIN_HEIGHT);
@@ -342,11 +391,12 @@ fn construct_plan(
             }
         }
     }
-    let volume = VolumePlan {
+    let mut volume = VolumePlan {
         mask: mask.clone(),
         columns,
         surfaces,
     };
+    seam_shape.apply(&mut volume)?;
     let structures = template.structure_plan();
     let party_start = template.party_start();
     let hostile_start = template.hostile_start();
@@ -379,15 +429,15 @@ fn construct_plan(
         .map(|surface| (surface, biome_region))
         .collect();
     let view_hint = fort_view_hint(
-        layout.grid_radius,
+        patch.grid_radius(),
         level_height,
         center,
         ground_level,
         rotation,
     )?;
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let fragment = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: Default::default(),
         features: FeaturePlan::default(),
@@ -398,7 +448,24 @@ fn construct_plan(
         interiors: InteriorPlan::default(),
         anchors,
         view_hint,
-    })
+    };
+    let mut issues = validate_patch_walker_seams(&patch, &fragment.volume);
+    issues.extend(
+        fragment
+            .validate_against(patch.layout())
+            .into_iter()
+            .map(|issue| {
+                recipe_issue(format!(
+                    "Fort patch {:?} failed {:?}: {}",
+                    issue.patch, issue.code, issue.detail
+                ))
+            }),
+    );
+    if issues.is_empty() {
+        Ok(fragment)
+    } else {
+        Err(issues)
+    }
 }
 
 impl FortTemplate {
@@ -571,10 +638,12 @@ impl FortTemplate {
     }
 
     fn hostile_start(&self) -> TilePos {
-        TilePos::new(
-            to_world(HexCoord::from_axial(-2, 0), self.center, self.rotation),
-            self.ground_level,
-        )
+        let preferred = to_world(HexCoord::from_axial(-2, 0), self.center, self.rotation);
+        self.courtyard
+            .iter()
+            .copied()
+            .min_by_key(|position| position.coord.distance(preferred))
+            .unwrap_or_else(|| TilePos::new(preferred, self.ground_level))
     }
 
     fn keep_review_anchor(&self) -> Option<TilePos> {

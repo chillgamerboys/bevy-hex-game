@@ -8,9 +8,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
-use super::patch::PatchRecipeContext;
+use super::local_frame::LocalPatchFrame;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
@@ -103,19 +106,22 @@ impl V3Recipe for HillsRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let streams = patch.seed_streams(context.seed, context.candidate);
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.environment,
             self.level_height,
-            Some((
-                streams.stage("hills.orientation"),
-                streams.stage("hills.centres"),
-            )),
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Fatal(V3GenerationError::RecipeContract(format!(
+                "Hills single-patch composition failed: {error:?}"
+            )))
+        })
     }
 
     fn validate(
@@ -162,13 +168,13 @@ impl V3Recipe for HillsRecipe {
                 "Hills fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.environment,
             self.level_height,
-            None,
+            PatchBuildMode::CanonicalFallback,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -178,6 +184,11 @@ impl V3Recipe for HillsRecipe {
                     .collect::<Vec<_>>()
                     .join("; "),
             )
+        })?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "Hills fallback composition failed: {error:?}"
+            ))
         })
     }
 }
@@ -218,32 +229,96 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_plan(
-    layout: ResolvedLayoutPlan,
-    patch_id: PatchId,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3HillsSettings,
+    environment: V3EnvironmentSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let streams = mode.seed_streams(&patch);
+    construct_patch_with_streams(
+        patch,
+        settings,
+        environment,
+        level_height,
+        streams.map(|streams| {
+            (
+                streams.stage("hills.orientation"),
+                streams.stage("hills.centres"),
+            )
+        }),
+    )
+}
+
+pub(crate) fn construct_patch_with_streams(
+    patch: PatchRecipeContext<'_>,
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
     streams: Option<(SeedStream<'_>, SeedStream<'_>)>,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch = PatchRecipeContext::resolve(&layout, patch_id)
-        .map_err(|error| vec![recipe_issue(error.to_string())])?;
-    let orientation = streams.map_or(0, |(orientation, _)| {
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+        .map_err(|error| vec![recipe_issue(format!("Hills local frame failed: {error}"))])?;
+    let local_mask = frame.local_mask(patch.mask()).map_err(|error| {
+        vec![recipe_issue(format!(
+            "Hills local mask conversion failed: {error}"
+        ))]
+    })?;
+    let requested_orientation = streams.map_or(0, |(orientation, _)| {
         u8::try_from(orientation.sample(0) % 6).unwrap_or_default()
     });
     let centre_stream = streams.map(|(_, centres)| centres);
-    let crossings = crossing_geometry(patch.mask(), orientation, layout.grid_radius)?;
-    let mut excluded = patch.protected_approaches();
-    excluded.extend(crossings.protected.iter().copied());
+    let protected = patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord))
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|error| {
+            vec![recipe_issue(format!(
+                "Hills seam approach conversion failed: {error}"
+            ))]
+        })?;
+    let lateral_offsets: &[i32] = if patch.layout().kind == super::layout::LayoutKind::Single {
+        &[0]
+    } else {
+        &[0, -4, 4, -6, 6, -2, 2]
+    };
+    let river_level = settings.valley_level.saturating_sub(1);
+    let (orientation, river_offset, local_crossings, local_river_nodes) = (0..6)
+        .flat_map(|turn| {
+            lateral_offsets.iter().copied().map(move |river_offset| {
+                (requested_orientation.saturating_add(turn) % 6, river_offset)
+            })
+        })
+        .filter_map(|(orientation, river_offset)| {
+            crossing_geometry(&local_mask, orientation, frame.scale(), river_offset)
+                .ok()
+                .filter(|crossings| crossings.river.is_disjoint(&protected))
+                .and_then(|crossings| {
+                    river_nodes(&crossings.river, orientation, river_offset, river_level)
+                        .ok()
+                        .map(|nodes| (orientation, river_offset, crossings, nodes))
+                })
+        })
+        .next()
+        .ok_or_else(|| {
+            vec![recipe_issue(
+                "Hills cannot orient its liquid barrier away from protected walker seams",
+            )]
+        })?;
+    let mut excluded = protected;
+    excluded.extend(local_crossings.protected.iter().copied());
     let centres = select_hill_centres(
-        patch.mask(),
+        &local_mask,
         settings.hills_per_bank,
         orientation,
+        river_offset,
         centre_stream,
         &excluded,
     )?;
-    let mut surface_by_coord = BTreeMap::new();
-    for coord in patch.mask() {
+    let mut surface_by_local = BTreeMap::new();
+    for coord in &local_mask {
         let rise = centres
             .iter()
             .map(|centre| {
@@ -254,19 +329,33 @@ pub(crate) fn construct_plan(
             })
             .max()
             .unwrap_or_default();
-        surface_by_coord.insert(*coord, settings.valley_level.saturating_add(rise));
+        surface_by_local.insert(*coord, settings.valley_level.saturating_add(rise));
     }
-    for coord in &crossings.protected {
-        if let Some(level) = surface_by_coord.get_mut(coord) {
+    for coord in &local_crossings.protected {
+        if let Some(level) = surface_by_local.get_mut(coord) {
             *level = settings.valley_level;
         }
     }
     fit_protected_routes(
-        &crossings.protected,
+        &local_crossings.protected,
         settings.valley_level,
-        &mut surface_by_coord,
+        &mut surface_by_local,
     );
-    fit_shared_approaches(&patch, &mut surface_by_coord);
+    let crossings = local_crossings.into_world(frame)?;
+    let mut surface_by_coord = surface_by_local
+        .iter()
+        .map(|(coord, level)| {
+            frame
+                .to_world(*coord)
+                .map(|world| (world, *level))
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills surface conversion failed: {error}"
+                    ))]
+                })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let seam_shape = shape_walker_seams(&patch, &mut surface_by_coord)?;
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
@@ -322,12 +411,20 @@ pub(crate) fn construct_plan(
             ordinary_by_coord.insert(*coord, surface);
         }
     }
-    let volume = VolumePlan {
+    let mut volume = VolumePlan {
         mask: patch.mask().clone(),
         columns,
         surfaces,
     };
-    let (party_coord, hostile_coord) = opposing_landings(patch.mask(), orientation)?;
+    seam_shape.apply(&mut volume)?;
+    ordinary_by_coord.retain(|_, position| {
+        volume
+            .surfaces
+            .get(position)
+            .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+    });
+    let (party_coord, hostile_coord) =
+        opposing_landings(ordinary_by_coord.keys().copied(), frame, orientation)?;
     let conflict_coord = crossings
         .bridge_centerline
         .get(crossings.bridge_centerline.len() / 2)
@@ -393,30 +490,64 @@ pub(crate) fn construct_plan(
     } else {
         FillMaterialRole::Water
     };
-    let river_nodes = river_nodes(
-        &crossings.river,
-        orientation,
-        settings.valley_level.saturating_sub(1),
-    )?;
+    let river_nodes = local_river_nodes
+        .into_iter()
+        .map(|(position, node)| {
+            let position = frame.position_to_world(position).map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Hills river position conversion failed: {error}"
+                ))]
+            })?;
+            let downstream = node
+                .downstream
+                .map(|downstream| frame.position_to_world(downstream))
+                .transpose()
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills river downstream conversion failed: {error}"
+                    ))]
+                })?;
+            Ok((
+                position,
+                LiquidNode {
+                    state: node.state,
+                    downstream,
+                },
+            ))
+        })
+        .collect::<Result<_, Vec<WorldValidationIssue>>>()?;
     let biome_regions = volume
         .surfaces
         .keys()
         .copied()
         .map(|surface| (surface, patch.biome_region()))
         .collect();
-    let view_hint = hills_view_hint(
-        patch.mask(),
-        &surface_by_coord,
-        layout.grid_radius,
+    let local_levels = surface_by_coord
+        .iter()
+        .map(|(coord, level)| {
+            frame
+                .to_local(*coord)
+                .map(|local| (local, *level))
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills camera conversion failed: {error}"
+                    ))]
+                })
+        })
+        .collect::<Result<_, Vec<WorldValidationIssue>>>()?;
+    let view_hint = frame.view_hint_to_world(hills_view_hint(
+        &local_mask,
+        &local_levels,
+        frame.scale(),
         level_height,
-    )?;
+    )?);
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let fragment = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: LiquidPlan {
             bodies: BTreeMap::from([(
-                LiquidBodyId(patch_id.0),
+                LiquidBodyId(0),
                 LiquidBodyPlan {
                     material: liquid_material,
                     nodes: river_nodes,
@@ -426,7 +557,7 @@ pub(crate) fn construct_plan(
         features,
         structures: StructurePlan {
             by_id: BTreeMap::from([(
-                StructureId(patch_id.0),
+                StructureId(0),
                 PlannedStructure {
                     kind: StructureKind::Bridge,
                     voxels: crossings
@@ -443,7 +574,24 @@ pub(crate) fn construct_plan(
         interiors: InteriorPlan::default(),
         anchors,
         view_hint,
-    })
+    };
+    let mut issues = validate_patch_walker_seams(&patch, &fragment.volume);
+    issues.extend(
+        fragment
+            .validate_against(patch.layout())
+            .into_iter()
+            .map(|issue| {
+                recipe_issue(format!(
+                    "Hills patch {:?} failed {:?}: {}",
+                    issue.patch, issue.code, issue.detail
+                ))
+            }),
+    );
+    if issues.is_empty() {
+        Ok(fragment)
+    } else {
+        Err(issues)
+    }
 }
 
 #[derive(Debug)]
@@ -458,10 +606,48 @@ struct CrossingGeometry {
     protected: BTreeSet<HexCoord>,
 }
 
+impl CrossingGeometry {
+    fn into_world(self, frame: LocalPatchFrame) -> Result<Self, Vec<WorldValidationIssue>> {
+        let convert_set = |coords: BTreeSet<HexCoord>| {
+            coords
+                .into_iter()
+                .map(|coord| frame.to_world(coord))
+                .collect::<Result<BTreeSet<_>, _>>()
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills crossing conversion failed: {error}"
+                    ))]
+                })
+        };
+        let convert_route = |coords: Vec<HexCoord>| {
+            coords
+                .into_iter()
+                .map(|coord| frame.to_world(coord))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills route conversion failed: {error}"
+                    ))]
+                })
+        };
+        Ok(Self {
+            river: convert_set(self.river)?,
+            bridge_deck: convert_set(self.bridge_deck)?,
+            ford_deck: convert_set(self.ford_deck)?,
+            bridge_centerline: convert_route(self.bridge_centerline)?,
+            bridge_route: convert_set(self.bridge_route)?,
+            ford_centerline: convert_route(self.ford_centerline)?,
+            ford_route: convert_set(self.ford_route)?,
+            protected: convert_set(self.protected)?,
+        })
+    }
+}
+
 fn crossing_geometry(
     mask: &BTreeSet<HexCoord>,
     orientation: u8,
     grid_radius: u32,
+    river_offset: i32,
 ) -> Result<CrossingGeometry, Vec<WorldValidationIssue>> {
     let radius = i32::try_from(grid_radius)
         .map_err(|error| vec![recipe_issue(format!("Hills radius exceeds i32: {error}"))])?;
@@ -469,14 +655,24 @@ fn crossing_geometry(
     let river: BTreeSet<_> = mask
         .iter()
         .copied()
-        .filter(|coord| unrotate(*coord, orientation).x().abs() <= RIVER_HALF_WIDTH)
+        .filter(|coord| {
+            unrotate(*coord, orientation)
+                .x()
+                .saturating_sub(river_offset)
+                .abs()
+                <= RIVER_HALF_WIDTH
+        })
         .collect();
     let route = |first_y: i32| {
         [first_y, first_y.saturating_add(1)]
             .into_iter()
             .flat_map(|y| {
-                (-APPROACH_HALF_LENGTH..=APPROACH_HALF_LENGTH)
-                    .map(move |x| rotate(HexCoord::from_axial(x, y), orientation))
+                (-APPROACH_HALF_LENGTH..=APPROACH_HALF_LENGTH).map(move |x| {
+                    rotate(
+                        HexCoord::from_axial(x.saturating_add(river_offset), y),
+                        orientation,
+                    )
+                })
             })
             .collect::<BTreeSet<_>>()
     };
@@ -484,14 +680,23 @@ fn crossing_geometry(
         [first_y, first_y.saturating_add(1)]
             .into_iter()
             .flat_map(|y| {
-                (-CROSSING_HALF_LENGTH..=CROSSING_HALF_LENGTH)
-                    .map(move |x| rotate(HexCoord::from_axial(x, y), orientation))
+                (-CROSSING_HALF_LENGTH..=CROSSING_HALF_LENGTH).map(move |x| {
+                    rotate(
+                        HexCoord::from_axial(x.saturating_add(river_offset), y),
+                        orientation,
+                    )
+                })
             })
             .collect::<BTreeSet<_>>()
     };
     let centerline = |y: i32| {
         (-APPROACH_HALF_LENGTH..=APPROACH_HALF_LENGTH)
-            .map(|x| rotate(HexCoord::from_axial(x, y), orientation))
+            .map(|x| {
+                rotate(
+                    HexCoord::from_axial(x.saturating_add(river_offset), y),
+                    orientation,
+                )
+            })
             .collect::<Vec<_>>()
     };
     let bridge_route = route(0);
@@ -628,6 +833,7 @@ fn route_membership(
 fn river_nodes(
     river: &BTreeSet<HexCoord>,
     orientation: u8,
+    river_offset: i32,
     top_level: Level,
 ) -> Result<BTreeMap<TilePos, LiquidNode>, Vec<WorldValidationIssue>> {
     let mut nodes = BTreeMap::new();
@@ -639,8 +845,8 @@ fn river_nodes(
         );
         let downstream_coord = if river.contains(&forward) {
             Some(forward)
-        } else if local.x() != 0 {
-            let merge = rotate(HexCoord::from_axial(0, local.y()), orientation);
+        } else if local.x() != river_offset {
+            let merge = rotate(HexCoord::from_axial(river_offset, local.y()), orientation);
             if !river.contains(&merge) || coord.distance(merge) != 1 {
                 return Err(vec![recipe_issue(format!(
                     "Hills river lane cannot merge at boundary cell {coord:?}"
@@ -669,6 +875,7 @@ fn select_hill_centres(
     mask: &BTreeSet<HexCoord>,
     per_bank: u8,
     orientation: u8,
+    river_offset: i32,
     stream: Option<SeedStream<'_>>,
     excluded: &BTreeSet<HexCoord>,
 ) -> Result<Vec<HexCoord>, Vec<WorldValidationIssue>> {
@@ -677,7 +884,13 @@ fn select_hill_centres(
         let mut candidates: Vec<_> = mask
             .iter()
             .copied()
-            .filter(|coord| unrotate(*coord, orientation).x().signum() == bank)
+            .filter(|coord| {
+                unrotate(*coord, orientation)
+                    .x()
+                    .saturating_sub(river_offset)
+                    .signum()
+                    == bank
+            })
             .filter(|coord| !excluded.contains(coord))
             .collect();
         candidates.sort_by_key(|coord| {
@@ -696,7 +909,13 @@ fn select_hill_centres(
                 selected.push(coord);
                 if selected
                     .iter()
-                    .filter(|centre| unrotate(**centre, orientation).x().signum() == bank)
+                    .filter(|centre| {
+                        unrotate(**centre, orientation)
+                            .x()
+                            .saturating_sub(river_offset)
+                            .signum()
+                            == bank
+                    })
                     .count()
                     == usize::from(per_bank)
                 {
@@ -731,38 +950,30 @@ fn fit_protected_routes(
     }
 }
 
-fn fit_shared_approaches(patch: &PatchRecipeContext<'_>, levels: &mut BTreeMap<HexCoord, Level>) {
-    for edge in patch.shared_edges() {
-        let preferred = edge.preferred_level();
-        let approaches = edge.protected_approaches();
-        for coord in patch.mask() {
-            let distance = approaches
-                .iter()
-                .map(|approach| approach.distance(*coord))
-                .min()
-                .unwrap_or(u32::MAX);
-            let distance = i32::try_from(distance).unwrap_or(i32::MAX);
-            if let Some(level) = levels.get_mut(coord) {
-                *level = (*level)
-                    .min(preferred.saturating_add(distance))
-                    .max(preferred.saturating_sub(distance));
-            }
-        }
-    }
-}
-
 fn opposing_landings(
-    mask: &BTreeSet<HexCoord>,
+    coords: impl IntoIterator<Item = HexCoord>,
+    frame: LocalPatchFrame,
     orientation: u8,
 ) -> Result<(HexCoord, HexCoord), Vec<WorldValidationIssue>> {
-    let party = mask
+    let coords = coords
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map(|local| (coord, local)))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            vec![recipe_issue(format!(
+                "Hills landing conversion failed: {error}"
+            ))]
+        })?;
+    let party = coords
         .iter()
         .copied()
-        .min_by_key(|coord| (unrotate(*coord, orientation).x(), *coord));
-    let hostile = mask
+        .min_by_key(|(coord, local)| (unrotate(*local, orientation).x(), *coord))
+        .map(|(coord, _)| coord);
+    let hostile = coords
         .iter()
         .copied()
-        .max_by_key(|coord| (unrotate(*coord, orientation).x(), *coord));
+        .max_by_key(|(coord, local)| (unrotate(*local, orientation).x(), *coord))
+        .map(|(coord, _)| coord);
     match (party, hostile) {
         (Some(party), Some(hostile)) if party != hostile => Ok((party, hostile)),
         _ => Err(vec![recipe_issue(
@@ -889,6 +1100,7 @@ fn validate_hills(
             &plan.layout.footprint,
             *orientation,
             plan.layout.grid_radius,
+            0,
         )
         .is_ok_and(|geometry| geometry.river == fill_coords)
     });
