@@ -113,7 +113,9 @@ mod tests {
             .resource_mut::<lattice::DisableSelection>()
             .decision = Some(lattice::DisableDecision {
             decider: hex_core::UnitId(3),
+            target: hex_core::UnitId(3),
             owed: 1,
+            restoring: false,
             live: vec![hex_core::LatticeCoord::ORIGIN],
         });
         app.update();

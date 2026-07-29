@@ -302,6 +302,11 @@ without touching the framework, which is the point of having one.
   unit from the turn order and leaves it revivable by a restoring spell. Functional
   death and permadeath remain separate design decisions. Further damaging casts refuse
   a downed target before payment, while Reveal may still inspect its retained lattice.
+- **Renewal is an exact caster choice.** `RestoreHexes` parks
+  `PendingDecision::ChooseRestores`; a player caster selects disabled cells on the
+  target lattice, while a non-player caster uses its registered deterministic
+  algorithm. The answer remains a replayable `ChooseRestores` command rather than an
+  internal healing policy.
 - **One cast may open at most one defender choice.** Content validation rejects a spell
   with several non-targeted `DisableHexes` effects; the pending-decision resource holds
   one exact answer, so accepting that authoring shape would overwrite damage silently.

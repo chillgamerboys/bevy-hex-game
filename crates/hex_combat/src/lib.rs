@@ -40,6 +40,8 @@ pub mod effects;
 pub mod knowledge;
 /// Structured outcomes produced by combat resolution.
 pub mod outcomes;
+/// Terminal encounter detection and its simulation gate.
+pub mod resolution;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
@@ -52,6 +54,7 @@ pub use outcomes::{
     CastBlockReason, CombatData, CombatEvent, CommandRefusal, EncounterOutcome, PartyMoveRefusal,
     RestorationRefusal, UnitData,
 };
+pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use turns::{Initiative, TurnOrder};
 
 /// The order a turn resolves in.
@@ -81,6 +84,8 @@ pub enum CombatSystems {
     /// frame, and the applier's committed presentation is visible to
     /// [`Self::Advance`].
     Apply,
+    /// Mark newly downed units and detect a terminal encounter.
+    Resolve,
     /// Pass the turn on, once whoever holds it has finished.
     Advance,
 }
@@ -93,10 +98,15 @@ pub fn plugin(app: &mut App) {
         (
             CombatSystems::Act,
             CombatSystems::Apply,
+            CombatSystems::Resolve,
             CombatSystems::Advance,
         )
             .chain()
             .in_set(AppSystems::Update),
+    );
+    app.configure_sets(
+        Update,
+        hex_core::PausableSystems.run_if(resolution::encounter_unresolved),
     );
     app.add_plugins((
         turns::plugin,
@@ -104,5 +114,6 @@ pub fn plugin(app: &mut App) {
         commands::plugin,
         effects::plugin,
         knowledge::plugin,
+        resolution::plugin,
     ));
 }

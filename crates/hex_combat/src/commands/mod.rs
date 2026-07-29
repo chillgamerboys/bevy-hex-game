@@ -52,10 +52,12 @@ use crate::turns::TurnOrder;
 pub(crate) mod cast;
 pub use cast::{delivers_anything, UNDELIVERABLE};
 mod choose_disables;
+mod choose_restores;
 mod end_turn;
 mod move_along;
 mod move_party;
 mod presentation;
+mod rest;
 mod strike;
 
 /// Tiles, as the applier needs them to ground a commanded path.
@@ -120,6 +122,8 @@ struct Verb<'a> {
     knowledge: &'a mut crate::knowledge::FactionKnowledge,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
+    /// Restored units waiting for a round boundary before initiative.
+    revivals: &'a mut crate::turns::PendingRevivals,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
     party: &'a Party,
@@ -139,6 +143,7 @@ struct ResolutionStores<'w> {
     effects: ResMut<'w, crate::effects::PersistentEffects>,
     knowledge: ResMut<'w, crate::knowledge::FactionKnowledge>,
     events: MessageWriter<'w, CombatEvent>,
+    revivals: ResMut<'w, crate::turns::PendingRevivals>,
 }
 
 #[derive(SystemParam)]
@@ -146,6 +151,13 @@ struct PartyStores<'w> {
     party: Res<'w, Party>,
     formation: ResMut<'w, PartyFormation>,
     formations: Option<Res<'w, FormationCatalog>>,
+}
+
+#[derive(SystemParam)]
+struct UnitStores<'w, 's> {
+    actors: ActorQuery<'w, 's>,
+    lattices: cast::LatticeQuery<'w, 's>,
+    lattice_stats: Query<'w, 's, &'static hex_lattice::LatticeStats>,
 }
 
 pub(crate) fn plugin(app: &mut App) {
@@ -251,8 +263,7 @@ fn apply_commands(
     mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
     tiles: TileQuery,
-    mut actors: ActorQuery,
-    mut lattices: cast::LatticeQuery,
+    mut units: UnitStores,
     mut party_stores: PartyStores,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
@@ -273,7 +284,8 @@ fn apply_commands(
         // Seat validation. Units without an owner belong to seat 0 — "the only
         // session there is" — matching how they are spawned; the check grows
         // teeth the moment a second seat exists.
-        let owner = actors
+        let owner = units
+            .actors
             .get(entity)
             .ok()
             .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
@@ -304,6 +316,7 @@ fn apply_commands(
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
             events: &mut emitted,
+            revivals: &mut stores.revivals,
             combat: combat.as_deref(),
             party: &party_stores.party,
             formation: &mut party_stores.formation,
@@ -317,7 +330,7 @@ fn apply_commands(
                 &mut verb,
                 &mut commands,
                 &tiles,
-                &mut actors,
+                &mut units.actors,
                 unit,
                 entity,
                 path,
@@ -326,7 +339,7 @@ fn apply_commands(
                 &mut verb,
                 &mut commands,
                 &tiles,
-                &mut actors,
+                &mut units.actors,
                 issued.seat,
                 unit,
                 paths,
@@ -335,13 +348,15 @@ fn apply_commands(
                 &mut verb,
                 &mut commands,
                 &tiles,
-                &mut actors,
-                &mut lattices,
+                &mut units.actors,
+                &mut units.lattices,
                 unit,
                 entity,
                 target,
             ),
-            GameCommand::EndTurn { .. } => end_turn::apply(&mut verb, &mut actors, unit, entity),
+            GameCommand::EndTurn { .. } => {
+                end_turn::apply(&mut verb, &mut units.actors, unit, entity)
+            }
             GameCommand::Cast {
                 ref spell,
                 target,
@@ -350,8 +365,8 @@ fn apply_commands(
             } => cast::apply(
                 &mut verb,
                 &mut commands,
-                &mut actors,
-                &mut lattices,
+                &mut units.actors,
+                &mut units.lattices,
                 unit,
                 entity,
                 spell,
@@ -360,10 +375,26 @@ fn apply_commands(
             ),
             GameCommand::Channel { .. } => Err(CommandRefusal::ChannelUnavailable),
             GameCommand::ChooseDisables { ref cells, .. } => {
-                choose_disables::apply(&mut verb, &mut lattices, unit, entity, cells)
+                choose_disables::apply(&mut verb, &mut units.lattices, unit, entity, cells)
             }
-            GameCommand::ChooseRestores { .. } => Err(CommandRefusal::RestorationUnavailable),
-            GameCommand::Rest { .. } => Err(CommandRefusal::RestUnavailable),
+            GameCommand::ChooseRestores {
+                target, ref cells, ..
+            } => choose_restores::apply(
+                &mut verb,
+                &mut commands,
+                &mut units.actors,
+                &mut units.lattices,
+                unit,
+                target,
+                cells,
+            ),
+            GameCommand::Rest { .. } => rest::apply(
+                &mut verb,
+                &mut commands,
+                &mut units.lattices,
+                &units.lattice_stats,
+                unit,
+            ),
         };
 
         if let Err(refusal) = outcome {

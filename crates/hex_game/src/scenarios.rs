@@ -70,6 +70,10 @@ pub(super) struct ScenarioToLoad {
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
 }
 
+/// Exact launch input retained for deterministic defeat retry.
+#[derive(Resource, Debug, Clone)]
+pub(super) struct ActiveScenario(pub(super) ScenarioToLoad);
+
 /// The selected scenario's authored hour, snapshotted before its lighting loads.
 ///
 /// Keeping this separate from [`TimeOfDay`] lets the loading contract distinguish an
@@ -129,6 +133,10 @@ fn apply_selected_scenario(
     };
     let scenario = pending.scenario.clone();
     let resolved_seed = pending.resolved_seed;
+    commands.insert_resource(ActiveScenario(ScenarioToLoad {
+        scenario: scenario.clone(),
+        resolved_seed,
+    }));
     commands.remove_resource::<ScenarioToLoad>();
 
     if let Some(seed) = resolved_seed {
@@ -375,6 +383,7 @@ fn clear_session_resources(mut commands: Commands) {
     commands.remove_resource::<SimSeeds>();
     commands.remove_resource::<ScenarioTimeOverride>();
     commands.remove_resource::<TimeOfDay>();
+    commands.remove_resource::<ActiveScenario>();
 }
 
 /// Derives the session's sim seeds from what already determines the world.
@@ -435,7 +444,7 @@ mod tests {
     use super::{
         clear_session_resources, finalize_gameplay_setup, initialize_time_of_day,
         scenario_contract_error, validate_gameplay_lighting_contract, validate_loaded_scenario,
-        ScenarioTimeOverride, ScenarioToLoad,
+        ActiveScenario, ScenarioTimeOverride, ScenarioToLoad,
     };
 
     fn library() -> ScenarioLibrary {
@@ -1407,6 +1416,16 @@ mod tests {
             app.world().get_resource::<ResolvedMapSeed>(),
             Some(&ResolvedMapSeed(configured))
         );
+        let active = app.world().resource::<ActiveScenario>();
+        let entries = library();
+        let selected = entries
+            .scenarios
+            .get(procedural_index)
+            .expect("the selected scenario still exists");
+        assert_eq!(active.0.scenario.name, selected.name);
+        assert_eq!(active.0.scenario.world, selected.world);
+        assert_eq!(active.0.scenario.encounter, selected.encounter);
+        assert_eq!(active.0.resolved_seed, Some(ResolvedMapSeed(configured)));
     }
 
     /// Selecting an authored map after a generated one cannot leak its old seed.

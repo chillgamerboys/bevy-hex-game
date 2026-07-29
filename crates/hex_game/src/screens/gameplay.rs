@@ -13,17 +13,18 @@
 
 use bevy::prelude::*;
 use hex_assets::FormationCatalog;
-use hex_combat::{Turn, TurnOrder};
+use hex_combat::{EncounterOutcome, EncounterResolution, Turn, TurnOrder};
 use hex_core::{
-    GameplaySetup, HexCoord, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
-    Screen, UnitId,
+    CommandQueue, ControlOwner, GameCommand, GameplaySetup, HexCoord, IssuedCommand, Mode,
+    PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, UnitId,
 };
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
 use super::{despawn_screen, DespawnOnExit};
-use crate::menus::widgets::UiAssets;
+use crate::menus::widgets::{blurb, heading, row_button, UiAssets};
 use crate::readouts::HudElement;
+use crate::scenarios::ActiveScenario;
 
 pub(super) fn plugin(app: &mut App) {
     app.add_sub_state::<Pause>();
@@ -33,11 +34,22 @@ pub(super) fn plugin(app: &mut App) {
     app.add_sub_state::<Mode>();
     app.register_type::<Mode>();
 
-    app.add_systems(Update, handle_input.run_if(in_state(Screen::Gameplay)));
+    app.add_systems(
+        Update,
+        handle_input
+            .run_if(in_state(Screen::Gameplay))
+            .run_if(hex_combat::encounter_unresolved),
+    );
     app.add_systems(Update, update_hud.run_if(in_state(Screen::Gameplay)));
     app.add_systems(
         Update,
         (handle_party_strip, update_party_strip)
+            .chain()
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    app.add_systems(
+        Update,
+        (sync_outcome_modal, handle_outcome_actions)
             .chain()
             .run_if(in_state(Screen::Gameplay)),
     );
@@ -86,6 +98,19 @@ struct PartyModeButton;
 
 #[derive(Component)]
 struct PartyModeText;
+
+#[derive(Component)]
+struct PartyRestButton;
+
+#[derive(Component)]
+struct OutcomeModal;
+
+#[derive(Component, Clone, Copy)]
+enum OutcomeAction {
+    Continue,
+    Retry,
+    ReturnTitle,
+}
 
 #[expect(
     clippy::cast_precision_loss,
@@ -219,6 +244,23 @@ fn spawn_party_strip(
                             ..TextFont::from_font_size(11.0)
                         },
                     ));
+                controls
+                    .spawn((
+                        Button,
+                        PartyRestButton,
+                        Node {
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.07)),
+                    ))
+                    .with_child((
+                        Text::new("Rest  R"),
+                        TextFont {
+                            font: assets.body.clone().into(),
+                            ..TextFont::from_font_size(11.0)
+                        },
+                    ));
                 for preset in &formations.presets {
                     controls
                         .spawn((
@@ -290,7 +332,11 @@ fn handle_party_strip(
     mode_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyModeButton>)>,
     preset_clicks: Query<(&Interaction, &PartyPresetButton), Changed<Interaction>>,
     slot_clicks: Query<(&Interaction, &PartySlotButton), Changed<Interaction>>,
+    rest_clicks: Query<&Interaction, (Changed<Interaction>, With<PartyRestButton>)>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut queue: ResMut<CommandQueue>,
     selected: Query<(Entity, &UnitId), (With<Player>, With<Selected>)>,
+    owners: Query<&ControlOwner>,
 ) {
     if *mode.get() != Mode::Exploring {
         return;
@@ -328,7 +374,8 @@ fn handle_party_strip(
             }
         }
     }
-    let selected = selected.iter().next().map(|(_, unit)| *unit);
+    let selected_info = selected.iter().next().map(|(_, unit)| *unit);
+    let selected = selected_info;
     for (interaction, button) in &slot_clicks {
         if *interaction != Interaction::Pressed {
             continue;
@@ -342,6 +389,27 @@ fn handle_party_strip(
         if preset.slots.iter().any(|slot| slot.offset == button.0) {
             let _ = formation.assign(member, button.0);
             formation.fill_unassigned(preset, &party.members);
+        }
+    }
+    let rest_requested = keys.just_pressed(KeyCode::KeyR)
+        || rest_clicks
+            .iter()
+            .any(|interaction| *interaction == Interaction::Pressed);
+    if rest_requested {
+        let issuer = selected
+            .or_else(|| party.members.first().copied())
+            .filter(|unit| registry.entity_of(*unit).is_some());
+        if let Some(unit) = issuer {
+            let seat = registry
+                .entity_of(unit)
+                .and_then(|entity| owners.get(entity).ok())
+                .copied()
+                .unwrap_or_default()
+                .0;
+            queue.push(IssuedCommand {
+                seat,
+                command: GameCommand::Rest { unit },
+            });
         }
     }
 }
@@ -478,6 +546,124 @@ fn spawn_hud(mut commands: Commands, assets: Res<UiAssets>) {
         });
 }
 
+fn sync_outcome_modal(
+    mut commands: Commands,
+    resolution: Res<EncounterResolution>,
+    existing: Query<Entity, With<OutcomeModal>>,
+    assets: Res<UiAssets>,
+) {
+    let Some(outcome) = resolution.outcome() else {
+        for entity in &existing {
+            commands.entity(entity).despawn();
+        }
+        return;
+    };
+    if !existing.is_empty() {
+        return;
+    }
+    commands
+        .spawn((
+            Name::new("Encounter Outcome Modal"),
+            OutcomeModal,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.62)),
+            GlobalZIndex(20),
+            Pickable::default(),
+            DespawnOnExit(Screen::Gameplay),
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Node {
+                        width: Val::Px(430.0),
+                        padding: UiRect::all(Val::Px(28.0)),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(16.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.5)),
+                    BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.97)),
+                ))
+                .with_children(|panel| {
+                    let (title, detail) = match outcome {
+                        EncounterOutcome::Victory => {
+                            ("Victory", "The battlefield remains as the encounter ended.")
+                        }
+                        EncounterOutcome::Defeat => (
+                            "Defeat",
+                            "Retry replays this scenario with the same resolved seed.",
+                        ),
+                    };
+                    panel.spawn(heading(&assets, title));
+                    panel.spawn(blurb(&assets, detail));
+                    panel
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(10.0),
+                            ..default()
+                        })
+                        .with_children(|buttons| {
+                            let primary = match outcome {
+                                EncounterOutcome::Victory => (OutcomeAction::Continue, "Continue"),
+                                EncounterOutcome::Defeat => (OutcomeAction::Retry, "Retry"),
+                            };
+                            buttons
+                                .spawn((row_button(primary.1, 150.0), primary.0))
+                                .with_child(blurb(&assets, primary.1));
+                            buttons
+                                .spawn((
+                                    row_button("Return to Title", 150.0),
+                                    OutcomeAction::ReturnTitle,
+                                ))
+                                .with_child(blurb(&assets, "Return to Title"));
+                        });
+                });
+        });
+}
+
+fn handle_outcome_actions(
+    clicked: Query<(&Interaction, &OutcomeAction), Changed<Interaction>>,
+    resolution: Res<EncounterResolution>,
+    active: Option<Res<ActiveScenario>>,
+    mut commands: Commands,
+    mut next_mode: ResMut<NextState<Mode>>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    let Some(outcome) = resolution.outcome() else {
+        return;
+    };
+    for (interaction, action) in &clicked {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match (*action, outcome) {
+            (OutcomeAction::Continue, EncounterOutcome::Victory) => {
+                next_mode.set(Mode::Exploring);
+            }
+            (OutcomeAction::Retry, EncounterOutcome::Defeat) => {
+                let Some(active) = active.as_deref() else {
+                    error!("cannot retry: active scenario launch input was not retained");
+                    continue;
+                };
+                commands.insert_resource(active.0.clone());
+                next_screen.set(Screen::Loading);
+            }
+            (OutcomeAction::ReturnTitle, _) => next_screen.set(Screen::Title),
+            _ => {}
+        }
+    }
+}
+
 fn exploring_hint() -> String {
     "EXPLORING   ·   click a tile to move   ·   right-drag to orbit   ·   \
      WASD to pan   ·   scroll to zoom   ·   H hides HUD   ·   ESC to pause"
@@ -518,7 +704,7 @@ fn update_hud(
                 order.round + 1,
                 whose,
                 lattice_readout(&party),
-                combat_action_hint(player_turn, pending.is_open())
+                combat_action_hint(player_turn, &pending)
             )
         }
     };
@@ -531,13 +717,14 @@ fn update_hud(
 /// The action hint must agree with the command emitters: Space and casting are
 /// player-turn controls, while an open defender choice replaces every ordinary
 /// simulation command.
-fn combat_action_hint(player_turn: bool, decision_open: bool) -> &'static str {
-    if decision_open {
-        "choose a live cell above, then ENTER to confirm"
-    } else if player_turn {
-        "cast from the panel   ·   SPACE to end turn"
-    } else {
-        "waiting for the enemy"
+fn combat_action_hint(player_turn: bool, pending: &PendingDecision) -> &'static str {
+    match pending {
+        PendingDecision::ChooseDisables { .. } => "choose a live cell above, then ENTER to confirm",
+        PendingDecision::ChooseRestores { .. } => {
+            "choose a disabled target cell above, then ENTER to confirm"
+        }
+        PendingDecision::None if player_turn => "cast from the panel   ·   SPACE to end turn",
+        PendingDecision::None => "waiting for the enemy",
     }
 }
 
@@ -629,7 +816,10 @@ fn handle_input(
 
 #[cfg(test)]
 mod tests {
+    use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
+    use hex_assets::ScenarioLibrary;
+    use hex_core::ResolvedMapSeed;
 
     use super::*;
 
@@ -670,13 +860,61 @@ mod tests {
     #[test]
     fn combat_hints_never_offer_player_commands_during_an_enemy_turn() {
         assert_eq!(
-            combat_action_hint(true, false),
+            combat_action_hint(true, &PendingDecision::None),
             "cast from the panel   ·   SPACE to end turn"
         );
-        assert_eq!(combat_action_hint(false, false), "waiting for the enemy");
         assert_eq!(
-            combat_action_hint(false, true),
+            combat_action_hint(false, &PendingDecision::None),
+            "waiting for the enemy"
+        );
+        assert_eq!(
+            combat_action_hint(
+                false,
+                &PendingDecision::ChooseDisables {
+                    decider: UnitId(1),
+                    count: 1,
+                    source: UnitId(2),
+                }
+            ),
             "choose a live cell above, then ENTER to confirm"
         );
+    }
+
+    #[test]
+    fn retry_requeues_the_exact_active_scenario_and_seed() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_state::<Screen>()
+            .add_sub_state::<Mode>();
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        app.update();
+        app.update();
+
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../../assets/config/scenarios.ron"))
+                .expect("shipped scenarios parse");
+        let scenario = library
+            .scenarios
+            .into_iter()
+            .find(|scenario| scenario.generation_seed.is_some())
+            .expect("a generated scenario exists");
+        let seed = ResolvedMapSeed(9_001);
+        app.insert_resource(EncounterResolution(Some(EncounterOutcome::Defeat)));
+        app.insert_resource(ActiveScenario(crate::scenarios::ScenarioToLoad {
+            scenario: scenario.clone(),
+            resolved_seed: Some(seed),
+        }));
+        app.world_mut()
+            .spawn((Interaction::Pressed, OutcomeAction::Retry));
+        app.add_systems(Update, handle_outcome_actions);
+        app.update();
+
+        let retry = app.world().resource::<crate::scenarios::ScenarioToLoad>();
+        assert_eq!(retry.scenario.name, scenario.name);
+        assert_eq!(retry.scenario.world, scenario.world);
+        assert_eq!(retry.scenario.encounter, scenario.encounter);
+        assert_eq!(retry.resolved_seed, Some(seed));
     }
 }
