@@ -196,13 +196,13 @@ candidate, and the canonical fallback remains the final hard-valid result.
 Recipe-specific repair actions will be added only when they can preserve the
 validated topology instead of disguising regeneration as repair.
 
-The recipe publishes exactly `party_start`, `hostile_start`, `forest_clearing`, and
-`prairie_overlook`. The two review anchors are bound to the primary clearing and the
-recipe's exact prairie overlook surface. `walks/forest.ron` pins the shipped hero seed
-and captures map and character-camera presentation. The current walk DSL cannot
-address map-space tiles, so that script is not a route traversal: exact graph
-validation and recorded manual traversal cover topology until the tooling gains that
-capability.
+The recipe requires `party_start`, `hostile_start`, `forest_clearing`, and
+`prairie_overlook` while preserving the open generated-anchor vocabulary. The two
+review anchors are bound to the primary clearing and the recipe's exact prairie
+overlook surface. `walks/forest.ron` pins the shipped hero seed and captures map and
+character-camera presentation. The current walk DSL cannot address map-space tiles,
+so that script is not a route traversal: exact graph validation and recorded manual
+traversal cover topology until the tooling gains that capability.
 
 ### Fort
 

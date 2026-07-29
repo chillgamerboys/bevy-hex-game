@@ -134,10 +134,6 @@ fn substance_table_without_swatch(omitted: &str) -> SubstanceTable {
     substance_table_fixture(None, Some(omitted))
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the integration test immediately"
-)]
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
     substance_table_fixture(omitted, None)
 }

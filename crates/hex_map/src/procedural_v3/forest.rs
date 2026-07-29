@@ -734,16 +734,17 @@ fn validate_review_anchors(
     prairie: &BTreeSet<TilePos>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
-    let expected_names = BTreeSet::from([
+    let required_names = BTreeSet::from([
         PARTY_START,
         HOSTILE_START,
         FOREST_CLEARING,
         PRAIRIE_OVERLOOK,
     ]);
     let actual_names: BTreeSet<_> = plan.anchors.keys().map(String::as_str).collect();
-    if actual_names != expected_names {
+    let missing_names: BTreeSet<_> = required_names.difference(&actual_names).copied().collect();
+    if !missing_names.is_empty() {
         issues.push(recipe_issue(format!(
-            "Forest requires exactly the anchors {expected_names:?}"
+            "Forest is missing required anchors {missing_names:?}"
         )));
     }
 
@@ -2013,7 +2014,7 @@ mod tests {
             .iter()
             .any(|issue| issue.detail.contains("forest_clearing_0")));
 
-        let mut misplaced_overlook = baseline;
+        let mut misplaced_overlook = baseline.clone();
         let hostile = misplaced_overlook
             .anchors
             .get(HOSTILE_START)
@@ -2028,6 +2029,20 @@ mod tests {
         assert!(issues
             .iter()
             .any(|issue| issue.detail.contains("exact prairie surface")));
+
+        let mut extended = baseline.clone();
+        extended.anchors.insert(
+            "future_review_anchor".to_owned(),
+            extended
+                .anchors
+                .get(PARTY_START)
+                .copied()
+                .expect("Forest should publish party_start"),
+        );
+        assert!(
+            matches!(validate_forest(&extended), WorldValidation::Valid(_)),
+            "recipe validation must preserve the open generated-anchor vocabulary"
+        );
     }
 
     #[test]
