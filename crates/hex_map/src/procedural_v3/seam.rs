@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, Level, SpecialMovementRegion, TilePos, TraversalProfile};
 
-use super::layout::{PatchId, ResolvedEdgeContract, ResolvedLiquidPort};
+use super::layout::{PatchId, ResolvedEdgeContract};
 use super::patch::PatchRecipeContext;
 use super::traversal::OrdinaryGraph;
 use super::volume::{SurfaceAccess, VolumePlan};
@@ -79,13 +79,6 @@ pub(crate) fn shape_walker_seams(
     let mut edges = Vec::new();
 
     for edge in patch.shared_edges() {
-        if !matches!(edge.contract.liquid, ResolvedLiquidPort::Dry) {
-            issues.push(seam_issue(format!(
-                "patch {} dry-recipe seam {:?} declares directed liquid",
-                patch.id.0, edge.id
-            )));
-            continue;
-        }
         let ports = edge.walker_ports();
         if !valid_two_wide_contract(
             edge.contract.walker.count,
@@ -275,8 +268,8 @@ pub(crate) fn validate_world_walker_seams(
             }
         }
 
-        for (patch, approaches) in &edge.protected_approaches {
-            for coord in approaches {
+        for port in &edge.walker.ports {
+            for coord in port.first_approach.iter().chain(&port.second_approach) {
                 validate_world_surface(
                     *edge_id,
                     TilePos::new(*coord, edge.elevation.preferred),
@@ -285,6 +278,8 @@ pub(crate) fn validate_world_walker_seams(
                     issues,
                 );
             }
+        }
+        for patch in edge.protected_approaches.keys() {
             if !plan.layout.patches.contains_key(patch) {
                 issues.push(seam_issue(format!(
                     "shared seam {edge_id:?} protects an unknown patch {}",

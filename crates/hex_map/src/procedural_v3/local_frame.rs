@@ -4,11 +4,16 @@
 //! Forest retain reviewed geometry expressed around axial origin, so they use this
 //! narrow frame to preserve Single output while translating Ring7 patches.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, MapViewHint, TilePos};
 
+use super::composition::GeneratedPatchPlan;
 use super::layout::LayoutKind;
+use super::liquid::LiquidPlan;
+use super::volume::VolumePlan;
+use super::world::{FeaturePlan, InteriorPlan, LightId, PlannedGameplayLight, StructurePlan};
+use super::world::{GeneratedWorldPlan, ProtectedFeatureRoute};
 
 /// Identity-preserving local frame for one resolved recipe patch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,6 +100,11 @@ impl LocalPatchFrame {
         Ok(TilePos::new(self.to_world(position.coord)?, position.level))
     }
 
+    /// Converts one exact world-space voxel position to local recipe coordinates.
+    pub(crate) fn position_to_local(self, position: TilePos) -> Result<TilePos, String> {
+        Ok(TilePos::new(self.to_local(position.coord)?, position.level))
+    }
+
     /// Converts the complete exact patch mask into local coordinates.
     pub(crate) fn local_mask(
         self,
@@ -104,6 +114,22 @@ impl LocalPatchFrame {
             .copied()
             .map(|coord| self.to_local(coord))
             .collect()
+    }
+
+    /// Converts a complete local surface-level plan to exact world coordinates.
+    pub(crate) fn levels_to_world(
+        self,
+        levels: BTreeMap<HexCoord, i32>,
+    ) -> Result<BTreeMap<HexCoord, i32>, String> {
+        self.translate_coord_map(levels, FrameDirection::ToWorld)
+    }
+
+    /// Converts a complete world-space surface-level plan to local coordinates.
+    pub(crate) fn levels_to_local(
+        self,
+        levels: BTreeMap<HexCoord, i32>,
+    ) -> Result<BTreeMap<HexCoord, i32>, String> {
+        self.translate_coord_map(levels, FrameDirection::ToLocal)
     }
 
     /// Moves a locally authored camera frame over the resolved patch.
@@ -119,6 +145,209 @@ impl LocalPatchFrame {
             ),
         )
     }
+
+    /// Converts every exact semantic position in one local patch to world space.
+    pub(crate) fn patch_to_world(self, plan: &mut GeneratedPatchPlan) -> Result<(), String> {
+        self.translate_semantics(
+            FrameDirection::ToWorld,
+            &mut plan.volume,
+            &mut plan.liquids,
+            &mut plan.features,
+            &mut plan.structures,
+            &mut plan.blockers,
+            &mut plan.lights,
+            &mut plan.biome_regions,
+            &mut plan.interiors,
+            &mut plan.anchors,
+            &mut plan.view_hint,
+        )
+    }
+
+    /// Creates a local-coordinate copy for recipe-specific validation.
+    pub(crate) fn world_to_local(
+        self,
+        plan: &GeneratedWorldPlan,
+    ) -> Result<GeneratedWorldPlan, String> {
+        let mut local = plan.clone();
+        self.translate_semantics(
+            FrameDirection::ToLocal,
+            &mut local.volume,
+            &mut local.liquids,
+            &mut local.features,
+            &mut local.structures,
+            &mut local.blockers,
+            &mut local.lights,
+            &mut local.biome_regions,
+            &mut local.interiors,
+            &mut local.anchors,
+            &mut local.view_hint,
+        )?;
+        Ok(local)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "translation must cover every exact semantic position atomically"
+    )]
+    fn translate_semantics(
+        self,
+        direction: FrameDirection,
+        volume: &mut VolumePlan,
+        liquids: &mut LiquidPlan,
+        features: &mut FeaturePlan,
+        structures: &mut StructurePlan,
+        blockers: &mut BTreeSet<TilePos>,
+        lights: &mut BTreeMap<LightId, PlannedGameplayLight>,
+        biome_regions: &mut BTreeMap<TilePos, hex_core::BiomeRegionId>,
+        interiors: &mut InteriorPlan,
+        anchors: &mut BTreeMap<String, TilePos>,
+        view_hint: &mut MapViewHint,
+    ) -> Result<(), String> {
+        volume.mask = self.translate_coords(&volume.mask, direction)?;
+        volume.columns =
+            self.translate_coord_map(std::mem::take(&mut volume.columns), direction)?;
+        volume.surfaces =
+            self.translate_position_map(std::mem::take(&mut volume.surfaces), direction)?;
+
+        for body in liquids.bodies.values_mut() {
+            let mut nodes = BTreeMap::new();
+            for (position, mut node) in std::mem::take(&mut body.nodes) {
+                if let Some(downstream) = node.downstream {
+                    node.downstream = Some(self.translate_position(downstream, direction)?);
+                }
+                nodes.insert(self.translate_position(position, direction)?, node);
+            }
+            body.nodes = nodes;
+        }
+        for feature in features.by_id.values_mut() {
+            feature.root = self.translate_position(feature.root, direction)?;
+            feature.blocker_footprint =
+                self.translate_positions(&feature.blocker_footprint, direction)?;
+        }
+        for route in features.protected_routes.values_mut() {
+            *route = ProtectedFeatureRoute {
+                centerline: route
+                    .centerline
+                    .iter()
+                    .copied()
+                    .map(|position| self.translate_position(position, direction))
+                    .collect::<Result<_, _>>()?,
+                surfaces: self.translate_positions(&route.surfaces, direction)?,
+            };
+        }
+        for clearing in features.clearings.values_mut() {
+            clearing.surfaces = self.translate_positions(&clearing.surfaces, direction)?;
+        }
+        for structure in structures.by_id.values_mut() {
+            structure.voxels = self.translate_positions(&structure.voxels, direction)?;
+        }
+        *blockers = self.translate_positions(blockers, direction)?;
+        for light in lights.values_mut() {
+            light.origin = self.translate_position(light.origin, direction)?;
+        }
+        *biome_regions = self.translate_position_map(std::mem::take(biome_regions), direction)?;
+        for interior in interiors.by_id.values_mut() {
+            interior.floors = self.translate_positions(&interior.floors, direction)?;
+            interior.entrances = self.translate_positions(&interior.entrances, direction)?;
+            interior.roof_voxels = self.translate_positions(&interior.roof_voxels, direction)?;
+        }
+        for position in anchors.values_mut() {
+            *position = self.translate_position(*position, direction)?;
+        }
+        *view_hint = self.translate_view_hint(*view_hint, direction);
+        Ok(())
+    }
+
+    fn translate_coords(
+        self,
+        coords: &BTreeSet<HexCoord>,
+        direction: FrameDirection,
+    ) -> Result<BTreeSet<HexCoord>, String> {
+        coords
+            .iter()
+            .copied()
+            .map(|coord| self.translate_coord(coord, direction))
+            .collect()
+    }
+
+    fn translate_positions(
+        self,
+        positions: &BTreeSet<TilePos>,
+        direction: FrameDirection,
+    ) -> Result<BTreeSet<TilePos>, String> {
+        positions
+            .iter()
+            .copied()
+            .map(|position| self.translate_position(position, direction))
+            .collect()
+    }
+
+    fn translate_coord_map<T>(
+        self,
+        values: BTreeMap<HexCoord, T>,
+        direction: FrameDirection,
+    ) -> Result<BTreeMap<HexCoord, T>, String> {
+        values
+            .into_iter()
+            .map(|(coord, value)| Ok((self.translate_coord(coord, direction)?, value)))
+            .collect()
+    }
+
+    fn translate_position_map<T>(
+        self,
+        values: BTreeMap<TilePos, T>,
+        direction: FrameDirection,
+    ) -> Result<BTreeMap<TilePos, T>, String> {
+        values
+            .into_iter()
+            .map(|(position, value)| Ok((self.translate_position(position, direction)?, value)))
+            .collect()
+    }
+
+    fn translate_coord(
+        self,
+        coord: HexCoord,
+        direction: FrameDirection,
+    ) -> Result<HexCoord, String> {
+        match direction {
+            FrameDirection::ToLocal => self.to_local(coord),
+            FrameDirection::ToWorld => self.to_world(coord),
+        }
+    }
+
+    fn translate_position(
+        self,
+        position: TilePos,
+        direction: FrameDirection,
+    ) -> Result<TilePos, String> {
+        match direction {
+            FrameDirection::ToLocal => self.position_to_local(position),
+            FrameDirection::ToWorld => self.position_to_world(position),
+        }
+    }
+
+    fn translate_view_hint(self, hint: MapViewHint, direction: FrameDirection) -> MapViewHint {
+        match direction {
+            FrameDirection::ToWorld => self.view_hint_to_world(hint),
+            FrameDirection::ToLocal => {
+                let offset = self.center.to_world(0.0);
+                MapViewHint::new(
+                    (hint.eye.0 - offset.x, hint.eye.1, hint.eye.2 - offset.z),
+                    (
+                        hint.focus.0 - offset.x,
+                        hint.focus.1,
+                        hint.focus.2 - offset.z,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FrameDirection {
+    ToLocal,
+    ToWorld,
 }
 
 fn checked_coord_sum(first: HexCoord, second: HexCoord) -> Result<HexCoord, String> {

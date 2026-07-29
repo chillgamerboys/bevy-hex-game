@@ -8,9 +8,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use hex_core::{HexCoord, MapViewHint, SpecialMovementRegion, TilePos};
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
-use super::seed::{SeedStream, SeedStreams};
+use super::local_frame::LocalPatchFrame;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
+use super::seed::SeedStream;
+#[cfg(test)]
+use super::seed::SeedStreams;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
@@ -145,16 +151,22 @@ impl V3Recipe for WaterfallRecipe {
                 ),
             ));
         }
-        let streams = SeedStreams::new(context.seed, context.candidate, PatchId(0).0);
-        construct_plan(
-            self.layout.clone(),
-            Some(WaterfallStreams {
-                relief: streams.stage("waterfall.relief"),
-                cliff: streams.stage("waterfall.cliff"),
-            }),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
+            .map_err(CandidateAttemptError::Fatal)?;
+        let fragment = construct_patch(
+            patch,
+            &V3WaterfallSettings,
+            V3EnvironmentSettings::TemperateGrassland,
             self.level_height,
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Rejected(vec![recipe_issue(format!("{error:?}"))])
+        })
     }
 
     fn validate(
@@ -201,15 +213,17 @@ impl V3Recipe for WaterfallRecipe {
                 "Waterfall fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(self.layout.clone(), None, self.level_height).map_err(|issues| {
-            V3GenerationError::RecipeContract(
-                issues
-                    .into_iter()
-                    .map(|issue| issue.detail)
-                    .collect::<Vec<_>>()
-                    .join("; "),
-            )
-        })
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
+            &V3WaterfallSettings,
+            V3EnvironmentSettings::TemperateGrassland,
+            self.level_height,
+            PatchBuildMode::CanonicalFallback,
+        )
+        .map_err(recipe_issues_to_error)?;
+        compose_single_patch(self.layout.clone(), fragment)
+            .map_err(|error| V3GenerationError::RecipeContract(format!("{error:?}")))
     }
 }
 
@@ -270,21 +284,33 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-fn construct_plan(
-    layout: ResolvedLayoutPlan,
-    streams: Option<WaterfallStreams<'_>>,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    _settings: &V3WaterfallSettings,
+    environment: V3EnvironmentSettings,
     level_height: f32,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch = layout
-        .patches
-        .get(&PatchId(0))
-        .ok_or_else(|| vec![recipe_issue("Single Waterfall layout has no patch zero")])?;
-    let mask = patch.mask.clone();
-    let biome_region = patch.biome_region;
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    if environment != V3EnvironmentSettings::TemperateGrassland {
+        return Err(vec![recipe_issue(
+            "Waterfall requires the TemperateGrassland environment",
+        )]);
+    }
+    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let mask = frame
+        .local_mask(patch.mask())
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let patch_radius = frame.scale();
+    let biome_region = patch.biome_region();
+    let streams = mode.seed_streams(&patch).map(|streams| WaterfallStreams {
+        relief: streams.stage("waterfall.relief"),
+        cliff: streams.stage("waterfall.cliff"),
+    });
     let watercourse = watercourse(&mask)?;
-    let bypass = bypass_tiles(layout.grid_radius, &mask)?;
-    let secondary_bypass = secondary_bypass_tiles(layout.grid_radius, &mask)?;
-    let secondary_apron = secondary_slope_apron(layout.grid_radius, &mask)?;
+    let bypass = bypass_tiles(patch_radius, &mask)?;
+    let secondary_bypass = secondary_bypass_tiles(patch_radius, &mask)?;
+    let secondary_apron = secondary_slope_apron(patch_radius, &mask)?;
     let bridge = bridge_tiles(&mask)?;
     let bridge_by_coord: BTreeMap<_, _> = bridge
         .iter()
@@ -305,7 +331,7 @@ fn construct_plan(
             .map(|position| (position.coord, HIGH_LAND_LEVEL)),
     );
     let escarpment = EscarpmentPlan::new(
-        layout.grid_radius,
+        patch_radius,
         &mask,
         &water_coords,
         &protected_by_coord,
@@ -313,7 +339,7 @@ fn construct_plan(
     )?;
     let relief = streams.map(|streams| {
         ReliefPlan::new(
-            layout.grid_radius,
+            patch_radius,
             &mask,
             &water_coords,
             &protected_by_coord,
@@ -342,6 +368,25 @@ fn construct_plan(
             downstream: None,
         });
     }
+
+    let local_land_levels = mask
+        .iter()
+        .copied()
+        .filter(|coord| !water_by_coord.contains_key(coord))
+        .map(|coord| {
+            (
+                coord,
+                land_surface_level(coord, &protected_by_coord, &escarpment, relief.as_ref()),
+            )
+        })
+        .collect();
+    let mut world_land_levels = frame
+        .levels_to_world(local_land_levels)
+        .map_err(|error| vec![recipe_issue(error)])?;
+    let seam_shape = shape_walker_seams(&patch, &mut world_land_levels)?;
+    let land_levels = frame
+        .levels_to_local(world_land_levels)
+        .map_err(|error| vec![recipe_issue(error)])?;
 
     for coord in &mask {
         let bridge_deck = bridge_by_coord.get(coord).copied();
@@ -372,8 +417,11 @@ fn construct_plan(
                 },
             );
         } else {
-            let surface_level =
-                land_surface_level(*coord, &protected_by_coord, &escarpment, relief.as_ref());
+            let surface_level = land_levels.get(coord).copied().ok_or_else(|| {
+                vec![recipe_issue(format!(
+                    "Waterfall land plan omitted coordinate {coord:?}"
+                ))]
+            })?;
             let surface = bridge_deck.unwrap_or_else(|| TilePos::new(*coord, surface_level));
             columns.insert(*coord, land_column(surface_level, bridge_deck));
             surfaces.insert(
@@ -433,10 +481,10 @@ fn construct_plan(
         .copied()
         .map(|surface| (surface, biome_region))
         .collect();
-    let view_hint = waterfall_view_hint(layout.grid_radius, level_height)?;
+    let view_hint = waterfall_view_hint(patch_radius, level_height)?;
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let mut plan = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: LiquidPlan {
             bodies: BTreeMap::from([(
@@ -463,7 +511,17 @@ fn construct_plan(
         interiors: InteriorPlan::default(),
         anchors,
         view_hint,
-    })
+    };
+    frame
+        .patch_to_world(&mut plan)
+        .map_err(|error| vec![recipe_issue(error)])?;
+    seam_shape.apply(&mut plan.volume)?;
+    let seam_issues = validate_patch_walker_seams(&patch, &plan.volume);
+    if seam_issues.is_empty() {
+        Ok(plan)
+    } else {
+        Err(seam_issues)
+    }
 }
 
 fn waterfall_view_hint(
