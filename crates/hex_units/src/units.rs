@@ -39,6 +39,7 @@ use hex_core::{
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
 use crate::pathing::reached_step_index;
 use crate::selection::Selected;
+use crate::{plan_formation_move, FormationMember, FormationPlanError};
 
 const PLAYER_SWATCH_ID: &str = "unit/player";
 const HOSTILE_SWATCH_ID: &str = "unit/hostile";
@@ -347,8 +348,22 @@ fn on_tile_clicked(
             Without<MovingTo>,
         ),
     >,
+    party_players: Query<
+        (
+            &UnitId,
+            Option<&ControlOwner>,
+            &StandsOn,
+            &Body,
+            Has<Transformation>,
+            Has<MovingTo>,
+        ),
+        With<Player>,
+    >,
     queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
+    party: Option<Res<Party>>,
+    formation: Option<Res<PartyFormation>>,
+    formations: Option<Res<FormationCatalog>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
     pending: Option<Res<PendingDecision>>,
@@ -386,6 +401,82 @@ fn on_tile_clicked(
     let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
     };
+
+    if *mode.get() == Mode::Exploring
+        && party
+            .as_deref()
+            .is_some_and(|party| party.members.len() > 1)
+        && formation
+            .as_deref()
+            .is_some_and(|formation| formation.mode == PartyMovementMode::Group)
+    {
+        let (Some(party), Some(formation), Some(formations)) = (
+            party.as_deref(),
+            formation.as_deref(),
+            formations.as_deref(),
+        ) else {
+            return;
+        };
+        let Some(preset) = formations.get(&formation.preset) else {
+            return;
+        };
+        let Some(anchor) = formation.anchor_member(preset) else {
+            return;
+        };
+        if queue.holds_command_for(anchor)
+            || party_players
+                .iter()
+                .any(|(_, _, _, _, transforming, moving)| transforming || moving)
+        {
+            return;
+        }
+        let Some((_, owner, anchor_standing, anchor_body, _, _)) = party_players
+            .iter()
+            .find(|(unit, _, _, _, _, _)| **unit == anchor)
+        else {
+            return;
+        };
+        let anchor_footing = Footing::from_tiles(tiles.iter(), &table, *anchor_body);
+        let Some(destination) = anchor_footing.at(*pos) else {
+            return;
+        };
+        let Some(anchor_path) = route(anchor_standing.0, destination, &anchor_footing) else {
+            return;
+        };
+        if anchor_path.len() < 2 {
+            return;
+        }
+        let mut members = Vec::with_capacity(party.members.len());
+        for member in &party.members {
+            let Some((unit, _, standing, body, _, _)) = party_players
+                .iter()
+                .find(|(unit, _, _, _, _, _)| *unit == member)
+            else {
+                return;
+            };
+            members.push(FormationMember {
+                unit: *unit,
+                standing: standing.0,
+                footing: Footing::from_tiles(tiles.iter(), &table, *body),
+            });
+        }
+        match plan_formation_move(preset, formation, &anchor_path, members) {
+            Ok(plan) => queue.push(IssuedCommand {
+                seat: owner.copied().unwrap_or_default().0,
+                command: GameCommand::MoveParty {
+                    anchor,
+                    paths: plan.paths,
+                },
+            }),
+            Err(FormationPlanError::NoSafeSlot(member)) => {
+                warn!("party move rejected: member {member:?} has no safe compressed slot");
+            }
+            Err(FormationPlanError::InvalidFormation) => {
+                warn!("party move rejected: runtime formation assignments are invalid");
+            }
+        }
+        return;
+    }
 
     for (unit, owner, standing, body, turn) in players.iter() {
         // In combat a click is only a move if it is this unit's turn. Out of combat

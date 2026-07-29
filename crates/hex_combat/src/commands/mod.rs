@@ -37,14 +37,14 @@ use bevy::prelude::*;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    CombatSettings, ContentIndex, ContentTables, ElementCatalog, PlayerSettings, SpellBook,
-    SubstanceTable,
+    CombatSettings, ContentIndex, ContentTables, ElementCatalog, FormationCatalog, PlayerSettings,
+    SpellBook, SubstanceTable,
 };
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
     PausableSystems, PendingDecision, Screen, TilePos, Turn,
 };
-use hex_units::{Body, Downed, Faction, MovingTo, StandsOn, UnitRegistry};
+use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitRegistry};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
@@ -54,6 +54,7 @@ pub use cast::{delivers_anything, UNDELIVERABLE};
 mod choose_disables;
 mod end_turn;
 mod move_along;
+mod move_party;
 mod presentation;
 mod strike;
 
@@ -121,6 +122,9 @@ struct Verb<'a> {
     events: &'a mut Vec<CombatEvent>,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
+    party: &'a Party,
+    formation: &'a mut PartyFormation,
+    formations: Option<&'a FormationCatalog>,
     /// Units this drain already committed presentation for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
@@ -137,8 +141,17 @@ struct ResolutionStores<'w> {
     events: MessageWriter<'w, CombatEvent>,
 }
 
+#[derive(SystemParam)]
+struct PartyStores<'w> {
+    party: Res<'w, Party>,
+    formation: ResMut<'w, PartyFormation>,
+    formations: Option<Res<'w, FormationCatalog>>,
+}
+
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<CommandQueue>()
+        .init_resource::<Party>()
+        .init_resource::<PartyFormation>()
         // A resource rather than a marker component since it carries a payload, so it
         // needs initialising as well as registering. Nothing sets it to anything but
         // `None` until the damage model lands.
@@ -240,6 +253,7 @@ fn apply_commands(
     tiles: TileQuery,
     mut actors: ActorQuery,
     mut lattices: cast::LatticeQuery,
+    mut party_stores: PartyStores,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
     let mut emitted: Vec<CombatEvent> = Vec::new();
@@ -291,6 +305,9 @@ fn apply_commands(
             knowledge: &mut stores.knowledge,
             events: &mut emitted,
             combat: combat.as_deref(),
+            party: &party_stores.party,
+            formation: &mut party_stores.formation,
+            formations: party_stores.formations.as_deref(),
             committed: &mut committed,
             in_combat,
         };
@@ -305,7 +322,15 @@ fn apply_commands(
                 entity,
                 path,
             ),
-            GameCommand::MoveParty { .. } => Err(CommandRefusal::PartyMovementUnavailable),
+            GameCommand::MoveParty { ref paths, .. } => move_party::apply(
+                &mut verb,
+                &mut commands,
+                &tiles,
+                &mut actors,
+                issued.seat,
+                unit,
+                paths,
+            ),
             GameCommand::Strike { target, .. } => strike::apply(
                 &mut verb,
                 &mut commands,

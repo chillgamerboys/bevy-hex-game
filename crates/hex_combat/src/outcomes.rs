@@ -66,6 +66,11 @@ pub enum PartyMoveRefusal {
         /// Repeated member.
         member: UnitId,
     },
+    /// A player-party member had no path in the atomic command.
+    MissingMember {
+        /// Omitted member.
+        member: UnitId,
+    },
     /// A path did not begin at its member's current position.
     InvalidStart {
         /// Member with the invalid start.

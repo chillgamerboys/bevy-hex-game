@@ -32,3 +32,33 @@ The miniature grid is an editor as well as a readout. A diamond marks the author
 anchor. Its slot positions are the actual axial offsets, so changing a preset's
 content changes the displayed shape without a parallel UI layout.
 
+## Atomic group traversal
+
+A Group click first routes the assigned anchor exactly as an ordinary walker. For each
+anchor segment, the planner derives its sextant and rotates the authored offsets from
+their `A` orientation. Members are placed anchor-first and then in authored slot order.
+Each member uses its own `Body` and `Footing`.
+
+The candidate ladder is deterministic:
+
+1. the member's ideal rotated slot, choosing the closest vertical surface;
+2. an unused recent exact surface on the anchor corridor; then
+3. another standable surface within the party's maximum compressed spread, ordered by
+   distance to the ideal coordinate, vertical difference, and `TilePos`.
+
+Every candidate must have a complete route from that member's prior planned surface.
+Destinations are unique at every anchor segment. This lets a formation collapse into
+a single-file bridge corridor and reclaim its ideal slots when open ground returns,
+while a member that cannot remain within the safe compressed footprint rejects the
+complete plan.
+
+The emitter queues one `MoveParty` containing every exact `PartyPath`. The combat
+command funnel independently regrounds all paths against live terrain and validates
+the active anchor, party membership, complete member coverage, unique members, seats,
+starts, traversability, busy state, and unique final destinations. It inserts no
+movement component until every member passes. Member paths may cross because global
+unit obstruction remains deferred, but they cannot finish together.
+
+If combat begins during presentation, the existing movement interruption reconciles
+every moving party member to its nearest whole route surface before turn construction.
+Solo mode bypasses this planner and continues to emit one selected-unit `MoveAlong`.
