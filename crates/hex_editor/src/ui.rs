@@ -1020,16 +1020,16 @@ fn draw_top_toolbar(
                         WorkshopMode::Objects => WorkshopUiAction::SaveObject,
                     });
                 }
-                if snapshot.recovery_conflict && !snapshot.recovery_catalogs_reconciled {
-                    if ui
+                if snapshot.recovery_conflict
+                    && !snapshot.recovery_catalogs_reconciled
+                    && ui
                         .button("Reconcile")
                         .on_hover_text(
                             "Merge recovered palette and style edits onto the current tracked catalogs",
                         )
                         .clicked()
-                    {
-                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogs);
-                    }
+                {
+                    actions.push(WorkshopUiAction::ReconcileRecoveryCatalogs);
                 }
                 if mode == WorkshopMode::Objects {
                     if ui
