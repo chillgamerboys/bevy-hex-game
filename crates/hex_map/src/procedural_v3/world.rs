@@ -829,7 +829,7 @@ fn validate_feature_membership(
     }
 }
 
-fn valid_stable_name(name: &str) -> bool {
+pub(super) fn valid_stable_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .bytes()

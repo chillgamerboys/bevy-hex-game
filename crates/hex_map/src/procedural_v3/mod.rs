@@ -24,6 +24,11 @@ use materialize::{MaterializationError, MaterializedV3World};
 use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
+#[expect(
+    dead_code,
+    reason = "Ring7 recipe integration consumes checked patch composition in the next PR"
+)]
+mod composition;
 mod fingerprint;
 mod forest;
 mod hills;
