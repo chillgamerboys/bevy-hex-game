@@ -223,9 +223,10 @@ untracked working copy under `.context/asset-workshop/` for disposable work.
 
 ## Explicit persistence
 
-Tracked assets change only through explicit Save, Save As, or Duplicate. Before a
-write, the tool validates the complete palette-style-object reference graph and shows
-the global impact of shared changes. Invalid data leaves the last valid file intact.
+Tracked assets change only through explicit persistence actions: Save, Save As,
+Duplicate, or a confirmed Delete. Before a write, the tool validates the complete
+palette-style-object reference graph and shows the global impact of shared changes.
+Invalid data leaves the last valid file intact.
 
 In **Voxel Styles**, Save writes the palette and style catalogs as one validated
 operation. In **Objects**, Save updates an already tracked object, Save As assigns a
@@ -271,11 +272,14 @@ normal production deserializer and every tracked save still enforce the full obj
 contract.
 
 If tracked files changed after the recovery snapshot, Restore preserves the draft but
-marks a recovery conflict. Existing tracked files cannot be overwritten until the
-author reloads, or preserves the object through Save As and resolves any remaining
-catalog differences. Closing a dirty session first flushes recovery, then requires
-Save All and Quit, Discard and Quit, or Cancel. A clean explicit save removes obsolete
-recovery state.
+marks a recovery conflict. **Reconcile** performs a three-way merge between the
+recovery checkpoint, recovered catalog edits, and current tracked catalogs. Independent
+changes are retained from both sides; same-id conflicts are named and remain blocked
+until the author chooses the desired draft value or reloads. A dirty recovered tracked
+object must be preserved through Save As before its old destination can be overwritten.
+Reconciled catalogs may be saved first when that new object depends on a recovered
+style. Closing a dirty session first flushes recovery, then requires Save All and Quit,
+Discard and Quit, or Cancel. A clean explicit save removes obsolete recovery state.
 
 ## Review output
 

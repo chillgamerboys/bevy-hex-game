@@ -8,6 +8,8 @@
 //! `HEX_REVIEW_CAPTURE` captures the renderer after the validated terrain has settled,
 //! then exits. `HEX_REVIEW_TIME` and `HEX_REVIEW_CAMERA` optionally select the cyclic
 //! lighting hour and map/character perspective for that launch.
+//! `HEX_REVIEW_LIQUID_PHASE` freezes liquid presentation at a deterministic phase;
+//! captures default to phase `0.0` when no explicit phase is configured.
 //! `HEX_REVIEW_FOCUS_ANCHOR` optionally relocates the selected actor to one exact
 //! generated anchor before framing. This keeps iteration tooling on the same loading
 //! and validation path as manual play while avoiding compositor-dependent screenshots.
@@ -29,6 +31,7 @@ use hex_core::{
     CameraFocusTarget, GameplaySetupFailure, Headroom, HexSpan, HexTile, MapAnchorId, MapAnchors,
     MapViewHint, ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos,
 };
+use hex_map::LiquidVisualTime;
 use hex_units::{Body, Footing, Selected, Standing, StandsOn};
 use hex_world::{CameraMode, PanOrbitCamera};
 
@@ -40,6 +43,7 @@ const SEED_ENV: &str = "HEX_REVIEW_SEED";
 const CAPTURE_ENV: &str = "HEX_REVIEW_CAPTURE";
 const VIEW_ENV: &str = "HEX_REVIEW_VIEW";
 const TIME_ENV: &str = "HEX_REVIEW_TIME";
+const LIQUID_PHASE_ENV: &str = "HEX_REVIEW_LIQUID_PHASE";
 const CAMERA_ENV: &str = "HEX_REVIEW_CAMERA";
 const FOCUS_ANCHOR_ENV: &str = "HEX_REVIEW_FOCUS_ANCHOR";
 const CUTAWAY_ENV: &str = "HEX_REVIEW_CUTAWAY";
@@ -64,6 +68,12 @@ pub(super) fn plugin(app: &mut App) {
     };
 
     let capture = request.capture.clone();
+    if let Some(time) = request
+        .liquid_phase_seconds
+        .and_then(LiquidVisualTime::frozen_at)
+    {
+        app.insert_resource(time);
+    }
     app.insert_resource(request).add_systems(
         Update,
         launch_review_scenario.run_if(in_state(Screen::Title)),
@@ -109,6 +119,7 @@ struct ReviewRequest {
     scenario: String,
     seed: Option<u64>,
     time_hours: Option<f32>,
+    liquid_phase_seconds: Option<f32>,
     capture: Option<ReviewCapture>,
     launched: bool,
 }
@@ -121,6 +132,7 @@ impl ReviewRequest {
             environment_value(CAPTURE_ENV)?,
             environment_value(VIEW_ENV)?,
             environment_value(TIME_ENV)?,
+            environment_value(LIQUID_PHASE_ENV)?,
             environment_value(CAMERA_ENV)?,
             environment_value(FOCUS_ANCHOR_ENV)?,
             environment_value(CUTAWAY_ENV)?,
@@ -133,6 +145,7 @@ impl ReviewRequest {
         capture: Option<String>,
         view: Option<String>,
         time: Option<String>,
+        liquid_phase: Option<String>,
         camera: Option<String>,
         focus_anchor: Option<String>,
         cutaway: Option<String>,
@@ -142,6 +155,7 @@ impl ReviewRequest {
             || capture.is_some()
             || view.is_some()
             || time.is_some()
+            || liquid_phase.is_some()
             || camera.is_some()
             || focus_anchor.is_some()
             || cutaway.is_some();
@@ -158,6 +172,9 @@ impl ReviewRequest {
             })
             .transpose()?;
         let time_hours = time.map(|value| parse_review_hour(&value)).transpose()?;
+        let liquid_phase_seconds = liquid_phase
+            .map(|value| parse_liquid_phase(&value))
+            .transpose()?;
         let focus_anchor = match focus_anchor {
             Some(value) if value.trim().is_empty() => {
                 return Err(format!("{FOCUS_ANCHOR_ENV} must not be empty"));
@@ -205,10 +222,17 @@ impl ReviewRequest {
             None => None,
         };
 
+        // A capture must be byte-reproducible, so freeze liquid presentation at phase
+        // zero unless the launch names an explicit phase. Launches without a capture
+        // keep the live animation.
+        let liquid_phase_seconds =
+            liquid_phase_seconds.or_else(|| capture.is_some().then_some(0.0));
+
         Ok(Some(Self {
             scenario,
             seed,
             time_hours,
+            liquid_phase_seconds,
             capture,
             launched: false,
         }))
@@ -233,6 +257,16 @@ fn parse_review_hour(value: &str) -> Result<f32, String> {
         ));
     }
     Ok(hours)
+}
+
+fn parse_liquid_phase(value: &str) -> Result<f32, String> {
+    let phase = value
+        .parse::<f32>()
+        .map_err(|error| format!("{LIQUID_PHASE_ENV} must be a finite number: {error}"))?;
+    if !phase.is_finite() {
+        return Err(format!("{LIQUID_PHASE_ENV} must be finite; got {value:?}"));
+    }
+    Ok(phase)
 }
 
 fn environment_value(name: &str) -> Result<Option<String>, String> {
@@ -887,7 +921,7 @@ mod tests {
     #[test]
     fn review_automation_is_dormant_without_environment_values() {
         assert!(
-            ReviewRequest::from_values(None, None, None, None, None, None, None, None)
+            ReviewRequest::from_values(None, None, None, None, None, None, None, None, None)
                 .expect("empty review configuration should be valid")
                 .is_none()
         );
@@ -901,6 +935,7 @@ mod tests {
             Some(".context/review.png".to_owned()),
             Some("top-down".to_owned()),
             Some("18.5".to_owned()),
+            Some("0.5".to_owned()),
             Some("character".to_owned()),
             Some("deep_chamber".to_owned()),
             Some("full".to_owned()),
@@ -911,6 +946,7 @@ mod tests {
         assert_eq!(request.scenario, "Procedural Hills");
         assert_eq!(request.seed, Some(42));
         assert_eq!(request.time_hours, Some(18.5));
+        assert_eq!(request.liquid_phase_seconds, Some(0.5));
         let capture = request.capture.expect("capture should be configured");
         assert_eq!(capture.path, PathBuf::from(".context/review.png"));
         assert_eq!(capture.view, ReviewView::TopDown);
@@ -920,12 +956,46 @@ mod tests {
     }
 
     #[test]
+    fn captures_default_to_a_frozen_liquid_phase_and_launches_do_not() {
+        let capture = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            Some(".context/review.png".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("capture configuration should parse")
+        .expect("capture configuration should be enabled");
+        assert_eq!(capture.liquid_phase_seconds, Some(0.0));
+
+        let launch = ReviewRequest::from_values(
+            Some("Procedural Hills".to_owned()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("launch configuration should parse")
+        .expect("launch configuration should be enabled");
+        assert_eq!(launch.liquid_phase_seconds, None);
+    }
+
+    #[test]
     fn view_without_capture_is_rejected() {
         let error = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
             None,
             None,
             Some("rotated".to_owned()),
+            None,
             None,
             None,
             None,
@@ -940,6 +1010,7 @@ mod tests {
     fn camera_without_capture_is_rejected() {
         let error = ReviewRequest::from_values(
             Some("Procedural Hills".to_owned()),
+            None,
             None,
             None,
             None,
@@ -963,6 +1034,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some("deep_chamber".to_owned()),
             None,
         )
@@ -974,6 +1046,7 @@ mod tests {
             Some("Caves".to_owned()),
             None,
             Some(".context/cave.png".to_owned()),
+            None,
             None,
             None,
             None,
@@ -995,6 +1068,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some("full".to_owned()),
         )
         .expect_err("a cutaway override without an output should be invalid");
@@ -1005,6 +1079,7 @@ mod tests {
             Some("Caves".to_owned()),
             None,
             Some(".context/cave.png".to_owned()),
+            None,
             None,
             None,
             None,
@@ -1145,6 +1220,7 @@ mod tests {
             Some(".context/review.png".to_owned()),
             None,
             None,
+            None,
             Some("first-person".to_owned()),
             None,
             None,
@@ -1167,9 +1243,21 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .expect_err("an invalid review time should be rejected");
             assert!(error.contains(TIME_ENV), "{error}");
+        }
+    }
+
+    #[test]
+    fn review_liquid_phase_requires_a_finite_number() {
+        assert_eq!(parse_liquid_phase("0.5"), Ok(0.5));
+        assert_eq!(parse_liquid_phase("-2.25"), Ok(-2.25));
+        for invalid in ["NaN", "inf", "-inf", "not-a-phase"] {
+            let error =
+                parse_liquid_phase(invalid).expect_err("non-finite liquid phases must fail");
+            assert!(error.contains(LIQUID_PHASE_ENV), "{error}");
         }
     }
 

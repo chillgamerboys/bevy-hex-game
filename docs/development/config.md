@@ -76,6 +76,7 @@ The optional review overrides are:
 | `HEX_REVIEW_VIEW` | Uses `default`, `rotated`, or `top-down` map azimuth |
 | `HEX_REVIEW_CAMERA` | Uses the `map` or close `character` camera |
 | `HEX_REVIEW_TIME` | Sets a cyclic-lighting hour from `0.0` up to, but not including, `24.0` |
+| `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
 

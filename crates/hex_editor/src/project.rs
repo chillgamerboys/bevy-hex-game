@@ -246,6 +246,15 @@ impl AssetProject {
         revision_set_from_sources(&self.loaded_sources)
     }
 
+    /// Validates proposed catalogs against every currently tracked object.
+    pub(crate) fn validate_catalogs(
+        &self,
+        palette: &ArtPalette,
+        styles: &VoxelStyleCatalog,
+    ) -> Result<(), ProjectError> {
+        validate_graph(palette, styles, &self.objects)
+    }
+
     /// Discards the loaded project snapshot and reloads the complete art graph.
     pub fn reload_from_disk(&mut self) -> Result<(), ProjectError> {
         *self = Self::load(&self.repository_root)?;

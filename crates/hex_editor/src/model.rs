@@ -213,7 +213,7 @@ pub struct EditorModel {
     object: ObjectBlueprint,
     selection: ObjectSelection,
     clipboard: ObjectClipboard,
-    saved_object: ObjectBlueprint,
+    saved_object: Option<ObjectBlueprint>,
     history: SnapshotHistory<EditorSnapshot>,
 }
 
@@ -233,7 +233,7 @@ impl EditorModel {
                 .first()
                 .map(|placement| placement.style.clone()),
             active_part,
-            saved_object: object.clone(),
+            saved_object: Some(object.clone()),
             object,
             selection: ObjectSelection::default(),
             clipboard: ObjectClipboard::default(),
@@ -247,9 +247,14 @@ impl EditorModel {
     /// intentionally session-only and are not included.
     #[must_use]
     pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
+        let (saved_object, saved_object_is_checkpoint) = self.saved_object.as_ref().map_or_else(
+            || (RawObjectDraft::from_blueprint(&self.object), false),
+            |saved| (RawObjectDraft::from_blueprint(saved), true),
+        );
         EditorRecoveryDraft {
             object: RawObjectDraft::from_blueprint(&self.object),
-            saved_object: RawObjectDraft::from_blueprint(&self.saved_object),
+            saved_object,
+            saved_object_is_checkpoint,
             mode: self.mode,
             tool: self.tool,
             preview_rig: self.preview_rig,
@@ -272,6 +277,7 @@ impl EditorModel {
         let EditorRecoveryDraft {
             object,
             saved_object,
+            saved_object_is_checkpoint,
             mode,
             tool,
             preview_rig,
@@ -281,7 +287,7 @@ impl EditorModel {
             selection,
         } = recovery;
         let object = object.into_blueprint();
-        let saved_object = saved_object.into_blueprint();
+        let saved_object = saved_object_is_checkpoint.then(|| saved_object.into_blueprint());
         let (selection, sanitization) = sanitized_selection(selection, &object);
         Ok((
             Self {
@@ -403,7 +409,7 @@ impl EditorModel {
         };
         let mut editor = Self::from_blueprint(object)?;
         editor.active_style = Some(style);
-        editor.saved_object.placements.clear();
+        editor.saved_object = None;
         Ok(editor)
     }
 
@@ -505,12 +511,12 @@ impl EditorModel {
     /// Whether object semantics differ from the last saved checkpoint.
     #[must_use]
     pub fn is_dirty(&self) -> bool {
-        self.object != self.saved_object
+        self.saved_object.as_ref() != Some(&self.object)
     }
 
     /// Marks the current draft as the saved checkpoint.
     pub fn mark_saved(&mut self) {
-        self.saved_object = self.object.clone();
+        self.saved_object = Some(self.object.clone());
     }
 
     /// Adopts the immutable identity assigned by a successful Save As operation.
@@ -538,7 +544,7 @@ impl EditorModel {
         }
         self.object.id = id;
         self.object.display_name = display_name;
-        self.saved_object.placements.clear();
+        self.saved_object = None;
         self.history.clear();
         Ok(())
     }
@@ -1601,6 +1607,24 @@ mod tests {
             style_id("calibration/neutral"),
         )
         .is_err());
+    }
+
+    #[test]
+    fn empty_unsaved_documents_cannot_match_a_synthetic_saved_checkpoint() {
+        for (category, connectivity) in [
+            (ObjectCategory::Effect, ConnectivityPolicy::Free),
+            (ObjectCategory::Prop, ConnectivityPolicy::Grounded),
+            (ObjectCategory::Prop, ConnectivityPolicy::Free),
+        ] {
+            let mut editor =
+                EditorModel::blank(category, connectivity, style_id("calibration/neutral"))
+                    .expect("supported blank document should be valid");
+            let origin = editor.object().origin;
+
+            assert_eq!(editor.erase(origin), Ok(true));
+            assert!(editor.object().placements.is_empty());
+            assert!(editor.is_dirty());
+        }
     }
 
     #[test]

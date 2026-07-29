@@ -8,10 +8,9 @@ use hex_assets::{
     ArtPalette, ObjectAssetId, PaletteSwatch, SwatchId, VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 
+use crate::history::DEFAULT_HISTORY_LIMIT;
 use crate::model::{EditorModel, EditorModelError};
 use crate::recovery::{RecoveryError, RecoverySanitization, RecoveryWorkshopDraft};
-
-const GLOBAL_HISTORY_LIMIT: usize = 128;
 
 /// A recoverable workshop draft operation failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,6 +156,18 @@ impl WorkshopDraft {
         &self.styles
     }
 
+    /// Palette checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_palette(&self) -> &ArtPalette {
+        &self.saved_palette
+    }
+
+    /// Style checkpoint represented by the tracked baseline captured in recovery.
+    #[must_use]
+    pub(crate) const fn saved_styles(&self) -> &VoxelStyleCatalog {
+        &self.saved_styles
+    }
+
     /// Current object editor.
     #[must_use]
     pub const fn editor(&self) -> &EditorModel {
@@ -203,10 +214,11 @@ impl WorkshopDraft {
                 "use the active object transaction for grouped edits",
             ));
         }
+        let label = validated_label(label)?;
         let changed = operation(&mut self.editor)?;
         if changed {
             self.push_undo(GlobalHistoryEntry {
-                label: validated_label(label)?,
+                label,
                 kind: GlobalHistoryKind::Object,
             });
             self.redo.clear();
@@ -432,6 +444,32 @@ impl WorkshopDraft {
         self.saved_styles = self.styles.clone();
     }
 
+    /// Rebases recovered catalog drafts onto the current tracked catalogs.
+    ///
+    /// The application performs the three-way merge because it also owns the
+    /// filesystem revision contract. This method adopts its validated result and
+    /// makes the current tracked catalogs the new save checkpoint.
+    pub(crate) fn adopt_rebased_catalogs(
+        &mut self,
+        current_palette: ArtPalette,
+        current_styles: VoxelStyleCatalog,
+        merged_palette: ArtPalette,
+        merged_styles: VoxelStyleCatalog,
+    ) -> Result<(), WorkshopDraftError> {
+        current_styles
+            .validate(&current_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        merged_styles
+            .validate(&merged_palette)
+            .map_err(|error| WorkshopDraftError::new(error.to_string()))?;
+        self.palette = merged_palette;
+        self.styles = merged_styles;
+        self.saved_palette = current_palette;
+        self.saved_styles = current_styles;
+        self.clear_history();
+        Ok(())
+    }
+
     /// Marks the object as explicitly saved under its current identity.
     pub fn mark_object_saved(&mut self) {
         self.editor.mark_saved();
@@ -507,7 +545,7 @@ fn validated_label(label: impl Into<String>) -> Result<String, WorkshopDraftErro
 }
 
 fn trim_history(history: &mut VecDeque<GlobalHistoryEntry>) {
-    while history.len() > GLOBAL_HISTORY_LIMIT {
+    while history.len() > DEFAULT_HISTORY_LIMIT {
         drop(history.pop_front());
     }
 }
@@ -589,6 +627,20 @@ mod tests {
         assert!(draft.palette().contains(&accent_id));
         assert_eq!(draft.redo(), Ok(true));
         assert_eq!(draft.editor().object().display_name, "History Plant");
+    }
+
+    #[test]
+    fn invalid_object_history_labels_are_rejected_before_mutation() {
+        let mut draft = fixture();
+        let before = draft.editor().clone();
+
+        let result = draft.edit_object("  ", |editor| {
+            editor.set_display_name("Must not be applied")
+        });
+
+        assert!(result.is_err());
+        assert_eq!(draft.editor(), &before);
+        assert_eq!(draft.undo_label(), None);
     }
 
     #[test]
