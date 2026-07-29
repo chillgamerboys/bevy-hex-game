@@ -246,6 +246,15 @@ impl AssetProject {
         revision_set_from_sources(&self.loaded_sources)
     }
 
+    /// Validates proposed catalogs against every currently tracked object.
+    pub(crate) fn validate_catalogs(
+        &self,
+        palette: &ArtPalette,
+        styles: &VoxelStyleCatalog,
+    ) -> Result<(), ProjectError> {
+        validate_graph(palette, styles, &self.objects)
+    }
+
     /// Discards the loaded project snapshot and reloads the complete art graph.
     pub fn reload_from_disk(&mut self) -> Result<(), ProjectError> {
         *self = Self::load(&self.repository_root)?;
@@ -924,10 +933,78 @@ pub(crate) fn current_file_revision(
     repository_root: &Path,
     relative_path: &Path,
 ) -> Result<ByteRevision, ProjectError> {
+    current_file_bytes_and_revision(repository_root, relative_path).map(|(_, revision)| revision)
+}
+
+/// Reads one repository-relative renderer source and its exact byte revision.
+pub(crate) fn current_file_bytes_and_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(Vec<u8>, ByteRevision), ProjectError> {
     let path = repository_root.join(relative_path);
     let source =
         fs::read(&path).map_err(|error| ProjectError::at("read renderer source", &path, error))?;
-    Ok(byte_revision(&source))
+    let revision = byte_revision(&source);
+    Ok((source, revision))
+}
+
+/// Copies a renderer source to an immutable, content-addressed AssetServer path.
+pub(crate) fn cache_renderer_source(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(String, ByteRevision), ProjectError> {
+    let (source, revision) = current_file_bytes_and_revision(repository_root, relative_path)?;
+    let extension = relative_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin");
+    let asset_relative = format!(
+        ".asset-workshop-cache/renderer-{}-{:016x}.{extension}",
+        revision.byte_len, revision.fingerprint
+    );
+    let destination = repository_root.join("assets").join(&asset_relative);
+    let parent = destination.parent().ok_or_else(|| {
+        ProjectError::at(
+            "prepare renderer cache",
+            &destination,
+            "destination has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| ProjectError::at("create renderer cache", parent, error))?;
+
+    if destination.exists() {
+        let cached = fs::read(&destination)
+            .map_err(|error| ProjectError::at("read renderer cache", &destination, error))?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "content-addressed cache path contains different bytes",
+            ));
+        }
+    } else if let Err(write_error) =
+        AtomicFile::new(&destination, DisallowOverwrite).write(|file| file.write_all(&source))
+    {
+        let cached = fs::read(&destination).map_err(|read_error| {
+            ProjectError::at(
+                "write renderer cache",
+                &destination,
+                format!(
+                    "atomic write failed ({write_error}); reading a possible concurrent result also failed ({read_error})"
+                ),
+            )
+        })?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "concurrent cache writer produced different bytes",
+            ));
+        }
+    }
+
+    Ok((asset_relative, revision))
 }
 
 fn byte_revision(source: &[u8]) -> ByteRevision {
@@ -1639,6 +1716,45 @@ pub(crate) mod tests {
             .expect("current revisions should include the palette");
         assert_eq!(current_palette.byte_len, loaded_palette.byte_len);
         assert_ne!(current_palette.fingerprint, loaded_palette.fingerprint);
+    }
+
+    #[test]
+    fn renderer_cache_is_content_addressed_and_preserves_the_loaded_bytes() {
+        let directory = TestDirectory::new();
+        let source_path = Path::new("assets/meshes/hex.glb");
+        let absolute_source = directory.repository_root().join(source_path);
+        fs::create_dir_all(
+            absolute_source
+                .parent()
+                .expect("renderer source should have a parent"),
+        )
+        .expect("mesh directory should be created");
+        fs::write(&absolute_source, b"mesh version one").expect("mesh fixture should write");
+
+        let (asset_path, revision) =
+            cache_renderer_source(directory.repository_root(), source_path)
+                .expect("renderer source should be cached");
+        let cached_path = directory.repository_root().join("assets").join(asset_path);
+        assert_eq!(
+            fs::read(&cached_path).expect("cached mesh should be readable"),
+            b"mesh version one"
+        );
+        assert_eq!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("original mesh should remain readable")
+        );
+
+        fs::write(&absolute_source, b"mesh version two").expect("mesh fixture should change");
+        assert_ne!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("changed mesh should remain readable")
+        );
+        assert_eq!(
+            fs::read(cached_path).expect("cached mesh should remain immutable"),
+            b"mesh version one"
+        );
     }
 
     #[test]

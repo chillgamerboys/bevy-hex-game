@@ -155,6 +155,8 @@ pub struct WorkshopUiSnapshot {
     pub recovery_prompt: Option<RecoveryPrompt>,
     /// Whether restored work was based on an older tracked art revision.
     pub recovery_conflict: bool,
+    /// Whether recovered catalogs were safely rebased while object rescue remains.
+    pub recovery_catalogs_reconciled: bool,
     /// Whether any tracked replacement is currently blocked.
     pub tracked_writes_blocked: bool,
     /// Whether the open object draft currently passes save validation.
@@ -194,6 +196,7 @@ impl WorkshopUiSnapshot {
         external_changes: &[ExternalAssetChange],
         recovery_prompt: Option<RecoveryPrompt>,
         recovery_conflict: bool,
+        recovery_catalogs_reconciled: bool,
         review_ready: bool,
         review_in_progress: bool,
         close_confirmation: bool,
@@ -212,6 +215,7 @@ impl WorkshopUiSnapshot {
         self.external_changes = external_changes.to_vec();
         self.recovery_prompt = recovery_prompt;
         self.recovery_conflict = recovery_conflict;
+        self.recovery_catalogs_reconciled = recovery_catalogs_reconciled;
         self.tracked_writes_blocked = recovery_conflict || !external_changes.is_empty();
         self.object_save_ready = editor.blueprint_for_save(style_draft).is_ok();
         self.review_ready = review_ready;
@@ -233,6 +237,7 @@ impl WorkshopUiSnapshot {
         self.external_changes.clear();
         self.recovery_prompt = None;
         self.recovery_conflict = false;
+        self.recovery_catalogs_reconciled = false;
         self.tracked_writes_blocked = true;
         self.object_save_ready = false;
         self.review_ready = false;
@@ -299,10 +304,16 @@ pub enum WorkshopUiAction {
     RestoreRecovery,
     /// Explicitly delete the pending startup recovery file.
     DiscardRecovery,
-    /// Keep restored work and accept the current tracked files as its overwrite baseline.
-    AcceptRecoveryBaseline,
+    /// Three-way merge recovered catalog drafts onto the current tracked catalogs.
+    ReconcileRecoveryCatalogs,
+    /// Reconcile catalogs, resolving same-id conflicts with the recovered value.
+    ReconcileRecoveryCatalogsPreferRecovered,
+    /// Reconcile catalogs, resolving same-id conflicts with the tracked value.
+    ReconcileRecoveryCatalogsPreferTracked,
     /// Validate, save every dirty tracked document, and close the Workshop.
     SaveAllAndClose,
+    /// Keep the crash-recovery draft and close without writing tracked files.
+    KeepRecoveryAndClose,
     /// Explicitly discard local changes and their recovery file, then close.
     DiscardAndClose,
     /// Cancel a native close request.
@@ -746,7 +757,6 @@ fn draw_workshop_ui(
     draw_delete_confirmation(context, &mut state, &mut actions);
     draw_reload_confirmation(context, &snapshot, &mut state, &mut actions);
     draw_recovery_prompt(context, &snapshot, &mut actions);
-    draw_recovery_conflict(context, &snapshot, &mut actions);
     draw_close_confirmation(context, &snapshot, &mut actions);
     draw_review_progress(context, &snapshot);
     collect_keyboard_shortcuts(context, &snapshot, &mut state, &mut actions);
@@ -757,7 +767,6 @@ fn draw_workshop_ui(
         || state.pending_delete.is_some()
         || state.pending_reload
         || snapshot.recovery_prompt.is_some()
-        || snapshot.recovery_conflict
         || snapshot.close_confirmation
         || snapshot.review_in_progress
         || context.any_popup_open();
@@ -800,7 +809,6 @@ fn collect_keyboard_shortcuts(
         || state.pending_delete.is_some()
         || state.pending_reload
         || snapshot.recovery_prompt.is_some()
-        || snapshot.recovery_conflict
         || snapshot.close_confirmation
         || snapshot.review_in_progress
     {
@@ -1003,9 +1011,17 @@ fn draw_top_toolbar(
                 }
 
                 let save_ready = match mode {
-                    WorkshopMode::VoxelStyles => project_ready,
-                    WorkshopMode::Objects => saved_document && snapshot.object_save_ready,
-                } && !snapshot.tracked_writes_blocked;
+                    WorkshopMode::VoxelStyles => {
+                        project_ready
+                            && (!snapshot.tracked_writes_blocked
+                                || snapshot.recovery_catalogs_reconciled)
+                    }
+                    WorkshopMode::Objects => {
+                        saved_document
+                            && snapshot.object_save_ready
+                            && !snapshot.tracked_writes_blocked
+                    }
+                };
                 if ui
                     .add_enabled(save_ready, egui::Button::new("Save"))
                     .on_hover_text("Validate and explicitly save the active authoring data")
@@ -1015,6 +1031,35 @@ fn draw_top_toolbar(
                         WorkshopMode::VoxelStyles => WorkshopUiAction::SaveCatalogs,
                         WorkshopMode::Objects => WorkshopUiAction::SaveObject,
                     });
+                }
+                if snapshot.recovery_conflict && !snapshot.recovery_catalogs_reconciled {
+                    if ui
+                        .button("Reconcile")
+                        .on_hover_text(
+                            "Safely merge independent catalog edits and report any same-id conflicts",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogs);
+                    }
+                    if ui
+                        .button("Recovered Wins")
+                        .on_hover_text(
+                            "Merge independent edits and choose recovered values for every same-id conflict",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogsPreferRecovered);
+                    }
+                    if ui
+                        .button("Tracked Wins")
+                        .on_hover_text(
+                            "Merge independent edits and choose current tracked values for every same-id conflict",
+                        )
+                        .clicked()
+                    {
+                        actions.push(WorkshopUiAction::ReconcileRecoveryCatalogsPreferTracked);
+                    }
                 }
                 if mode == WorkshopMode::Objects {
                     if ui
@@ -1158,7 +1203,7 @@ fn draw_top_toolbar(
                         if snapshot.recovery_conflict {
                             ui.label(egui::RichText::new("Recovery conflict").color(ERROR))
                                 .on_hover_text(
-                                    "Recovered work predates the tracked files; choose which version to keep",
+                                    "Reconcile recovered catalogs, then use Save As for changed tracked objects",
                                 );
                         }
                         if dirty {
@@ -2611,7 +2656,7 @@ fn draw_recovery_prompt(
                     ui.add_space(6.0);
                     ui.label(
                         egui::RichText::new(
-                            "Tracked art changed after this draft. Restore is safe; afterward, choose whether recovered work or the current files win.",
+                            "Tracked art changed after this draft. Restore is safe; reconcile catalogs and use Save As for a changed tracked object before overwriting.",
                         )
                         .color(WARNING),
                     );
@@ -2661,53 +2706,12 @@ fn draw_recovery_prompt(
     });
 }
 
-fn draw_recovery_conflict(
-    context: &egui::Context,
-    snapshot: &WorkshopUiSnapshot,
-    actions: &mut Vec<WorkshopUiAction>,
-) {
-    if !snapshot.recovery_conflict || snapshot.recovery_prompt.is_some() {
-        return;
-    }
-    egui::Modal::new(egui::Id::new("recovery_baseline_conflict")).show(context, |ui| {
-        ui.set_min_width(440.0);
-        ui.heading("Recovered Work Predates Tracked Files");
-        ui.label(
-            "The recovered draft was created from older source bytes. Keeping it allows later saves to overwrite the files currently on disk.",
-        );
-        ui.add_space(6.0);
-        ui.label(
-            egui::RichText::new(
-                "Choose explicitly: keep the recovered draft, or discard it and reload the current tracked files.",
-            )
-            .color(WARNING),
-        );
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui
-                .button("Keep My Work")
-                .on_hover_text("Accept the current files as the recovered draft's new baseline")
-                .clicked()
-            {
-                actions.push(WorkshopUiAction::AcceptRecoveryBaseline);
-            }
-            if ui
-                .button("Discard Recovery")
-                .on_hover_text("Delete the recovery file and reload the current tracked project")
-                .clicked()
-            {
-                actions.push(WorkshopUiAction::ReloadProject);
-            }
-        });
-    });
-}
-
 fn draw_close_confirmation(
     context: &egui::Context,
     snapshot: &WorkshopUiSnapshot,
     actions: &mut Vec<WorkshopUiAction>,
 ) {
-    if !snapshot.close_confirmation || snapshot.recovery_conflict {
+    if !snapshot.close_confirmation {
         return;
     }
     let can_save = !snapshot.tracked_writes_blocked
@@ -2729,7 +2733,7 @@ fn draw_close_confirmation(
         if !can_save {
             ui.add_space(6.0);
             let guidance = if snapshot.tracked_writes_blocked {
-                "Save All is unavailable while tracked files or the recovery baseline conflict. Reload or resolve the recovery choice first; Save As can preserve only an object draft when shared catalogs are unchanged."
+                "Save All is unavailable while tracked files or the recovery baseline conflict. Reload or reconcile recovered catalogs first; Save As can then preserve the object draft."
             } else {
                 "Save All is unavailable for a new or invalid object draft. Correct the draft, or use Save As after it passes validation."
             };
@@ -2749,6 +2753,13 @@ fn draw_close_confirmation(
                 .clicked()
             {
                 actions.push(WorkshopUiAction::DiscardAndClose);
+            }
+            if ui
+                .button("Keep Recovery & Quit")
+                .on_hover_text("Keep the crash-recovery draft without changing tracked files")
+                .clicked()
+            {
+                actions.push(WorkshopUiAction::KeepRecoveryAndClose);
             }
             if ui.button("Cancel").clicked() {
                 actions.push(WorkshopUiAction::CancelClose);

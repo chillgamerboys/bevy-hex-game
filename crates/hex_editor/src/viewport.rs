@@ -36,6 +36,16 @@ const ORBIT_SENSITIVITY: f32 = 1.0;
 const PAN_SCREEN_SCALE: f32 = 2.0;
 const ZOOM_SENSITIVITY: f32 = 0.12;
 
+/// Immutable AssetServer path selected for the renderer mesh used by this session.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ViewportMeshAssetPath(pub String);
+
+impl Default for ViewportMeshAssetPath {
+    fn default() -> Self {
+        Self(HEX_MESH_ASSET_PATH.to_owned())
+    }
+}
+
 /// Which Workshop view the 3D viewport is presenting.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum ViewportMode {
@@ -369,6 +379,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<ViewportPreviewRig>()
         .init_resource::<ViewportInputEnabled>()
         .init_resource::<ViewportContent>()
+        .init_resource::<ViewportMeshAssetPath>()
         .init_resource::<ViewportSceneCache>()
         .init_resource::<HoveredFaceTarget>()
         .insert_resource(GlobalAmbientLight::default())
@@ -413,6 +424,7 @@ pub fn plugin(app: &mut App) {
 fn spawn_viewport(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mesh_asset_path: Res<ViewportMeshAssetPath>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let hex_mesh = asset_server.load(
@@ -420,7 +432,7 @@ fn spawn_viewport(
             mesh: 0,
             primitive: 0,
         }
-        .from_asset(HEX_MESH_ASSET_PATH),
+        .from_asset(mesh_asset_path.0.clone()),
     );
     let guide_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.32, 0.36, 0.40, 0.10),

@@ -249,12 +249,14 @@ impl EditorModel {
     /// intentionally session-only and are not included.
     #[must_use]
     pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
+        let (saved_object, saved_object_is_checkpoint) = self.saved_object.as_ref().map_or_else(
+            || (RawObjectDraft::from_blueprint(&self.object), false),
+            |saved| (RawObjectDraft::from_blueprint(saved), true),
+        );
         EditorRecoveryDraft {
             object: RawObjectDraft::from_blueprint(&self.object),
-            saved_object: self
-                .saved_object
-                .as_ref()
-                .map(RawObjectDraft::from_blueprint),
+            saved_object,
+            saved_object_is_checkpoint,
             mode: self.mode,
             tool: self.tool,
             preview_rig: self.preview_rig,
@@ -277,6 +279,7 @@ impl EditorModel {
         let EditorRecoveryDraft {
             object,
             saved_object,
+            saved_object_is_checkpoint,
             mode,
             tool,
             preview_rig,
@@ -286,7 +289,7 @@ impl EditorModel {
             selection,
         } = recovery;
         let object = object.into_blueprint();
-        let saved_object = saved_object.map(RawObjectDraft::into_blueprint);
+        let saved_object = saved_object_is_checkpoint.then(|| saved_object.into_blueprint());
         let (selection, sanitization) = sanitized_selection(selection, &object);
         Ok((
             Self {
@@ -516,27 +519,6 @@ impl EditorModel {
     /// Marks the current draft as the saved checkpoint.
     pub fn mark_saved(&mut self) {
         self.saved_object = Some(self.object.clone());
-    }
-
-    /// Re-pins the saved checkpoint to the current tracked object after recovery.
-    pub(crate) fn rebase_saved_checkpoint(
-        &mut self,
-        checkpoint: Option<ObjectBlueprint>,
-    ) -> Result<(), EditorModelError> {
-        if let Some(checkpoint) = &checkpoint {
-            checkpoint
-                .validate_intrinsic()
-                .map_err(EditorModelError::new)?;
-            if checkpoint.id != self.object.id {
-                return Err(EditorModelError::new(format!(
-                    "tracked checkpoint '{}' does not match open object '{}'",
-                    checkpoint.id.as_str(),
-                    self.object.id.as_str()
-                )));
-            }
-        }
-        self.saved_object = checkpoint;
-        Ok(())
     }
 
     /// Adopts the immutable identity assigned by a successful Save As operation.
@@ -1659,7 +1641,7 @@ mod tests {
         assert_eq!(editor.erase(origin), Ok(true));
 
         let recovery = editor.recovery_snapshot();
-        assert!(recovery.saved_object.is_none());
+        assert!(!recovery.saved_object_is_checkpoint);
         let (restored, sanitization) =
             EditorModel::from_recovery(recovery).expect("recovery should restore");
 

@@ -272,12 +272,19 @@ normal production deserializer and every tracked save still enforce the full obj
 contract.
 
 If tracked files changed after the recovery snapshot, Restore preserves the draft but
-requires an informed choice before overwriting anything. **Keep My Work** accepts the
-current disk bytes as the recovered draft's new baseline, allowing later saves to
-replace them. **Discard Recovery** deletes the untracked draft and reloads the current
-tracked project. Closing a dirty session first flushes recovery, then requires Save
-All and Quit, Discard and Quit, or Cancel. A clean explicit save removes obsolete
-recovery state.
+marks a recovery conflict. **Reconcile** performs a three-way merge between the
+recovery checkpoint, recovered catalog edits, and current tracked catalogs. Independent
+changes are retained from both sides; same-id conflicts are named and remain blocked
+until the author explicitly chooses **Recovered Wins** or **Tracked Wins** (the choice
+applies only to same-id conflicts), or reloads. If tracked catalogs change again after
+reconciliation, saving blocks until the author reconciles the new baseline. A dirty
+recovered tracked object whose source also changed must be preserved through Save As
+before its old destination can be overwritten. A clean recovered object instead adopts
+the current tracked version.
+Reconciled catalogs may be saved first when that new object depends on a recovered
+style. Closing a dirty session first flushes recovery, then requires Save All and Quit,
+Keep Recovery and Quit, Discard and Quit, or Cancel. A clean explicit save removes
+obsolete recovery state.
 
 ## Review output
 
@@ -307,8 +314,10 @@ the same bytes again reuses the existing directory; a different pack claiming th
 same fingerprint is reported as a collision and never overwrites it. Review output is
 derived and untracked. A saved object remains the only source of truth.
 
-Request creation, renderer startup, and publication each verify the exact tracked
-art-source revisions and `assets/meshes/hex.glb` bytes used to prepare the review.
+At startup, the Workshop copies `assets/meshes/hex.glb` to an untracked,
+content-addressed cache and renders that immutable copy. Request creation, renderer
+startup, and publication each verify the exact tracked art-source revisions and mesh
+bytes used to prepare the review.
 Publication checks once before staging and again immediately before the atomic rename.
 A source change at any of those points aborts the export, removes its staging
 directory, and requires a project reload or fresh review request.

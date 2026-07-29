@@ -39,18 +39,13 @@ const PREPARE_TIMEOUT: Duration = Duration::from_secs(30);
 const READBACK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Installs deterministic offscreen capture and publication for object reviews.
-#[derive(Debug, Default)]
-pub struct ReviewCapturePlugin;
-
-impl Plugin for ReviewCapturePlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<ReviewCaptureState>()
-            .init_resource::<ReviewCaptureProgress>()
-            .add_message::<ReviewCaptureRequest>()
-            .add_message::<ReviewCaptureFinished>()
-            .add_message::<ReviewCaptureRejected>()
-            .add_systems(PostUpdate, drive_review_capture);
-    }
+pub fn plugin(app: &mut App) {
+    app.init_resource::<ReviewCaptureState>()
+        .init_resource::<ReviewCaptureProgress>()
+        .add_message::<ReviewCaptureRequest>()
+        .add_message::<ReviewCaptureFinished>()
+        .add_message::<ReviewCaptureRejected>()
+        .add_systems(PostUpdate, drive_review_capture);
 }
 
 /// Requests one complete, immutable review pack.

@@ -1374,6 +1374,7 @@ fn publish_review_pack_with_hook(
 
     if path_exists(&final_path, "inspect review destination")? {
         validate_pack_directory(&final_path, &report_bytes, frames, &contact_sheet)?;
+        hook(PublishCheckpoint::BeforeRename)?;
         return Ok(ReviewPublishOutcome::AlreadyPublished(final_path));
     }
 
@@ -2192,10 +2193,18 @@ mod tests {
         assert_eq!(first.path(), final_path);
         assert_eq!(actual_file_names(&final_path), expected_pack_names());
 
-        let second = publish_review_pack(&directory.path, &report, &frames)
+        let mut final_check_ran = false;
+        let second =
+            publish_review_pack_with_hook(&directory.path, &report, &frames, |checkpoint| {
+                if checkpoint == PublishCheckpoint::BeforeRename {
+                    final_check_ran = true;
+                }
+                Ok(())
+            })
             .expect("identical pack should be idempotent");
         assert!(matches!(second, ReviewPublishOutcome::AlreadyPublished(_)));
         assert_eq!(second.path(), final_path);
+        assert!(final_check_ran);
     }
 
     #[test]
