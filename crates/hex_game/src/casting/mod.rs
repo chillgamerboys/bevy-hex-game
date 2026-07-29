@@ -51,7 +51,7 @@ use hex_lattice::{castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
 use hex_units::{Downed, Faction, Player, Selected, StandsOn, UnitRegistry};
 
-use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
+use crate::menus::widgets::element_color;
 
 mod panel;
 mod preview;
@@ -559,7 +559,7 @@ fn spell_row(
             shape_label(&definition.targeting.shape)
         ),
         blocked,
-        color: element_color(element, elements),
+        color: element_color(element.and_then(|name| elements.id(name)), elements),
         range: u32::from(definition.targeting.range),
         shape: definition.targeting.shape.clone(),
     }
@@ -576,43 +576,6 @@ fn shape_label(shape: &TargetShape) -> String {
         TargetShape::Cone { length, spread } => format!("cone {length} long, spread {spread}"),
         TargetShape::Path { offsets } => format!("path of {}", offsets.len()),
     }
-}
-
-/// The colour a spell is presented in, from the element it draws on.
-///
-/// # Why the wheel decides the hue
-///
-/// [`GEM_COLOR`] and [`FUSION_COLOR`] are the lattice demo's palette, shared so the two
-/// screens agree about what a gem and a fusion look like — but a colour *per element*
-/// needs six of them, and inventing six literals would compile a content file's element
-/// names into the interface. So the hue is rotated around the circle by the element's
-/// position on `elements.ron`'s wheel, keeping [`GEM_COLOR`]'s saturation and lightness.
-/// Two properties fall out of that, and neither is an accident: six elements land on six
-/// evenly spaced hues, which is exactly what makes a legend readable, and **opposed
-/// elements get opposed hues**, because the wheel's opposition rule is a half turn and
-/// so is theirs.
-///
-/// A fusion output is not on the wheel — it is not an element anybody holds — so it
-/// takes [`FUSION_COLOR`], which is what the demo paints a fusion cell.
-///
-/// The hues are therefore not semantic: fire is not necessarily red. Making them so
-/// means a colour field on the element content, which is a schema change this has no
-/// business making on the way past.
-fn element_color(element: Option<&str>, elements: &ElementCatalog) -> Color {
-    let Some(id) = element.and_then(|name| elements.id(name)) else {
-        return GEM_COLOR;
-    };
-    let wheel = elements.wheel();
-    let Some(step) = wheel.iter().position(|on_wheel| *on_wheel == id) else {
-        return FUSION_COLOR;
-    };
-    // `u16` rather than a cast: a wheel is single digits, and this keeps the function
-    // free of the precision-loss suppressions a lossy conversion would need.
-    let step = u16::try_from(step).unwrap_or(0);
-    let spokes = u16::try_from(wheel.len()).unwrap_or(1).max(1);
-    let base = Hsla::from(GEM_COLOR);
-    let hue = (base.hue + 360.0 * f32::from(step) / f32::from(spokes)).rem_euclid(360.0);
-    Color::from(Hsla::new(hue, base.saturation, base.lightness, base.alpha))
 }
 
 /// Applies whatever the player asked of the aim this frame.
@@ -857,6 +820,7 @@ mod tests {
     use hex_core::Level;
 
     use super::*;
+    use crate::menus::widgets::{FUSION_COLOR, GEM_COLOR};
 
     fn shipped_content() -> (ElementCatalog, SpellBook) {
         let element_file: ElementFile = ron::from_str(include_str!(concat!(
@@ -936,7 +900,7 @@ mod tests {
         let mut seen: Vec<Color> = Vec::new();
         for id in elements.wheel() {
             let name = elements.name(*id).expect("a wheel element has a name");
-            let color = element_color(Some(name), &elements);
+            let color = element_color(elements.id(name), &elements);
             assert!(
                 !seen.contains(&color),
                 "{name} shares a colour with an element already on the wheel"
@@ -944,12 +908,12 @@ mod tests {
             seen.push(color);
         }
         assert_eq!(
-            element_color(Some("Lightning"), &elements),
+            element_color(elements.id("Lightning"), &elements),
             FUSION_COLOR,
             "a fusion output is not on the wheel and should read as a fusion"
         );
         assert_eq!(
-            element_color(Some("not an element"), &elements),
+            element_color(elements.id("not an element"), &elements),
             GEM_COLOR,
             "an unresolvable element falls back rather than vanishing"
         );
@@ -968,8 +932,8 @@ mod tests {
             };
             let name = elements.name(*id).expect("a wheel element has a name");
             let against = elements.name(*opposite).expect("its opposite has a name");
-            let hue = Hsla::from(element_color(Some(name), &elements)).hue;
-            let other = Hsla::from(element_color(Some(against), &elements)).hue;
+            let hue = Hsla::from(element_color(elements.id(name), &elements)).hue;
+            let other = Hsla::from(element_color(elements.id(against), &elements)).hue;
             let apart = (hue - other).abs();
             assert!(
                 (apart - 180.0).abs() < 0.5,

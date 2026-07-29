@@ -21,6 +21,8 @@
 //! already caused one crash in this codebase by running in states it did not expect.
 
 use bevy::prelude::*;
+use hex_assets::ElementCatalog;
+use hex_core::ElementId;
 
 /// Background of a button at rest.
 const RESTING: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
@@ -65,6 +67,30 @@ pub const GEM_COLOR: Color = Color::srgba(0.16, 0.45, 0.52, 0.92);
 /// The tint of a fusion — a cell that combines gems, or a spell drawing on what one
 /// makes. Off the wheel in the content and off the hue circle here, for the same reason.
 pub const FUSION_COLOR: Color = Color::srgba(0.42, 0.30, 0.62, 0.92);
+
+/// The shared tint for an element wherever it appears in the interface.
+///
+/// Wheel position rotates [`GEM_COLOR`]'s hue, so opposed elements receive
+/// opposed hues without compiling content names into UI code. Higher-order
+/// fusion outputs use [`FUSION_COLOR`]; an absent element falls back to the
+/// base gem tint.
+#[must_use]
+pub fn element_color(element: Option<ElementId>, elements: &ElementCatalog) -> Color {
+    let Some(id) = element else {
+        return GEM_COLOR;
+    };
+    let wheel = elements.wheel();
+    let Some(step) = wheel.iter().position(|on_wheel| *on_wheel == id) else {
+        return FUSION_COLOR;
+    };
+    // `u16` rather than a cast: a wheel is single digits, and this keeps the function
+    // free of the precision-loss suppressions a lossy conversion would need.
+    let step = u16::try_from(step).unwrap_or(0);
+    let spokes = u16::try_from(wheel.len()).unwrap_or(1).max(1);
+    let base = Hsla::from(GEM_COLOR);
+    let hue = (base.hue + 360.0 * f32::from(step) / f32::from(spokes)).rem_euclid(360.0);
+    Color::from(Hsla::new(hue, base.saturation, base.lightness, base.alpha))
+}
 
 /// Display size — screen titles, in the display face.
 pub const DISPLAY_SIZE: f32 = 46.0;

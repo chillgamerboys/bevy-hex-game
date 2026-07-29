@@ -10,7 +10,7 @@ use hex_assets::{ElementCatalog, SpellBook};
 use hex_core::LatticeCoord;
 use hex_lattice::{CellKind, LatticeState, LatticeStats};
 
-use super::widgets::{OwnColors, UiAssets, FUSION_COLOR, GEM_COLOR, LABEL};
+use super::widgets::{element_color, OwnColors, UiAssets, FUSION_COLOR, LABEL};
 
 /// Pixel width of one hex cell sprite (pointy-top, so height runs longer).
 const CELL_SIZE: f32 = 62.0;
@@ -109,7 +109,7 @@ pub(crate) fn live_cell_view(
         LOCKED_COLOR
     } else {
         match kind {
-            CellKind::Gem { .. } => GEM_COLOR,
+            CellKind::Gem { element } => element_color(Some(element), elements),
             CellKind::Fusion { .. } => FUSION_COLOR,
             _ => SPELL_COLOR,
         }
