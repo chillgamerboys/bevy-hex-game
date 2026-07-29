@@ -84,7 +84,8 @@ version:
 | Generic asset loading; domain schema/settings modules | `hex_assets` | loader infra gameplay; each schema and its content follow the domain owner |
 | Sky, camera, presentation cutaways | `hex_world` | world |
 | Rules: input, movement, interaction | `hex_units` | gameplay |
-| Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
+| Authoritative illumination, sight, and faction map knowledge | `hex_perception` | world |
+| Runtime rendering of authored static voxel objects | `hex_objects` | shared presentation |
 | A debug tool | `hex_dev` | gameplay |
 | Palette, voxel-style, and object authoring workflow | `hex_editor` | shared tooling |
 | A screen or menu | `hex_game` | shared |

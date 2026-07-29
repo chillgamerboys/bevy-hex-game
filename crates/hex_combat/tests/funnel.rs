@@ -254,7 +254,7 @@ fn command_grounding_rejects_generated_feature_blockers() {
 
 /// The same command sequence from the same spawn state lands the same world.
 ///
-/// This is the funnel's reason to exist: every sim mutation flows through the
+/// This is the funnel's reason to exist: every player/AI intent flows through the
 /// drained queue, so the sequence *is* the input, and applying it twice must
 /// be indistinguishable — same turn order, same positions, same budgets.
 #[test]

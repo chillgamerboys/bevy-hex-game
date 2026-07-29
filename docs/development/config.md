@@ -8,7 +8,9 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
-| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and future objects |
+| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
+| `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
+| `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
@@ -41,7 +43,8 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `art/palette.ron` | Substance and unit colours on the next world rebuild |
+| `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
+| `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `perception.ron` | Straight away; observation and knowledge use the new profile on the next frame |

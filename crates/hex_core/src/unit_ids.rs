@@ -2,7 +2,7 @@
 //!
 //! [`UnitId`] exists because `Entity` is not stable: its index is recycled and
 //! its bits differ across runs and saves, so anything keyed on it — a turn
-//! order, an AI tie-break, a replay log — silently reshuffles. A `UnitId` is
+//! order, an AI tie-break, a future replay log — silently reshuffles. A `UnitId` is
 //! allocated once per unit in scenario spawn order and never reused within a
 //! session, which makes it the key saves store, commands name, and every sim
 //! tie-break compares.

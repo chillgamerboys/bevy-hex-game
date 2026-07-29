@@ -725,8 +725,8 @@ fn emit_cast(queue: &mut CommandQueue, readout: &CastReadout, caster: &Caster, a
             spell: aim.spell.clone(),
             target: aim.anchor,
             // Only the shapes that point somewhere carry a facing. Sending one anyway
-            // would put a direction nobody chose into the replay log, where every field
-            // is a permanent save commitment.
+            // would put a direction nobody chose into the future recorded command
+            // stream, whose wire fields are save/replay commitments.
             facing: volumes::needs_facing(&row.shape)
                 .then(|| facing_toward(caster.standing.coord, aim.anchor.coord)),
             // Variable mana has no chooser yet; see `spell_row`.
@@ -1077,8 +1077,8 @@ mod tests {
     /// A confirmed cast carries the exact anchor, and a facing only when the shape
     /// points somewhere.
     ///
-    /// The facing is a permanent save commitment — the command log is the replay log —
-    /// so an anchored shape must not acquire a direction nobody chose.
+    /// The facing is a future save/replay commitment, so an anchored shape must not
+    /// acquire a direction nobody chose.
     #[test]
     fn a_confirmed_cast_names_its_anchor_and_only_the_facing_it_needs() {
         let (readout, caster) = readout_of(&["Ember", "Flamethrower"]);

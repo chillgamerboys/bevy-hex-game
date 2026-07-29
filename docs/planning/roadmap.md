@@ -1,13 +1,15 @@
 # Roadmap
 
-The epics between this skeleton and a shippable game, as rows `/seed-tickets`
-can turn into Linear `HEX-*` tickets. Where each epic came from, and the
+The remaining epics between the current build and a shippable game. The table under
+**Upcoming** is the one `/seed-tickets` can turn into Linear `HEX-*` tickets.
+What is already built lives in [status.md](status.md); release history lives in the
+root changelog. Where each epic came from, and the
 evidence behind it, is [production-audit.md](production-audit.md) — a dated
 snapshot that does not change. This file is the living plan: rows get claimed,
 split, and retired.
 
-**How this file works.** Each row of the table below becomes one Linear ticket
-when someone runs `/seed-tickets`, which writes an HTML-comment marker back
+**How this file works.** Each unmarked row of the Upcoming table becomes one Linear
+ticket when someone runs `/seed-tickets`, which writes an HTML-comment marker back
 onto the row recording the ticket and who claimed it. Never write those
 markers by hand, and never take a row someone else's marker claims. Rows are
 epics, not implementation plans — `/plan-ticket` produces the plan when work
@@ -24,34 +26,21 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Deterministic sim seams | serde across the hex_core domain vocabulary; a stable `UnitId` with allocator and registry; every sim tie-break moved off entity ids; a `SimSeeds` resource | core | <!-- linear: HEX-6 owner: shravan-kumaran -->
-| Command funnel | `GameCommand` vocabulary and queue in hex_core; one validating applier in hex_combat; click, SPACE, and the AI become emitters; a `Busy` gate replaces animation-component gating | combat | <!-- linear: HEX-11 owner: shravan-kumaran -->
-| Combat policy knobs | `combat.ron`: engage/disengage ranges, movement budget, height bonus, and the open design questions as named policy enums that parse but reject-with-reason until built | combat | <!-- linear: HEX-10 owner: shravan-kumaran -->
-| Elements and spells as content | `elements.ron` (wheel, opposition, fusion recipes) and `spells.ron` (closed-enum effects, targeting specs); a cross-file `ContentIndex` with load-time and test-time reference checks | assets | <!-- linear: HEX-7 owner: shravan-kumaran -->
-| Lattice engine | new pure `hex_lattice` crate: inscription/state split, `castable()`, disable and enchantment bookkeeping, channeling; the property-test suite | combat | <!-- linear: HEX-8 owner: shravan-kumaran -->
-| Lattices wired into the game | units spawn with archetype lattices from `lattices.ron`; a first `Cast`; damage, death, and the defender-chooses decision flow; a HUD readout of live/disabled hexes | combat | <!-- linear: HEX-12 owner: shravan-kumaran -->
-| Run bottoms on tiles | publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to wave 3 terrain casting | map |
+| Complete-party combat integration | Finish party selection, deterministic AI hosting, atomic formation traversal, and multi-party combat behavior | units/combat |
+| Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
-| Casting UX | shape previews under the cursor, blocked-reason surfacing from `castable()`, target cycling, and cast presentation per element | units | <!-- linear: HEX-21 owner: shravan-kumaran -->
 | Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game | <!-- linear: HEX-22 owner: shravan-kumaran -->
-| Combat readability | initiative order display, a live/disabled lattice readout beyond a count, and a combat log | game | <!-- linear: HEX-23 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
-| Magic outside combat | casting in real time, which first requires an answer to out-of-combat mana regeneration | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
+| Magic outside combat | casting in real time; rest has settled recovery, but exploration needs its own input, time-cost, and interruption rules | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
-| Encounters | `encounters/*.ron`: rosters by archetype, spawn zones, anchor placements, a formation anchor; retires the two-coordinate scenario scaffold | game | <!-- linear: HEX-14 owner: shravan-kumaran -->
 | Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
-| Knowledge and divination seam | `FactionLatticeKnowledge` with a `view()` accessor and round-based decay; UI and AI read hostile lattices only through it | combat | <!-- linear: HEX-13 owner: shravan-kumaran -->
-| Ship-hygiene basics | panic hook, log-to-file, version display in the title, diagnostics logging off in release | game | <!-- linear: HEX-9 owner: shravan-kumaran -->
 | Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
 | Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
-| V3 procedural foundation | `generator_version: 3`; private `GeneratedWorldPlan`; `Single` and radius-33 `Ring7` layouts; patch masks, edge contracts, named streams, validation, scoring, repair, fallback, and diagnostics | map |
-| Steady-state liquids and Waterfall | directed water topology; still/current/rapid/fall rendering; elevated inlet, rapids, fall, basin, outlet, and ordinary-walker bypass | map |
 | Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
 | Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
-| Surface features and Forest | deterministic low-poly trees and grass, exact root blockers, protected routes, clearings, prairie, and composable canopy cutaway | map |
+| Forest authored-object adoption | World-side Forest placements publish shared `ObjectInstance`s while blockers remain a separate exact projection; procedural plant synthesis follows only after exemplar review | map/shared presentation |
 | Structures and Fort | worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation | map |
 | Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
 | V3 recipe migration and legacy removal | rebuild every active V1/V2 recipe and scenario in V3; approve replacement corpora; then remove both legacy parsers, generators, assets, and runtime tests | map |
@@ -67,14 +56,13 @@ phase. It changed no behavior or existing `hex_units`/`hex_combat` systems; test
 harnesses only mirror the expanded shared setup chain. Both implementation lanes
 branched from updated `dev` after that contract merged.
 
-**Map lane:** V3 foundation → liquid topology → opaque renderer → Waterfall →
-Forest → Fort → `Ring7` → remaining recipe migration → V1/V2 removal. The map
-owner keeps semantic plans private and publishes exact shared consequences.
+**Map lane:** Fort → `Ring7` → remaining recipe migration → V1/V2 removal.
+The map owner keeps semantic plans private and publishes exact shared consequences.
 Recipe PRs do not edit gameplay-owned crates.
 
-**Perception lane:** headless illumination and faction knowledge (delivered) → fog
-presentation and cave lights → movement adapter → engagement/targeting/AI
-adapters. `hex_perception` may observe unit positions, while `hex_units` reads
+**Perception lane:** fog presentation and cave lights → movement adapter →
+engagement/targeting/AI adapters. `hex_perception` may observe unit positions, while
+`hex_units` reads
 only `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned
 crate is isolated and reviewed by that owner.
 
@@ -83,41 +71,22 @@ depend on combat integration. `Ring7` waits for Waterfall, Forest, and Fort sema
 plans; V3 migration waits for the composite contracts but not for final combat
 tuning.
 
-The first liquid implementation also records an explicit terrain-edit policy for
-support removal and stale flow topology. Until topology-aware rebuilding exists, V3
-authored liquid voxels and every lower voxel in their columns are protected as one
-atomic semantic dependency. The map-private exact classifier lands with topology;
-runtime admission lands with the first runnable V3 recipe. The `diggable` flag still
-governs legacy and non-topological liquids and is not a substitute for this policy.
+Until topology-aware rebuilding exists, V3 authored liquid voxels and every lower
+voxel in their columns remain protected as one atomic semantic dependency. The
+`diggable` flag still governs legacy and non-topological liquids and is not a
+substitute for this policy.
 Dynamic cave-breach illumination remains unresolved: terrain edits do not reclassify
 an entire chamber until aperture and domain semantics are agreed.
-
-The pre-existing gameplay critical path remains independent: sim seams →
-funnel → lattices wired, with element content and the lattice engine feeding
-it from the side. Spatial map knowledge does not replace the lattice-specific
-Knowledge and divination seam: the former answers which world entities a
-faction currently observes, while the latter answers what that faction knows
-about an observed enemy's lattice.
 
 ### The gameplay lane, in waves
 
 The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collects a
 group of ticket PRs in dependency order, a human walks the integrated build once, and
-the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules). Waves 1 and
-2 are done — content, the lattice engine, sim seams, combat knobs, the command funnel,
-and ship hygiene are on `dev`.
+the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
-- **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
-  disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
-  Encounters. `RunBottom` lands before Terrain magic starts, and Terrain magic starts
-  only after the declarative impact, outcome, and conjuration-admission asks G/H/L have
-  an agreed shape. Other wave work need not wait for those boundary contracts. Damage
-  exists at the end of it.
-- **Wave 4 — combat feel and casting UX.** Casting UX, Outcome flow, Combat
-  readability, Trajectories and lingering effects, Magic outside combat, Channelling
-  and co-casting — plus **Movement and combat perception adapters**, the gameplay half
-  of the perception lane. It can now start from the live `hex_perception` boundary
-  but remains scheduled and reviewed by the gameplay owner.
+- **Wave 4 — combat breadth.** Complete-party combat integration, outcome flow,
+  trajectories and lingering zones, magic outside combat, channelling/co-casting,
+  and the gameplay-owned movement/engagement/targeting/AI perception adapters.
 - **Wave 5 — productization.** Save and load, Settings/persistence/audio, Steam
   packaging and crash reporting, Engine upkeep (pinned to the Bevy 0.20 window).
 
@@ -137,100 +106,6 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ## The epics, in detail
 
-### Deterministic sim seams
-
-The cheapest-now, brutal-later foundations for saves, replays, and future
-co-op. Four small PRs: serde derives on the hex_core vocabulary (`HexCoord`
-via its constructor invariant, `TilePos`, `SubstanceId`, `TerrainEdit`) and
-`Faction`, with round-trip tests and the `CubeCoord` dedup; a `UnitId(u64)`
-component with a saved allocator and an entity-registry, allocation in
-scenario spawn order; `TurnOrder` keyed by `UnitId` with ties broken
-initiative-then-id (today's entity-index tie-break is not stable across
-runs or saves); AI target and selection tie-breaks moved to `UnitId`; a
-`SimSeeds` resource (world / ai-flavor / cosmetic — resolution itself takes
-no RNG, by signature). Also `PlayerSeat`/`ControlOwner` (seat 0 everywhere
-today) and a `Party` roster resource — one field each, and they are the
-entire future co-op ownership model.
-
-The `Turn` and `Body` serde derives were once slated to trail (their lines
-sat in files #56 held), but they landed with the first serde PR after it
-merged — nothing trails. The remainder of this epic (`UnitId`, tie-breaks,
-`SimSeeds`, the seat/party fields) ships as wave 2's opening PR.
-
-### Command funnel
-
-Everything that changes sim state becomes a `GameCommand` (`MoveAlong`,
-`Strike`, `EndTurn`, later `Cast`/`Channel`/`ChooseDisables`) pushed onto a
-`CommandQueue` resource and applied at one schedule point in hex_combat:
-validate (whose turn, seat ownership, `Reach`-checked path, later
-`castable()`) → apply (the only sim mutation site) → project (animation,
-overlays). `on_tile_clicked`, the SPACE handler, and the AI keep their logic
-but end by emitting instead of mutating. A `Busy` component becomes the
-"still presenting" gate so turn logic stops depending on hex_anim's
-`Transformation` component. The drained queue is the replay log, the save
-adjunct, and the future network payload. Standing rule that lands with it:
-never key a sim decision on entity order or query iteration order.
-
-### Combat policy knobs
-
-Move the provisional constants (`ENGAGE_RANGE`, `DISENGAGE_MARGIN`,
-`MOVEMENT_PER_TURN`, default initiative, `LEVELS_PER_BONUS_RANGE`) into
-`combat.ron` via the existing loader traits, and express the deliberately-open
-design questions from [the design](../design/game.md#open-questions) as policy
-enums whose variants are the doc's own options (initiative source, action
-economy, channeling trickle, rout). Unimplemented variants parse but fail the
-loading screen with a reason naming what they wait on — flipping a playtest
-option becomes a file edit, and nothing gets settled by accident.
-
-### Elements and spells as content
-
-`elements.ron`: the six-element wheel (opposition is index arithmetic over
-the wheel array), higher-order elements, and fusion recipes, validated
-acyclic and feedable; `ElementId` assigned from sorted names exactly like
-`SubstanceId` (ids never appear in files or saves — names do).
-`spells.ron`: requirements as an element multiset (tier ≤ 6), casting axis
-(evocation / enchantment-with-upkeep), mana axis (fixed / variable),
-co-castable flag — "ritual" becomes the name for variable + co-castable, per
-the design's own note. Effects are a closed enum of primitives
-(disable / burn / restore / modify-incoming / reveal / illuminate /
-terrain edits by substance name / displace) — no scripting engine; the lint
-wall and validate-at-parse are the argument. A `ContentIndex` resolves every
-cross-file name and fails loudly, plus a hex_game test module that opens
-everything shipped.
-
-### Lattice engine
-
-The game's core system as a pure rules crate, `hex_core → hex_lattice`,
-proven headless before any wiring: `LatticeSpec` (the inscription — also the
-serde format `lattices.ron` and the future in-game editor share) vs
-`LatticeState` (mana, disabled set, enchantment locks, burns — all integer,
-all BTree-ordered); `castable()` returning either a `CastPlan` (the exact
-gem-to-requirement assignment) or a reason the UI can show; `apply_cast`,
-`apply_disables` (breaking enchantments burns their locked mana),
-deterministic `channel`. Property tests: two tier-6 spells can never be
-adjacent, disabling a locked gem kills its enchantment, fusion chains die
-downstream, serde round-trips are identity.
-
-### Lattices wired into the game
-
-The moment damage exists. Units spawn with archetype lattices
-(`lattices.ron`: wolf, raider, hedge-mage authored as cube-coordinate
-entries); the placeholder `Strike` becomes an ember-grade `Cast` through the
-funnel; disables flow through a `PendingDecision::ChooseDisables` suspension
-point (defender-chooses is a protocol fact — an AI auto-policy answers it
-today, another human answers it in co-op later); death = all hexes disabled →
-leaves the turn order; the HUD shows your own live/disabled count. Fight
-length, initiative source, and rout stay knobs — nothing here settles them.
-
-### Encounters
-
-Replace the two-coordinate scenario scaffold with encounter files chosen per
-scenario the same way worlds and lighting already are: a party anchor plus
-formation offsets, named spawn zones with deterministic fill, a roster of
-archetype references. Should support `Anchor("name")` placements — PR #52's
-`MapAnchors` mechanism — alongside zones. Later additions (triggers, quests)
-extend the schema without breaking it.
-
 ### Save and load
 
 A hand-shaped, versioned serde `SaveFile` in `hex_game/src/save/` — domain
@@ -244,23 +119,6 @@ seeded-regen + edit replay until the map-side terrain snapshot lands
 ([boundary.md](boundary.md), ask D2) — which is the generator-change-proof
 primary format. Floats never enter a save: positions are `TilePos`, spans are
 re-derived.
-
-### Knowledge and divination seam
-
-Hidden information is the game's uncertainty mechanism, and one accessor is
-both the feature and the future anti-cheat filter: `FactionLatticeKnowledge` maps
-(viewer faction, subject) to what has been revealed and until when; UI and AI
-read hostile lattices only through `view()`; a decay system ticks reveals at
-round ends. Ships with a dev reveal-all toggle and an opaque "lattice unknown"
-readout from base visibility; capacity is itself divination-gated.
-
-### Ship-hygiene basics
-
-The smallest production ticket and a good pipeline warm-up: a panic hook,
-log-to-file (the Windows release currently logs nowhere — its console is
-disabled and stdout goes with it), the workspace version displayed on the
-title screen, and the always-on diagnostics logging turned off in release.
-Nothing here depends on anything.
 
 ### Settings menu, persistence, and audio
 
@@ -311,23 +169,17 @@ The decision-complete contract is
 
 ### Spatial perception
 
-Physical scene lighting remains presentation. A headless `hex_perception`
-crate deterministically combines exterior illumination, interior darkness,
-public local lights, unit positions, and per-faction knowledge. It owns
-Unknown/Remembered/Observed state and publishes the smaller
-`LocalMapKnowledge` view for the pending movement adapter.
-
-Fog rendering, unknown exploration, engagement, targeting, AI, and
-last-known-position behavior remain separate pending adapters now that the headless
-rules are live. The existing Knowledge and divination epic remains responsible
-for hidden lattice contents; it consumes spatial observation rather than
-duplicating it.
+Remaining perception work follows
+[the perception contract](../systems/perception.md): presentation and each
+gameplay-owned adapter stay separate, while spatial observation and hidden lattice
+contents remain distinct information channels.
 
 ### The map rows
 
 Specified in [boundary.md](boundary.md), each with exact signatures,
-publisher/consumer, tests, and a fallback if deferred — nothing on the
-gameplay side blocks on them.
+publisher/consumer, tests, and a fallback if deferred. Most gameplay work can proceed
+independently, but terrain casting deliberately blocks on `RunBottom` and the accepted
+impact/outcome/conjuration contracts rather than reconstructing world facts.
 
 ### Where the rest of the documentation lives
 

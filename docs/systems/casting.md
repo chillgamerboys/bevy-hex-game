@@ -258,7 +258,8 @@ entity and targeting is therefore positional ([map.md](map.md)).
 
 The payload will grow. It grows through **optional fields with serde defaults, or new
 command variants** — never through speculative fields added early, because the command
-log is the replay log and every field is a permanent save commitment.
+wire format is a future replay/save commitment. The live queue is consumed; no replay
+log is persisted yet.
 
 ## Persistent effects
 
@@ -299,9 +300,10 @@ without touching the framework, which is the point of having one.
   content dump); it has no mechanical effect. Co-casting is entangled with the
   unresolved initiative question.
 - **Downed-first death is provisional.** Version 0.3 removes a fully disabled
-  unit from the turn order and leaves it revivable by a restoring spell. Functional
-  death and permadeath remain separate design decisions. Further damaging casts refuse
-  a downed target before payment, while Reveal may still inspect its retained lattice.
+  unit from the turn order and retains its lattice for a future restoration flow.
+  Reactivation is not implemented. Functional death and permadeath remain separate
+  design decisions. Further damaging casts refuse a downed target before payment,
+  while Reveal may still inspect its retained lattice.
 - **One cast may open at most one defender choice.** Content validation rejects a spell
   with several non-targeted `DisableHexes` effects; the pending-decision resource holds
   one exact answer, so accepting that authoring shape would overwrite damage silently.

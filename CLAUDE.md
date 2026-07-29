@@ -107,7 +107,7 @@ hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → h
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
@@ -115,8 +115,8 @@ hex_core → hex_anim ───────────────────�
 **`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
 spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
 `App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
-design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
-`hex_assets` and the combat wiring consume it as the content and spawning land.
+design's open questions. `hex_assets` resolves authored content into it, `hex_units`
+carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared

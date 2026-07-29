@@ -34,7 +34,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
 | `hex_units` | Units and their lattices, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
 | `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, the placeholder AI, faction lattice knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
+| `hex_combat` | The loop: modes, turn order, command application, deterministic melee AI, persistent effects, and faction lattice knowledge | `hex_core`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -73,21 +73,20 @@ settles none of [the design's open questions](design/game.md#open-questions) —
 initiative, action economy, fight length, the functional-death threshold — it exposes
 primitives and leaves the policy to the crates above it.
 
-It still depends only on `hex_core`, and three crates now declare an edge to it — drawn
-ahead of the code so the damage-loop PRs stop contending over the same manifests. Each
-edge is for a different half of the job. **`hex_assets`** will implement the engine's
-content lookup traits over `elements.ron`/`spells.ron` and turn authored lattices into a
-`LatticeSpec`, so the engine reads content without knowing what a file is. **`hex_units`**
-will carry the result: a unit's spec, state and stats go on at spawn, keyed by its
-archetype. **`hex_combat`** drives it — casting through the command funnel, damage
-through `apply_disables`, and the defender-chooses decision the engine deliberately
-refuses to own; today it reads the lattice types only in `knowledge.rs`.
+It still depends only on `hex_core`, and three crates consume it for distinct reasons.
+**`hex_assets`** implements the engine's content lookup traits over
+`elements.ron`/`spells.ron` and turns authored lattices into a `LatticeSpec`, so the
+engine reads content without knowing what a file is. **`hex_units`** carries the
+result: a unit's spec, state, and stats are attached at spawn, keyed by its archetype.
+**`hex_combat`** drives it — casting through the command funnel, damage through
+`apply_disables`, defender-owned disable choices, persistent effects, and the
+knowledge seam the engine deliberately refuses to own.
 
-Drawing an edge early costs something worth naming: the compiler stops being the review
+Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
-trade is deliberate and temporary — the alternative was three PRs each editing the same
-two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
-the types it exposes.
+trade is deliberate — the compiler cannot distinguish an intended consumer from an
+accidental import once the edge exists. Like the map, the engine is one person's, and
+its contract is the types it exposes.
 
 ### Ownership cuts both ways
 
@@ -355,6 +354,7 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 |---|---|---|
 | Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
+| On coherent art-graph reload | `palette.ron`, `voxel_styles.ron`, `object_catalog.ron`, `objects/*.ron` | Existing authored object instances rebuild; a bad graph retains the last valid revision |
 | At spawn | `world.ron`, `substances.ron`, `palette.ron` substance/unit swatches, `player.ron` scale | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
@@ -390,11 +390,11 @@ asks for is looking at the window.
 
 Two complementary layers across the workspace.
 
-**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
-which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
-the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
-id assignment, and the movement rules — including that a two-level body is refused a
-one-voxel crawlspace a one-level body walks into.
+**Unit tests** live beside behavior throughout the workspace and do not need a GPU:
+coordinate round-tripping, the cube invariant, lattice properties, content validation,
+object meshing, perception, voxel columns and run-merging, substance id assignment,
+and movement rules — including that a two-level body is refused a one-voxel crawlspace
+a one-level body walks into.
 
 **ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
 world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and

@@ -1230,8 +1230,7 @@ impl CombatSettings {
                 return Err(format!(
                     "combat.ron: initiative_policy {other:?} is not built yet — it waits on \
                      the initiative question being settled (docs/design/game.md, Open \
-                     questions), and DerivedFromLattice additionally on lattices being \
-                     wired into units (HEX-12)"
+                     questions) and the selected policy being implemented"
                 ));
             }
         }
@@ -1249,7 +1248,7 @@ impl CombatSettings {
             other => {
                 return Err(format!(
                     "combat.ron: channelling_trickle {other:?} is not built yet — it waits \
-                     on channelling being wired into units (HEX-12)"
+                     on the channelling question and Channel implementation"
                 ));
             }
         }
@@ -2231,7 +2230,7 @@ mod tests {
             (
                 "channelling_trickle: BurstOnly",
                 "channelling_trickle: TrickleWithBurst",
-                "HEX-12",
+                "channelling question",
             ),
             (
                 "rout_policy: FightToTheEnd",
