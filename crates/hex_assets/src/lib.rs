@@ -22,6 +22,7 @@ pub mod content_index;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
+mod fingerprint;
 /// Selectable exploration formation presets.
 pub mod formations;
 /// Who each of them is: archetype lattices, resolved from content.
@@ -43,7 +44,9 @@ pub use art_palette::{
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
-pub use content_index::{ContentError, ContentIndex, ContentTables};
+pub use content_index::{
+    AcceptedContentRevision, ContentError, ContentIndex, ContentReadinessSystems, ContentTables,
+};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
@@ -97,6 +100,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<CelestialCycleSettings>()
         .register_type::<LightingKeyframe>()
         .register_type::<CelestialBody>()
+        .register_type::<ResolvedLighting>()
         .register_type::<PerceptionSettings>()
         .register_type::<SightPreset>()
         .register_type::<SightRanges>()

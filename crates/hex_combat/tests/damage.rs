@@ -122,7 +122,12 @@ fn publish_spatial_knowledge(app: &mut App) {
         for &(id, faction, pos, _) in &rows {
             observation.insert_surface(pos);
             observation
-                .try_insert_unit(ObservedUnit { id, faction, pos })
+                .try_insert_unit(ObservedUnit {
+                    id,
+                    faction,
+                    pos,
+                    provides_sight: true,
+                })
                 .expect("test unit ids are unique");
         }
         observation

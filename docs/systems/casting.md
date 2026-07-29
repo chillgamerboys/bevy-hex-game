@@ -144,6 +144,12 @@ positions. The effect still applies authoritatively to hidden terrain and units,
 its acknowledgments, animations, and combat-log entries are filtered through faction
 knowledge and do not reveal hidden outcomes.
 
+This is live at every current entry point. The aiming preview and target cycle expose
+only Observed anchors, AI legal-action enumeration receives only authorized anchors,
+and the authoritative command applier checks observation again at application time.
+The repeated check is intentional: a preview or AI request is not authority after
+knowledge changes.
+
 The rule is absolute, including for divination. That is the honest reading of the
 design rather than an oversight: divination is the *lattice*-information channel, and
 `Reveal` targets a unit you must already see in order to scry. A **spatial** divination
@@ -151,10 +157,6 @@ design rather than an oversight: divination is the *lattice*-information channel
 designed, and Unknown positions are unpickable by design so there would be nothing to
 name anyway. If one is ever specified, the exception is one condition in this ladder
 and changes nothing about the boundary with the world owner.
-
-The observation rung retains its compatibility `true` until the combat perception
-adapter lands. `hex_perception` now publishes the authoritative query that adapter
-will consume in one isolated `hex_combat` change.
 
 ### Occupancy
 

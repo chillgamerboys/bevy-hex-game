@@ -588,27 +588,55 @@ impl CelestialCycleSettings {
 
     fn validate_dark_handoffs(&self) -> Result<(), String> {
         let frame_count = self.keyframes.len();
-        let next_frames = self.keyframes.iter().cycle().skip(1).take(frame_count);
-        let following_frames = self.keyframes.iter().cycle().skip(2).take(frame_count);
-
-        for (index, ((current, next), following)) in self
-            .keyframes
-            .iter()
-            .zip(next_frames)
-            .zip(following_frames)
-            .enumerate()
-        {
+        for index in 0..frame_count {
+            let Some(current) = self.keyframes.get(index) else {
+                continue;
+            };
+            let next_index = (index + 1) % frame_count;
+            let Some(next) = self.keyframes.get(next_index) else {
+                continue;
+            };
             if current.active_body == next.active_body {
                 continue;
             }
 
-            if next.direct_illuminance > current.direct_illuminance
-                || next.direct_illuminance > following.direct_illuminance
+            let current_is_horizon = current.sun_elevation_degrees.abs() <= f32::EPSILON;
+            let next_is_horizon = next.sun_elevation_degrees.abs() <= f32::EPSILON;
+            if !current_is_horizon && !next_is_horizon {
+                return Err(format!(
+                    "profile.keyframes body change between indices {index} and {next_index} \
+                     crosses the horizon mid-segment; author a zero-elevation keyframe at the \
+                     dark handoff"
+                ));
+            }
+
+            // `handoff_body` changes immediately after a zero-elevation start, at a
+            // zero-elevation end, or (when both endpoints sit on the horizon) at the
+            // darker endpoint selected by the same illuminance rule.
+            let handoff_index = if current_is_horizon
+                && (!next_is_horizon || current.direct_illuminance <= next.direct_illuminance)
+            {
+                index
+            } else {
+                next_index
+            };
+            let previous_index = (handoff_index + frame_count - 1) % frame_count;
+            let following_index = (handoff_index + 1) % frame_count;
+            let Some(handoff) = self.keyframes.get(handoff_index) else {
+                continue;
+            };
+            let Some(previous) = self.keyframes.get(previous_index) else {
+                continue;
+            };
+            let Some(following) = self.keyframes.get(following_index) else {
+                continue;
+            };
+            if handoff.direct_illuminance > previous.direct_illuminance
+                || handoff.direct_illuminance > following.direct_illuminance
             {
                 return Err(format!(
-                    "profile.keyframes body change between indices {index} and {} must occur at \
-                     a local minimum of direct_illuminance",
-                    (index + 1) % frame_count
+                    "profile.keyframes body change between indices {index} and {next_index} must \
+                     occur at a local minimum of direct_illuminance (index {handoff_index})"
                 ));
             }
         }
@@ -1813,6 +1841,11 @@ mod tests {
                 "direct_illuminance: 220.0",
                 "direct_illuminance: 4000.0",
                 "local minimum",
+            ),
+            (
+                "sun_elevation_degrees: 0.0,\n                active_body: Sun",
+                "sun_elevation_degrees: 1.0,\n                active_body: Sun",
+                "crosses the horizon mid-segment",
             ),
         ] {
             let invalid = LIGHTING_RON.replacen(needle, replacement, 1);
