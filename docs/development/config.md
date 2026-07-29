@@ -329,8 +329,10 @@ and exact reference:
 
 Saving the file registers it with the game. It will not appear in generated terrain
 until the generation code selects it. A missing palette reference rejects the
-cross-file update and retains the previous valid runtime table. `air` is never drawn
-and therefore uses `swatch: None`; every rendered substance requires `Some(...)`.
+cross-file update and retains the previous valid runtime table. The rejected source
+pair is retained too, so repairing only the other file retries the complete on-disk
+candidate instead of accepting a stale fallback. `air` is never drawn and therefore
+uses `swatch: None`; every rendered substance requires `Some(...)`.
 
 **A bigger procedural map.** `grid_radius: 12` gives 469 columns, `20` gives 1261,
 and `40` gives 4921. Procedural recipes accept radii from 12 through 40 and regenerate

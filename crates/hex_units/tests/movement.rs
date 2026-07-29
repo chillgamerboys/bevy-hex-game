@@ -358,6 +358,28 @@ fn the_player_spawns_on_the_surface() {
 }
 
 #[test]
+fn shipped_unit_swatches_preserve_the_pre_migration_colors() {
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .expect("the shipped art palette should parse");
+
+    for (id, expected) in [
+        ("unit/player", [1.0_f32, 0.2, 0.2]),
+        ("unit/hostile", [0.25_f32, 0.45, 0.9]),
+    ] {
+        let actual = palette
+            .get_str(id)
+            .unwrap_or_else(|| panic!("the shipped palette should contain {id}"))
+            .color()
+            .to_array();
+        assert_eq!(
+            actual.map(f32::to_bits),
+            expected.map(f32::to_bits),
+            "{id} changed during the zero-delta palette migration"
+        );
+    }
+}
+
+#[test]
 fn unit_materials_use_the_exact_authored_palette_swatches() {
     let mut app = test_app();
     enter_gameplay(&mut app);
