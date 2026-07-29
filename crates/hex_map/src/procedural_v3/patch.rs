@@ -42,13 +42,6 @@ impl PatchBuildMode {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PatchSharedEdge<'a> {
     pub(crate) id: ResolvedEdgeId,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "Ring7 recipe validation consumes the oriented side in the integration PR"
-        )
-    )]
     pub(crate) side: HexSide,
     pub(crate) contract: &'a ResolvedEdgeContract,
     patch_is_first: bool,
@@ -109,10 +102,6 @@ impl<'a> PatchSharedEdge<'a> {
 
     /// Directed liquid aperture when this patch is the source or sink.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "patch-ready Waterfall consumes directed liquid ports in the next recipe PR"
-    )]
     pub(crate) fn liquid_port(&self) -> Option<(bool, ResolvedPort)> {
         let ResolvedLiquidPort::Directed { source, port, .. } = &self.contract.liquid else {
             return None;

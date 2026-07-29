@@ -22,6 +22,7 @@ use super::world::{GeneratedWorldPlan, ProtectedFeatureRoute};
 pub(crate) struct LocalPatchFrame {
     center: HexCoord,
     scale: u32,
+    rotation: u8,
 }
 
 impl LocalPatchFrame {
@@ -35,6 +36,16 @@ impl LocalPatchFrame {
         kind: LayoutKind,
         grid_radius: u32,
     ) -> Result<Self, String> {
+        Self::resolve_rotated(mask, kind, grid_radius, 0)
+    }
+
+    /// Resolves a frame whose local recipe axes are rotated into world space.
+    pub(crate) fn resolve_rotated(
+        mask: &BTreeSet<HexCoord>,
+        kind: LayoutKind,
+        grid_radius: u32,
+        rotation: u8,
+    ) -> Result<Self, String> {
         if mask.is_empty() {
             return Err("cannot frame an empty V3 patch mask".to_owned());
         }
@@ -45,6 +56,7 @@ impl LocalPatchFrame {
             return Ok(Self {
                 center: HexCoord::ORIGIN,
                 scale: grid_radius,
+                rotation: rotation % 6,
             });
         }
 
@@ -72,6 +84,7 @@ impl LocalPatchFrame {
         Ok(Self {
             center,
             scale: max_distance.min(12),
+            rotation: rotation % 6,
         })
     }
 
@@ -90,11 +103,12 @@ impl LocalPatchFrame {
     /// Converts one world-space coordinate to this recipe's local frame.
     pub(crate) fn to_local(self, coord: HexCoord) -> Result<HexCoord, String> {
         checked_coord_difference(coord, self.center)
+            .map(|coord| rotate(coord, (6_u8.saturating_sub(self.rotation)) % 6))
     }
 
     /// Converts one local coordinate to exact world-space ownership.
     pub(crate) fn to_world(self, coord: HexCoord) -> Result<HexCoord, String> {
-        checked_coord_sum(coord, self.center)
+        checked_coord_sum(rotate(coord, self.rotation), self.center)
     }
 
     /// Converts one exact local voxel position to world space.
@@ -138,13 +152,11 @@ impl LocalPatchFrame {
     #[must_use]
     pub(crate) fn view_hint_to_world(self, hint: MapViewHint) -> MapViewHint {
         let offset = self.center.to_world(0.0);
+        let eye = rotate_world_point(hint.eye, self.rotation);
+        let focus = rotate_world_point(hint.focus, self.rotation);
         MapViewHint::new(
-            (hint.eye.0 + offset.x, hint.eye.1, hint.eye.2 + offset.z),
-            (
-                hint.focus.0 + offset.x,
-                hint.focus.1,
-                hint.focus.2 + offset.z,
-            ),
+            (eye.0 + offset.x, eye.1, eye.2 + offset.z),
+            (focus.0 + offset.x, focus.1, focus.2 + offset.z),
         )
     }
 
@@ -381,13 +393,18 @@ impl LocalPatchFrame {
             FrameDirection::ToWorld => self.view_hint_to_world(hint),
             FrameDirection::ToLocal => {
                 let offset = self.center.to_world(0.0);
-                MapViewHint::new(
+                let translated = MapViewHint::new(
                     (hint.eye.0 - offset.x, hint.eye.1, hint.eye.2 - offset.z),
                     (
                         hint.focus.0 - offset.x,
                         hint.focus.1,
                         hint.focus.2 - offset.z,
                     ),
+                );
+                let inverse = (6_u8.saturating_sub(self.rotation)) % 6;
+                MapViewHint::new(
+                    rotate_world_point(translated.eye, inverse),
+                    rotate_world_point(translated.focus, inverse),
                 )
             }
         }
@@ -398,6 +415,31 @@ impl LocalPatchFrame {
 enum FrameDirection {
     ToLocal,
     ToWorld,
+}
+
+fn rotate(coord: HexCoord, turns: u8) -> HexCoord {
+    let [mut x, mut y, mut z] = coord.to_cubic_array();
+    for _ in 0..turns % 6 {
+        (x, y, z) = (-z, -x, -y);
+    }
+    HexCoord::new_cubic(x, y, z)
+}
+
+fn rotate_world_point(point: (f32, f32, f32), turns: u8) -> (f32, f32, f32) {
+    let turns = turns % 6;
+    if turns == 0 {
+        return point;
+    }
+    if turns == 3 {
+        return (-point.0, point.1, -point.2);
+    }
+    let angle = -f32::from(turns) * std::f32::consts::FRAC_PI_3;
+    let (sin, cos) = angle.sin_cos();
+    (
+        point.0.mul_add(cos, -point.2 * sin),
+        point.1,
+        point.0.mul_add(sin, point.2 * cos),
+    )
 }
 
 fn checked_coord_sum(first: HexCoord, second: HexCoord) -> Result<HexCoord, String> {
@@ -465,6 +507,37 @@ mod tests {
                 Ok(coord)
             );
         }
+    }
+
+    #[test]
+    fn rotated_composite_frame_round_trips_geometry_and_view() {
+        let translation = HexCoord::from_axial(21, 0);
+        let local: BTreeSet<_> = HexCoord::ORIGIN.within_radius(12).into_iter().collect();
+        let world: BTreeSet<_> = local
+            .iter()
+            .copied()
+            .map(|coord| {
+                checked_coord_sum(rotate(coord, 3), translation).expect("small translation")
+            })
+            .collect();
+        let frame = LocalPatchFrame::resolve_rotated(&world, LayoutKind::Ring7, 33, 3)
+            .expect("rotated composite mask should frame");
+        let hint = MapViewHint::new((12.0, 20.0, -5.0), (3.0, 6.0, 2.0));
+
+        assert_eq!(frame.local_mask(&world), Ok(local));
+        for coord in world {
+            assert_eq!(
+                frame
+                    .to_local(coord)
+                    .and_then(|local| frame.to_world(local)),
+                Ok(coord)
+            );
+        }
+        let translated = frame.view_hint_to_world(hint);
+        assert_eq!(
+            frame.translate_view_hint(translated, FrameDirection::ToLocal),
+            hint
+        );
     }
 
     #[test]

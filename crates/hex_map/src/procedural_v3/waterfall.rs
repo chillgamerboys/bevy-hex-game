@@ -296,8 +296,14 @@ pub(crate) fn construct_patch(
             "Waterfall requires the TemperateGrassland environment",
         )]);
     }
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
-        .map_err(|error| vec![recipe_issue(error)])?;
+    let rotation = waterfall_rotation(&patch)?;
+    let frame = LocalPatchFrame::resolve_rotated(
+        patch.mask(),
+        patch.layout().kind,
+        patch.grid_radius(),
+        rotation,
+    )
+    .map_err(|error| vec![recipe_issue(error)])?;
     let mask = frame
         .local_mask(patch.mask())
         .map_err(|error| vec![recipe_issue(error)])?;
@@ -522,6 +528,32 @@ pub(crate) fn construct_patch(
     } else {
         Err(seam_issues)
     }
+}
+
+fn waterfall_rotation(patch: &PatchRecipeContext<'_>) -> Result<u8, Vec<WorldValidationIssue>> {
+    if patch.layout().kind == super::layout::LayoutKind::Single {
+        return Ok(0);
+    }
+    let outlets = patch
+        .shared_edges()
+        .filter_map(|edge| {
+            edge.liquid_port()
+                .and_then(|(is_source, _)| is_source.then_some(edge.side))
+        })
+        .collect::<Vec<_>>();
+    let [outlet] = outlets.as_slice() else {
+        return Err(vec![recipe_issue(
+            "Ring7 Waterfall requires exactly one directed liquid outlet",
+        )]);
+    };
+    Ok(match outlet {
+        super::layout::HexSide::East => 0,
+        super::layout::HexSide::NorthEast => 1,
+        super::layout::HexSide::NorthWest => 2,
+        super::layout::HexSide::West => 3,
+        super::layout::HexSide::SouthWest => 4,
+        super::layout::HexSide::SouthEast => 5,
+    })
 }
 
 fn waterfall_view_hint(
