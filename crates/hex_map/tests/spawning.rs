@@ -198,19 +198,20 @@ fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
         .expect("the fixture substances should resolve through the fixture palette")
 }
 
+fn runtime_art_catalog() -> RuntimeArtCatalog {
+    runtime_art_catalog_without(None)
+}
+
 #[expect(
     clippy::expect_used,
     reason = "invalid compile-time art fixtures should fail the integration test immediately"
 )]
-fn runtime_art_catalog() -> RuntimeArtCatalog {
+fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalog {
     let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
         .expect("tracked art palette should parse");
     let styles: VoxelStyleCatalog =
         ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))
             .expect("tracked voxel styles should parse");
-    let manifest: ObjectCatalogFile =
-        ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
-            .expect("tracked object catalog should parse");
     let mut objects = BTreeMap::new();
     for source in [
         include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
@@ -223,8 +224,12 @@ fn runtime_art_catalog() -> RuntimeArtCatalog {
     ] {
         let blueprint: ObjectBlueprint =
             ron::from_str(source).expect("tracked object blueprint should parse");
-        objects.insert(blueprint.id.clone(), blueprint);
+        if omitted_object != Some(blueprint.id.as_str()) {
+            objects.insert(blueprint.id.clone(), blueprint);
+        }
     }
+    let manifest = ObjectCatalogFile::new(objects.keys().cloned())
+        .expect("fixture object ids should form a valid manifest");
     RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
         .expect("tracked runtime art catalog should resolve")
 }
@@ -446,6 +451,12 @@ fn v2_mountains_app() -> App {
 }
 
 fn v3_caves_app() -> App {
+    let mut app = v3_caves_app_without_art_catalog();
+    app.insert_resource(runtime_art_catalog());
+    app
+}
+
+fn v3_caves_app_without_art_catalog() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
         grid_radius: 12,
@@ -1569,6 +1580,83 @@ fn tile_count(app: &mut App) -> usize {
         .query_filtered::<Entity, With<HexTile>>()
         .iter(app.world())
         .count()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid generated crystal hierarchy is a broken integration-test fixture"
+)]
+fn cave_crystal_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
+    let roots: Vec<_> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &ObjectInstance, &Children)>();
+        query
+            .iter(world)
+            .filter(|(_entity, instance, _children)| {
+                instance.object_id().as_str().starts_with("prop/crystal-")
+            })
+            .map(|(entity, instance, children)| {
+                (
+                    entity,
+                    instance.clone(),
+                    children.iter().collect::<Vec<_>>(),
+                )
+            })
+            .collect()
+    };
+
+    let mut snapshots = BTreeMap::new();
+    for (root, instance, children) in roots {
+        assert!(app.world().get::<GameplayLight>(root).is_none());
+        assert!(app.world().get::<TilePos>(root).is_none());
+        let point_lights: Vec<_> = children
+            .iter()
+            .filter_map(|child| {
+                app.world()
+                    .get::<PointLight>(*child)
+                    .map(|light| (*child, light))
+            })
+            .collect();
+        assert_eq!(
+            point_lights.len(),
+            1,
+            "each crystal object owns one physical point light"
+        );
+        let (point_light_entity, point_light) = point_lights
+            .first()
+            .expect("the exact point-light child count was checked above");
+        assert!((point_light.intensity - 4_500.0).abs() < f32::EPSILON);
+        assert!((point_light.range - 4.5).abs() < f32::EPSILON);
+        assert!((point_light.radius - 0.12).abs() < f32::EPSILON);
+        assert!(!point_light.shadow_maps_enabled);
+        assert!(!point_light.contact_shadows_enabled);
+        assert!(
+            app.world()
+                .get::<GameplayLight>(*point_light_entity)
+                .is_none(),
+            "physical light must not duplicate gameplay illumination"
+        );
+        assert!(app.world().get::<TilePos>(*point_light_entity).is_none());
+
+        let origin = instance.origin();
+        let floor_level = origin
+            .level
+            .checked_sub(1)
+            .expect("a generated crystal must sit one level above its floor");
+        assert!(
+            snapshots
+                .insert(
+                    TilePos::new(origin.coord, floor_level),
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        instance.rotation().steps(),
+                    ),
+                )
+                .is_none(),
+            "one authored crystal is expected per gameplay-light floor"
+        );
+    }
+    snapshots
 }
 
 fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
@@ -2726,6 +2814,37 @@ fn v2_mountains_teardown_and_reentry_preserve_generated_state() {
 }
 
 #[test]
+fn v3_caves_missing_crystal_asset_fails_before_any_world_publication() {
+    let mut app = v3_caves_app_without_art_catalog();
+    app.insert_resource(runtime_art_catalog_without(Some("prop/crystal-spire")));
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(cave_crystal_instances(&mut app).is_empty());
+    let gameplay_light_count = app
+        .world_mut()
+        .query::<&GameplayLight>()
+        .iter(app.world())
+        .count();
+    let point_light_count = app
+        .world_mut()
+        .query::<&PointLight>()
+        .iter(app.world())
+        .count();
+    assert_eq!(gameplay_light_count, 0);
+    assert_eq!(point_light_count, 0);
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("prop/crystal-spire"));
+}
+
+#[test]
 fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
     let mut app = v3_caves_app();
     enter_gameplay(&mut app);
@@ -2764,10 +2883,18 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .map(|(position, light)| (*position, *light))
             .collect()
     };
+    let first_crystals = cave_crystal_instances(&mut app);
 
     assert!(!first_floors.is_empty());
     assert!(!first_roofs.is_empty());
     assert!(!first_lights.is_empty());
+    assert_eq!(first_crystals.len(), first_lights.len());
+    assert!(
+        first_crystals
+            .keys()
+            .all(|position| first_lights.contains_key(position)),
+        "every physical crystal must share the exact semantic gameplay-light floor"
+    );
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -2789,6 +2916,13 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
         lights.iter(world).count()
     };
     assert_eq!(light_count_after_exit, 0);
+    assert!(cave_crystal_instances(&mut app).is_empty());
+    let point_light_count_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&PointLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(point_light_count_after_exit, 0);
 
     enter_gameplay(&mut app);
 
@@ -2838,10 +2972,12 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .map(|(position, light)| (*position, *light))
             .collect()
     };
+    let second_crystals = cave_crystal_instances(&mut app);
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_floors, first_floors);
     assert_eq!(second_roofs, first_roofs);
     assert_eq!(second_lights, first_lights);
+    assert_eq!(second_crystals, first_crystals);
 }
 
 #[test]

@@ -25,6 +25,7 @@ use hex_core::{
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
+use crate::crystal_render::{self, CrystalPresentationError};
 use crate::feature_render::{self, FeaturePresentationError};
 use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
@@ -283,6 +284,7 @@ fn spawn_grid(
     liquid_visual_time: Res<LiquidVisualTime>,
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
 ) {
     if let Err(error) = build_grid(
         &mut commands,
@@ -296,6 +298,7 @@ fn spawn_grid(
         liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
+        art_catalog.as_deref(),
     ) {
         fail_presentation_setup(&mut commands, &error);
     }
@@ -315,9 +318,15 @@ fn build_grid(
     liquid_phase_seconds: f32,
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
+    art_catalog: Option<&RuntimeArtCatalog>,
 ) -> Result<(), MapPresentationError> {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
+    // Crystal asset resolution happens before any presentation entities are
+    // queued, so a missing or incompatible dependency cannot leave a partial map.
+    let prepared_crystals =
+        crystal_render::prepare_presentations(settings.level_height, presentation, art_catalog)
+            .map_err(MapPresentationError::Crystal)?;
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -333,6 +342,7 @@ fn build_grid(
         feature_render::spawn_presentations(commands, settings.level_height, presentation)
             .map_err(MapPresentationError::Feature)?,
     );
+    children.extend(crystal_render::spawn_prepared(commands, prepared_crystals));
     children.extend(spawn_gameplay_lights(commands, presentation));
 
     for (coord, column) in map.columns() {
@@ -419,6 +429,7 @@ fn fail_presentation_setup(commands: &mut Commands, error: &MapPresentationError
 enum MapPresentationError {
     Liquid(LiquidPresentationError),
     Feature(FeaturePresentationError),
+    Crystal(CrystalPresentationError),
 }
 
 #[derive(SystemParam)]
@@ -433,6 +444,7 @@ impl fmt::Display for MapPresentationError {
         match self {
             Self::Liquid(error) => write!(formatter, "liquid presentation failed: {error}"),
             Self::Feature(error) => write!(formatter, "feature presentation failed: {error}"),
+            Self::Crystal(error) => write!(formatter, "crystal presentation failed: {error}"),
         }
     }
 }
@@ -442,6 +454,7 @@ impl std::error::Error for MapPresentationError {
         match self {
             Self::Liquid(error) => Some(error),
             Self::Feature(error) => Some(error),
+            Self::Crystal(error) => Some(error),
         }
     }
 }
@@ -562,6 +575,7 @@ fn apply_terrain_edits(
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
     liquid_visual_time: Res<LiquidVisualTime>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
     mut spatial: EditableSpatialConsequences,
@@ -654,6 +668,7 @@ fn apply_terrain_edits(
         liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
+        art_catalog.as_deref(),
     );
     match rebuilt {
         Ok(()) => {

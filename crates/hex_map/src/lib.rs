@@ -36,6 +36,7 @@
 
 use bevy::prelude::*;
 
+mod crystal_render;
 mod feature_render;
 /// Terrain height generation.
 pub mod generator;

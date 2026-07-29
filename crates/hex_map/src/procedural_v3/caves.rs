@@ -5,7 +5,12 @@
 //! gameplay semantics rooted on those floor surfaces, not renderer measurements.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::fmt;
 
+use hex_assets::{
+    ConnectivityPolicy, ObjectAssetId, ObjectBlueprint, ObjectCategory, RuntimeArtCatalog,
+    SrgbColor, VoxelStyleId, VoxelSurfaceMode,
+};
 use hex_core::{HexCoord, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
 use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
@@ -38,6 +43,220 @@ const HOSTILE_START: &str = "hostile_start";
 const CONFLICT_CENTER: &str = "conflict_center";
 const CAVE_ENTRANCE: &str = "cave_entrance";
 const DEEP_CHAMBER: &str = "deep_chamber";
+const CRYSTAL_LOW_CLUSTER_ID: &str = "prop/crystal-low-cluster";
+const CRYSTAL_BRANCHED_ID: &str = "prop/crystal-branched";
+const CRYSTAL_SPIRE_ID: &str = "prop/crystal-spire";
+const CRYSTAL_BODY_STYLE_ID: &str = "crystal/cyan-body";
+const CRYSTAL_GLOW_STYLE_ID: &str = "crystal/cyan-glow";
+
+/// Authored assets admitted by the cave presentation contract.
+#[derive(Debug, Clone)]
+pub(crate) struct CaveCrystalObjectSet {
+    low_cluster: ObjectAssetId,
+    branched: ObjectAssetId,
+    spire: ObjectAssetId,
+    glow_color: SrgbColor,
+}
+
+impl CaveCrystalObjectSet {
+    /// Resolves every kind a deterministic candidate can select.
+    ///
+    /// Resolving the complete set before candidate construction prevents one seed
+    /// from loading while another fails later because it selected a missing asset.
+    pub(crate) fn resolve(catalog: &RuntimeArtCatalog) -> Result<Self, CaveCrystalAssetError> {
+        let body_style = style_id(CRYSTAL_BODY_STYLE_ID)?;
+        let glow_style = style_id(CRYSTAL_GLOW_STYLE_ID)?;
+        let body = catalog.style(&body_style).ok_or_else(|| {
+            CaveCrystalAssetError::new(format!(
+                "Caves requires authored voxel style '{CRYSTAL_BODY_STYLE_ID}'"
+            ))
+        })?;
+        if body.authored().surface_mode() != VoxelSurfaceMode::Opaque
+            || body.authored().emission().is_none()
+        {
+            return Err(CaveCrystalAssetError::new(format!(
+                "Caves style '{CRYSTAL_BODY_STYLE_ID}' must be opaque and emissive"
+            )));
+        }
+        let glow = catalog.style(&glow_style).ok_or_else(|| {
+            CaveCrystalAssetError::new(format!(
+                "Caves requires authored voxel style '{CRYSTAL_GLOW_STYLE_ID}'"
+            ))
+        })?;
+        if glow.authored().surface_mode() != VoxelSurfaceMode::Additive
+            || glow.authored().emission().is_none()
+        {
+            return Err(CaveCrystalAssetError::new(format!(
+                "Caves style '{CRYSTAL_GLOW_STYLE_ID}' must be additive and emissive"
+            )));
+        }
+        let glow_color = glow.emission_color().ok_or_else(|| {
+            CaveCrystalAssetError::new(format!(
+                "Caves style '{CRYSTAL_GLOW_STYLE_ID}' has no resolved emission colour"
+            ))
+        })?;
+
+        Ok(Self {
+            low_cluster: resolve_crystal_object(
+                catalog,
+                CRYSTAL_LOW_CLUSTER_ID,
+                CaveCrystalKind::LowCluster,
+                &body_style,
+                &glow_style,
+            )?,
+            branched: resolve_crystal_object(
+                catalog,
+                CRYSTAL_BRANCHED_ID,
+                CaveCrystalKind::Branched,
+                &body_style,
+                &glow_style,
+            )?,
+            spire: resolve_crystal_object(
+                catalog,
+                CRYSTAL_SPIRE_ID,
+                CaveCrystalKind::Spire,
+                &body_style,
+                &glow_style,
+            )?,
+            glow_color,
+        })
+    }
+
+    #[must_use]
+    pub(crate) fn object_id(&self, kind: CaveCrystalKind) -> &ObjectAssetId {
+        match kind {
+            CaveCrystalKind::LowCluster => &self.low_cluster,
+            CaveCrystalKind::Branched => &self.branched,
+            CaveCrystalKind::Spire => &self.spire,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn glow_color(&self) -> SrgbColor {
+        self.glow_color
+    }
+}
+
+/// Failure to resolve the authored crystal dependency set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaveCrystalAssetError {
+    detail: String,
+}
+
+impl CaveCrystalAssetError {
+    fn new(detail: impl Into<String>) -> Self {
+        Self {
+            detail: detail.into(),
+        }
+    }
+
+    pub(crate) fn missing_catalog() -> Self {
+        Self::new("Caves requires the accepted runtime art catalog")
+    }
+}
+
+impl fmt::Display for CaveCrystalAssetError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for CaveCrystalAssetError {}
+
+fn style_id(raw: &str) -> Result<VoxelStyleId, CaveCrystalAssetError> {
+    VoxelStyleId::new(raw).map_err(|error| {
+        CaveCrystalAssetError::new(format!(
+            "Caves authored style id {raw:?} is invalid: {error}"
+        ))
+    })
+}
+
+fn resolve_crystal_object(
+    catalog: &RuntimeArtCatalog,
+    raw_id: &str,
+    kind: CaveCrystalKind,
+    body_style: &VoxelStyleId,
+    glow_style: &VoxelStyleId,
+) -> Result<ObjectAssetId, CaveCrystalAssetError> {
+    let id = ObjectAssetId::new(raw_id).map_err(|error| {
+        CaveCrystalAssetError::new(format!(
+            "Caves authored object id {raw_id:?} is invalid: {error}"
+        ))
+    })?;
+    let blueprint = catalog.object(&id).ok_or_else(|| {
+        CaveCrystalAssetError::new(format!(
+            "Caves requires authored object {raw_id:?}, but it is absent from the accepted catalog"
+        ))
+    })?;
+    validate_crystal_object(blueprint, kind, body_style, glow_style)?;
+    Ok(id)
+}
+
+fn validate_crystal_object(
+    blueprint: &ObjectBlueprint,
+    kind: CaveCrystalKind,
+    body_style: &VoxelStyleId,
+    glow_style: &VoxelStyleId,
+) -> Result<(), CaveCrystalAssetError> {
+    let expected_height = kind.height_u8();
+    if blueprint.category != ObjectCategory::Prop {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' is {:?}; expected Prop",
+            blueprint.id, blueprint.category
+        )));
+    }
+    if blueprint.connectivity != ConnectivityPolicy::Free {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' must use free connectivity",
+            blueprint.id
+        )));
+    }
+    if blueprint.bounds.radius != 1
+        || blueprint.bounds.min_level != 0
+        || blueprint.bounds.height != expected_height
+    {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' must use radius-one levels 0..{}",
+            blueprint.id, expected_height
+        )));
+    }
+    if blueprint.origin.q != 0 || blueprint.origin.r != 0 || blueprint.origin.level != 0 {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' must keep its authored origin at (0, 0, 0)",
+            blueprint.id
+        )));
+    }
+    if !blueprint.blocker_footprint.is_empty() || !blueprint.canopy_occluders.is_empty() {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' must remain non-blocking and cannot define canopy cells",
+            blueprint.id
+        )));
+    }
+
+    let mut has_body = false;
+    let mut has_glow = false;
+    let mut reaches_reserved_height = false;
+    for placement in &blueprint.placements {
+        if placement.style == *body_style {
+            has_body = true;
+        } else if placement.style == *glow_style {
+            has_glow = true;
+        } else {
+            return Err(CaveCrystalAssetError::new(format!(
+                "Caves crystal '{}' uses unsupported style '{}'",
+                blueprint.id, placement.style
+            )));
+        }
+        reaches_reserved_height |= placement.position.level == kind.height() - 1;
+    }
+    if !has_body || !has_glow || !reaches_reserved_height {
+        return Err(CaveCrystalAssetError::new(format!(
+            "Caves crystal '{}' must contain body and glow voxels and reach its reserved height",
+            blueprint.id
+        )));
+    }
+    Ok(())
+}
 
 /// Recipe metrics retained by selection and the public generation report.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2195,11 +2414,14 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use super::*;
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     };
     use crate::terrain::TerrainPalette;
+    use hex_assets::{ArtPalette, ObjectCatalogFile, VoxelStyleCatalog};
     use hex_core::SubstanceId;
 
     const BEDROCK: SubstanceId = SubstanceId(1);
@@ -2214,6 +2436,66 @@ mod tests {
     const BASALT: SubstanceId = SubstanceId(10);
     const LAVA: SubstanceId = SubstanceId(11);
     const WORKED_STONE: SubstanceId = SubstanceId(12);
+
+    fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
+        static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
+        CATALOG.get_or_init(|| runtime_art_catalog_with(|_| {}))
+    }
+
+    fn runtime_art_catalog_with(
+        mutate: impl FnOnce(&mut BTreeMap<ObjectAssetId, ObjectBlueprint>),
+    ) -> RuntimeArtCatalog {
+        let palette: ArtPalette = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/palette.ron"
+        )))
+        .expect("tracked art palette should parse");
+        let styles: VoxelStyleCatalog = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/voxel_styles.ron"
+        )))
+        .expect("tracked voxel styles should parse");
+        let mut objects = BTreeMap::new();
+        for source in [
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/small-broadleaf.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/tall-narrow.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/old-growth.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/grass-tuft.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/crystal-low-cluster.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/crystal-branched.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/crystal-spire.ron"
+            )),
+        ] {
+            let blueprint: ObjectBlueprint =
+                ron::from_str(source).expect("tracked object blueprint should parse");
+            objects.insert(blueprint.id.clone(), blueprint);
+        }
+        mutate(&mut objects);
+        let manifest = ObjectCatalogFile::new(objects.keys().cloned())
+            .expect("fixture object ids should form a valid manifest");
+        RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+            .expect("fixture runtime art graph should resolve")
+    }
 
     fn world_edges() -> PatchEdgesSettings {
         PatchEdgesSettings {
@@ -2240,6 +2522,34 @@ mod tests {
                 edges: world_edges(),
             }),
         }
+    }
+
+    #[test]
+    fn crystal_preflight_rejects_missing_and_incompatible_assets() {
+        let missing = runtime_art_catalog_with(|objects| {
+            objects.remove(
+                &ObjectAssetId::new(CRYSTAL_SPIRE_ID)
+                    .expect("the tracked spire id should remain valid"),
+            );
+        });
+        let missing_error =
+            CaveCrystalObjectSet::resolve(&missing).expect_err("the complete set is required");
+        assert!(missing_error.to_string().contains(CRYSTAL_SPIRE_ID));
+
+        let incompatible = runtime_art_catalog_with(|objects| {
+            let spire = objects
+                .get_mut(
+                    &ObjectAssetId::new(CRYSTAL_SPIRE_ID)
+                        .expect("the tracked spire id should remain valid"),
+                )
+                .expect("the fixture should contain the spire");
+            spire.bounds.height = 5;
+        });
+        let incompatible_error = CaveCrystalObjectSet::resolve(&incompatible)
+            .expect_err("a silhouette exceeding its reserved height must fail");
+        assert!(incompatible_error
+            .to_string()
+            .contains("radius-one levels 0..4"));
     }
 
     fn palette() -> TerrainPalette {
@@ -2548,9 +2858,16 @@ mod tests {
         for (seed, candidate, semantic_fingerprint, map_fingerprint) in expected {
             let selected =
                 generate(12, 0.4, &settings(), seed).expect("reviewed Caves seed should generate");
-            let build =
-                super::super::build(12, 0.4, &settings(), seed, &palette(), &is_solid, None)
-                    .expect("reviewed Caves seed should materialize");
+            let build = super::super::build(
+                12,
+                0.4,
+                &settings(),
+                seed,
+                &palette(),
+                &is_solid,
+                Some(runtime_art_catalog()),
+            )
+            .expect("reviewed Caves seed should materialize");
             assert_eq!(selected.selected_candidate, candidate);
             assert_eq!(
                 selected.validated.semantic_fingerprint,
@@ -2612,7 +2929,7 @@ mod tests {
                 u64::MAX,
                 &palette,
                 &is_solid,
-                None,
+                Some(runtime_art_catalog()),
             )
             .expect("warm-up Caves should build");
             std::hint::black_box(warmup);
@@ -2620,9 +2937,16 @@ mod tests {
             let mut samples = Vec::new();
             for seed in 0..12 {
                 let started = std::time::Instant::now();
-                let build =
-                    super::super::build(radius, 0.4, &settings(), seed, &palette, &is_solid, None)
-                        .expect("benchmark Caves should build");
+                let build = super::super::build(
+                    radius,
+                    0.4,
+                    &settings(),
+                    seed,
+                    &palette,
+                    &is_solid,
+                    Some(runtime_art_catalog()),
+                )
+                .expect("benchmark Caves should build");
                 assert!(!build.report.used_fallback);
                 samples.push(started.elapsed());
                 std::hint::black_box(build);
