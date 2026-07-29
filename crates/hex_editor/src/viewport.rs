@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::gltf::GltfAssetLabel;
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::{GlobalAmbientLight, NotShadowCaster};
 use bevy::picking::events::{Click, Move, Out, Over, Pointer};
 use bevy::picking::mesh_picking::MeshPickingPlugin;
@@ -24,7 +24,7 @@ use hex_core::config::{HEX_CIRCUMRADIUS, HEX_SMALL_DIAMETER};
 /// World-space height of one authored voxel level.
 pub const DEFAULT_LEVEL_HEIGHT: f32 = 0.4;
 
-const HEX_MESH: &str = "meshes/hex.glb";
+pub(crate) const HEX_MESH_ASSET_PATH: &str = "meshes/hex.glb";
 const DEFAULT_GRID_RADIUS: u8 = 6;
 const GUIDE_THICKNESS: f32 = 0.012;
 const GRID_LINE_LIFT: f32 = 0.008;
@@ -35,6 +35,16 @@ const MAX_CAMERA_PITCH: f32 = std::f32::consts::FRAC_PI_2;
 const ORBIT_SENSITIVITY: f32 = 1.0;
 const PAN_SCREEN_SCALE: f32 = 2.0;
 const ZOOM_SENSITIVITY: f32 = 0.12;
+
+/// Immutable AssetServer path selected for the renderer mesh used by this session.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ViewportMeshAssetPath(pub String);
+
+impl Default for ViewportMeshAssetPath {
+    fn default() -> Self {
+        Self(HEX_MESH_ASSET_PATH.to_owned())
+    }
+}
 
 /// Which Workshop view the 3D viewport is presenting.
 #[derive(Resource, Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -347,9 +357,15 @@ enum VoxelSceneAction {
     Restyle(RenderedVoxel),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraDragMode {
+    Orbit,
+    Pan,
+}
+
 #[derive(Default)]
 struct CameraDrag {
-    button: Option<MouseButton>,
+    mode: Option<CameraDragMode>,
     last_cursor: Option<Vec2>,
 }
 
@@ -363,6 +379,7 @@ pub fn plugin(app: &mut App) {
         .init_resource::<ViewportPreviewRig>()
         .init_resource::<ViewportInputEnabled>()
         .init_resource::<ViewportContent>()
+        .init_resource::<ViewportMeshAssetPath>()
         .init_resource::<ViewportSceneCache>()
         .init_resource::<HoveredFaceTarget>()
         .insert_resource(GlobalAmbientLight::default())
@@ -407,6 +424,7 @@ pub fn plugin(app: &mut App) {
 fn spawn_viewport(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
+    mesh_asset_path: Res<ViewportMeshAssetPath>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let hex_mesh = asset_server.load(
@@ -414,7 +432,7 @@ fn spawn_viewport(
             mesh: 0,
             primitive: 0,
         }
-        .from_asset(HEX_MESH),
+        .from_asset(mesh_asset_path.0.clone()),
     );
     let guide_material = materials.add(StandardMaterial {
         base_color: Color::srgba(0.32, 0.36, 0.40, 0.10),
@@ -818,38 +836,50 @@ fn control_camera(
     windows: Query<&Window, With<PrimaryWindow>>,
     input_enabled: Res<ViewportInputEnabled>,
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     mut cursor_events: MessageReader<CursorMoved>,
     mut wheel_events: MessageReader<MouseWheel>,
     mut drag: Local<CameraDrag>,
     mut cameras: Query<(&mut ViewportCamera, &mut Transform)>,
 ) {
     let cursor_positions: Vec<Vec2> = cursor_events.read().map(|event| event.position).collect();
-    let scroll: f32 = wheel_events.read().map(|event| event.y).sum();
+    let scroll: f32 = wheel_events
+        .read()
+        .map(|event| match event.unit {
+            MouseScrollUnit::Line => event.y,
+            MouseScrollUnit::Pixel => event.y / 48.0,
+        })
+        .sum();
     let Ok(window) = windows.single() else {
-        drag.button = None;
+        drag.mode = None;
         drag.last_cursor = None;
         return;
     };
     if !input_enabled.0 {
-        drag.button = None;
+        drag.mode = None;
         drag.last_cursor = None;
         return;
     }
 
-    let wanted_button = if buttons.pressed(MouseButton::Right) {
-        Some(MouseButton::Right)
-    } else if buttons.pressed(MouseButton::Middle) {
-        Some(MouseButton::Middle)
+    let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    let space = keys.pressed(KeyCode::Space);
+    let wanted_mode = if buttons.pressed(MouseButton::Middle)
+        || (space && buttons.pressed(MouseButton::Left))
+        || (shift && buttons.pressed(MouseButton::Right))
+    {
+        Some(CameraDragMode::Pan)
+    } else if buttons.pressed(MouseButton::Right) {
+        Some(CameraDragMode::Orbit)
     } else {
         None
     };
-    if drag.button != wanted_button {
-        drag.button = wanted_button;
+    if drag.mode != wanted_mode {
+        drag.mode = wanted_mode;
         drag.last_cursor = window.cursor_position();
     }
 
     let mut pointer_delta = Vec2::ZERO;
-    if wanted_button.is_some() {
+    if wanted_mode.is_some() {
         for position in cursor_positions {
             if let Some(previous) = drag.last_cursor {
                 pointer_delta += position - previous;
@@ -867,14 +897,14 @@ fn control_camera(
         return;
     };
 
-    match wanted_button {
-        Some(MouseButton::Right) => {
+    match wanted_mode {
+        Some(CameraDragMode::Orbit) => {
             let size = Vec2::new(window.width().max(1.0), window.height().max(1.0));
             camera.yaw -= pointer_delta.x / size.x * std::f32::consts::TAU * ORBIT_SENSITIVITY;
             camera.pitch += pointer_delta.y / size.y * std::f32::consts::PI * ORBIT_SENSITIVITY;
             camera.pitch = camera.pitch.clamp(MIN_CAMERA_PITCH, MAX_CAMERA_PITCH);
         }
-        Some(MouseButton::Middle) => {
+        Some(CameraDragMode::Pan) => {
             let rotation = camera.transform().rotation;
             let right = rotation * Vec3::X;
             let up = rotation * Vec3::Y;
@@ -1073,21 +1103,13 @@ fn draw_guides(
     if content.show_canopy_overlay {
         for position in &content.canopy_cells {
             if cell_is_visible(&content, *position) {
-                draw_hex_ring(
-                    &mut gizmos,
-                    overlay_ring_center(*position, 0.060),
-                    Color::srgb(0.20, 0.86, 0.92),
-                );
+                draw_canopy_marker(&mut gizmos, overlay_ring_center(*position, 0.060));
             }
         }
     }
     if content.show_blocker_overlay {
         for column in &content.blocker_columns {
-            draw_hex_ring(
-                &mut gizmos,
-                axial_world_center(*column, GRID_LINE_LIFT + 0.020),
-                Color::srgb(0.96, 0.24, 0.22),
-            );
+            draw_blocker_marker(&mut gizmos, blocker_overlay_center(&content, *column));
         }
     }
 
@@ -1141,6 +1163,58 @@ fn overlay_ring_center(position: LocalVoxelCoord, lift: f32) -> Vec3 {
         level_floor(position.level) + DEFAULT_LEVEL_HEIGHT + lift,
         center.z,
     )
+}
+
+fn blocker_overlay_center(content: &ViewportContent, column: LocalAxialCoord) -> Vec3 {
+    let top = content
+        .voxels
+        .iter()
+        .filter(|voxel| {
+            voxel.position.axial() == column && cell_is_visible(content, voxel.position)
+        })
+        .map(|voxel| voxel.position.level)
+        .max();
+    top.map_or_else(
+        || axial_world_center(column, GRID_LINE_LIFT + 0.020),
+        |level| {
+            let position = LocalVoxelCoord::new(column.q, column.r, level);
+            overlay_ring_center(position, 0.080)
+        },
+    )
+}
+
+fn draw_blocker_marker(gizmos: &mut Gizmos, center: Vec3) {
+    let color = Color::srgb(0.96, 0.24, 0.22);
+    draw_hex_ring(gizmos, center, color);
+    let radius = HEX_CIRCUMRADIUS * 0.72;
+    for direction in [
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(3.0f32.sqrt() * 0.5, 0.0, 0.5),
+        Vec3::new(3.0f32.sqrt() * 0.5, 0.0, -0.5),
+    ] {
+        gizmos.line(
+            center - direction * radius,
+            center + direction * radius,
+            color,
+        );
+    }
+}
+
+fn draw_canopy_marker(gizmos: &mut Gizmos, center: Vec3) {
+    let color = Color::srgb(0.20, 0.86, 0.92);
+    draw_hex_ring(gizmos, center, color);
+    gizmos.line(center + Vec3::Y * 0.015, center + Vec3::Y * 0.34, color);
+    let cross_radius = HEX_CIRCUMRADIUS * 0.32;
+    gizmos.line(
+        center + Vec3::new(-cross_radius, 0.34, 0.0),
+        center + Vec3::new(cross_radius, 0.34, 0.0),
+        color,
+    );
+    gizmos.line(
+        center + Vec3::new(0.0, 0.34, -cross_radius),
+        center + Vec3::new(0.0, 0.34, cross_radius),
+        color,
+    );
 }
 
 const fn semantic_color(part: ObjectPart) -> Color {
@@ -1277,11 +1351,34 @@ fn frame_for(content: &ViewportContent, mode: ViewportMode) -> (Vec3, f32) {
         return (Vec3::new(0.0, 0.5 * DEFAULT_LEVEL_HEIGHT, 0.0), 5.5);
     }
 
+    frame_object_positions(
+        content
+            .voxels
+            .iter()
+            .filter(|voxel| {
+                !content.isolate_active_level || voxel.position.level == content.active_level
+            })
+            .map(|voxel| voxel.position),
+    )
+    .unwrap_or_else(|| {
+        let radius = f32::from(content.grid_radius.min(MAX_OBJECT_RADIUS));
+        (
+            Vec3::new(0.0, grid_plane_y(content.active_level), 0.0),
+            (radius * HEX_SMALL_DIAMETER + 4.0).clamp(5.5, MAX_CAMERA_RADIUS),
+        )
+    })
+}
+
+/// Returns stable focus and radius values for occupied object-local cells.
+///
+/// `None` represents an empty iterator. Review capture reuses this calculation so
+/// its fixed views frame geometry exactly as the interactive viewport does.
+pub(crate) fn frame_object_positions(
+    positions: impl IntoIterator<Item = LocalVoxelCoord>,
+) -> Option<(Vec3, f32)> {
     let mut bounds: Option<(Vec3, Vec3)> = None;
-    for voxel in content.voxels.iter().filter(|voxel| {
-        !content.isolate_active_level || voxel.position.level == content.active_level
-    }) {
-        let center = voxel_world_center(voxel.position);
+    for position in positions {
+        let center = voxel_world_center(position);
         let half = Vec3::new(
             HEX_CIRCUMRADIUS,
             0.5 * DEFAULT_LEVEL_HEIGHT,
@@ -1295,18 +1392,12 @@ fn frame_for(content: &ViewportContent, mode: ViewportMode) -> (Vec3, f32) {
         });
     }
 
-    if let Some((minimum, maximum)) = bounds {
+    bounds.map(|(minimum, maximum)| {
         let focus = 0.5 * (minimum + maximum);
         let half_extent = 0.5 * (maximum - minimum);
         let radius = (2.7 * half_extent.length() + 2.0).clamp(MIN_CAMERA_RADIUS, MAX_CAMERA_RADIUS);
         (focus, radius)
-    } else {
-        let radius = f32::from(content.grid_radius.min(MAX_OBJECT_RADIUS));
-        (
-            Vec3::new(0.0, grid_plane_y(content.active_level), 0.0),
-            (radius * HEX_SMALL_DIAMETER + 4.0).clamp(5.5, MAX_CAMERA_RADIUS),
-        )
-    }
+    })
 }
 
 #[cfg(test)]
@@ -1344,26 +1435,6 @@ mod tests {
         assert_eq!(axial_cells(6).len(), 127);
         let unique: BTreeSet<_> = axial_cells(6).into_iter().collect();
         assert_eq!(unique.len(), 127);
-    }
-
-    #[test]
-    fn active_level_grid_omits_occupied_pick_cells() {
-        let Ok(style) = VoxelStyleId::new("test/opaque") else {
-            unreachable!("fixture style id should be valid")
-        };
-        let occupied_cell = LocalVoxelCoord::new(0, 0, 3);
-        let occupied = BTreeMap::from([(occupied_cell, style)]);
-        let content = ViewportContent {
-            grid_radius: 1,
-            active_level: 3,
-            show_grid: true,
-            ..default()
-        };
-
-        let grid = desired_grid_cells(&content, ViewportMode::Object, &occupied);
-
-        assert_eq!(grid.len(), 6);
-        assert!(!grid.contains(&occupied_cell));
     }
 
     #[test]
@@ -1413,6 +1484,51 @@ mod tests {
                 style: repainted_style,
             })]
         );
+    }
+
+    #[test]
+    fn active_level_grid_omits_occupied_pick_cells() {
+        let Ok(style) = VoxelStyleId::new("test/opaque") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let occupied_cell = LocalVoxelCoord::new(0, 0, 3);
+        let occupied = BTreeMap::from([(occupied_cell, style)]);
+        let content = ViewportContent {
+            grid_radius: 1,
+            active_level: 3,
+            show_grid: true,
+            ..default()
+        };
+
+        let grid = desired_grid_cells(&content, ViewportMode::Object, &occupied);
+
+        assert_eq!(grid.len(), 6);
+        assert!(!grid.contains(&occupied_cell));
+    }
+
+    #[test]
+    fn blocker_overlay_stays_above_the_highest_visible_voxel() {
+        let Ok(style) = VoxelStyleId::new("test/opaque") else {
+            unreachable!("fixture style id should be valid")
+        };
+        let mut content = ViewportContent::default();
+        content.set_voxels(vec![
+            RenderedVoxel {
+                position: LocalVoxelCoord::new(0, 0, 1),
+                style: style.clone(),
+            },
+            RenderedVoxel {
+                position: LocalVoxelCoord::new(0, 0, 3),
+                style,
+            },
+        ]);
+        let center = blocker_overlay_center(&content, LocalAxialCoord::new(0, 0));
+        assert!((center.y - 1.68).abs() < 1e-5);
+
+        content.isolate_active_level = true;
+        content.active_level = 1;
+        let sliced = blocker_overlay_center(&content, LocalAxialCoord::new(0, 0));
+        assert!((sliced.y - 0.88).abs() < 1e-5);
     }
 
     #[test]

@@ -16,6 +16,11 @@ use hex_assets::{
 use serde::{Deserialize, Serialize};
 
 use crate::history::{HistoryError, SnapshotHistory};
+use crate::recovery::{
+    sanitized_selection, EditorRecoveryDraft, RawObjectDraft, RecoveryError, RecoverySanitization,
+};
+
+pub(crate) const CALIBRATION_OBJECT_ID: &str = "calibration/scene";
 
 /// The two authoring workspaces sharing one editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -238,9 +243,75 @@ impl EditorModel {
         })
     }
 
+    /// Captures all durable object-authoring state for crash recovery.
+    ///
+    /// Clipboard contents, undo/redo history, and an open transaction are
+    /// intentionally session-only and are not included.
+    #[must_use]
+    pub fn recovery_snapshot(&self) -> EditorRecoveryDraft {
+        let (saved_object, saved_object_is_checkpoint) = self.saved_object.as_ref().map_or_else(
+            || (RawObjectDraft::from_blueprint(&self.object), false),
+            |saved| (RawObjectDraft::from_blueprint(saved), true),
+        );
+        EditorRecoveryDraft {
+            object: RawObjectDraft::from_blueprint(&self.object),
+            saved_object,
+            saved_object_is_checkpoint,
+            mode: self.mode,
+            tool: self.tool,
+            preview_rig: self.preview_rig,
+            active_level: self.active_level,
+            active_style: self.active_style.clone(),
+            active_part: self.active_part,
+            selection: self.selection.cells.iter().copied().collect(),
+        }
+    }
+
+    /// Restores a potentially incomplete object-authoring draft from recovery.
+    ///
+    /// Production blueprint validation is deliberately deferred until an explicit
+    /// save. Selection cells that are no longer occupied are discarded, while
+    /// clipboard and history state restart empty.
+    pub fn from_recovery(
+        mut recovery: EditorRecoveryDraft,
+    ) -> Result<(Self, RecoverySanitization), RecoveryError> {
+        recovery.normalize_and_validate()?;
+        let EditorRecoveryDraft {
+            object,
+            saved_object,
+            saved_object_is_checkpoint,
+            mode,
+            tool,
+            preview_rig,
+            active_level,
+            active_style,
+            active_part,
+            selection,
+        } = recovery;
+        let object = object.into_blueprint();
+        let saved_object = saved_object_is_checkpoint.then(|| saved_object.into_blueprint());
+        let (selection, sanitization) = sanitized_selection(selection, &object);
+        Ok((
+            Self {
+                mode,
+                tool,
+                preview_rig,
+                active_level,
+                active_style,
+                active_part,
+                object,
+                selection: ObjectSelection { cells: selection },
+                clipboard: ObjectClipboard::default(),
+                saved_object,
+                history: SnapshotHistory::default(),
+            },
+            sanitization,
+        ))
+    }
+
     /// Builds the unsaved, in-memory scene shown when no authored object is open.
     pub fn calibration_scene() -> Result<Self, EditorModelError> {
-        let id = ObjectAssetId::new("calibration/scene")
+        let id = ObjectAssetId::new(CALIBRATION_OBJECT_ID)
             .map_err(|error| EditorModelError::new(error.to_string()))?;
         let style = VoxelStyleId::new("calibration/neutral")
             .map_err(|error| EditorModelError::new(error.to_string()))?;
@@ -388,9 +459,9 @@ impl EditorModel {
         let position = LocalVoxelCoord::new(0, 0, level);
         if !self.object.bounds.contains(position) {
             return Err(EditorModelError::new(format!(
-                "active level {level} lies outside levels {}..{}",
+                "active level {level} lies outside levels {}..={}; adjust Document > Authoring bounds",
                 self.object.bounds.min_level,
-                upper_level(self.object.bounds)
+                maximum_level(self.object.bounds)
             )));
         }
         self.active_level = level;
@@ -1195,23 +1266,37 @@ fn validate_bounds(bounds: ObjectBounds) -> Result<(), EditorModelError> {
     Ok(())
 }
 
-fn validate_position(
+pub(crate) fn validate_position(
     object: &ObjectBlueprint,
     position: LocalVoxelCoord,
 ) -> Result<(), EditorModelError> {
-    if !object.bounds.contains(position) {
+    let axial_radius = position.axial().radius();
+    if axial_radius > i64::from(object.bounds.radius) {
         return Err(EditorModelError::new(format!(
-            "cell {position:?} lies outside radius {} and levels {}..{}",
+            "cell {position:?} is outside authoring radius {}: axial radius {axial_radius} is above the maximum; increase Radius under Document > Authoring bounds",
             object.bounds.radius,
-            object.bounds.min_level,
-            upper_level(object.bounds)
         )));
     }
+
+    let level = i64::from(position.level);
+    let minimum = i64::from(object.bounds.min_level);
+    let maximum = maximum_level(object.bounds);
+    if level < minimum {
+        return Err(EditorModelError::new(format!(
+            "cell {position:?} is outside levels {minimum}..={maximum}: level {level} is below authoring minimum {minimum}; adjust Minimum level under Document > Authoring bounds"
+        )));
+    }
+    if level > maximum {
+        return Err(EditorModelError::new(format!(
+            "cell {position:?} is outside levels {minimum}..={maximum}: level {level} is above authoring maximum {maximum}; increase Height under Document > Authoring bounds"
+        )));
+    }
+
     Ok(())
 }
 
-fn upper_level(bounds: ObjectBounds) -> i64 {
-    i64::from(bounds.min_level) + i64::from(bounds.height)
+fn maximum_level(bounds: ObjectBounds) -> i64 {
+    i64::from(bounds.min_level) + i64::from(bounds.height) - 1
 }
 
 fn placement_at(object: &ObjectBlueprint, position: LocalVoxelCoord) -> Option<&ObjectPlacement> {
@@ -1545,6 +1630,27 @@ mod tests {
     }
 
     #[test]
+    fn recovery_preserves_the_absent_checkpoint_for_unsaved_documents() {
+        let mut editor = EditorModel::blank(
+            ObjectCategory::Effect,
+            ConnectivityPolicy::Free,
+            style_id("calibration/neutral"),
+        )
+        .expect("supported blank document should be valid");
+        let origin = editor.object().origin;
+        assert_eq!(editor.erase(origin), Ok(true));
+
+        let recovery = editor.recovery_snapshot();
+        assert!(!recovery.saved_object_is_checkpoint);
+        let (restored, sanitization) =
+            EditorModel::from_recovery(recovery).expect("recovery should restore");
+
+        assert_eq!(sanitization, RecoverySanitization::default());
+        assert!(restored.object().placements.is_empty());
+        assert!(restored.is_dirty());
+    }
+
+    #[test]
     fn metadata_edits_are_validated_and_undoable() {
         let mut editor = editor();
         assert_eq!(editor.set_display_name("Young Oak"), Ok(true));
@@ -1583,6 +1689,48 @@ mod tests {
             })
             .is_err());
         assert_eq!(editor.object().display_name, "Calibration Scene");
+    }
+
+    #[test]
+    fn authoring_bounds_accept_exact_edges_and_report_each_exceeded_dimension() {
+        let mut editor = editor();
+        let bounds = ObjectBounds {
+            radius: 3,
+            min_level: -2,
+            height: 8,
+        };
+        assert_eq!(editor.set_bounds(bounds), Ok(true));
+
+        for position in [
+            LocalVoxelCoord::new(0, 3, -2),
+            LocalVoxelCoord::new(0, 3, 5),
+        ] {
+            assert_eq!(validate_position(editor.object(), position), Ok(()));
+        }
+
+        let below = validate_position(editor.object(), LocalVoxelCoord::new(0, 3, -3))
+            .expect_err("the level below the inclusive minimum must be rejected");
+        assert!(below.message().contains("level -3"));
+        assert!(below.message().contains("below authoring minimum -2"));
+        assert!(below.message().contains("levels -2..=5"));
+        assert!(below.message().contains("Document > Authoring bounds"));
+
+        let above = validate_position(editor.object(), LocalVoxelCoord::new(0, 3, 6))
+            .expect_err("the level above the inclusive maximum must be rejected");
+        assert!(above.message().contains("level 6"));
+        assert!(above.message().contains("above authoring maximum 5"));
+        assert!(above.message().contains("levels -2..=5"));
+        assert!(above.message().contains("Document > Authoring bounds"));
+
+        let outside_radius = validate_position(editor.object(), LocalVoxelCoord::new(0, 4, 0))
+            .expect_err("the cell beyond the inclusive axial radius must be rejected");
+        assert!(outside_radius
+            .message()
+            .contains("outside authoring radius 3"));
+        assert!(outside_radius.message().contains("axial radius 4"));
+        assert!(outside_radius
+            .message()
+            .contains("Document > Authoring bounds"));
     }
 
     #[test]

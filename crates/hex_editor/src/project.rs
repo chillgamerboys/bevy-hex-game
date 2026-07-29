@@ -17,12 +17,18 @@ use hex_assets::{
     VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::xxh3_64;
 
 const ART_PATH: &str = "assets/art";
 const PALETTE_FILE: &str = "palette.ron";
 const STYLE_FILE: &str = "voxel_styles.ron";
 const OBJECT_DIRECTORY: &str = "objects";
+const OBJECT_CATEGORIES: [ObjectCategory; 3] = [
+    ObjectCategory::Plant,
+    ObjectCategory::Effect,
+    ObjectCategory::Prop,
+];
 
 /// One object affected by a shared style or swatch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +66,24 @@ pub struct ExternalAssetChange {
     pub path: PathBuf,
     /// Nature of the byte-level change.
     pub kind: ExternalChangeKind,
+}
+
+/// Stable byte identity of one tracked source at a recovery checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ByteRevision {
+    /// Exact source byte count.
+    pub byte_len: u64,
+    /// Stable XXH3 digest of the complete source bytes.
+    pub fingerprint: u64,
+}
+
+/// Complete tracked art-source identity stored with a recovery draft.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectRevisionSet {
+    /// Revisions keyed by normalized `assets/art`-relative path.
+    pub files: BTreeMap<String, ByteRevision>,
 }
 
 /// Actionable failure from loading or persisting an asset project.
@@ -216,6 +240,21 @@ impl AssetProject {
         Ok(compare_sources(&self.loaded_sources, &current))
     }
 
+    /// Captures the exact loaded byte revisions for crash-recovery conflict checks.
+    #[must_use]
+    pub fn revision_snapshot(&self) -> ProjectRevisionSet {
+        revision_set_from_sources(&self.loaded_sources)
+    }
+
+    /// Validates proposed catalogs against every currently tracked object.
+    pub(crate) fn validate_catalogs(
+        &self,
+        palette: &ArtPalette,
+        styles: &VoxelStyleCatalog,
+    ) -> Result<(), ProjectError> {
+        validate_graph(palette, styles, &self.objects)
+    }
+
     /// Discards the loaded project snapshot and reloads the complete art graph.
     pub fn reload_from_disk(&mut self) -> Result<(), ProjectError> {
         *self = Self::load(&self.repository_root)?;
@@ -282,26 +321,28 @@ impl AssetProject {
 
         if palette_first {
             let palette_source = write_ron_atomically(&palette_path, &palette, AllowOverwrite)?;
-            if let Err(error) = write_ron_atomically(&style_path, &styles, AllowOverwrite) {
-                return Err(with_rollback(
-                    error,
-                    write_bytes_atomically(&palette_path, &old_palette_source, AllowOverwrite),
-                    "palette",
-                ));
-            }
+            let style_source =
+                write_ron_atomically(&style_path, &styles, AllowOverwrite).map_err(|error| {
+                    with_rollback(
+                        error,
+                        write_bytes_atomically(&palette_path, &old_palette_source, AllowOverwrite),
+                        "palette",
+                    )
+                })?;
             self.record_written_source(&palette_path, palette_source)?;
-            self.record_serialized_source(&style_path, &styles)?;
+            self.record_written_source(&style_path, style_source)?;
         } else if styles_first {
             let style_source = write_ron_atomically(&style_path, &styles, AllowOverwrite)?;
-            if let Err(error) = write_ron_atomically(&palette_path, &palette, AllowOverwrite) {
-                return Err(with_rollback(
-                    error,
-                    write_bytes_atomically(&style_path, &old_style_source, AllowOverwrite),
-                    "voxel styles",
-                ));
-            }
+            let palette_source = write_ron_atomically(&palette_path, &palette, AllowOverwrite)
+                .map_err(|error| {
+                    with_rollback(
+                        error,
+                        write_bytes_atomically(&style_path, &old_style_source, AllowOverwrite),
+                        "voxel styles",
+                    )
+                })?;
             self.record_written_source(&style_path, style_source)?;
-            self.record_serialized_source(&palette_path, &palette)?;
+            self.record_written_source(&palette_path, palette_source)?;
         } else {
             return Err(ProjectError::new(
                 "save art catalogs",
@@ -365,7 +406,8 @@ impl AssetProject {
         new_id: ObjectAssetId,
     ) -> Result<(), ProjectError> {
         self.ensure_catalog_sources_unchanged("save object as")?;
-        if self.objects.contains_key(&new_id) {
+        let mut refreshed = Self::load(&self.repository_root)?;
+        if refreshed.objects.contains_key(&new_id) {
             return Err(ProjectError::new(
                 "save object as",
                 None,
@@ -373,7 +415,7 @@ impl AssetProject {
             ));
         }
         blueprint.id = new_id.clone();
-        let path = object_path(&self.art_root, &blueprint)?;
+        let path = object_path(&refreshed.art_root, &blueprint)?;
         if path
             .try_exists()
             .map_err(|error| ProjectError::at("inspect Save As destination", &path, error))?
@@ -385,12 +427,13 @@ impl AssetProject {
             ));
         }
 
-        let mut objects = self.objects.clone();
+        let mut objects = refreshed.objects.clone();
         drop(objects.insert(new_id, blueprint.clone()));
-        validate_graph(&self.palette, &self.styles, &objects)?;
+        validate_graph(&refreshed.palette, &refreshed.styles, &objects)?;
         let source = write_ron_atomically(&path, &blueprint, DisallowOverwrite)?;
-        self.record_written_source(&path, source)?;
-        self.objects = objects;
+        refreshed.record_written_source(&path, source)?;
+        refreshed.objects = objects;
+        *self = refreshed;
         Ok(())
     }
 
@@ -549,14 +592,6 @@ impl AssetProject {
         Ok(())
     }
 
-    fn record_serialized_source<T: Serialize>(
-        &mut self,
-        path: &Path,
-        value: &T,
-    ) -> Result<(), ProjectError> {
-        self.record_written_source(path, pretty_ron(value)?.into_bytes())
-    }
-
     fn remove_written_source(&mut self, path: &Path) -> Result<(), ProjectError> {
         let key = relative_art_path(&self.art_root, path)?;
         drop(self.loaded_sources.remove(&key));
@@ -566,11 +601,7 @@ impl AssetProject {
 
 fn load_objects(art_root: &Path) -> Result<BTreeMap<ObjectAssetId, ObjectBlueprint>, ProjectError> {
     let mut objects = BTreeMap::new();
-    for category in [
-        ObjectCategory::Plant,
-        ObjectCategory::Effect,
-        ObjectCategory::Prop,
-    ] {
+    for category in OBJECT_CATEGORIES {
         let directory = art_root
             .join(OBJECT_DIRECTORY)
             .join(category_directory(category));
@@ -842,11 +873,7 @@ fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Proje
         }
     }
 
-    for category in [
-        ObjectCategory::Plant,
-        ObjectCategory::Effect,
-        ObjectCategory::Prop,
-    ] {
+    for category in OBJECT_CATEGORIES {
         let relative_directory = PathBuf::from(OBJECT_DIRECTORY).join(category_directory(category));
         let directory = art_root.join(&relative_directory);
         if !directory
@@ -887,6 +914,113 @@ fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Proje
         }
     }
     Ok(sources)
+}
+
+/// Reads the exact current byte revisions below a repository's tracked art tree.
+///
+/// This intentionally shares the same source discovery as project loading and
+/// external-change detection so capture transactions cannot omit a source that
+/// either of those paths considers authoritative.
+pub(crate) fn current_project_revisions(
+    repository_root: &Path,
+) -> Result<ProjectRevisionSet, ProjectError> {
+    let sources = scan_art_sources(&repository_root.join(ART_PATH))?;
+    Ok(revision_set_from_sources(&sources))
+}
+
+/// Reads the exact byte revision of one repository-relative renderer source.
+pub(crate) fn current_file_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<ByteRevision, ProjectError> {
+    current_file_bytes_and_revision(repository_root, relative_path).map(|(_, revision)| revision)
+}
+
+/// Reads one repository-relative renderer source and its exact byte revision.
+pub(crate) fn current_file_bytes_and_revision(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(Vec<u8>, ByteRevision), ProjectError> {
+    let path = repository_root.join(relative_path);
+    let source =
+        fs::read(&path).map_err(|error| ProjectError::at("read renderer source", &path, error))?;
+    let revision = byte_revision(&source);
+    Ok((source, revision))
+}
+
+/// Copies a renderer source to an immutable, content-addressed AssetServer path.
+pub(crate) fn cache_renderer_source(
+    repository_root: &Path,
+    relative_path: &Path,
+) -> Result<(String, ByteRevision), ProjectError> {
+    let (source, revision) = current_file_bytes_and_revision(repository_root, relative_path)?;
+    let extension = relative_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("bin");
+    let asset_relative = format!(
+        ".asset-workshop-cache/renderer-{}-{:016x}.{extension}",
+        revision.byte_len, revision.fingerprint
+    );
+    let destination = repository_root.join("assets").join(&asset_relative);
+    let parent = destination.parent().ok_or_else(|| {
+        ProjectError::at(
+            "prepare renderer cache",
+            &destination,
+            "destination has no parent directory",
+        )
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|error| ProjectError::at("create renderer cache", parent, error))?;
+
+    if destination.exists() {
+        let cached = fs::read(&destination)
+            .map_err(|error| ProjectError::at("read renderer cache", &destination, error))?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "content-addressed cache path contains different bytes",
+            ));
+        }
+    } else if let Err(write_error) =
+        AtomicFile::new(&destination, DisallowOverwrite).write(|file| file.write_all(&source))
+    {
+        let cached = fs::read(&destination).map_err(|read_error| {
+            ProjectError::at(
+                "write renderer cache",
+                &destination,
+                format!(
+                    "atomic write failed ({write_error}); reading a possible concurrent result also failed ({read_error})"
+                ),
+            )
+        })?;
+        if cached != source {
+            return Err(ProjectError::at(
+                "verify renderer cache",
+                &destination,
+                "concurrent cache writer produced different bytes",
+            ));
+        }
+    }
+
+    Ok((asset_relative, revision))
+}
+
+fn byte_revision(source: &[u8]) -> ByteRevision {
+    ByteRevision {
+        byte_len: u64::try_from(source.len()).unwrap_or(u64::MAX),
+        fingerprint: xxh3_64(source),
+    }
+}
+
+fn revision_set_from_sources(sources: &BTreeMap<PathBuf, Vec<u8>>) -> ProjectRevisionSet {
+    ProjectRevisionSet {
+        files: sources
+            .iter()
+            .map(|(path, source)| (normalized_relative_path(path), byte_revision(source)))
+            .collect(),
+    }
 }
 
 fn compare_sources(
@@ -954,8 +1088,15 @@ fn relative_art_path(art_root: &Path, path: &Path) -> Result<PathBuf, ProjectErr
         .map_err(|error| ProjectError::at("resolve art source path", path, error))
 }
 
+fn normalized_relative_path(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use hex_assets::{
@@ -969,12 +1110,12 @@ mod tests {
 
     static TEST_DIRECTORY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory {
+    pub(crate) struct TestDirectory {
         path: PathBuf,
     }
 
     impl TestDirectory {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let sequence = TEST_DIRECTORY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
                 "hex-editor-project-test-{}-{sequence}",
@@ -984,7 +1125,11 @@ mod tests {
             Self { path }
         }
 
-        fn art_root(&self) -> PathBuf {
+        pub(crate) fn repository_root(&self) -> &Path {
+            &self.path
+        }
+
+        pub(crate) fn art_root(&self) -> PathBuf {
             self.path.join(ART_PATH)
         }
     }
@@ -1007,7 +1152,7 @@ mod tests {
         ObjectAssetId::new(value).expect("test object id should be valid")
     }
 
-    fn fixture_catalog() -> VoxelStyleCatalog {
+    pub(crate) fn fixture_catalog() -> VoxelStyleCatalog {
         let mut styles = BTreeMap::new();
         styles.insert(
             style_id("plant/trunk"),
@@ -1053,6 +1198,29 @@ mod tests {
         }
     }
 
+    fn prop(id: &str, display_name: &str) -> ObjectBlueprint {
+        ObjectBlueprint {
+            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
+            id: object_id(id),
+            display_name: display_name.to_owned(),
+            category: ObjectCategory::Prop,
+            bounds: ObjectBounds {
+                radius: 1,
+                min_level: 0,
+                height: 2,
+            },
+            connectivity: ConnectivityPolicy::Grounded,
+            origin: LocalVoxelCoord::new(0, 0, 0),
+            placements: vec![ObjectPlacement {
+                position: LocalVoxelCoord::new(0, 0, 0),
+                style: style_id("plant/trunk"),
+                part: ObjectPart::Prop(PropPart::Structure),
+            }],
+            blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
+            canopy_occluders: Vec::new(),
+        }
+    }
+
     fn floating_effect(id: &str, display_name: &str) -> ObjectBlueprint {
         let origin = LocalVoxelCoord::new(0, 0, -2);
         ObjectBlueprint {
@@ -1084,30 +1252,7 @@ mod tests {
         }
     }
 
-    fn prop(id: &str, display_name: &str) -> ObjectBlueprint {
-        ObjectBlueprint {
-            schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
-            id: object_id(id),
-            display_name: display_name.to_owned(),
-            category: ObjectCategory::Prop,
-            bounds: ObjectBounds {
-                radius: 1,
-                min_level: 0,
-                height: 2,
-            },
-            connectivity: ConnectivityPolicy::Grounded,
-            origin: LocalVoxelCoord::new(0, 0, 0),
-            placements: vec![ObjectPlacement {
-                position: LocalVoxelCoord::new(0, 0, 0),
-                style: style_id("plant/trunk"),
-                part: ObjectPart::Prop(PropPart::Structure),
-            }],
-            blocker_footprint: vec![LocalAxialCoord::new(0, 0)],
-            canopy_occluders: Vec::new(),
-        }
-    }
-
-    fn prepare_project() -> TestDirectory {
+    pub(crate) fn prepare_project() -> TestDirectory {
         let directory = TestDirectory::new();
         let art_root = directory.art_root();
         fs::create_dir_all(&art_root).expect("fixture art directory should be created");
@@ -1541,6 +1686,78 @@ mod tests {
     }
 
     #[test]
+    fn current_project_revisions_track_exact_on_disk_bytes() {
+        let directory = prepare_project();
+        let project = AssetProject::load(&directory.path).expect("project should load");
+        let loaded = project.revision_snapshot();
+        assert_eq!(
+            current_project_revisions(&directory.path)
+                .expect("unchanged tracked sources should scan"),
+            loaded
+        );
+
+        let palette_path = directory.art_root().join(PALETTE_FILE);
+        let mut modified = fs::read(&palette_path).expect("palette should be readable");
+        let byte = modified
+            .first_mut()
+            .expect("fixture palette should contain source bytes");
+        *byte = byte.wrapping_add(1);
+        fs::write(&palette_path, modified).expect("equal-length edit should be written");
+
+        let current = current_project_revisions(&directory.path)
+            .expect("modified tracked sources should scan");
+        let loaded_palette = loaded
+            .files
+            .get(PALETTE_FILE)
+            .expect("loaded revisions should include the palette");
+        let current_palette = current
+            .files
+            .get(PALETTE_FILE)
+            .expect("current revisions should include the palette");
+        assert_eq!(current_palette.byte_len, loaded_palette.byte_len);
+        assert_ne!(current_palette.fingerprint, loaded_palette.fingerprint);
+    }
+
+    #[test]
+    fn renderer_cache_is_content_addressed_and_preserves_the_loaded_bytes() {
+        let directory = TestDirectory::new();
+        let source_path = Path::new("assets/meshes/hex.glb");
+        let absolute_source = directory.repository_root().join(source_path);
+        fs::create_dir_all(
+            absolute_source
+                .parent()
+                .expect("renderer source should have a parent"),
+        )
+        .expect("mesh directory should be created");
+        fs::write(&absolute_source, b"mesh version one").expect("mesh fixture should write");
+
+        let (asset_path, revision) =
+            cache_renderer_source(directory.repository_root(), source_path)
+                .expect("renderer source should be cached");
+        let cached_path = directory.repository_root().join("assets").join(asset_path);
+        assert_eq!(
+            fs::read(&cached_path).expect("cached mesh should be readable"),
+            b"mesh version one"
+        );
+        assert_eq!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("original mesh should remain readable")
+        );
+
+        fs::write(&absolute_source, b"mesh version two").expect("mesh fixture should change");
+        assert_ne!(
+            revision,
+            current_file_revision(directory.repository_root(), source_path)
+                .expect("changed mesh should remain readable")
+        );
+        assert_eq!(
+            fs::read(cached_path).expect("cached mesh should remain immutable"),
+            b"mesh version one"
+        );
+    }
+
+    #[test]
     fn same_length_external_object_edit_blocks_save_but_save_as_preserves_both() {
         let directory = prepare_project();
         let oak_path = write_object_fixture(&directory, &tree("plant/oak", "Oak"));
@@ -1579,11 +1796,18 @@ mod tests {
             .art_root()
             .join("objects/plant/local-oak.ron")
             .is_file());
+        assert_eq!(
+            project
+                .object(&object_id("plant/oak"))
+                .expect("refreshed external object should be indexed")
+                .display_name,
+            "Elm"
+        );
+        assert!(project.object(&object_id("plant/local-oak")).is_some());
         assert!(project
             .external_changes()
-            .expect("the source conflict should remain sticky")
-            .iter()
-            .any(|change| change.path == Path::new("objects/plant/oak.ron")));
+            .expect("successful Save As should refresh object sources")
+            .is_empty());
     }
 
     #[test]
