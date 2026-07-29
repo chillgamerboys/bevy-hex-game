@@ -173,7 +173,7 @@ time-of-day is available to those that opt in. The title screen shows the worksp
 version, sessions write a `hex_game.log` beside the executable (fresh per launch),
 and a panic hook puts the last words in it.
 
-The 2026-07-29 foundation inventory contains 1,362 tests: 1,337 ordinary tests in the
+The 2026-07-29 foundation inventory contains 1,363 tests: 1,338 ordinary tests in the
 complete all-feature workspace gate and 25 explicitly ignored stress/benchmark
 entries. The exact list, measurements, branch matrix, and exclusions are recorded in
 [foundation-hardening.md](foundation-hardening.md) rather than repeated as a brittle

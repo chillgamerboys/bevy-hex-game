@@ -4,11 +4,12 @@ Durable handoff for the July 2026 correctness, scalability, lifecycle, and CI cl
 This record describes the implemented playable slice. It does not turn unresolved
 design questions into code.
 
-> **Integration status, 2026-07-29:** the focused fixes and their targeted stress
-> gates are green and PR-stack propagation is settled. The three consecutive final
-> ordinary gates, final release/doc/static gates, scripted visual captures, and GitHub
-> platform checks are still in progress. Do not read this intermediate record as final
-> signoff.
+> **Integration status, 2026-07-29:** automated acceptance is complete for the
+> focused implementation: targeted correctness gates, the complete local
+> release-stress matrix, scripted visual walks, exact-final-tip ordinary triplicate,
+> PR-stack propagation, strict GitHub checks, coverage, deep checks, and all three
+> shipping platforms. PR #137 is the review boundary. Human presentation/play-feel
+> approval remains a separate mandatory signoff.
 
 ## Reference and scope
 
@@ -50,6 +51,12 @@ Trova97-owned branch that introduced the behavior.
 | `2ffb45d` | faction-authorized combat-log and pulse disclosure | 7 focused readout tests and strict all-feature game Clippy green |
 | `dc09492` | deterministic V2 Hills ordinary and release corpora | 134 ordinary semantic cases and 10,000-seed release corpus green |
 | `aae0c94` | align the sky test fixture with interpolation-aware dark handoff | 12 sky and 22 settings tests, strict Clippy, and preliminary full workspace gate green |
+| `ec887a9` | reconcile the implemented contracts, project status, and roadmap exclusions | Markdown links, diff checks, and focused code/doc gates green |
+| `4b5203c` | close audit documentation gaps and repair strict rustdoc links | warnings-denied workspace rustdoc green |
+| `d81adad` | execute isolated deep checks with one pinned nightly | isolated `hex_core` check, 117/1 scoped Miri, and Linux AddressSanitizer green |
+| `f55b818` | keep scripted casts on authorized anchors and make Party Trial routing atomic | all seven release walks, 176/176 steps and 37/37 captures green |
+| `1c14bcf` | keep branch-derived authored mountain peaks connected through protected carving | seed 6401 ordinary regression, fallback matrix, 390 `hex_map` tests, and corrected 30,000-map expanded corpus green |
+| `d9fc93c` | select the Windows LLVM linker for the exact release package and remove its platform-only dead-code warning | exact Windows package passes in 22m07s; local and all other code-tip GitHub gates green |
 
 ### Active PR stack
 
@@ -72,6 +79,13 @@ head after the final push.
 The #133 Forest failure was not “fixed” by changing the expected
 `left: 7, right: 4`. Generated output was bisected to the first behavioral divergence
 and the stitched Forest planner was isolated there.
+
+After the scope freeze, colleague-owned draft PR #136 (“Wave 6: Creator and Combat
+Lab”) appeared from head `56367cd`. It was inspected read-only and is not part of this
+integration graph. Five platform/quick jobs pass, while Clippy/tests fail because
+`review.rs` does not handle the newly added `Screen::CharacterCreator` and
+`Screen::CombatLab` variants. The owner must repair that draft before it is eligible
+to merge; no commits, pushes, or comments were made on it here.
 
 ### PR #135
 
@@ -158,7 +172,7 @@ All timings below are release-mode measurements on the primary Mac unless stated
 otherwise. They are regression evidence, not portable promises about another
 machine.
 
-The final inventory discovers 1,362 tests: 1,337 ordinary tests in the complete
+The final inventory discovers 1,363 tests: 1,338 ordinary tests in the complete
 all-feature workspace gate and 25 explicitly ignored stress/benchmark entries.
 
 ### AI decision matrix
@@ -231,17 +245,35 @@ fallback candidate. All cells are far below the p95 16.7 ms and worst 50 ms gate
 - Because the terrain-edit timing gate passes comfortably, the broad rebuild is
   retained for now rather than accepting a riskier partial-column rewrite. Churn
   remains a measured P2 optimization opportunity.
-- Seven release generator corpora now cover 923 deduplicated ordinary inputs and
-  pass. The original six covered 789 inputs in 15.13 s of test execution
-  (145.09 s including the first ThinLTO build); Mountains seed 52 was their only
-  fallback-pressure case and remained below 1%. The added V2 Hills corpus contributes
-  134 semantic cases.
-- A release V2 Hills run over 10,000 seeds produced zero invalid worlds, zero
-  fallbacks, and 10,000 unique fingerprints. Test execution took 63.594 s; the
-  first ThinLTO-inclusive command took 388.90 s.
-- The full 10,000-seed generator corpora are weekly/manual release jobs. They enforce
-  validity and each generator's existing fallback bound; their timings are trends,
-  not hardware-sensitive PR failures.
+- Seven ordinary generator corpora cover 923 deduplicated inputs. The original six
+  cover 789 inputs; the V2 Hills addition contributes 134 semantic cases. Mountains
+  seed 52 remains the only known ordinary fallback-pressure case and stays below 1%.
+- The complete weekly/manual release matrix passed after promoting one newly
+  discovered Mountains failure to an ordinary regression:
+
+| Corpus | Valid generated worlds | Existing fallback gate | Test time | Command wall |
+|---|---:|---:|---:|---:|
+| V1 Hills | 10,000/10,000; 10,000 unique fingerprints | 0 | 62.706 s | 267.930 s cold |
+| V2 Hills | 10,000/10,000; 10,000 unique fingerprints | 0 | 66.519 s | 68.279 s |
+| V2 Caves | 10,000/10,000 | <1% | 72.16 s | 254.568 s including shared build wait |
+| V2 Caves expanded | 10,000/10,000 | <1% | 82.64 s | 84.171 s |
+| V2 Mountains | 10,000/10,000 | <1% | 114.01 s | 115.511 s |
+| V2 Mountains expanded `(18,5)/(21,6)/(24,7)` | 30,000/30,000 | <1% for each 10,000-map setting | 634.43 s | 779.662 s including rebuild |
+| V2 Sky | 10,000/10,000 | <1% | 141.97 s | 143.469 s |
+| V3 Forest | 10,000/10,000 | <1% | 131.56 s | 312.10 s including shared build wait |
+| V3 Waterfall | 10,000/10,000 | <1% | 164.06 s | 165.56 s |
+
+The first expanded Mountains run failed after 16,401 valid maps at relief 21,
+six peaks, seed 6401: a branch summit survived selection while its attachment prefix
+crossed protected approach cells that carving later flattened. The peak selector now
+requires the authored prefix through a branch-derived summit to survive protected and
+route carving. Seed 6401 is an ordinary regression; the deterministic fallback is
+directly tested for all three expanded setting pairs. The shipped Mountains
+fingerprint is unchanged.
+
+Passing tests that expose only a fallback assertion substantiate the bound but do not
+emit the exact passing count; this is an observability limitation, not a missing gate.
+Corpus timings are trends rather than hardware-sensitive PR failures.
 
 ### Toolchain and CI
 
@@ -252,24 +284,49 @@ LLVM coverage artifacts for the headless domain crates. Weekly/manual workflows 
 release stress corpora, performance probes, Party Trial/stalemate soaks, scoped Miri,
 and supported Linux AddressSanitizer checks.
 
+The deep workflow uses `nightly-2026-07-29` explicitly despite the repository's
+stable toolchain file. Scoped Miri passed 117 tests with one ignored in 5m38.209s;
+the matching GitHub Miri and Linux AddressSanitizer jobs passed. An isolated
+`cargo check --package hex_core` prevents workspace feature unification from hiding
+missing direct features again.
+
+The first cold Windows exact-release job reached `hex_game`'s final ThinLTO link but
+the MSVC linker exceeded the 30-minute job ceiling. The corrected code tip selects the
+runner's preinstalled MSVC-compatible LLVM linker for that exact Cargo profile and
+records its version. This is a CI linker selection, not a weaker release build. The
+exact package then passed in 22m07s; Linux passed in 7m40s and macOS in 10m18s.
+
+GitHub cannot dispatch a newly introduced `workflow_dispatch` file until the workflow
+exists on the default branch. Therefore PR #137's full generator/stress workflow is
+locally reproduced by the complete release matrix above; its scheduled/manual GitHub
+entry becomes dispatchable after merge. Ordinary PR CI still runs 128 deterministic
+seeds per recipe plus every named regression seed.
+
 The stale MPL allowance is removed. Bevy/platform duplicate dependencies remain
 documented where they are intentional. No `__eh_frame` warning appeared in the full
-Party Trial links or PR #135's exact release game build. The foundation tip still
-receives its own exact shipping build in the final gate.
+Party Trial links, PR #135's exact release game build, or the foundation's local exact
+release build.
 
 ### Final gate ledger
 
-| Gate | Status |
-|---|---|
-| Focused AI/combat/perception/content/formation/lifecycle regressions | green |
-| Strict Clippy for the directly affected crates | green |
-| Full workspace format, deny, all-target/all-feature Clippy, warnings-denied docs, exact release game build | pending final integration tip |
-| Complete ordinary workspace gate, three consecutive runs | pending final integration tip |
-| Scripted walks and frame inspection | pending |
-| Foundation PR GitHub CI, coverage, platform packaging, stress, and deep checks | pending PR publication |
+| Gate | Command / evidence | Duration | Result |
+|---|---|---:|---|
+| Format | `cargo fmt --all --check` | 2.468 s | pass |
+| Dependency policy | `cargo deny check` | 5.336 s | pass; only documented Bevy/platform duplicates |
+| Strict workspace lint | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | 5.613 s warm | pass |
+| Documentation | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | 8.338 s warm | pass |
+| Shipping build | `cargo build --package hex_game --release` | 219.162 s | pass; no warning and no `__eh_frame` diagnostic |
+| Package isolation | `cargo check --package hex_core` | 0.898 s warm | pass |
+| Ordinary triplicate on the settled code tip | `cargo test --workspace --all-features` | 73.204 / 37.951 / 37.050 s | each pass: 1,338 ordinary, 25 ignored |
+| Scoped interpreter | pinned-nightly Miri over `hex_core`, `hex_lattice`, and `hex_ai` | 338.209 s | 117 pass, 1 ignored |
+| Release stress | nine generator workflow entries, AI/formation/perception/terrain probes, Party Trial 100×, and two 10,000-turn stalemates | generator timings above; soaks 8.619/4.266 s | pass after promoting Mountains seed 6401 |
+| Scripted visual walks | seven release-shaped scripts at 1280×720 | 271 s release build; walk steps watchdog-bounded | 176/176 steps, 37/37 captures, all non-black and inspected |
+| PR #137 code-tip GitHub gates | CI run `30490536448`; deep run `30490535873` | packages: Linux 7m40s, macOS 10m18s, Windows 22m07s | quick, strict tests/docs, coverage/timing artifacts, three exact packages, pinned Miri, and Linux ASan pass |
 
-The final handoff must replace every pending row with a command, duration, and result.
-No final “solid foundation” claim is valid while one remains pending.
+The final Markdown-only handoff commit is followed by the same complete ordinary
+triplicate and all PR checks without changing tracked files. Their exact-tip results
+are recorded in the PR closeout because recording them in this file would itself
+create a new untested tip.
 
 ## Project-goal divergence
 
@@ -338,15 +395,19 @@ separate mandatory line item.
 3. **P2 — remaining perception adapters:** unknown-frontier movement, engagement,
    ordinary attack targeting, and lost-contact search must consume the same faction
    authority already used by AI/casting.
-4. **P3 — V3 stress completion:** retain the proven Forest feature contract and run
-   the full release generator corpora, including the Fort fixed corpus intentionally
-   skipped by the propagated branch's broad ordinary gate.
-5. **P3 — intentional dependency/platform debt:** revisit documented Bevy/platform
+4. **P3 — active-branch Fort stress:** retain the proven Forest feature contract and
+   run the Fort fixed release corpus on its owning active branch before that branch
+   joins `dev`; Fort is not part of the foundation tip's generator inventory.
+5. **P3 — stress observability:** emit exact passing fallback counts and fingerprint
+   diversity from Caves, Mountains, Sky, Forest, and Waterfall corpora rather than
+   exposing only their enforced `<1%` assertions.
+6. **P3 — intentional dependency/platform debt:** revisit documented Bevy/platform
    duplicates and feature trimming during the budgeted Bevy 0.20 window; do not churn
    them without an actionable build or binary-size result.
-6. **Design backlog, unranked as defects:** rout/surrender, unit obstruction,
+7. **Design backlog, unranked as defects:** rout/surrender, unit obstruction,
    multi-hex occupancy, terrain magic, fog presentation, and balance need explicit
    design decisions and their own acceptance plans.
 
 There are no known unresolved P0 or P1 defects in the focused implementation at this
-snapshot. That statement remains conditional on the pending final gate ledger.
+snapshot. The mandatory human visual/play-feel verdict and the ranked P2/P3 items
+above are not represented as complete.
