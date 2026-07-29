@@ -4,9 +4,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::hills;
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
-use super::patch::PatchRecipeContext;
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::validate_patch_walker_seams;
 use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
@@ -84,21 +86,22 @@ impl V3Recipe for SkyRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let streams = patch.seed_streams(context.seed, context.candidate);
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.environment,
             self.level_height,
-            Some(SkyStreams {
-                ground_orientation: streams.stage("sky.ground.orientation"),
-                ground_centres: streams.stage("sky.ground.centres"),
-                island_centres: streams.stage("sky.island_centres"),
-                satellite: streams.stage("sky.satellite"),
-            }),
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Fatal(V3GenerationError::RecipeContract(format!(
+                "SkyIslands single-patch composition failed: {error:?}"
+            )))
+        })
     }
 
     fn validate(
@@ -145,13 +148,13 @@ impl V3Recipe for SkyRecipe {
                 "SkyIslands fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(
-            self.layout.clone(),
-            PatchId(0),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
             &self.settings,
             self.environment,
             self.level_height,
-            None,
+            PatchBuildMode::CanonicalFallback,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -161,6 +164,11 @@ impl V3Recipe for SkyRecipe {
                     .collect::<Vec<_>>()
                     .join("; "),
             )
+        })?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "SkyIslands fallback composition failed: {error:?}"
+            ))
         })
     }
 }
@@ -212,26 +220,29 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_plan(
-    layout: ResolvedLayoutPlan,
-    patch_id: PatchId,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
     settings: &V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
-    streams: Option<SkyStreams<'_>>,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let root_streams = mode.seed_streams(&patch);
+    let streams = root_streams.map(|streams| SkyStreams {
+        ground_orientation: streams.stage("sky.ground.orientation"),
+        ground_centres: streams.stage("sky.ground.centres"),
+        island_centres: streams.stage("sky.island_centres"),
+        satellite: streams.stage("sky.satellite"),
+    });
     let ground_streams =
         streams.map(|streams| (streams.ground_orientation, streams.ground_centres));
-    let mut plan = hills::construct_plan(
-        layout,
-        patch_id,
+    let mut plan = hills::construct_patch_with_streams(
+        patch,
         &settings.ground,
         environment,
         level_height,
         ground_streams,
     )?;
-    let patch = PatchRecipeContext::resolve(&plan.layout, patch_id)
-        .map_err(|error| vec![recipe_issue(error.to_string())])?;
     let mask = patch.mask().clone();
     let excluded = patch.protected_approaches();
     let mut ground_levels = BTreeMap::<HexCoord, Level>::new();
@@ -275,8 +286,8 @@ pub(crate) fn construct_plan(
         streams.map(|streams| streams.satellite),
     )?;
 
-    let primary_region = SpecialMovementRegion(patch_id.0.saturating_mul(2));
-    let satellite_region = SpecialMovementRegion(patch_id.0.saturating_mul(2).saturating_add(1));
+    let primary_region = SpecialMovementRegion(0);
+    let satellite_region = SpecialMovementRegion(1);
     let mut upper = BTreeMap::<HexCoord, UpperCell>::new();
     for coord in &primary_cells {
         let owner = centres
@@ -371,16 +382,25 @@ pub(crate) fn construct_plan(
                 interior: None,
             },
         );
-        let region = plan
-            .biome_regions
-            .values()
-            .next()
-            .copied()
-            .unwrap_or_default();
-        plan.biome_regions.insert(position, region);
+        plan.biome_regions.insert(position, patch.biome_region());
     }
-    plan.view_hint = sky_view_hint(plan.layout.grid_radius, upper_base, level_height)?;
-    Ok(plan)
+    plan.view_hint = sky_view_hint(patch.grid_radius(), upper_base, level_height)?;
+    let mut issues = validate_patch_walker_seams(&patch, &plan.volume);
+    issues.extend(
+        plan.validate_against(patch.layout())
+            .into_iter()
+            .map(|issue| {
+                recipe_issue(format!(
+                    "SkyIslands patch {:?} failed {:?}: {}",
+                    issue.patch, issue.code, issue.detail
+                ))
+            }),
+    );
+    if issues.is_empty() {
+        Ok(plan)
+    } else {
+        Err(issues)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

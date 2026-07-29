@@ -32,6 +32,8 @@ mod caves;
     reason = "Ring7 recipe integration consumes checked patch composition in the next PR"
 )]
 mod composition;
+#[cfg(test)]
+mod dry_patch_tests;
 mod fingerprint;
 mod forest;
 mod fort;

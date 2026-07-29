@@ -8,8 +8,11 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{HexCoord, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
-use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
-use super::seed::{SeedStream, SeedStreams};
+use super::composition::{compose_single_patch, GeneratedPatchPlan};
+use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams, WalkerSeamShape};
+use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
@@ -116,6 +119,7 @@ struct CrystalLightSite {
 struct PatchFrame {
     center: HexCoord,
     scale: i32,
+    max_entrance_inset: i32,
 }
 
 /// Runs the common eight-candidate selector for one V3 Caves world.
@@ -133,8 +137,8 @@ pub(crate) fn generate(
     let cave_settings = validate_recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
-    let patch = CavePatch::new(&layout, PatchId(0))?;
-    patch.validate_capacity(cave_settings)?;
+    let patch = PatchRecipeContext::resolve(&layout, PatchId(0))?;
+    validate_patch_capacity(&patch, cave_settings)?;
     run_recipe(
         &CavesRecipe {
             level_height,
@@ -174,24 +178,23 @@ impl V3Recipe for CavesRecipe {
                 ),
             ));
         }
-        let streams = SeedStreams::new(context.seed, context.candidate, PatchId(0).0);
-        let streams = CaveStreams {
-            orientation: streams.stage("caves.orientation"),
-            floors: streams.stage("caves.floors"),
-            clearances: streams.stage("caves.clearances"),
-            surface: streams.stage("caves.surface"),
-            materials: streams.stage("caves.materials"),
-            lights: streams.stage("caves.lights"),
-            light_kinds: streams.stage("caves.lights.visual.kind"),
-            light_rotations: streams.stage("caves.lights.visual.rotation"),
-        };
-        construct_plan(
-            self.layout.clone(),
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
+            .map_err(CandidateAttemptError::Fatal)?;
+        let fragment = construct_patch(
+            patch,
             &self.settings,
-            Some(streams),
             self.level_height,
+            PatchBuildMode::Candidate {
+                world_seed: context.seed,
+                candidate: context.candidate,
+            },
         )
-        .map_err(CandidateAttemptError::Rejected)
+        .map_err(CandidateAttemptError::Rejected)?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            CandidateAttemptError::Fatal(V3GenerationError::RecipeContract(format!(
+                "Caves single-patch composition failed: {error:?}"
+            )))
+        })
     }
 
     fn validate(
@@ -239,17 +242,27 @@ impl V3Recipe for CavesRecipe {
                 "Caves fallback radius disagrees with its resolved layout".to_owned(),
             ));
         }
-        construct_plan(self.layout.clone(), &self.settings, None, self.level_height).map_err(
-            |issues| {
-                V3GenerationError::RecipeContract(
-                    issues
-                        .into_iter()
-                        .map(|issue| issue.detail)
-                        .collect::<Vec<_>>()
-                        .join("; "),
-                )
-            },
+        let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
+        let fragment = construct_patch(
+            patch,
+            &self.settings,
+            self.level_height,
+            PatchBuildMode::CanonicalFallback,
         )
+        .map_err(|issues| {
+            V3GenerationError::RecipeContract(
+                issues
+                    .into_iter()
+                    .map(|issue| issue.detail)
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )
+        })?;
+        compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
+            V3GenerationError::RecipeContract(format!(
+                "Caves fallback composition failed: {error:?}"
+            ))
+        })
     }
 }
 
@@ -281,59 +294,97 @@ fn validate_recipe_settings(
     Ok(caves)
 }
 
-struct CavePatch<'a> {
-    layout: &'a ResolvedLayoutPlan,
-    patch_id: PatchId,
-    mask: &'a BTreeSet<HexCoord>,
-}
-
-impl<'a> CavePatch<'a> {
-    fn new(layout: &'a ResolvedLayoutPlan, patch_id: PatchId) -> Result<Self, V3GenerationError> {
-        let patch = layout.patches.get(&patch_id).ok_or_else(|| {
-            V3GenerationError::RecipeContract(format!("Caves layout has no patch {patch_id:?}"))
-        })?;
-        Ok(Self {
-            layout,
-            patch_id,
-            mask: &patch.mask,
+fn validate_patch_capacity(
+    patch: &PatchRecipeContext<'_>,
+    settings: &V3CavesSettings,
+) -> Result<(), V3GenerationError> {
+    let topology_mask = cave_topology_mask(patch);
+    let frame = context_patch_frame(patch, &topology_mask).map_err(recipe_issues_to_error)?;
+    let orientations: &[u8] = if patch.layout().kind == super::layout::LayoutKind::Single {
+        &[0]
+    } else {
+        &[0, 1, 2, 3, 4, 5]
+    };
+    let mut rejected = Vec::new();
+    let topology = orientations
+        .iter()
+        .find_map(|orientation| {
+            match build_topology(&topology_mask, frame, *orientation, settings, None) {
+                Ok(topology) => Some(topology),
+                Err(issues) => {
+                    rejected.push(format!(
+                        "orientation {orientation}: {}",
+                        issues
+                            .into_iter()
+                            .map(|issue| issue.detail)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                    None
+                }
+            }
         })
+        .ok_or_else(|| {
+            V3GenerationError::RecipeContract(format!(
+                "Caves footprint cannot fit the configured chamber network ({})",
+                rejected.join("; ")
+            ))
+        })?;
+    if topology.chamber_centres.len() != usize::from(settings.chamber_count) {
+        return Err(V3GenerationError::RecipeContract(
+            "Caves footprint cannot fit the configured chamber network".to_owned(),
+        ));
     }
-
-    fn validate_capacity(&self, settings: &V3CavesSettings) -> Result<(), V3GenerationError> {
-        if self.layout.kind != LayoutKind::Single {
-            return Err(V3GenerationError::RecipeUnavailable("Ring7"));
-        }
-        let frame = patch_frame(self.mask).map_err(recipe_issues_to_error)?;
-        let topology = build_topology(self.mask, frame, 0, settings, None, self.patch_id)
-            .map_err(recipe_issues_to_error)?;
-        if topology.chamber_centres.len() != usize::from(settings.chamber_count) {
-            return Err(V3GenerationError::RecipeContract(
-                "Caves footprint cannot fit the configured chamber network".to_owned(),
-            ));
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
-fn construct_plan(
-    layout: ResolvedLayoutPlan,
+pub(crate) fn construct_patch(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3CavesSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let streams = mode.seed_streams(&patch);
+    construct_patch_with_streams(
+        patch,
+        settings,
+        streams.map(|streams| CaveStreams {
+            orientation: streams.stage("caves.orientation"),
+            floors: streams.stage("caves.floors"),
+            clearances: streams.stage("caves.clearances"),
+            surface: streams.stage("caves.surface"),
+            materials: streams.stage("caves.materials"),
+            lights: streams.stage("caves.lights"),
+            light_kinds: streams.stage("caves.lights.visual.kind"),
+            light_rotations: streams.stage("caves.lights.visual.rotation"),
+        }),
+        level_height,
+    )
+}
+
+fn construct_patch_with_streams(
+    patch: PatchRecipeContext<'_>,
     settings: &V3CavesSettings,
     streams: Option<CaveStreams<'_>>,
     level_height: f32,
-) -> Result<GeneratedWorldPlan, Vec<WorldValidationIssue>> {
-    let patch_id = PatchId(0);
-    let patch = layout
-        .patches
-        .get(&patch_id)
-        .ok_or_else(|| vec![recipe_issue("Single Caves layout has no patch zero")])?;
-    let mask = patch.mask.clone();
-    let biome_region = patch.biome_region;
-    let frame = patch_frame(&mask)?;
-    let orientation = streams.map_or(0, |streams| {
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    validate_patch_capacity(&patch, settings)
+        .map_err(|error| vec![recipe_issue(error.to_string())])?;
+    let mask = patch.mask().clone();
+    let biome_region = patch.biome_region();
+    let topology_mask = cave_topology_mask(&patch);
+    let frame = context_patch_frame(&patch, &topology_mask)?;
+    let requested_orientation = streams.map_or(0, |streams| {
         u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
-    let topology = build_topology(&mask, frame, orientation, settings, streams, patch_id)?;
-    let surface_heights = build_surface_heights(&mask, settings, &topology, streams)?;
+    let (orientation, topology, surface_heights, seam_shape) = compatible_patch_geometry(
+        &patch,
+        &topology_mask,
+        frame,
+        requested_orientation,
+        settings,
+        streams,
+    )?;
     let ramp_levels: BTreeMap<_, _> = topology
         .entrance
         .rows
@@ -347,7 +398,7 @@ fn construct_plan(
         .copied()
         .filter(|coord| !ramp_levels.contains_key(coord))
         .collect();
-    let interior = InteriorRegionId(patch_id.0.saturating_add(1));
+    let interior = InteriorRegionId(1);
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
@@ -412,6 +463,7 @@ fn construct_plan(
         columns,
         surfaces,
     };
+    seam_shape.apply(&mut volume)?;
 
     let party = topology
         .entrance
@@ -467,15 +519,15 @@ fn construct_plan(
         .map(|surface| (surface, biome_region))
         .collect();
     let view_hint = cave_view_hint(
-        layout.grid_radius,
+        patch.grid_radius(),
         level_height,
         settings.surface_level,
         topology.frame,
         orientation,
     )?;
 
-    Ok(GeneratedWorldPlan {
-        layout,
+    let fragment = GeneratedPatchPlan {
+        patch_id: patch.id,
         volume,
         liquids: Default::default(),
         features: FeaturePlan::default(),
@@ -495,7 +547,84 @@ fn construct_plan(
         },
         anchors,
         view_hint,
-    })
+    };
+    let mut issues = validate_patch_walker_seams(&patch, &fragment.volume);
+    issues.extend(
+        fragment
+            .validate_against(patch.layout())
+            .into_iter()
+            .map(|issue| {
+                recipe_issue(format!(
+                    "Caves patch {:?} failed {:?}: {}",
+                    issue.patch, issue.code, issue.detail
+                ))
+            }),
+    );
+    if issues.is_empty() {
+        Ok(fragment)
+    } else {
+        Err(issues)
+    }
+}
+
+fn compatible_patch_geometry(
+    patch: &PatchRecipeContext<'_>,
+    topology_mask: &BTreeSet<HexCoord>,
+    frame: PatchFrame,
+    requested_orientation: u8,
+    settings: &V3CavesSettings,
+    streams: Option<CaveStreams<'_>>,
+) -> Result<(u8, CaveTopology, BTreeMap<HexCoord, i32>, WalkerSeamShape), Vec<WorldValidationIssue>>
+{
+    let mut last_issues = Vec::new();
+    for offset in 0..6 {
+        let orientation = requested_orientation.saturating_add(offset) % 6;
+        let topology = match build_topology(topology_mask, frame, orientation, settings, streams) {
+            Ok(topology) => topology,
+            Err(issues) => {
+                last_issues = issues;
+                continue;
+            }
+        };
+        let mut surface_heights =
+            match build_surface_heights(patch.mask(), settings, &topology, streams) {
+                Ok(heights) => heights,
+                Err(issues) => {
+                    last_issues = issues;
+                    continue;
+                }
+            };
+        let seam_shape = match shape_walker_seams(patch, &mut surface_heights) {
+            Ok(shape) => shape,
+            Err(issues) => {
+                last_issues = issues;
+                continue;
+            }
+        };
+        let ramp_conflicts = topology.entrance.rows.iter().flatten().any(|position| {
+            seam_shape.is_boundary(position.coord)
+                || seam_shape
+                    .required_surface(position.coord)
+                    .is_some_and(|required| required != *position)
+        });
+        let underground_seam_crossing = topology
+            .floor_levels
+            .keys()
+            .any(|coord| seam_shape.is_boundary(*coord));
+        if ramp_conflicts || underground_seam_crossing {
+            last_issues = vec![recipe_issue(format!(
+                "Caves orientation {orientation} overlaps a protected shared seam"
+            ))];
+            continue;
+        }
+        return Ok((orientation, topology, surface_heights, seam_shape));
+    }
+    if last_issues.is_empty() {
+        last_issues.push(recipe_issue(
+            "Caves found no entrance orientation compatible with its shared seams",
+        ));
+    }
+    Err(last_issues)
 }
 
 fn build_topology(
@@ -504,7 +633,6 @@ fn build_topology(
     orientation: u8,
     settings: &V3CavesSettings,
     streams: Option<CaveStreams<'_>>,
-    _patch_id: PatchId,
 ) -> Result<CaveTopology, Vec<WorldValidationIssue>> {
     let entrance = entrance_ramp(mask, frame, orientation, settings)?;
     let chamber_centres = chamber_centres(mask, frame, orientation, settings.chamber_count)?;
@@ -687,7 +815,19 @@ fn patch_frame(mask: &BTreeSet<HexCoord>) -> Result<PatchFrame, Vec<WorldValidat
             "Caves patch needs an effective radius of at least ten",
         )]);
     }
-    Ok(PatchFrame { center, scale })
+    Ok(PatchFrame {
+        center,
+        scale,
+        max_entrance_inset: 0,
+    })
+}
+
+fn cave_topology_mask(patch: &PatchRecipeContext<'_>) -> BTreeSet<HexCoord> {
+    let shared_boundary: BTreeSet<_> = patch
+        .shared_edges()
+        .flat_map(|edge| edge.boundary_pairs().into_iter().map(|(local, _)| local))
+        .collect();
+    patch.mask().difference(&shared_boundary).copied().collect()
 }
 
 fn chamber_centres(
@@ -753,6 +893,17 @@ fn chamber_tree_edges(count: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
+fn context_patch_frame(
+    patch: &PatchRecipeContext<'_>,
+    mask: &BTreeSet<HexCoord>,
+) -> Result<PatchFrame, Vec<WorldValidationIssue>> {
+    let mut frame = patch_frame(mask)?;
+    if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+        frame.max_entrance_inset = 4;
+    }
+    Ok(frame)
+}
+
 fn chamber_floor_levels(
     settings: &V3CavesSettings,
     count: usize,
@@ -792,39 +943,41 @@ fn entrance_ramp(
         .surface_level
         .checked_sub(settings.cave_floor_level)
         .ok_or_else(|| vec![recipe_issue("Caves entrance descent underflowed")])?;
-    let start = frame.scale.saturating_neg();
-    let rows = (0..=descent)
-        .map(|step| {
-            let y = start.saturating_add(step);
-            let level = settings.surface_level.saturating_sub(step);
-            [
-                TilePos::new(
-                    translate(
-                        frame.center,
-                        rotate(HexCoord::from_axial(0, y), orientation),
+    for inset in 0..=frame.max_entrance_inset {
+        let start = frame.scale.saturating_neg().saturating_add(inset);
+        let rows = (0..=descent)
+            .map(|step| {
+                let y = start.saturating_add(step);
+                let level = settings.surface_level.saturating_sub(step);
+                [
+                    TilePos::new(
+                        translate(
+                            frame.center,
+                            rotate(HexCoord::from_axial(0, y), orientation),
+                        ),
+                        level,
                     ),
-                    level,
-                ),
-                TilePos::new(
-                    translate(
-                        frame.center,
-                        rotate(HexCoord::from_axial(1, y), orientation),
+                    TilePos::new(
+                        translate(
+                            frame.center,
+                            rotate(HexCoord::from_axial(1, y), orientation),
+                        ),
+                        level,
                     ),
-                    level,
-                ),
-            ]
-        })
-        .collect::<Vec<_>>();
-    if rows
-        .iter()
-        .flatten()
-        .any(|position| !mask.contains(&position.coord))
-    {
-        return Err(vec![recipe_issue(
-            "Caves entrance ramp escaped the patch mask",
-        )]);
+                ]
+            })
+            .collect::<Vec<_>>();
+        if rows
+            .iter()
+            .flatten()
+            .all(|position| mask.contains(&position.coord))
+        {
+            return Ok(CaveRoute { rows });
+        }
     }
-    Ok(CaveRoute { rows })
+    Err(vec![recipe_issue(
+        "Caves entrance ramp escaped the patch mask",
+    )])
 }
 
 fn paired_route(
@@ -1893,12 +2046,13 @@ fn cave_target_sets(
     settings: &V3CavesSettings,
     party: TilePos,
 ) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>), WorldValidationIssue> {
-    let patch_id = PatchId(0);
     let patch = plan
         .layout
         .patches
-        .get(&patch_id)
-        .ok_or_else(|| recipe_issue("Caves validation cannot find patch zero"))?;
+        .iter()
+        .next()
+        .map(|(_patch_id, patch)| patch)
+        .ok_or_else(|| recipe_issue("Caves validation cannot find its isolated patch"))?;
     let frame = patch_frame(&patch.mask).map_err(|issues| {
         issues
             .into_iter()
@@ -1907,7 +2061,7 @@ fn cave_target_sets(
     })?;
     let topology = (0..6)
         .filter_map(|orientation| {
-            build_topology(&patch.mask, frame, orientation, settings, None, patch_id).ok()
+            build_topology(&patch.mask, frame, orientation, settings, None).ok()
         })
         .find(|topology| {
             topology
