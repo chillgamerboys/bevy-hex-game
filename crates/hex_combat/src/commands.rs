@@ -24,7 +24,7 @@ use hex_anim::Transformation;
 use hex_assets::{PlayerSettings, SubstanceTable};
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, PendingDecision, Screen, TilePos, Turn,
+    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
 };
 use hex_units::{
     Body, Faction, Footing, HexPathingLine, MovingTo, Standing, StandsOn, UnitRegistry,
@@ -144,6 +144,7 @@ fn apply_commands(
     registry: Res<UnitRegistry>,
     settings: Option<Res<PlayerSettings>>,
     table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
     mut actors: ActorQuery,
 ) {
@@ -201,7 +202,7 @@ fn apply_commands(
                     drop_command(&issued, "no substance table to ground the path against");
                     continue;
                 };
-                let footing = Footing::from_tiles(tiles.iter(), table, *body);
+                let footing = Footing::from_tiles(tiles.iter(), table, *body, blockers.as_deref());
                 let Some(steps) = ground_path(path, standing.0, &footing) else {
                     drop_command(&issued, "path is not walkable from where the unit stands");
                     continue;
@@ -286,7 +287,7 @@ fn apply_commands(
                 };
                 // **Reach, not range.** Melee is the step rule both ways: an
                 // attacker five levels up must not acquire a two-hex punch.
-                let footing = Footing::from_tiles(tiles.iter(), table, *body);
+                let footing = Footing::from_tiles(tiles.iter(), table, *body, blockers.as_deref());
                 if !(footing.admits_step(standing.0.pos, target_standing.pos)
                     && footing.admits_step(target_standing.pos, standing.0.pos))
                 {

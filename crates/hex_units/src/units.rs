@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause, Screen,
-    SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
+    SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Standing};
@@ -322,6 +322,7 @@ fn on_tile_clicked(
     >,
     queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
 ) {
@@ -376,7 +377,7 @@ fn on_tile_clicked(
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
         // between right and wrong.
-        let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+        let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
         let Some(destination) = footing.at(*pos) else {
             continue;
         };
@@ -550,6 +551,7 @@ fn spawn_units(
     settings: Res<PlayerSettings>,
     scenario: Res<ScenarioSettings>,
     anchors: Option<Res<MapAnchors>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
@@ -562,7 +564,7 @@ fn spawn_units(
     // Both units share a body for now. When lattices land, size becomes a property of
     // the unit rather than a global setting, and this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
-    let footing = Footing::from_tiles(tiles.iter(), &table, body);
+    let footing = Footing::from_tiles(tiles.iter(), &table, body, blockers.as_deref());
 
     // Resolve the complete authored presentation contract before allocating materials
     // or actors. A missing second swatch must not leave a player-only session behind.

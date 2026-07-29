@@ -24,7 +24,8 @@ use hex_assets::{
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile,
-    IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, Turn, UnitId, MAX_HEADROOM,
+    IssuedCommand, Mode, PlayerSeat, Screen, SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
+    MAX_HEADROOM,
 };
 use hex_units::{route, Body, Faction, Footing, Standing, StandsOn, UnitRegistry};
 
@@ -215,6 +216,32 @@ fn an_exploring_move_flows_through_the_funnel() {
         standing_of(&mut app, player),
         Some(TilePos::new(destination, GROUND_LEVEL)),
         "the commanded walk should land"
+    );
+}
+
+#[test]
+fn command_grounding_rejects_generated_feature_blockers() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let destination = HexCoord::new_cubic(1, -1, 0);
+    let mut blockers = TraversalBlockers::new();
+    assert!(blockers.insert(TilePos::new(destination, GROUND_LEVEL)));
+    app.insert_resource(blockers);
+    enter_gameplay(&mut app);
+
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: path(&[HexCoord::ORIGIN, destination]),
+        },
+    );
+    settle(&mut app);
+
+    assert_eq!(
+        standing_of(&mut app, player),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL)),
+        "the authoritative applier must not ground a path through a tree root"
     );
 }
 
@@ -611,8 +638,12 @@ fn a_routed_path_grounds_and_applies() {
             .world_mut()
             .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
         let world = app.world();
-        let footing =
-            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body);
+        let footing = Footing::from_tiles(
+            tiles.iter(world),
+            world.resource::<SubstanceTable>(),
+            body,
+            None,
+        );
         let to = footing
             .at(TilePos::new(destination, GROUND_LEVEL))
             .expect("the destination is standable");

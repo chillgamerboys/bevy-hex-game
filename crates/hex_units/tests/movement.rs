@@ -31,7 +31,7 @@ use hex_assets::{Substance, SubstanceFile, SubstanceTable};
 use hex_core::{
     CommandQueue, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan,
     HexTile, MapAnchorId, MapAnchors, Mode, Pause, Screen, SubstanceId, TerrainReady, TilePos,
-    TraversalProfile, Turn, MAX_HEADROOM,
+    TraversalBlockers, TraversalProfile, Turn, MAX_HEADROOM,
 };
 use hex_units::{
     Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
@@ -76,6 +76,9 @@ const BODY_LEVELS: hex_core::Level = 2;
 /// obstacles, so the worst it could do is lengthen an unrelated test's path. Keeping
 /// the fixtures apart still means neither test can fail for the other's reason.
 const CRAWLSPACE: HexCoord = HexCoord::new_cubic(-2, 2, 0);
+
+/// A solid surface occupied by a generated tree feature.
+const TREE_ROOT: HexCoord = HexCoord::new_cubic(0, 1, -1);
 
 /// Where the enemy starts. Off both the crawlspace and the route the click-to-move
 /// test walks, so neither test can fail for the other's reason.
@@ -319,8 +322,12 @@ fn commit_move(app: &mut App) -> Option<()> {
         .query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
     let steps = {
         let world = app.world();
-        let footing =
-            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body);
+        let footing = Footing::from_tiles(
+            tiles.iter(world),
+            world.resource::<SubstanceTable>(),
+            body,
+            world.get_resource::<TraversalBlockers>(),
+        );
         path.iter()
             .map(|pos| footing.at(*pos))
             .collect::<Option<Vec<_>>>()?
@@ -1365,6 +1372,33 @@ fn clicking_water_does_not_move_the_player() {
     assert!(
         app.world().get_entity(before).is_ok(),
         "the player should not have been despawned"
+    );
+}
+
+#[test]
+fn clicking_a_generated_feature_blocker_emits_no_move() {
+    let mut app = test_app();
+    let mut blockers = TraversalBlockers::new();
+    assert!(blockers.insert(TilePos::new(TREE_ROOT, GROUND_LEVEL)));
+    app.insert_resource(blockers);
+    enter_gameplay(&mut app);
+
+    let mut tiles = app
+        .world_mut()
+        .query_filtered::<(Entity, &TilePos), With<HexTile>>();
+    let tree_root = tiles
+        .iter(app.world())
+        .find(|(_, pos)| pos.coord == TREE_ROOT && pos.level == GROUND_LEVEL)
+        .map(|(entity, _)| entity)
+        .expect("the fixture has solid terrain under the generated tree");
+
+    let window = app.world_mut().spawn(Window::default()).id();
+    click(&mut app, tree_root, window);
+    app.update();
+
+    assert!(
+        app.world().resource::<CommandQueue>().is_empty(),
+        "a click must not route the selected unit into a generated tree root"
     );
 }
 
