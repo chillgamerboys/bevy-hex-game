@@ -37,7 +37,8 @@ pub(super) fn apply(
     // would overwrite the open decision and silently erase the first one's damage.
     if ctx.pending.is_open() {
         let decider = match *ctx.pending {
-            hex_core::PendingDecision::ChooseDisables { decider, .. } => decider,
+            hex_core::PendingDecision::ChooseDisables { decider, .. }
+            | hex_core::PendingDecision::ChooseRestores { decider, .. } => decider,
             hex_core::PendingDecision::None => unit,
         };
         return Err(CommandRefusal::DecisionPending { decider });

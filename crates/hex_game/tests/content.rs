@@ -6,9 +6,11 @@
 //! It rebuilds the tables the same way the game does — parse each file, assign ids
 //! from sorted names, resolve across files — but headless, with no `App`.
 
+use hex_ai::AiProfileId;
 use hex_assets::{
-    ArtPalette, ContentIndex, Effect, ElementCatalog, ElementFile, Encounter, LatticeFile,
-    LatticeLibrary, SpellBook, SpellFile, SubstanceFile, SubstanceTable,
+    AiProfileCatalog, ArtPalette, ContentIndex, Effect, ElementCatalog, ElementFile, Encounter,
+    FormationCatalog, LatticeFile, LatticeLibrary, SpellBook, SpellFile, SubstanceFile,
+    SubstanceTable,
 };
 use hex_core::LatticeCoord;
 use hex_lattice::{castable, CellKind, LatticeState};
@@ -35,6 +37,44 @@ fn parse_palette() -> Result<ArtPalette, SpannedError> {
 
 fn parse_lattices() -> Result<LatticeFile, SpannedError> {
     ron::from_str(include_str!("../../../assets/config/lattices.ron"))
+}
+
+fn parse_ai_profiles() -> Result<AiProfileCatalog, SpannedError> {
+    ron::from_str(include_str!("../../../assets/config/ai_profiles.ron"))
+}
+
+fn parse_formations() -> Result<FormationCatalog, SpannedError> {
+    ron::from_str(include_str!("../../../assets/config/formations.ron"))
+}
+
+#[test]
+fn shipped_ai_and_formation_content_is_valid_and_cross_referenced() {
+    let profiles = parse_ai_profiles().expect("ai_profiles.ron parses and validates");
+    let formations = parse_formations().expect("formations.ron parses and validates");
+    assert_eq!(formations.presets.len(), 3);
+    for name in ["Compact", "Column", "Wedge"] {
+        assert!(formations.get(name).is_some(), "missing {name} formation");
+    }
+
+    let elements =
+        ElementCatalog::from_file(&parse_elements().expect("elements.ron parses and validates"));
+    let spells = SpellBook::from_file(&parse_spells().expect("spells.ron parses and validates"));
+    let library = LatticeLibrary::build(
+        &parse_lattices().expect("lattices.ron parses"),
+        &elements,
+        &spells,
+    )
+    .expect("shipped lattices resolve");
+    for (name, archetype) in library.iter() {
+        let profile = archetype
+            .ai_profile
+            .as_ref()
+            .unwrap_or_else(|| panic!("archetype {name:?} has no default AI profile"));
+        assert!(
+            profiles.get(&AiProfileId(profile.clone())).is_some(),
+            "archetype {name:?} references unknown AI profile {profile:?}"
+        );
+    }
 }
 
 /// Every spell a shipped archetype inscribes must actually be castable on a fresh
@@ -119,6 +159,7 @@ fn every_encounter_archetype_has_a_lattice() {
         &spells,
     )
     .expect("shipped lattices resolve");
+    let profiles = parse_ai_profiles().expect("ai_profiles.ron parses and validates");
 
     // Read the directory rather than listing files: `include_str!` cannot glob, so a
     // hardcoded list silently stops covering the fifth encounter somebody adds — and
@@ -151,6 +192,13 @@ fn every_encounter_archetype_has_a_lattice() {
                 encounter.name,
                 unit.archetype,
             );
+            if let Some(profile) = unit.ai_profile {
+                assert!(
+                    profiles.get(&AiProfileId(profile.to_owned())).is_some(),
+                    "encounter {:?} references unknown AI profile {profile:?}",
+                    encounter.name
+                );
+            }
             checked += 1;
         }
     }
@@ -302,6 +350,7 @@ fn an_area_spell_on_a_lattice_is_refused_while_the_applier_only_reaches_the_anch
         cells: entries,
         attunement: BTreeMap::from([("Fire".to_owned(), 3)]),
         channelling: BTreeMap::from([("Fire".to_owned(), 3)]),
+        ai_profile: None,
     };
 
     let mut file = LatticeFile {

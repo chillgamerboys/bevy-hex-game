@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::{InteriorRegionId, Level, TilePos, TraversalEndpoint};
 
@@ -135,7 +136,20 @@ impl Default for SightProfile {
 }
 
 /// How much a faction currently knows about an exact map position.
-#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Reflect,
+    Serialize,
+    Deserialize,
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+)]
 pub enum KnowledgeState {
     /// The faction has never observed the position.
     #[default]

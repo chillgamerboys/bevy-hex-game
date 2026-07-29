@@ -1,0 +1,37 @@
+(
+    presets: [
+        (
+            name: "Compact",
+            slots: [
+                (offset: (q: 0, r: 0), anchor: true),
+                (offset: (q: 1, r: 0), anchor: false),
+                (offset: (q: 1, r: -1), anchor: false),
+                (offset: (q: 0, r: -1), anchor: false),
+                (offset: (q: -1, r: 1), anchor: false),
+                (offset: (q: 0, r: 1), anchor: false),
+            ],
+        ),
+        (
+            name: "Column",
+            slots: [
+                (offset: (q: 0, r: 0), anchor: true),
+                (offset: (q: -1, r: 0), anchor: false),
+                (offset: (q: -2, r: 0), anchor: false),
+                (offset: (q: -3, r: 0), anchor: false),
+                (offset: (q: -4, r: 0), anchor: false),
+                (offset: (q: -5, r: 0), anchor: false),
+            ],
+        ),
+        (
+            name: "Wedge",
+            slots: [
+                (offset: (q: 0, r: 0), anchor: true),
+                (offset: (q: -1, r: 1), anchor: false),
+                (offset: (q: 0, r: -1), anchor: false),
+                (offset: (q: -2, r: 1), anchor: false),
+                (offset: (q: -1, r: 0), anchor: false),
+                (offset: (q: -1, r: -1), anchor: false),
+            ],
+        ),
+    ],
+)

@@ -31,6 +31,7 @@ use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::formation::PartyPath;
 use crate::hex::Sextant;
 use crate::lattice_ids::LatticeCoord;
 use crate::unit_ids::{PlayerSeat, UnitId};
@@ -58,6 +59,13 @@ pub enum GameCommand {
         unit: UnitId,
         /// Every surface in order, starting with the current one.
         path: Vec<TilePos>,
+    },
+    /// Move an exploration party as one atomic formation plan.
+    MoveParty {
+        /// Member assigned to the authored anchor slot.
+        anchor: UnitId,
+        /// Exact path for every participating party member.
+        paths: Vec<PartyPath>,
     },
     /// Swing at a target within melee reach.
     Strike {
@@ -121,6 +129,21 @@ pub enum GameCommand {
         #[serde(default)]
         cells: Vec<LatticeCoord>,
     },
+    /// Answer a restoration decision with exact disabled cells on one target.
+    ChooseRestores {
+        /// Caster who owns the decision.
+        unit: UnitId,
+        /// Unit whose disabled cells are restored.
+        target: UnitId,
+        /// Exact disabled cells to restore.
+        #[serde(default)]
+        cells: Vec<LatticeCoord>,
+    },
+    /// Fully recover the player party while exploring.
+    Rest {
+        /// Selected party member issuing the session command.
+        unit: UnitId,
+    },
 }
 
 impl GameCommand {
@@ -129,11 +152,14 @@ impl GameCommand {
     pub fn unit(&self) -> UnitId {
         match *self {
             Self::MoveAlong { unit, .. }
+            | Self::MoveParty { anchor: unit, .. }
             | Self::Strike { unit, .. }
             | Self::EndTurn { unit }
             | Self::Cast { unit, .. }
             | Self::Channel { unit }
-            | Self::ChooseDisables { unit, .. } => unit,
+            | Self::ChooseDisables { unit, .. }
+            | Self::ChooseRestores { unit, .. }
+            | Self::Rest { unit } => unit,
         }
     }
 }
@@ -197,11 +223,10 @@ impl CommandQueue {
     /// queued for the same unit, which is what asking the broader question would do.
     #[must_use]
     pub fn holds_answer_for(&self, unit: UnitId) -> bool {
-        self.queue.iter().any(|issued| {
-            matches!(
-                issued.command,
-                GameCommand::ChooseDisables { unit: named, .. } if named == unit
-            )
+        self.queue.iter().any(|issued| match issued.command {
+            GameCommand::ChooseDisables { unit: named, .. }
+            | GameCommand::ChooseRestores { unit: named, .. } => named == unit,
+            _ => false,
         })
     }
 
@@ -267,6 +292,15 @@ pub enum PendingDecision {
         /// Who dealt it. The combat log and presentation need it; the rules do not.
         source: UnitId,
     },
+    /// A caster must choose exact disabled cells to restore on a target.
+    ChooseRestores {
+        /// Caster who owns this decision.
+        decider: UnitId,
+        /// Unit receiving the restoration.
+        target: UnitId,
+        /// Exact number of disabled cells required.
+        count: u16,
+    },
 }
 
 impl PendingDecision {
@@ -281,7 +315,9 @@ impl PendingDecision {
     pub fn decider(&self) -> Option<UnitId> {
         match *self {
             Self::None => None,
-            Self::ChooseDisables { decider, .. } => Some(decider),
+            Self::ChooseDisables { decider, .. } | Self::ChooseRestores { decider, .. } => {
+                Some(decider)
+            }
         }
     }
 }
@@ -316,6 +352,13 @@ mod tests {
                 unit,
                 path: Vec::new(),
             },
+            GameCommand::MoveParty {
+                anchor: unit,
+                paths: vec![PartyPath {
+                    member: unit,
+                    path: Vec::new(),
+                }],
+            },
             GameCommand::Strike {
                 unit,
                 target: UnitId(9),
@@ -333,6 +376,12 @@ mod tests {
                 unit,
                 cells: vec![crate::LatticeCoord::new(0, 0)],
             },
+            GameCommand::ChooseRestores {
+                unit,
+                target: UnitId(9),
+                cells: vec![crate::LatticeCoord::new(0, 0)],
+            },
+            GameCommand::Rest { unit },
         ];
         for command in commands {
             assert_eq!(command.unit(), unit);
@@ -365,5 +414,13 @@ mod tests {
         };
         assert!(waiting.is_open());
         assert_eq!(waiting.decider(), Some(UnitId(2)));
+
+        let restoring = PendingDecision::ChooseRestores {
+            decider: UnitId(1),
+            target: UnitId(2),
+            count: 2,
+        };
+        assert!(restoring.is_open());
+        assert_eq!(restoring.decider(), Some(UnitId(1)));
     }
 }
