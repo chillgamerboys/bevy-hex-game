@@ -24,8 +24,8 @@ use super::volume::{
     FillMaterialRole, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeatureKind, GeneratedWorldPlan, PlannedGameplayLight, PlannedInterior, PlannedStructure,
-    StructureKind,
+    FeatureKind, FeaturePlan, GeneratedWorldPlan, PlannedGameplayLight, PlannedInterior,
+    PlannedStructure, StructureKind,
 };
 
 const SETTINGS_DOMAIN: &[u8] = b"bevy-hex-game/procedural-v3/settings";
@@ -205,7 +205,7 @@ pub(crate) fn semantic_plan_fingerprint(plan: &GeneratedWorldPlan) -> Result<u64
     encode_layout_plan(&mut encoder, &plan.layout)?;
     encode_volume_plan(&mut encoder, &plan.volume)?;
     encode_liquids(&mut encoder, &plan.liquids)?;
-    encode_features(&mut encoder, &plan.features.by_id)?;
+    encode_features(&mut encoder, &plan.features)?;
     encode_structures(&mut encoder, &plan.structures.by_id)?;
     encode_tile_set(&mut encoder, &plan.blockers)?;
     encode_lights(&mut encoder, &plan.lights)?;
@@ -599,18 +599,29 @@ fn encode_liquids(encoder: &mut FingerprintEncoder, liquids: &LiquidPlan) -> Res
     Ok(())
 }
 
-fn encode_features(
-    encoder: &mut FingerprintEncoder,
-    features: &std::collections::BTreeMap<super::world::FeatureId, super::world::PlannedFeature>,
-) -> Result<(), String> {
-    encoder.collection_count(features.len())?;
-    for (id, feature) in features {
+fn encode_features(encoder: &mut FingerprintEncoder, features: &FeaturePlan) -> Result<(), String> {
+    encoder.collection_count(features.by_id.len())?;
+    for (id, feature) in &features.by_id {
         encoder.u32(id.0);
         encoder.tile_pos(feature.root);
         encoder.tag(match feature.kind {
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
         });
+    }
+    encoder.collection_count(features.protected_routes.len())?;
+    for (name, route) in &features.protected_routes {
+        encoder.str(name)?;
+        encoder.collection_count(route.centerline.len())?;
+        for position in &route.centerline {
+            encoder.tile_pos(*position);
+        }
+        encode_tile_set(encoder, &route.surfaces)?;
+    }
+    encoder.collection_count(features.clearings.len())?;
+    for (name, clearing) in &features.clearings {
+        encoder.str(name)?;
+        encode_tile_set(encoder, &clearing.surfaces)?;
     }
     Ok(())
 }
@@ -742,7 +753,8 @@ mod tests {
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{LevelInterval, SolidMass, SurfaceMetadata, VolumeColumn};
     use crate::procedural_v3::world::{
-        FeatureId, FeaturePlan, InteriorPlan, LightId, PlannedFeature, StructureId, StructurePlan,
+        FeatureClearing, FeatureId, InteriorPlan, LightId, PlannedFeature, ProtectedFeatureRoute,
+        StructureId, StructurePlan,
     };
     use crate::settings::{
         CubeCoord, NamedOverlaySettings, PatchEdgeContractSettings, PatchEdgesSettings,
@@ -1372,5 +1384,105 @@ mod tests {
                 "mutating {name} must change semantic identity"
             );
         }
+    }
+
+    #[test]
+    fn semantic_identity_covers_named_feature_memberships() {
+        let baseline = compact_world();
+        let baseline_fingerprint =
+            semantic_plan_fingerprint(&baseline).expect("the baseline encodes");
+
+        let mut with_route = baseline.clone();
+        with_route.features.protected_routes.insert(
+            "main_route".to_owned(),
+            ProtectedFeatureRoute {
+                centerline: vec![TilePos::ORIGIN],
+                surfaces: BTreeSet::from([TilePos::ORIGIN]),
+            },
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&with_route).expect("the route plan encodes"),
+            baseline_fingerprint
+        );
+
+        let mut with_clearing = baseline.clone();
+        with_clearing.features.clearings.insert(
+            "meadow".to_owned(),
+            FeatureClearing {
+                surfaces: BTreeSet::from([TilePos::ORIGIN]),
+            },
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&with_clearing).expect("the clearing plan encodes"),
+            baseline_fingerprint
+        );
+        assert_ne!(
+            semantic_plan_fingerprint(&with_route).expect("the route plan encodes"),
+            semantic_plan_fingerprint(&with_clearing).expect("the clearing plan encodes")
+        );
+    }
+
+    #[test]
+    fn named_feature_membership_insertion_order_is_not_semantic() {
+        let first_position = TilePos::ORIGIN;
+        let second_position = TilePos::new(HexCoord::ORIGIN, 1);
+        let first_entries = [
+            (
+                "secondary".to_owned(),
+                ProtectedFeatureRoute {
+                    centerline: vec![second_position, first_position],
+                    surfaces: BTreeSet::from([second_position, first_position]),
+                },
+            ),
+            (
+                "primary".to_owned(),
+                ProtectedFeatureRoute {
+                    centerline: vec![first_position],
+                    surfaces: BTreeSet::from([first_position]),
+                },
+            ),
+        ];
+
+        let mut first = compact_world();
+        for (name, route) in first_entries.clone() {
+            first.features.protected_routes.insert(name, route);
+        }
+        let mut second = compact_world();
+        for (name, route) in first_entries.into_iter().rev() {
+            second.features.protected_routes.insert(name, route);
+        }
+
+        assert_eq!(
+            semantic_plan_fingerprint(&first).expect("the first plan encodes"),
+            semantic_plan_fingerprint(&second).expect("the second plan encodes")
+        );
+    }
+
+    #[test]
+    fn protected_route_centerline_order_is_semantic() {
+        let first_position = TilePos::ORIGIN;
+        let second_position = TilePos::new(HexCoord::ORIGIN, 1);
+        let surfaces = BTreeSet::from([first_position, second_position]);
+        let mut forward = compact_world();
+        forward.features.protected_routes.insert(
+            "road".to_owned(),
+            ProtectedFeatureRoute {
+                centerline: vec![first_position, second_position],
+                surfaces: surfaces.clone(),
+            },
+        );
+        let mut reverse = compact_world();
+        reverse.features.protected_routes.insert(
+            "road".to_owned(),
+            ProtectedFeatureRoute {
+                centerline: vec![second_position, first_position],
+                surfaces,
+            },
+        );
+
+        assert_ne!(
+            semantic_plan_fingerprint(&forward).expect("the forward route encodes"),
+            semantic_plan_fingerprint(&reverse).expect("the reverse route encodes")
+        );
     }
 }

@@ -13,8 +13,8 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    ForestMetrics as ForestReportMetrics, GenerationReport, ProceduralRecipeMetrics,
+    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -24,6 +24,7 @@ use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
 mod fingerprint;
+mod forest;
 #[expect(
     dead_code,
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
@@ -38,13 +39,6 @@ mod liquid;
 pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the seed API is consumed by sequential V3 recipe implementations"
-    )
-)]
 mod seed;
 #[cfg_attr(
     not(test),
@@ -67,6 +61,7 @@ mod waterfall;
     reason = "the complete semantic plan is consumed by the V3 selection runner"
 )]
 mod world;
+pub(crate) use world::{FeatureId, FeatureKind, PlannedFeature};
 
 /// Failure to construct or validate one V3 world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +160,10 @@ pub(crate) fn ensure_recipe_available(
 ) -> Result<(), V3GenerationError> {
     match &settings.layout {
         V3LayoutSettings::Single(patch)
-            if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
+            if matches!(
+                patch.recipe,
+                V3RecipeSettings::Waterfall(_) | V3RecipeSettings::Forest(_)
+            ) =>
         {
             Ok(())
         }
@@ -200,39 +198,50 @@ pub(crate) fn build(
     is_solid: &dyn Fn(SubstanceId) -> bool,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let started = Instant::now();
-    let selection = match &settings.layout {
+    match &settings.layout {
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
         {
-            waterfall::generate(grid_radius, level_height, settings, seed)?
+            finish_build(
+                waterfall::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                waterfall_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Waterfall(waterfall_recipe_metrics(metrics)),
+            )
         }
-        V3LayoutSettings::Single(patch) => {
-            return Err(V3GenerationError::RecipeUnavailable(recipe_name(
-                &patch.recipe,
-            )));
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Forest(_)) => {
+            finish_build(
+                forest::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                forest_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Forest(forest_recipe_metrics(metrics)),
+            )
         }
-        V3LayoutSettings::Ring7(_) => {
-            return Err(V3GenerationError::RecipeUnavailable("Ring7"));
-        }
-    };
-    finish_waterfall_build(
-        selection,
-        grid_radius,
-        level_height,
-        settings,
-        seed,
-        palette,
-        is_solid,
-        started,
-    )
+        V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
+            &patch.recipe,
+        ))),
+        V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+    }
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "the V3 report boundary explicitly records every generation input"
 )]
-fn finish_waterfall_build(
-    selection: ValidatedWorldSelection<waterfall::WaterfallMetrics>,
+fn finish_build<M>(
+    selection: ValidatedWorldSelection<M>,
     grid_radius: u32,
     level_height: f32,
     settings: &ProceduralV3Settings,
@@ -240,6 +249,8 @@ fn finish_waterfall_build(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
     started: Instant,
+    tactical_metrics: fn(&M) -> TacticalMetrics,
+    recipe_metrics: fn(&M) -> ProceduralRecipeMetrics,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let ValidatedWorldSelection {
         validated,
@@ -290,10 +301,8 @@ fn finish_waterfall_build(
         settings_fingerprint,
         semantic_plan_fingerprint: Some(semantic_fingerprint),
         map_fingerprint: materialized_fingerprint,
-        metrics: waterfall_report_metrics(&metrics),
-        recipe_metrics: Some(ProceduralRecipeMetrics::Waterfall(
-            waterfall_recipe_metrics(&metrics),
-        )),
+        metrics: tactical_metrics(&metrics),
+        recipe_metrics: Some(recipe_metrics(&metrics)),
         elapsed_micros,
         notes: candidate_notes(notes),
     };
@@ -346,6 +355,46 @@ fn waterfall_recipe_metrics(metrics: &waterfall::WaterfallMetrics) -> WaterfallR
         bypass_steps: metrics.bypass_steps,
         alternate_bypass_steps: metrics.alternate_bypass_steps,
         raised_terrain: metrics.raised_terrain,
+    }
+}
+
+fn forest_report_metrics(metrics: &forest::ForestMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        barrier_cells: metrics.tree_roots,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
+        bank_high_ground_difference: i32::try_from(metrics.side_high_ground_difference)
+            .unwrap_or(i32::MAX),
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics
+            .tree_roots
+            .saturating_add(metrics.tall_grass_roots)
+            .saturating_mul(100)
+            .checked_div(
+                metrics
+                    .woodland_surfaces
+                    .saturating_add(metrics.prairie_surfaces),
+            )
+            .unwrap_or_default(),
+    }
+}
+
+fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics {
+    ForestReportMetrics {
+        tree_roots: metrics.tree_roots,
+        tall_grass_roots: metrics.tall_grass_roots,
+        woodland_surfaces: metrics.woodland_surfaces,
+        prairie_surfaces: metrics.prairie_surfaces,
+        clearing_count: metrics.clearing_count,
+        clearing_surfaces: metrics.clearing_surfaces,
+        protected_route_surfaces: metrics.protected_route_surfaces,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
     }
 }
 
@@ -441,5 +490,28 @@ mod tests {
             ensure_recipe_available(&settings),
             Err(V3GenerationError::RecipeUnavailable("Hills"))
         );
+    }
+
+    #[test]
+    fn forest_environment_signature_uses_the_full_recipe_footprint() {
+        let metrics = forest::ForestMetrics {
+            tree_roots: 20,
+            tall_grass_roots: 40,
+            woodland_surfaces: 120,
+            prairie_surfaces: 180,
+            clearing_count: 4,
+            clearing_surfaces: 40,
+            protected_route_surfaces: 30,
+            ordinary_surfaces: 280,
+            reachable_elevation_levels: 4,
+            relief: 4,
+            spawn_height_difference: 0,
+            side_high_ground_difference: 1,
+            critical_route_steps: 24,
+        };
+
+        let reported = forest_report_metrics(&metrics);
+
+        assert_eq!(reported.environment_signature_percent, 20);
     }
 }

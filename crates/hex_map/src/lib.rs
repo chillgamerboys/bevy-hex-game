@@ -36,6 +36,7 @@
 
 use bevy::prelude::*;
 
+mod feature_render;
 /// Terrain height generation.
 pub mod generator;
 /// Turning generated terrain into tile entities.
@@ -55,8 +56,8 @@ pub mod voxel;
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
-    GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    ForestMetrics as ForestReportMetrics, GenerationReport, ProceduralRecipeMetrics,
+    TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{
     BridgeSettings, CavesSettings, CrossingSettings, CubeCoord, DerivedHillsCrossing,

@@ -9,7 +9,7 @@ use bevy_reflect::prelude::*;
 
 use crate::TilePos;
 
-/// Marks one rendered tree crown as eligible for character-camera cutaway.
+/// Marks one rendered tree part as eligible for character-camera canopy cutaway.
 ///
 /// The exact root surface keeps stacked forests unambiguous without exposing the
 /// generator's private feature plan. Presentation uses the entity transform for

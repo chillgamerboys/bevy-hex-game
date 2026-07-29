@@ -132,6 +132,16 @@
             ),
         ),
         (
+            name: "Forest",
+            blurb: "Low wooded hills open onto a tall-grass prairie through protected clearings and trails.",
+            world: "config/worlds/procedural-forest.ron",
+            generation_seed: Some(381654729),
+            units: (
+                player: Anchor("party_start"),
+                enemy: Anchor("hostile_start"),
+            ),
+        ),
+        (
             name: "Close Quarters",
             blurb: "Both pieces spawn within engagement range, so the fight starts at once — the combat-loop showcase.",
             world: "config/world.ron",

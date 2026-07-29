@@ -505,6 +505,7 @@ mod tests {
             "../../walks/menus.ron",
             "../../walks/gameplay.ron",
             "../../walks/waterfall.ron",
+            "../../walks/forest.ron",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
