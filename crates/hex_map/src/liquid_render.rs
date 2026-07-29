@@ -934,7 +934,8 @@ fn side_between(source: HexCoord, target: HexCoord) -> Option<HexSide> {
 #[cfg(test)]
 mod tests {
     use bevy::platform::collections::HashMap;
-    use hex_assets::{Substance, SubstanceFile};
+    use hex_assets::{ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SwatchId};
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
 
@@ -953,26 +954,48 @@ mod tests {
         assert!((actual - expected).abs() < 1.0e-6, "{actual} != {expected}");
     }
 
+    #[expect(
+        clippy::expect_used,
+        reason = "invalid compile-time fixture data should fail the unit test immediately"
+    )]
     fn liquid_table() -> SubstanceTable {
-        let substances = [
-            ("air", (0.0, 0.0, 0.0), false),
-            ("stone", (0.5, 0.5, 0.5), true),
-            ("water", (0.08, 0.32, 0.65), false),
-            ("lava", (0.9, 0.2, 0.04), false),
+        let swatches = [
+            ("terrain/stone", "Stone", (0.5, 0.5, 0.5)),
+            ("liquid/water", "Water", (0.08, 0.32, 0.65)),
+            ("liquid/lava", "Lava", (0.9, 0.2, 0.04)),
         ]
         .into_iter()
-        .map(|(name, color, solid)| {
-            (
-                name.to_owned(),
-                Substance {
-                    color,
-                    solid,
-                    diggable: true,
-                },
+        .map(|(id, name, (red, green, blue))| {
+            let id = SwatchId::new(id).expect("fixture swatch id should be valid");
+            let swatch = PaletteSwatch::new(
+                name,
+                SrgbColor::new(red, green, blue).expect("fixture color should be valid"),
+                BTreeSet::from(["test".to_owned()]),
             )
+            .expect("fixture swatch should be valid");
+            (id, swatch)
         })
-        .collect::<HashMap<_, _>>();
-        SubstanceTable::from_file(&SubstanceFile { substances })
+        .collect::<BTreeMap<_, _>>();
+        let palette = ArtPalette::new(swatches).expect("fixture palette should be valid");
+
+        let mut substances = HashMap::default();
+        substances.insert("air".to_owned(), Substance::invisible(false, true));
+        for (name, swatch, solid) in [
+            ("stone", "terrain/stone", true),
+            ("water", "liquid/water", false),
+            ("lava", "liquid/lava", false),
+        ] {
+            substances.insert(
+                name.to_owned(),
+                Substance::from_swatch(
+                    SwatchId::new(swatch).expect("fixture swatch id should be valid"),
+                    solid,
+                    true,
+                ),
+            );
+        }
+        SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
+            .expect("fixture substances should resolve through the fixture palette")
     }
 
     #[test]
