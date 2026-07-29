@@ -44,7 +44,7 @@
     // in the standard walk so liquid and palette changes cannot leave that
     // renderer path completely unobserved.
     Settle(30),
-    StartScenario(name: "Volcanic Hills", seed: 444211238),
+    StartScenario(name: "Volcanic Hills", seed: Some(444211238)),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     Settle(120),
