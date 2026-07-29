@@ -29,7 +29,7 @@ use bevy::transform::TransformSystems;
 use hex_assets::{CameraSettings, Scenario, ScenarioLibrary, SubstanceTable};
 use hex_core::{
     CameraFocusTarget, GameplaySetupFailure, Headroom, HexSpan, HexTile, MapAnchorId, MapAnchors,
-    MapViewHint, ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos,
+    MapViewHint, ResolvedMapSeed, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
 };
 use hex_map::LiquidVisualTime;
 use hex_units::{Body, Footing, Selected, Standing, StandsOn};
@@ -582,6 +582,7 @@ fn relocate_review_focus(
     ready: Option<Res<TerrainReady>>,
     anchors: Option<Res<MapAnchors>>,
     table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
     tiles: ReviewTileQuery,
     mut selected: Query<
         (&Body, &mut StandsOn, &mut Transform, &mut CameraFocusTarget),
@@ -606,7 +607,14 @@ fn relocate_review_focus(
         return;
     };
 
-    let destination = resolve_review_focus(anchor_name, &anchors, &table, *body, tiles.iter());
+    let destination = resolve_review_focus(
+        anchor_name,
+        &anchors,
+        &table,
+        *body,
+        blockers.as_deref(),
+        tiles.iter(),
+    );
     let destination = match destination {
         Ok(destination) => destination,
         Err(error) => {
@@ -632,6 +640,7 @@ fn resolve_review_focus<'a>(
     anchors: &MapAnchors,
     table: &SubstanceTable,
     body: Body,
+    blockers: Option<&TraversalBlockers>,
     tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
 ) -> Result<Standing, String> {
     let anchor = MapAnchorId::from(anchor_name);
@@ -640,7 +649,7 @@ fn resolve_review_focus<'a>(
             "{FOCUS_ANCHOR_ENV} names {anchor_name:?}, which the generated map did not publish"
         ));
     };
-    let footing = Footing::from_tiles(tiles, table, body);
+    let footing = Footing::from_tiles(tiles, table, body, blockers);
     footing.at(position).ok_or_else(|| {
         format!(
             "{FOCUS_ANCHOR_ENV} anchor {anchor_name:?} resolves to {position:?}, \
@@ -1152,7 +1161,7 @@ mod tests {
         let body = Body::new(TraversalProfile::WALKER);
         let anchors = MapAnchors::new();
         let no_tiles = std::iter::empty();
-        let missing = resolve_review_focus("missing", &anchors, &table, body, no_tiles)
+        let missing = resolve_review_focus("missing", &anchors, &table, body, None, no_tiles)
             .expect_err("an unpublished anchor should fail");
         assert!(missing.contains(FOCUS_ANCHOR_ENV));
         assert!(missing.contains("did not publish"));
@@ -1166,6 +1175,7 @@ mod tests {
             &anchors,
             &table,
             body,
+            None,
             std::iter::once((&destination, &span, &stone, &headroom)),
         )
         .expect_err("one level of headroom should reject the normal actor");

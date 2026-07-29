@@ -1787,7 +1787,12 @@ mod tests {
                 &hex_core::SubstanceId,
                 &hex_core::Headroom,
             ), With<hex_core::HexTile>>();
-            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body)
+            Footing::from_tiles(
+                tiles.iter(world),
+                world.resource::<SubstanceTable>(),
+                body,
+                None,
+            )
         };
         let party = footing
             .at(party_position)

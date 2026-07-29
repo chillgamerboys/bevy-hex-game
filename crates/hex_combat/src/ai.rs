@@ -28,7 +28,8 @@ use bevy::prelude::*;
 use hex_assets::SubstanceTable;
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, Headroom, HexSpan, HexTile, IssuedCommand,
-    LatticeCoord, Mode, PausableSystems, PendingDecision, SubstanceId, TilePos, Turn, UnitId,
+    LatticeCoord, Mode, PausableSystems, PendingDecision, SubstanceId, TilePos, TraversalBlockers,
+    Turn, UnitId,
 };
 use hex_units::{
     route, Body, Downed, Enemy, Faction, Footing, Player, Standing, StandsOn, UnitRegistry,
@@ -86,6 +87,7 @@ fn take_enemy_turn(
     others: Query<(Entity, Option<&UnitId>, &Faction, &StandsOn), Without<Downed>>,
     tiles: TileQuery,
     table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
 ) {
     let Some(table) = table else {
         return;
@@ -135,7 +137,7 @@ fn take_enemy_turn(
         return;
     }
 
-    let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+    let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
     let plan = best_foe(&others, *faction, standing.0, &footing, turn.movement_left);
 
     match plan.map(|plan| plan.action) {

@@ -56,7 +56,7 @@ pub(super) fn apply(
             data: CombatData::SubstanceTable,
         });
     };
-    let footing = Footing::from_tiles(tiles.iter(), table, *body);
+    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
     let Some(steps) = ground_path(path, standing.0, &footing) else {
         return Err(CommandRefusal::InvalidPath);
     };

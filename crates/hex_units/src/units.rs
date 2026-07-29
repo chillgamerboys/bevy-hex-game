@@ -30,7 +30,8 @@ use std::collections::BTreeMap;
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause,
-    PendingDecision, Screen, SubstanceId, TerrainReady, TilePos, TraversalProfile, Turn, UnitId,
+    PendingDecision, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
+    TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
@@ -340,6 +341,7 @@ fn on_tile_clicked(
     >,
     queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
     pending: Option<Res<PendingDecision>>,
@@ -398,7 +400,7 @@ fn on_tile_clicked(
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
         // between right and wrong.
-        let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+        let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
         let Some(destination) = footing.at(*pos) else {
             continue;
         };
@@ -619,6 +621,7 @@ fn spawn_units(
     // them build a library to spawn a unit that does not cast.
     lattices: Option<Res<LatticeLibrary>>,
     anchors: Option<Res<MapAnchors>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
@@ -631,7 +634,7 @@ fn spawn_units(
     // Every unit shares a body for now. When lattices land, size becomes a property of
     // the archetype rather than a global setting, and this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
-    let footing = Footing::from_tiles(tiles.iter(), &table, body);
+    let footing = Footing::from_tiles(tiles.iter(), &table, body, blockers.as_deref());
 
     let placements = match place_roster(&encounter, &footing, anchors.as_deref()) {
         Ok(placements) => placements,

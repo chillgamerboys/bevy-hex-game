@@ -42,7 +42,7 @@ use hex_assets::{
 };
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
-    PausableSystems, PendingDecision, Screen, TilePos, Turn,
+    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
 };
 use hex_units::{Body, Downed, Faction, MovingTo, StandsOn, UnitRegistry};
 
@@ -121,6 +121,8 @@ struct Verb<'a> {
     events: &'a mut Vec<CombatEvent>,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
+    /// Exact world-space obstacles excluded from footing for movement and reach.
+    blockers: Option<&'a TraversalBlockers>,
     /// Units this drain already committed presentation for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
@@ -237,6 +239,7 @@ fn apply_commands(
     elements: Option<Res<ElementCatalog>>,
     mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
+    blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
     mut actors: ActorQuery,
     mut lattices: cast::LatticeQuery,
@@ -291,6 +294,7 @@ fn apply_commands(
             knowledge: &mut stores.knowledge,
             events: &mut emitted,
             combat: combat.as_deref(),
+            blockers: blockers.as_deref(),
             committed: &mut committed,
             in_combat,
         };
