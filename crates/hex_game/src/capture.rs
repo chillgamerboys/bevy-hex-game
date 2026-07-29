@@ -125,9 +125,12 @@ struct CoverageAnalysis {
 /// Production callers go through [`write_png`]'s stats; the tests exercise the
 /// analyzer directly against synthetic frames.
 #[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "some feature-specific test binaries compile the shared capture module without its analyzer tests"
+#[cfg_attr(
+    not(feature = "map-review"),
+    expect(
+        dead_code,
+        reason = "some feature-specific test binaries compile the shared capture module without its analyzer tests"
+    )
 )]
 pub(crate) fn has_visual_coverage(bytes: &[u8], width: usize, height: usize) -> bool {
     analyze_coverage(bytes, width, height).has_coverage
