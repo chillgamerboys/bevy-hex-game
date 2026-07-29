@@ -231,10 +231,11 @@ current-observation API through gameplay-owned adapters for hostile lattice
 knowledge, cast validation, and AI. Engagement and ordinary-attack adapters remain
 pending and must use the same authority.
 
-Later frames preserve the same ordering across crates:
+Later frames preserve the same authorization-critical ordering across crates:
 
 `PublishKnowledge` → combat spatial-knowledge synchronization →
-`CombatSystems::Act` → `CombatSystems::Apply`.
+`CombatSystems::Act` → `CombatSystems::Apply`, followed by the normal `Resolve` and
+`Advance` phases.
 
 This is a semantic boundary and a Bevy synchronization boundary. A same-frame
 position, observer, or `Downed` change is visible to AI before it selects a command,

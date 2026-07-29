@@ -51,10 +51,11 @@ stream; replay runs with AI dispatch disabled and consumes those recorded comman
 
 ## Publication and diagnostics
 
-One same-frame order is authoritative:
+The authorization-critical prefix of the same-frame order is:
 
 `PerceptionSystems::PublishKnowledge` → combat spatial-knowledge synchronization →
-`CombatSystems::Act` → `CombatSystems::Apply`.
+`CombatSystems::Act` → `CombatSystems::Apply`. Normal combat processing then continues
+through `Resolve` and `Advance`.
 
 An AI decision therefore cannot observe a unit that lost sight earlier in the same
 frame, including when the sole sight-providing unit was just downed. The command

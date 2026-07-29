@@ -41,7 +41,7 @@ Trova97-owned branch that introduced the behavior.
 
 | Commit | Change | Validation at this snapshot |
 |---|---|---|
-| `64c4b73` | coherent semantic content revisions and contiguous authored lattices | content/load regressions green |
+| `64c4b73` | coherent semantic content revisions, contiguous authored lattices, strict scenario fields, registered resolved lighting, and dark-handoff validation | content/load/config regressions green |
 | `82a5c94` | faction-authorized AI/casting and same-frame ordering | AI, combat, casting, and hidden-spillover regressions green |
 | `46412cb` | idle lifecycle guards, bounded diagnostics, stress and CI gates | focused lifecycle, terrain, generator, and soak gates green |
 | `86b850e` | shared formation traversal projections | 124 ordinary formation/unit tests and release matrix green; 1 ignored |
@@ -57,14 +57,14 @@ Trova97-owned branch that introduced the behavior.
 |---|---:|---|
 | `#116 → #125` | `2086ba8 → 3b0e49d` | exact ancestry; all six GitHub jobs green |
 | `#119 → #124` | `47ce2e3 → eaacc81` | exact ancestry; all six GitHub jobs green |
-| #120, `feat/v3-fort` | `fd9cbe3` | conflicts resolved against its actual base; pushed normally |
-| #122, `feat/v3-caves-lights` | `6d7cff1` | conflicts resolved against its actual base; pushed normally |
-| `#120/#122 → #126` | `25e0005` | both ancestry merges pushed; #120 merge is `0c701ae` |
-| `#126 → #129` | `c07b105` | broad V3 suite green; Fort corpus remains outside this branch |
-| `#126 → #132` | `f455367` | Caves/crystal tests green |
-| `#126 → #130` | `70a7c32` | Caves seed-445 golden retained; broad V3 suite green |
-| `#130 → #131` | `2dc4e99` | propagated and pushed |
-| `#131 → #133`, `feat/v3-ring7-runtime` | `9dd03e9` | contains #131 and Forest fix `12a98c2` as verified ancestors; all-feature map/game check, broad V3 175/7 ignored, focused Ring7 2/2, and scenario/title 37/37 green |
+| #120, `feat/v3-fort` | `fd9cbe3` | conflicts resolved against its actual base; mergeable; all six GitHub checks green |
+| #122, `feat/v3-caves-lights` | `6d7cff1` | conflicts resolved against its actual base; mergeable; all six GitHub checks green |
+| `#120/#122 → #126` | `25e0005` | both ancestry merges pushed; mergeable; all six GitHub checks green |
+| `#126 → #129` | `c07b105` | broad V3 suite green; mergeable; all six GitHub checks green |
+| `#126 → #132` | `f455367` | Caves/crystal tests green; mergeable; all six GitHub checks green |
+| `#126 → #130` | `70a7c32` | Caves seed-445 golden retained; mergeable; all six GitHub checks green |
+| `#130 → #131` | `2dc4e99` | propagated; mergeable; all six GitHub checks green |
+| `#131 → #133`, `feat/v3-ring7-runtime` | `9dd03e9` | contains #131 and Forest fix `12a98c2`; mergeable; all six GitHub checks green; broad V3 175/7 ignored and focused gates green |
 
 Every propagated worktree was clean and its local head exactly matched its remote
 head after the final push.
@@ -101,10 +101,11 @@ goal.
 
 Visibility and sight contribution are distinct. A downed unit may remain visible,
 but `ObservedUnit::provides_sight` is false and adding or removing `Downed` invalidates
-perception. The live update order is:
+perception. The authorization-critical prefix of the live update order is:
 
 `PublishKnowledge` → combat spatial-knowledge synchronization →
-`CombatSystems::Act` → `CombatSystems::Apply`.
+`CombatSystems::Act` → `CombatSystems::Apply`; normal combat processing then continues
+through `Resolve` and `Advance`.
 
 Cast preview, unit target cycling, AI enumeration, and the authoritative applier all
 require an Observed exact anchor. Remembered and Unknown anchors fail. Once an
@@ -132,6 +133,11 @@ Every lattice entering through authored `lattices.ron` resolution must form one
 contiguous hex arrangement. A disconnected lattice is rejected with its archetype in
 the error. Shipped valid content is unchanged.
 
+Scenario files reject unknown fields, so a misspelled authored option cannot be
+silently ignored. `ResolvedLighting` is registered for reflection, and dark-light
+handoff validation evaluates interpolated state at the actual zero-elevation
+transition rather than relying only on authored endpoints.
+
 ### Compact choices and bounded records
 
 Ordinary AI turn commands remain a fingerprinted canonical `LegalActionSet`.
@@ -151,6 +157,9 @@ compatibility decoding.
 All timings below are release-mode measurements on the primary Mac unless stated
 otherwise. They are regression evidence, not portable promises about another
 machine.
+
+The final inventory discovers 1,362 tests: 1,337 ordinary tests in the complete
+all-feature workspace gate and 25 explicitly ignored stress/benchmark entries.
 
 ### AI decision matrix
 

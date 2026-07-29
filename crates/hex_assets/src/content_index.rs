@@ -1,7 +1,7 @@
 //! Cross-file integrity for the content pipeline.
 //!
 //! Each content file validates its own invariants at parse
-//! ([`ElementFile`](crate::ElementFile), [`SpellFile`](crate::SpellFile)), but a
+//! ([`ElementFile`], [`SpellFile`]), but a
 //! single file cannot see the others. [`ContentIndex`] is where the references
 //! *between* files are resolved: every element a spell requires must exist in the
 //! [`ElementCatalog`], and every substance a spell's effect names must exist in the
