@@ -2,15 +2,19 @@
 
 ## Setup
 
+Follow the [setup guide](docs/development/setup.md) for prerequisites, platform
+packages, first-run verification, and troubleshooting. The quick start is:
+
 ```sh
 cargo dev            # run with the world inspector and live asset reload
 cargo run --release  # run as it ships: no inspector, much faster
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`; rustup fetches the right
-compiler on first build. Install the dependency auditor once with
-`cargo install cargo-deny --locked`. A cold build takes 10–20 minutes. Linux also
-needs the system packages in the README appendix; macOS and Windows do not.
+Contributors also need the dependency auditor:
+
+```sh
+cargo install cargo-deny --locked
+```
 
 Only changing values in `assets/config/`? You want [docs/development/config.md](docs/development/config.md)
 instead; none of this applies.
