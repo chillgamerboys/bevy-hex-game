@@ -308,7 +308,7 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 1,097 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 1,100 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 
