@@ -18,7 +18,7 @@ and changing the map.
 Enough to read the code and the other docs.
 
 **Crate** — a folder of code that gets compiled as a unit, like a module or package.
-This project has eleven, under `crates/`. Yours is `hex_map`.
+This project has twelve, under `crates/`. Yours is `hex_map`.
 
 **Entity** — one thing in the world: a tile, the player piece, the camera, the sun.
 Just an ID.

@@ -7,6 +7,25 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 20 — feat(art): render authored voxel objects at runtime (2026-07-28)
+
+- **PR**: #106 — `feat/runtime-object-renderer`
+- **Outcome**: green — 1 post-`dev` integration blocker fixed
+- **Lenses triggered**: 2, 4, 7, 8, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, 7, fresh-eyes | `crates/hex_assets/src/object_catalog.rs`:1493 | SHIP-BLOCKER | fixed during `dev` reconciliation — Forest and the authored object catalog now share the promoted tree palette semantics, and the shipped complete-graph regression pins the resulting combined fingerprint |
+| 2, 8 | `assets/art/palette.ron`:19 | NON-BLOCKER | fixed during conflict resolution — authored foliage and trunk swatches keep #106's production `tree` tags, while Forest-only grass remains explicitly `temporary`; colours and stable ids stay shared instead of creating a second palette vocabulary |
+| D3, D4 | `CLAUDE.md`:1 | NON-BLOCKER | fixed during reconciliation — active architecture, ownership guidance, onboarding, and test/release skills now describe the twelve-crate workspace and live perception/object-renderer edges |
+
+**Notes**: `hex_objects` remains presentation-only: it consumes the shared
+`ObjectInstance` request and publishes neither traversal blockers nor cutaway policy.
+Forest continues to present its generated temporary vegetation directly; adapting
+world-owned placements to authored objects is separate follow-up work. The full local
+gate passes with 1,236 tests, and 28 wired-game frames plus neutral and dark object
+gallery captures passed mechanical and review inspection.
+
 ## Wave 19 — feat(perception): add headless illumination and faction knowledge (2026-07-28)
 
 - **PR**: #93 — `feat/headless-perception`

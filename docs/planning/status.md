@@ -139,9 +139,10 @@ The runtime resolves that complete art graph atomically and retains its last val
 revision across a bad hot reload. `hex_objects` renders static instances from cached
 mesh chunks using the game prism and exact palette-backed material modes. The first
 production exemplar is the six-level `plant/small-broadleaf`. Terrain substances,
-liquids, construction metal, unit presentation, and temporary Forest vegetation
-resolve exact palette swatches. Procedural Forest object integration and procedural
-plant generation have not landed yet.
+liquids, construction metal, and unit presentation also resolve exact palette
+swatches. Forest still presents its generated temporary vegetation directly; adapting
+those placements to authored object instances and procedural plant synthesis have not
+landed yet.
 
 ## What is provisional
 
