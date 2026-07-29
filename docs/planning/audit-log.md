@@ -7,6 +7,51 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 13 — test(walk): cover Volcanic Hills lava (2026-07-28)
+
+- **PR**: #103 — `fix/volcanic-visual-walk`
+- **Outcome**: green — 1 ship-blocker fixed
+- **Lenses triggered**: D1
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D1 | `walks/gameplay.ron`:47 | SHIP-BLOCKER | fixed in-branch — the optional scenario seed now uses RON's `Some(444211238)` representation, so the shipped walk parses and reaches its lava capture |
+
+**Notes**: the corrected 40-step gameplay walk completed and all six frames passed
+mechanical and review inspection. The scenario name and pinned seed match
+`assets/config/scenarios.ron`; fresh-eyes found no additional bug class.
+
+## Wave 12 — feat(assets): migrate runtime colours to the art palette (2026-07-28)
+
+- **PR**: #99 — `feat/art-palette-migration`
+- **Outcome**: green — 2 ship-blockers fixed
+- **Lenses triggered**: 4, 7
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4 | `crates/hex_assets/src/substances.rs`:359 | SHIP-BLOCKER | fixed in `54467a8` — failed cross-file reloads retain the complete rejected palette/substance candidate pair, so repairing either file retries the real on-disk pair instead of accepting a stale fallback half |
+| 7 | `crates/hex_units/tests/movement.rs`:220 | SHIP-BLOCKER | fixed in `54467a8` — unit material tests parse the shipped palette and pin the exact `unit/player` and `unit/hostile` swatches |
+
+**Notes**: exact-head verification passed with 879 tests and five clean gameplay
+captures. The audit also incorporated the exact palette-backed liquid-foam
+round-trip pin.
+
+## Wave 11 — feat(editor): add recovery and exact-render review (2026-07-28)
+
+- **PR**: #96 — `feat/asset-workshop-review`
+- **Outcome**: green — recovery, review-identity, and publication blockers fixed
+- **Lenses triggered**: 1, 3, 4, 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 1, 4 | `crates/hex_editor/src/app.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — recovery conflicts now require an informed winner choice, tracked writes refresh the disk baseline, and recovery can be kept safely while quitting |
+| 4, 8 | `crates/hex_editor/src/review.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — capture and publication stay tied to the exact content-addressed GLB rendered by the viewport, with duplicate and concurrent-publication races rejected |
+| 3, 7 | `crates/hex_editor/src/ui.rs` | SHIP-BLOCKER | fixed through `0e4cf46` — recovery choices, unavailable previews, selection failures, and report/camera validation are surfaced and regression-tested |
+
+**Notes**: exact-head verification passed with 859 tests. The game walk does not
+drive the standalone editor, so the combined editor interaction remains part of
+the human release gate.
+
 ## Wave 10 — feat(editor): add the Asset Workshop (2026-07-28)
 
 - **PR**: #95 — `feat/asset-workshop-editor`
