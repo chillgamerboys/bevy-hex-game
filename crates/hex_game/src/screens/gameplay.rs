@@ -21,6 +21,7 @@ use hex_core::{
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
+use super::combat_lab::{CombatLabSession, CreatorDisplayName};
 use super::{despawn_screen, DespawnOnExit};
 use crate::menus::widgets::{
     blurb, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
@@ -501,6 +502,7 @@ fn update_party_strip(
     units: Query<(
         &UnitId,
         &Archetype,
+        Option<&CreatorDisplayName>,
         Option<&LatticeSpec>,
         Option<&LatticeState>,
         Has<Downed>,
@@ -548,7 +550,8 @@ fn update_party_strip(
         let Some(entity) = registry.entity_of(member) else {
             continue;
         };
-        let Ok((id, archetype, spec, state, downed, selected)) = units.get(entity) else {
+        let Ok((id, archetype, display_name, spec, state, downed, selected)) = units.get(entity)
+        else {
             continue;
         };
         let condition = spec.zip(state).map_or_else(String::new, |(spec, state)| {
@@ -567,7 +570,7 @@ fn update_party_strip(
             "{}ALLY {} · {} #{} · {}{}{}",
             if active { "▶ " } else { "" },
             button.0 + 1,
-            archetype.0,
+            display_name.map_or(archetype.0.as_str(), |name| name.0.as_str()),
             id.0,
             condition,
             if downed { " · DOWN" } else { "" },
@@ -669,6 +672,7 @@ fn sync_outcome_modal(
     resolution: Res<EncounterResolution>,
     existing: Query<Entity, With<OutcomeModal>>,
     assets: Res<UiAssets>,
+    lab: Option<Res<CombatLabSession>>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         for entity in &existing {
@@ -679,6 +683,14 @@ fn sync_outcome_modal(
     if !existing.is_empty() {
         return;
     }
+    let return_label = lab
+        .as_deref()
+        .map(|session| match session.return_to {
+            Screen::CharacterCreator => "Return to Creator",
+            Screen::CombatLab => "Return to Combat Lab",
+            _ => "Return to Title",
+        })
+        .unwrap_or("Return to Title");
     commands
         .spawn((
             Name::new("Encounter Outcome Modal"),
@@ -740,10 +752,10 @@ fn sync_outcome_modal(
                                 .with_child(blurb(&assets, primary.1));
                             buttons
                                 .spawn((
-                                    row_button("Return to Title", 150.0),
+                                    row_button(return_label, 170.0),
                                     OutcomeAction::ReturnTitle,
                                 ))
-                                .with_child(blurb(&assets, "Return to Title"));
+                                .with_child(blurb(&assets, return_label));
                         });
                 });
         });
@@ -753,6 +765,7 @@ fn handle_outcome_actions(
     clicked: Query<(&Interaction, &OutcomeAction), Changed<Interaction>>,
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
+    lab: Option<Res<CombatLabSession>>,
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
@@ -766,7 +779,11 @@ fn handle_outcome_actions(
         }
         match (*action, outcome) {
             (OutcomeAction::Continue, EncounterOutcome::Victory) => {
-                next_mode.set(Mode::Exploring);
+                if let Some(lab) = lab.as_deref() {
+                    next_screen.set(lab.return_to);
+                } else {
+                    next_mode.set(Mode::Exploring);
+                }
             }
             (OutcomeAction::Retry, EncounterOutcome::Defeat) => {
                 let Some(active) = active.as_deref() else {
@@ -776,7 +793,12 @@ fn handle_outcome_actions(
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
             }
-            (OutcomeAction::ReturnTitle, _) => next_screen.set(Screen::Title),
+            (OutcomeAction::ReturnTitle, _) => {
+                next_screen.set(
+                    lab.as_deref()
+                        .map_or(Screen::Title, |session| session.return_to),
+                );
+            }
             _ => {}
         }
     }
@@ -963,13 +985,17 @@ fn handle_input(
     pause: Res<State<Pause>>,
     mut next_pause: ResMut<NextState<Pause>>,
     mut next_screen: ResMut<NextState<Screen>>,
+    lab: Option<Res<CombatLabSession>>,
 ) {
     if bindings.just_pressed(&keys, InputAction::Pause) {
         next_pause.set(Pause(!pause.get().0));
     }
     // Backspace rather than Escape, which is taken by pause.
     if bindings.just_pressed(&keys, InputAction::ReturnTitle) {
-        next_screen.set(Screen::Title);
+        next_screen.set(
+            lab.as_deref()
+                .map_or(Screen::Title, |session| session.return_to),
+        );
     }
 }
 
@@ -1097,6 +1123,7 @@ mod tests {
         app.insert_resource(ActiveScenario(crate::scenarios::ScenarioToLoad {
             scenario: scenario.clone(),
             resolved_seed: Some(seed),
+            encounter_override: None,
         }));
         app.world_mut()
             .spawn((Interaction::Pressed, OutcomeAction::Retry));

@@ -19,6 +19,7 @@ use bevy::prelude::*;
 pub mod ai_profiles;
 pub mod art_palette;
 pub mod content_index;
+pub mod creation;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
@@ -44,6 +45,13 @@ pub use art_palette::{
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
 pub use content_index::{ContentError, ContentIndex, ContentTables};
+pub use creation::{
+    character_lattice_file, character_runtime_key, combined_spell_file, creator_character_issues,
+    creator_spell_issues, normalized_name, validate_name, CreationCell, CreationCellKind,
+    CreationLibraryFile, CreationPresetCatalog, CustomCharacterId, CustomSpellId,
+    PackagedCharacter, PackagedSpell, PresetAudience, SavedCharacter, SavedSpell, SpellReference,
+    CREATION_SCHEMA_VERSION, MAX_CREATION_CELLS, MAX_CREATION_NAME_CHARS, MAX_CREATION_RADIUS,
+};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
@@ -111,6 +119,7 @@ pub fn plugin(app: &mut App) {
     app.add_plugins(substances::plugin);
     app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
+    app.add_plugins(creation::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
     app.add_plugins(lattices::plugin);

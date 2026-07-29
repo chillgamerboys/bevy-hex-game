@@ -341,6 +341,7 @@ fn launch_review_scenario(
     commands.insert_resource(ScenarioToLoad {
         scenario,
         resolved_seed,
+        encounter_override: None,
     });
     request.launched = true;
     next.set(Screen::Loading);

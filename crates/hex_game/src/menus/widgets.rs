@@ -290,17 +290,23 @@ pub fn row_button(name: impl Into<String>, width: f32) -> impl Bundle {
 #[must_use]
 pub fn panel() -> impl Bundle {
     (
-        Node {
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(12.0),
-            padding: UiRect::all(Val::Px(18.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            border_radius: BorderRadius::all(Val::Px(10.0)),
-            ..default()
-        },
+        panel_node(),
         BorderColor::all(EDGE),
         BackgroundColor(PANEL_BG),
     )
+}
+
+/// The layout half of [`panel`], for a panel that needs custom dimensions.
+#[must_use]
+pub fn panel_node() -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(12.0),
+        padding: UiRect::all(Val::Px(18.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(10.0)),
+        ..default()
+    }
 }
 
 /// A thin horizontal rule between sections.

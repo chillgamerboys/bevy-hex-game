@@ -25,14 +25,14 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use hex_core::{HexCoord, Level, Screen, SpellId};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// One gem a spell requires: a distinct adjacent source of `element` contributing
 /// `mana`. Mirrors `hex_lattice::Requirement` so the future `SpellTable` mapping is
 /// direct.
-#[derive(Reflect, Debug, Clone, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GemRequirement {
     /// The element the adjacent gem (or live fusion output) must provide, by name.
     pub element: String,
@@ -41,7 +41,7 @@ pub struct GemRequirement {
 }
 
 /// How a spell spends the mana it draws. Mirrors `hex_lattice::Casting`.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CastingAxis {
     /// Drains and consumes the mana; its cost is throughput, recovered by channelling.
     Evocation,
@@ -55,7 +55,7 @@ pub enum CastingAxis {
 
 /// Whether a spell draws a fixed amount of mana or a variable amount for a varied
 /// effect.
-#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ManaAxis {
     /// A binary spell: it fires at full strength or not at all.
     Fixed,
@@ -71,7 +71,7 @@ pub enum ManaAxis {
 /// and so the only shape whose vertical extent an author controls voxel by voxel.
 /// `hex_units::volumes::rotated` turns it into the cast's facing; the `level` is not
 /// affected by that turn, because the rotation is about the vertical axis.
-#[derive(Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Reflect, Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VoxelOffset {
     /// Horizontal displacement from the anchor, before rotation.
     pub coord: HexCoord,
@@ -84,7 +84,7 @@ pub struct VoxelOffset {
 ///
 /// The parameters are the shape's own extent and are unrelated to
 /// [`TargetingSpec::range`], which bounds how far away the anchor may be.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TargetShape {
     /// Cast on the caster itself; `range` is 0.
     SelfCast,
@@ -128,7 +128,7 @@ pub enum TargetShape {
 
 /// Where a spell can be cast, reusing `hex_units::targeting`'s height-advantage
 /// geometry at cast time. Pure data here.
-#[derive(Reflect, Debug, Clone, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetingSpec {
     /// Base range in hexes, before any high-ground bonus.
     pub range: u8,
@@ -141,7 +141,7 @@ pub struct TargetingSpec {
 /// One primitive effect a spell applies when it resolves. A closed vocabulary
 /// (audit §8) — extension is one variant here plus one match arm where effects are
 /// applied.
-#[derive(Reflect, Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Effect {
     /// Disable a number of the target's hexes. `targeted` chooses specific hexes
     /// rather than a flat count.
@@ -223,7 +223,7 @@ impl Effect {
 }
 
 /// A single spell definition, before element/substance names are resolved.
-#[derive(Reflect, Debug, Clone, Deserialize)]
+#[derive(Reflect, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spell {
     /// The adjacent gems this spell draws on; its length is the tier (≤ 6).
     pub requirements: Vec<GemRequirement>,

@@ -28,6 +28,7 @@
 //! the same order.
 
 use bevy::prelude::*;
+use hex_assets::{Effect, ManaAxis, Spell, TargetShape};
 use hex_core::AppSystems;
 
 /// What an enemy does with its turn. A placeholder, and says so.
@@ -61,6 +62,52 @@ pub use outcomes::{
 pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use summary::{CombatSummary, CommandKind};
 pub use turns::{Initiative, TurnOrder};
+
+/// Combat-owned compatibility verdict for spells authored by the Wave 6 creator.
+///
+/// Asset validation answers whether a spell is structurally coherent. This function
+/// answers the narrower runtime question: whether combat delivers the complete promise
+/// the creator exposes. Keeping it here makes adding an applier arm and lifting its
+/// creator restriction one reviewable change.
+pub fn creator_spell_deployability(spell: &Spell) -> Result<(), Vec<String>> {
+    let mut issues = Vec::new();
+    if spell.mana != ManaAxis::Fixed {
+        issues.push("variable mana is not implemented".to_owned());
+    }
+    if spell.co_castable {
+        issues.push("co-casting is not implemented".to_owned());
+    }
+    if spell.targeting.needs_los {
+        issues.push("line-of-sight enforcement is not implemented".to_owned());
+    }
+    if !matches!(
+        spell.targeting.shape,
+        TargetShape::SelfCast | TargetShape::Single
+    ) {
+        issues.push("unit effects are delivered only to Self or Single targets".to_owned());
+    }
+    for effect in &spell.effects {
+        if !matches!(
+            effect,
+            Effect::DisableHexes {
+                targeted: false,
+                ..
+            } | Effect::Burn { .. }
+                | Effect::RestoreHexes { .. }
+                | Effect::Reveal { .. }
+        ) {
+            issues.push(format!("effect {effect:?} is not completely delivered"));
+        }
+    }
+    if !delivers_anything(spell) {
+        issues.push(UNDELIVERABLE.to_owned());
+    }
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
 
 /// The order a turn resolves in.
 ///
@@ -123,4 +170,61 @@ pub fn plugin(app: &mut App) {
         resolution::plugin,
         summary::plugin,
     ));
+}
+
+#[cfg(test)]
+mod creator_tests {
+    use super::*;
+    use hex_assets::{CastingAxis, GemRequirement, TargetingSpec};
+
+    fn ready_spell(effect: Effect) -> Spell {
+        Spell {
+            requirements: vec![GemRequirement {
+                element: "Fire".to_owned(),
+                mana: 1,
+            }],
+            casting: CastingAxis::Evocation,
+            mana: ManaAxis::Fixed,
+            co_castable: false,
+            targeting: TargetingSpec {
+                range: 3,
+                shape: TargetShape::Single,
+                needs_los: false,
+            },
+            effects: vec![effect],
+        }
+    }
+
+    #[test]
+    fn creator_delivery_accepts_only_the_closed_wave_six_behavior_set() {
+        for effect in [
+            Effect::DisableHexes {
+                count: 1,
+                targeted: false,
+            },
+            Effect::Burn { turns: 2 },
+            Effect::RestoreHexes { count: 1 },
+            Effect::Reveal { tier: 1 },
+        ] {
+            assert!(creator_spell_deployability(&ready_spell(effect)).is_ok());
+        }
+
+        let targeted = ready_spell(Effect::DisableHexes {
+            count: 1,
+            targeted: true,
+        });
+        assert!(creator_spell_deployability(&targeted).is_err());
+    }
+
+    #[test]
+    fn creator_delivery_fails_closed_on_unimplemented_axes() {
+        let mut spell = ready_spell(Effect::Burn { turns: 1 });
+        spell.targeting.needs_los = true;
+        spell.co_castable = true;
+        spell.mana = ManaAxis::Variable;
+        let issues = creator_spell_deployability(&spell).expect_err("unsupported axes must fail");
+        assert!(issues.iter().any(|issue| issue.contains("line-of-sight")));
+        assert!(issues.iter().any(|issue| issue.contains("co-casting")));
+        assert!(issues.iter().any(|issue| issue.contains("variable mana")));
+    }
 }

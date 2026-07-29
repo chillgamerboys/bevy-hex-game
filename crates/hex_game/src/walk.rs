@@ -187,6 +187,8 @@ enum WalkStep {
         #[serde(default)]
         seed: Option<u64>,
     },
+    /// Launch an immutable Combat Lab fixture by stable machine id.
+    StartFixture { id: String },
 }
 
 fn load_script(path: &str) -> Result<Vec<WalkStep>, String> {
@@ -222,6 +224,9 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
+        WalkStep::StartFixture { id } if id.trim().is_empty() => {
+            Err("fixture id must not be empty".to_owned())
+        }
         _ => Ok(()),
     }
 }
@@ -232,10 +237,12 @@ fn parse_screen(name: &str) -> Result<Screen, String> {
         "Title" => Ok(Screen::Title),
         "Settings" => Ok(Screen::Settings),
         "LatticeDemo" => Ok(Screen::LatticeDemo),
+        "CharacterCreator" => Ok(Screen::CharacterCreator),
+        "CombatLab" => Ok(Screen::CombatLab),
         "Loading" => Ok(Screen::Loading),
         "Gameplay" => Ok(Screen::Gameplay),
         _ => Err(format!(
-            "unknown screen {name:?}; expected Splash, Title, Settings, LatticeDemo, Loading, or Gameplay"
+            "unknown screen {name:?}; expected Splash, Title, Settings, CharacterCreator, CombatLab, LatticeDemo, Loading, or Gameplay"
         )),
     }
 }
@@ -336,6 +343,17 @@ struct WalkCombat<'w, 's> {
 }
 
 #[derive(SystemParam)]
+struct WalkContent<'w> {
+    failure: Option<Res<'w, GameplaySetupFailure>>,
+    library: Option<Res<'w, ScenarioLibrary>>,
+    presets: Option<Res<'w, hex_assets::CreationPresetCatalog>>,
+    shipped_spells: Option<Res<'w, hex_assets::SpellFile>>,
+    base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
+    elements: Option<Res<'w, hex_assets::ElementCatalog>>,
+    substances: Option<Res<'w, hex_assets::SubstanceTable>>,
+}
+
+#[derive(SystemParam)]
 struct WalkTerrain<'w, 's> {
     substances: Option<Res<'w, SubstanceTable>>,
     blockers: Option<Res<'w, TraversalBlockers>>,
@@ -409,8 +427,7 @@ fn run_walk(
     screen: Res<State<Screen>>,
     mut next: ResMut<NextState<Screen>>,
     mut combat: WalkCombat,
-    failure: Option<Res<GameplaySetupFailure>>,
-    library: Option<Res<ScenarioLibrary>>,
+    content: WalkContent,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     buttons: Query<(Entity, &Name), With<Button>>,
     tiles: Query<(Entity, &TilePos), With<HexTile>>,
@@ -450,7 +467,7 @@ fn run_walk(
             commands.entity(root).insert(UiTargetCamera(camera));
         }
     }
-    if let Some(failure) = failure {
+    if let Some(failure) = content.failure.as_deref() {
         error!(
             "visual walk aborted: gameplay setup failed: {}",
             failure.reason
@@ -832,7 +849,7 @@ fn run_walk(
             state.advance();
         }
         WalkStep::StartScenario { ref name, seed } => {
-            let Some(library) = library.as_deref() else {
+            let Some(library) = content.library.as_deref() else {
                 return;
             };
             let Some(scenario) = library
@@ -851,6 +868,61 @@ fn run_walk(
             commands.insert_resource(ScenarioToLoad {
                 scenario,
                 resolved_seed,
+                encounter_override: None,
+            });
+            next.set(Screen::Loading);
+            state.advance();
+        }
+        WalkStep::StartFixture { ref id } => {
+            let Some(library) = content.library.as_deref() else {
+                return;
+            };
+            let Some(name) = crate::screens::combat_lab::fixture_scenario_name(id) else {
+                error!("visual walk: fixture {id:?} is not registered");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let Some(scenario) = library
+                .scenarios
+                .iter()
+                .find(|scenario| scenario.name == name)
+                .cloned()
+            else {
+                error!("visual walk: fixture {id:?} scenario {name:?} is missing");
+                state.failed = true;
+                exit.write(AppExit::error());
+                return;
+            };
+            let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
+            commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
+                kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
+                return_to: Screen::CombatLab,
+            });
+            let payload = match crate::screens::combat_lab::creator_fixture_payload(
+                id,
+                content.presets.as_deref(),
+                content.shipped_spells.as_deref(),
+                content.base_lattices.as_deref(),
+                content.elements.as_deref(),
+                content.substances.as_deref(),
+            ) {
+                Ok(payload) => payload,
+                Err(reason) => {
+                    error!("visual walk: fixture {id:?} is invalid: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+            };
+            let encounter_override = payload.map(|(overlay, encounter)| {
+                commands.insert_resource(overlay);
+                encounter
+            });
+            commands.insert_resource(ScenarioToLoad {
+                scenario,
+                resolved_seed,
+                encounter_override,
             });
             next.set(Screen::Loading);
             state.advance();
@@ -1045,10 +1117,11 @@ mod tests {
         AwaitScreen("Title"),
         Settle(30),
         Capture("01-title"),
-        Click(name: "Lattice Demo"),
-        AwaitScreen("LatticeDemo"),
+        Click(name: "Combat Lab"),
+        AwaitScreen("CombatLab"),
         Key("Backspace"),
         StartScenario(name: "The Crossing"),
+        StartFixture(id: "ability-lab"),
         AwaitTerrain,
         ClickTile(q: 0, r: -2),
         Key("KeyR"),
@@ -1070,12 +1143,12 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 23);
+        assert_eq!(steps.len(), 24);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
             Some(&WalkStep::Click {
-                name: "Lattice Demo".into(),
+                name: "Combat Lab".into(),
                 index: 0
             })
         );
@@ -1084,6 +1157,12 @@ mod tests {
             Some(&WalkStep::StartScenario {
                 name: "The Crossing".into(),
                 seed: None
+            })
+        );
+        assert_eq!(
+            steps.get(7),
+            Some(&WalkStep::StartFixture {
+                id: "ability-lab".into(),
             })
         );
         for step in &steps {
@@ -1119,7 +1198,15 @@ mod tests {
 
     #[test]
     fn every_screen_name_round_trips() {
-        for name in ["Splash", "Title", "LatticeDemo", "Loading", "Gameplay"] {
+        for name in [
+            "Splash",
+            "Title",
+            "CharacterCreator",
+            "CombatLab",
+            "LatticeDemo",
+            "Loading",
+            "Gameplay",
+        ] {
             parse_screen(name).expect("known screen parses");
         }
         assert!(parse_screen("Gameplay ").is_err());

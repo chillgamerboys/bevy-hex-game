@@ -32,6 +32,10 @@ pub enum Screen {
     /// fusions, mana, disables, and enchantments. Slated for gating or removal
     /// before release.
     LatticeDemo,
+    /// Saved character and spell authoring, reached only from the Demos lane.
+    CharacterCreator,
+    /// Human sandbox setup and deterministic fixture selection.
+    CombatLab,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.

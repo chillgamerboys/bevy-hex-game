@@ -16,6 +16,7 @@ pub(crate) const APP_NAME: &str = "Hex Game";
 pub(crate) struct StoragePaths {
     pub(crate) preferences: PathBuf,
     pub(crate) resume: PathBuf,
+    pub(crate) creations: PathBuf,
 }
 
 impl Default for StoragePaths {
@@ -24,6 +25,7 @@ impl Default for StoragePaths {
         Self {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
+            creations: root.join("creations.ron"),
         }
     }
 }
@@ -90,11 +92,16 @@ mod tests {
         let paths = StoragePaths {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
+            creations: root.join("creations.ron"),
         };
         assert_eq!(
             paths.preferences.file_name(),
             Some(OsStr::new("preferences.ron"))
         );
         assert_eq!(paths.resume.file_name(), Some(OsStr::new("resume.ron")));
+        assert_eq!(
+            paths.creations.file_name(),
+            Some(OsStr::new("creations.ron"))
+        );
     }
 }

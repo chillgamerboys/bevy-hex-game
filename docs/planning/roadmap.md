@@ -59,6 +59,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
+| Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -115,6 +116,12 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   promising save compatibility or live storefront, signing, telemetry, or crash
   reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
   gate.
+- **Wave 6 — creator and combat lab (delivered).** The Demos lane now owns a saved
+  Character & Spell Creator plus one Combat Lab. Local records have stable IDs,
+  atomic persistence, Draft/Ready and Map-ready diagnostics, dependency-safe deletion,
+  and immutable packaged templates. Sandbox builds ordered rosters on three curated
+  maps, resolves deployment, freezes content for Retry, and refuses resume writes.
+  Fixed automated scenarios live behind one searchable stable-ID selector.
 
 The Wave 5 resume slot deliberately uses explicit seeded regeneration and refuses
 generator/content drift. It is a development convenience, not the production save
@@ -136,10 +143,11 @@ today, and its status, is [contracts.md](../contracts.md).
 
 The development-friendly three-column title deck now has Maps, focused Demos, and
 Actions lanes. Party Trial is the one integrated default game and launches through
-New Game rather than appearing beside diagnostic fixtures. Ability Lab and Raider
-Mirror remain visible focused combat demos; Close Quarters and the Combat category
-are retired. Continue and Settings are active, while starting a New Game never reads
-or overwrites the resume slot.
+New Game rather than appearing beside diagnostic fixtures. Creator and Combat Lab are
+the only Wave 6 title entries. Ability Lab, Raider Mirror, and creator matrices live
+behind Combat Lab's fixed-fixture selector; Close Quarters and the Combat category
+remain retired. Continue and Settings are active, while starting a New Game never
+reads or overwrites the resume slot.
 
 ### Save and load
 

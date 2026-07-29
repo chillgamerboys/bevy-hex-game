@@ -48,7 +48,8 @@ pub(super) fn plugin(app: &mut App) {
             reroll_scenario_seed,
             start_chosen_scenario,
             start_new_game,
-            open_lattice_demo,
+            open_character_creator,
+            open_combat_lab,
             open_settings,
             quit_game,
             handle_input,
@@ -91,9 +92,13 @@ struct RerollsScenario {
     scenario: Scenario,
 }
 
-/// The button that opens the lattice ruleset demo.
+/// The button that opens saved character and spell authoring.
 #[derive(Component)]
-struct OpensLatticeDemo;
+struct OpensCharacterCreator;
+
+/// The button that opens sandbox and deterministic combat fixtures.
+#[derive(Component)]
+struct OpensCombatLab;
 
 /// Starts the library's independently resolved default scenario.
 #[derive(Component)]
@@ -391,7 +396,7 @@ fn spawn_category_column(
             .with_children(|list| {
                 list.spawn((ListPlaceholder, blurb(assets, "loading scenarios...")));
                 if category == ScenarioCategory::Demo {
-                    spawn_lattice_demo_card(list, assets);
+                    spawn_wave_six_demo_cards(list, assets);
                 }
             });
     });
@@ -409,9 +414,9 @@ fn scenario_card_node() -> Node {
     }
 }
 
-fn spawn_lattice_demo_card(list: &mut ChildSpawnerCommands, assets: &UiAssets) {
+fn spawn_wave_six_demo_cards(list: &mut ChildSpawnerCommands, assets: &UiAssets) {
     list.spawn((
-        Name::new("Static Lattice Demo Entry"),
+        Name::new("Static Wave 6 Demo Entries"),
         StaticDemoEntry,
         Node {
             width: Val::Percent(100.0),
@@ -420,15 +425,32 @@ fn spawn_lattice_demo_card(list: &mut ChildSpawnerCommands, assets: &UiAssets) {
     ))
     .with_children(|entry| {
         entry
-            .spawn((button("Lattice Demo"), OpensLatticeDemo))
+            .spawn((button("Character & Spell Creator"), OpensCharacterCreator))
             .insert(scenario_card_node())
             .insert(BorderColor::all(ACCENT_EDGE))
             .with_children(|button| {
-                button.spawn(label(assets, "Lattice Demo"));
+                button.spawn(label(assets, "Character & Spell Creator"));
                 button.spawn((
                     blurb(
                         assets,
-                        "Poke the magic ruleset: cast, channel, strike, break enchantments.",
+                        "Build, save, revise, duplicate, and test lattices and spells.",
+                    ),
+                    Node {
+                        width: Val::Percent(100.0),
+                        ..default()
+                    },
+                ));
+            });
+        entry
+            .spawn((button("Combat Lab"), OpensCombatLab))
+            .insert(scenario_card_node())
+            .insert(BorderColor::all(ACCENT_EDGE))
+            .with_children(|button| {
+                button.spawn(label(assets, "Combat Lab"));
+                button.spawn((
+                    blurb(
+                        assets,
+                        "Compose a sandbox or launch a deterministic combat fixture.",
                     ),
                     Node {
                         width: Val::Percent(100.0),
@@ -486,6 +508,11 @@ fn rebuild_scenario_list(
     }
 
     for scenario in library.visible_scenarios() {
+        // Focused combat demos scale behind Combat Lab's fixture selector in Wave 6;
+        // only world-first scenarios remain direct, data-backed title cards.
+        if scenario.category == ScenarioCategory::Demo {
+            continue;
+        }
         let Some(list) = lists
             .iter()
             .find_map(|(entity, list)| (list.0 == scenario.category).then_some(entity))
@@ -585,6 +612,7 @@ fn start_chosen_scenario(
             commands.insert_resource(ScenarioToLoad {
                 scenario: starts.scenario.clone(),
                 resolved_seed: seeds.resolved(&starts.scenario).map(ResolvedMapSeed),
+                encounter_override: None,
             });
             next.set(Screen::Loading);
         }
@@ -624,18 +652,30 @@ fn start_new_game(
     commands.insert_resource(ScenarioToLoad {
         scenario: scenario.clone(),
         resolved_seed: seeds.resolved(scenario).map(ResolvedMapSeed),
+        encounter_override: None,
     });
     next.set(Screen::Loading);
 }
 
 /// Opens the lattice ruleset demo when its button is pressed.
-fn open_lattice_demo(
-    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensLatticeDemo>)>,
+fn open_character_creator(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensCharacterCreator>)>,
     mut next: ResMut<NextState<Screen>>,
 ) {
     for interaction in &clicked {
         if *interaction == Interaction::Pressed {
-            next.set(Screen::LatticeDemo);
+            next.set(Screen::CharacterCreator);
+        }
+    }
+}
+
+fn open_combat_lab(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<OpensCombatLab>)>,
+    mut next: ResMut<NextState<Screen>>,
+) {
+    for interaction in &clicked {
+        if *interaction == Interaction::Pressed {
+            next.set(Screen::CombatLab);
         }
     }
 }
@@ -903,17 +943,17 @@ mod tests {
         ));
     }
 
-    /// The demo button is part of the static title layout and switches screens.
+    /// Creator authoring is a static Demo-lane entry and switches screens.
     #[test]
-    fn the_lattice_demo_button_opens_the_demo_screen() {
+    fn the_creator_button_opens_the_creator_screen() {
         let mut app = test_app();
         go_to(&mut app, Screen::Title);
 
         let world = app.world_mut();
-        let mut buttons = world.query_filtered::<Entity, With<OpensLatticeDemo>>();
+        let mut buttons = world.query_filtered::<Entity, With<OpensCharacterCreator>>();
         let button = buttons
             .single(world)
-            .expect("the title screen should offer exactly one demo button");
+            .expect("the title screen should offer exactly one creator button");
         app.world_mut()
             .entity_mut(button)
             .insert(Interaction::Pressed);
@@ -922,8 +962,8 @@ mod tests {
 
         assert_eq!(
             *app.world().resource::<State<Screen>>().get(),
-            Screen::LatticeDemo,
-            "pressing the demo button should enter the demo screen"
+            Screen::CharacterCreator,
+            "pressing the creator button should enter the creator screen"
         );
     }
 
@@ -942,7 +982,6 @@ mod tests {
 
         for (name, category) in [
             ("Map One", ScenarioCategory::Map),
-            ("Demo One", ScenarioCategory::Demo),
             ("Map Two", ScenarioCategory::Map),
         ] {
             let button = button_named(&mut app, name);
@@ -975,11 +1014,16 @@ mod tests {
             1,
             "scenario-backed demos must not replace the static rules demo"
         );
-        let mut demo_buttons = world.query_filtered::<(&Name, Entity), With<OpensLatticeDemo>>();
-        let (name, static_button) = demo_buttons
-            .single(world)
-            .expect("the static demo has one exact button");
-        assert_eq!(name.as_str(), "Lattice Demo");
+        let mut demo_buttons =
+            world.query_filtered::<(&Name, Entity), Or<(With<OpensCharacterCreator>, With<OpensCombatLab>)>>();
+        let buttons: Vec<_> = demo_buttons.iter(world).collect();
+        assert_eq!(buttons.len(), 2);
+        let static_button = buttons
+            .iter()
+            .find_map(|(name, entity)| {
+                (name.as_str() == "Character & Spell Creator").then_some(*entity)
+            })
+            .expect("the static creator entry exists");
 
         let static_entry = world
             .get::<ChildOf>(static_button)
@@ -1019,7 +1063,10 @@ mod tests {
     #[test]
     fn shipped_scenarios_build_all_rows_inside_a_scroll_area() {
         let library = shipped_library();
-        let expected_rows = library.visible_scenarios().count();
+        let expected_rows = library
+            .visible_scenarios()
+            .filter(|scenario| scenario.category == ScenarioCategory::Map)
+            .count();
         let mut app = test_app_with(library);
 
         go_to(&mut app, Screen::Title);
@@ -1027,20 +1074,20 @@ mod tests {
         assert_eq!(scenario_entries(&mut app), expected_rows);
         assert_eq!(buttons(&mut app), expected_rows);
         assert_scrollable_scenario_lists(&mut app);
-        for category in [ScenarioCategory::Map, ScenarioCategory::Demo] {
-            let expected: Vec<String> = app
-                .world()
-                .resource::<ScenarioLibrary>()
-                .visible_scenarios()
-                .filter(|scenario| scenario.category == category)
-                .map(|scenario| scenario.name.clone())
-                .collect();
-            assert_eq!(
-                rendered_names(&mut app, category),
-                expected,
-                "every non-default shipped entry should appear exactly once in its authored lane"
-            );
-        }
+        let category = ScenarioCategory::Map;
+        let expected: Vec<String> = app
+            .world()
+            .resource::<ScenarioLibrary>()
+            .visible_scenarios()
+            .filter(|scenario| scenario.category == category)
+            .map(|scenario| scenario.name.clone())
+            .collect();
+        assert_eq!(
+            rendered_names(&mut app, category),
+            expected,
+            "every non-default shipped entry should appear exactly once in its authored lane"
+        );
+        assert!(rendered_names(&mut app, ScenarioCategory::Demo).is_empty());
     }
 
     /// The menu still has its scenarios when you come back to it.

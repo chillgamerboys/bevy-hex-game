@@ -8,6 +8,7 @@ use bevy::prelude::*;
 use hex_core::Pause;
 
 use crate::save::ResumeNotice;
+use crate::screens::combat_lab::CombatLabSession;
 
 use super::overlay_root;
 use super::widgets::{blurb, display, UiAssets};
@@ -24,15 +25,21 @@ struct PauseMenu;
 #[derive(Component)]
 struct ResumeNoticeText;
 
-fn spawn_pause_menu(mut commands: Commands, assets: Res<UiAssets>) {
+fn spawn_pause_menu(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    lab: Option<Res<CombatLabSession>>,
+) {
+    let hint = if lab.is_some() {
+        "ESC to resume   ·   F5 save disabled for Combat Lab   ·   BACKSPACE to return"
+    } else {
+        "ESC to resume   ·   F5 to save exploration   ·   BACKSPACE to title"
+    };
     commands
         .spawn((overlay_root("Pause Menu"), PauseMenu))
         .with_children(|parent| {
             parent.spawn(display(&assets, "Paused"));
-            parent.spawn(blurb(
-                &assets,
-                "ESC to resume   ·   F5 to save exploration   ·   BACKSPACE to title",
-            ));
+            parent.spawn(blurb(&assets, hint));
             parent.spawn((ResumeNoticeText, blurb(&assets, "")));
         });
 }

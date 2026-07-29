@@ -1,45 +1,31 @@
-// The menu walk: title screen, the lattice demo's full interaction loop, and
-// the return trip. Run with:
-//   HEX_WALK_SCRIPT=walks/menus.ron HEX_WALK_OUT=.context/visual-walks/local \
-//   cargo run -p hex_game --features visual-walk
-// Add HEX_WALK_SIZE=1280x720 to review an exact smaller viewport (default 1920x1080).
-//
-// Cast buttons carry their spell's name ("Cast Metal Shield") because entity
-// order is not stable across UI rebuilds — never target them by index.
-// "Demo Cell (5, 0)" is Metal Shield's first funding gem, so striking it
-// after casting the shield shatters the enchantment on camera.
+// The Wave 6 menu walk: title, settings, creator, Combat Lab, and return trips.
 [
     AwaitScreen("Title"),
     Settle(45),
     Capture("01-title"),
     Click(name: "Settings"),
     AwaitScreen("Settings"),
-    Settle(30),
+    Settle(20),
     Capture("02-settings"),
     Click(name: "Back"),
     AwaitScreen("Title"),
+    Click(name: "Character & Spell Creator"),
+    AwaitScreen("CharacterCreator"),
     Settle(30),
-    Click(name: "Lattice Demo"),
-    AwaitScreen("LatticeDemo"),
-    Settle(45),
-    Capture("03-demo-fresh"),
-    Click(name: "Cast Ember"),
-    Settle(15),
-    Capture("04-demo-after-ember"),
-    Click(name: "End Turn"),
-    Settle(15),
-    Capture("05-demo-after-end-turn"),
-    Click(name: "Cast Metal Shield"),
-    Settle(15),
-    Capture("06-demo-shield-locked"),
-    Click(name: "Demo Cell (5, 0)"),
-    Settle(15),
-    Capture("07-demo-shield-broken"),
-    Click(name: "Reset"),
-    Settle(15),
-    Capture("08-demo-reset"),
-    Key("Backspace"),
+    Capture("03-character-creator"),
+    Click(name: "Spells"),
+    Settle(20),
+    Capture("04-spell-creator"),
+    Click(name: "Back"),
     AwaitScreen("Title"),
-    Settle(30),
-    Capture("09-title-return"),
+    Click(name: "Combat Lab"),
+    AwaitScreen("CombatLab"),
+    Settle(20),
+    Capture("05-combat-sandbox"),
+    Click(name: "Fixed Fixtures"),
+    Settle(20),
+    Capture("06-fixed-fixtures"),
+    Click(name: "Back"),
+    AwaitScreen("Title"),
+    Capture("07-title-return"),
 ]

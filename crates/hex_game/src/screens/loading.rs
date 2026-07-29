@@ -23,6 +23,7 @@ pub(super) fn plugin(app: &mut App) {
         PostUpdate,
         (
             crate::scenarios::validate_loaded_scenario,
+            super::combat_lab::apply_creator_content_overlay,
             enter_gameplay_when_ready,
         )
             .chain()

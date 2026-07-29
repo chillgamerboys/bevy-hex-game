@@ -30,6 +30,7 @@ mod capture;
 mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
+mod creation_store;
 mod menus;
 mod preferences;
 mod readouts;
@@ -208,6 +209,7 @@ impl Plugin for AppPlugin {
 
         app.add_plugins((
             hex_assets::plugin,
+            creation_store::plugin,
             preferences::plugin,
             hex_objects::plugin,
             hex_map::plugin,

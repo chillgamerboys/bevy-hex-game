@@ -533,8 +533,14 @@ has somewhere obvious to go.
 A scenario names a world, a sky, and an encounter. The library's `default_game`
 names the entry launched by New Game; that entry is hidden from the development lanes.
 Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
-`category`. Scenario-backed demos share the Demo lane with the static **Lattice Demo**
-card.
+`category`. Wave 6 does not expose scenario-backed demos as title cards: the Demos
+lane contains only **Character & Spell Creator** and **Combat Lab**. Focused combat
+scenarios are selected by stable fixture ID inside Combat Lab.
+
+Immutable creator-format templates and automation records live in
+`creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
+`AutomationFixture` records are isolated behind fixed fixtures. Local saved creations
+belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
 
 ```ron
 (
