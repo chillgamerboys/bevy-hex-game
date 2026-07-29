@@ -90,9 +90,12 @@ impl LocalPatchFrame {
 
     /// Stable world-space center selected for this patch.
     #[must_use]
-    #[expect(
-        dead_code,
-        reason = "the next stacked Ring7 runner reports canonical validation frames"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the next stacked Ring7 runner reports canonical validation frames"
+        )
     )]
     pub(crate) const fn center(self) -> HexCoord {
         self.center
