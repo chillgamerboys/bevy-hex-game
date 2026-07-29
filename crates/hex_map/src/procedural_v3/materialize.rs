@@ -15,7 +15,9 @@ use hex_core::{
     SpecialMovementRegions, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
 };
 
-use super::fingerprint::{semantic_plan_fingerprint, FingerprintEncoder};
+use super::fingerprint::{
+    encode_light_presentation, semantic_plan_fingerprint, FingerprintEncoder,
+};
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::selection::ValidatedWorldPlan;
 use super::volume::{
@@ -827,6 +829,7 @@ fn encode_lights(
             IlluminationLevel::Bright => 2,
         });
         encoder.u32(light.radius);
+        encode_light_presentation(encoder, light.presentation);
     }
     Ok(())
 }
@@ -1270,6 +1273,7 @@ mod tests {
                     origin: light,
                     level: IlluminationLevel::Dim,
                     radius: light_radius,
+                    presentation: None,
                 },
             )]),
             biome_regions,
@@ -1412,7 +1416,7 @@ mod tests {
             repeated.materialized_fingerprint
         );
         assert_eq!(
-            first.materialized_fingerprint, 8_365_186_683_002_973_576,
+            first.materialized_fingerprint, 15_501_428_346_321_951_035,
             "update only with an explicit materialized V3 fingerprint decision"
         );
         assert_ne!(
