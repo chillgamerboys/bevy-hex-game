@@ -16,15 +16,19 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_combat::{
-    CombatEvent, CommandRefusal, FactionKnowledge, Initiative, KnownCell, RestorationRefusal,
-    TurnOrder,
+    CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, KnownCell,
+    RestorationRefusal, TurnOrder,
 };
 use hex_core::{
-    CommandQueue, ControlOwner, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand,
-    KnowledgeExpiry, KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen,
-    TilePos, UnitId,
+    CommandQueue, ControlOwner, ElementId, GameCommand, Headroom, HexCoord, HexSpan, IssuedCommand,
+    KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat,
+    Screen, SubstanceId, TilePos, UnitId,
 };
 use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    SurfaceSnapshot, SurfaceSnapshots,
+};
 use hex_units::{Downed, Faction, Party, Player, Standing, StandsOn, UnitRegistry};
 
 fn test_app() -> App {
@@ -87,6 +91,46 @@ fn spawn(app: &mut App, id: UnitId, faction: Faction, coord: HexCoord) -> Entity
         .resource_mut::<UnitRegistry>()
         .register(id, entity);
     entity
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "duplicate test identities or surfaces invalidate the fixture"
+)]
+fn publish_spatial_knowledge(app: &mut App) {
+    let rows: Vec<(UnitId, Faction, TilePos, HexSpan)> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .map(|(id, faction, standing)| (*id, *faction, standing.0.pos, standing.0.span))
+            .collect()
+    };
+    let current =
+        SurfaceSnapshots::try_from_iter(rows.iter().map(|&(_, _, pos, span)| SurfaceSnapshot {
+            pos,
+            span,
+            substance: SubstanceId(0),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }))
+        .expect("test units occupy unique surfaces");
+    let observe_all = || {
+        let mut observation = FactionObservation::new();
+        for &(id, faction, pos, _) in &rows {
+            observation.insert_surface(pos);
+            observation
+                .try_insert_unit(ObservedUnit { id, faction, pos })
+                .expect("test unit ids are unique");
+        }
+        observation
+    };
+    let observations = FactionObservations::from_factions(observe_all(), observe_all());
+    let mut spatial = FactionMapKnowledge::new();
+    apply_observations(&mut spatial, &current, &observations);
+    app.insert_resource(spatial);
 }
 
 fn take_events(app: &mut App) -> Vec<CombatEvent> {
@@ -697,6 +741,7 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
         Faction::Hostile,
         HexCoord::new_cubic(1, -1, 0),
     );
+    publish_spatial_knowledge(&mut app);
 
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
@@ -709,20 +754,23 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .is_some(),
         "the defender should start in the order"
     );
-    let learned = app.world_mut().resource_mut::<FactionKnowledge>().learn(
-        Faction::Player,
-        UnitId(1),
-        LatticeCoord::ORIGIN,
-        KnownCell {
-            kind: CellKind::Gem {
-                element: ElementId(0),
+    let learned = app
+        .world_mut()
+        .resource_mut::<FactionLatticeKnowledge>()
+        .learn(
+            Faction::Player,
+            UnitId(1),
+            LatticeCoord::ORIGIN,
+            KnownCell {
+                kind: CellKind::Gem {
+                    element: ElementId(0),
+                },
+                mana: Some(3),
+                disabled: false,
+                source: KnowledgeSource::Divination,
+                expiry: KnowledgeExpiry::Sustained,
             },
-            mana: Some(3),
-            disabled: false,
-            source: KnowledgeSource::Divination,
-            expiry: KnowledgeExpiry::Sustained,
-        },
-    );
+        );
     assert!(learned, "precondition: the hostile lattice is known");
 
     // Take both hexes down through the real path: park a decision, answer it.
@@ -761,11 +809,11 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
     );
     assert!(
         app.world()
-            .resource::<FactionKnowledge>()
+            .resource::<FactionLatticeKnowledge>()
             .view(Faction::Player, UnitId(1))
             .and_then(|known| known.cell(LatticeCoord::ORIGIN))
             .is_some(),
-        "knowledge of a revivable downed unit must survive until actual despawn"
+        "knowledge of a retained downed unit must survive until actual despawn"
     );
     assert_eq!(
         take_events(&mut app),
@@ -845,7 +893,7 @@ fn a_short_answer_is_accepted_when_the_lattice_has_no_more_to_give() {
     );
 }
 
-/// A downed unit's lattice is still reachable, or nothing could ever revive it.
+/// A downed unit's lattice remains reachable for a possible future restoration flow.
 ///
 /// Filtering the applier's lattice query by `Downed` would have been the obvious thing
 /// and would have quietly made the design's stated recovery impossible: downed exists
@@ -870,7 +918,7 @@ fn a_downed_units_lattice_can_still_be_restored() {
         "a spent lattice should put its unit down"
     );
 
-    // The engine's restore reaches it, which is what a revival spell will do.
+    // The engine's restore reaches the retained lattice; combat reactivation is not built.
     let mut entity = app.world_mut().entity_mut(defender);
     let mut state = entity
         .get_mut::<LatticeState>()

@@ -22,15 +22,42 @@ the map with sharp frozen massifs, deliberate cliffs, and a high-pass/low-bypass
 pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
+
+V3 now has its first two complete recipe lanes. Waterfall authors deterministic
+directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
+basin, outlet, and redundant land routes; an opaque animated renderer consumes the
+same exact flow facts. Forest plans rolling terrain and clearings, places its denser
+woodland, then bends a mostly two-wide road around those exact roots with short
+one-wide constraints and a three-cell prairie taper. Most prairie surfaces carry tall
+grass, while a few renderer-private tall exemplars vary the shared low-poly tree
+silhouette without claiming future multi-voxel occupancy. Tree roots are exact map
+blockers and tall grass is presentation-only. Map validation, movement previews,
+click routing, command validation, spawning, review relocation, and enemy pathfinding
+all consume the same exact blocker projection through the gameplay-owned adapter that
+has now passed review and is live on `dev`.
+
+Authoritative spatial perception now runs headlessly every gameplay frame.
+`hex_world` publishes a renderer-independent Bright or Dim exterior tier;
+`hex_perception` derives exact exterior/interior domains, maximum-tier public local
+lights, pooled faction sight, and independent faction memory over stacked `TilePos`
+surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
+edits, unseen units disappear immediately, and the player-side traversal projection
+is rebuilt from the same knowledge. Three validated hot-reloadable sight profiles
+live in `perception.ron`. World observation already gates the gameplay-owned hostile
+lattice-knowledge view. Fog/picking presentation, generated cave lamps/crystals,
+unknown-frontier routing, and engagement/targeting/AI consumers are not wired yet.
+
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
 reachable set and the route before a click commits to either.
 Combat has two tempos, a turn order, engagement with hysteresis, and surface-aware
 targeting where height buys range. Its tuning values are designer-facing knobs in
-`assets/config/combat.ron`, and every sim mutation flows through one **command
-funnel**: clicks, the end-turn key, and the AI emit `GameCommand`s into a queue,
-and a single applier in `hex_combat` validates each against seat, turn, reach, and
-budget before anything moves — which is what makes an input log a replay.
+`assets/config/combat.ron`. Player and AI intent flows through one **command funnel**:
+clicks, the end-turn key, and the AI emit `GameCommand`s into a queue, and a single
+applier in `hex_combat` validates each against seat, turn, reach, and budget before
+applying it. Passive effects and derived consequences such as downing run at their
+own deterministic schedule points. The queue is consumed rather than persisted;
+recording its command stream is future replay work.
 
 Who stands on a map is an **encounter**: `assets/config/encounters/*.ron`, a roster of
 units per side, each naming an archetype and one placement — an authored coordinate, a
@@ -61,9 +88,10 @@ roster's only fusion chain and Scrying Eye — and units spawn carrying them, ke
 archetype their encounter rostered. A cast goes through the command funnel and the
 legality ladder, and drains the lattice that paid for it. Damage names a count; **the defender
 chooses which hexes go down**, answering through a `ChooseDisables` command so the choice
-is in the replay log rather than made inside the applier. A unit whose every hex is
-disabled leaves the turn order and is **downed** — revivable, not despawned. A strike
-deals damage the same way, through the same decision.
+is replayable rather than made inside the applier. A unit whose every hex is disabled
+leaves the turn order and is **downed** — retained with its lattice for a future
+restoration flow, not despawned. Reactivation is not implemented. A strike deals
+damage the same way, through the same decision.
 
 **And casting has an interface.** A spell panel lists what the acting unit inscribes,
 each row carrying its live blocked reason from `castable` and, above the list, whichever
@@ -81,8 +109,10 @@ Bodies are one hex wide; there is no footprint for anything larger, and units do
 obstruct each other — so a route may be drawn straight through another piece.
 
 The **knowledge seam is live** as `hex_combat::knowledge`:
-`FactionKnowledge::view` is the one read path for a hostile lattice. Observation
-publishes existence and faction only; capacity and cells remain opaque until Reveal.
+`FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
+World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
+the gameplay adapter publishes only existence and faction, while capacity and cells
+remain opaque until Reveal.
 Scrying Eye writes a complete, expiring projection whose known cells refresh from live
 mana and disabled state without extending its lifetime. The HUD renders that projection,
 retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
@@ -102,17 +132,21 @@ version, sessions write a `hex_game.log` beside the executable (fresh per launch
 and a panic hook puts the last words in it.
 
 The standalone **Asset Workshop** is available through `cargo editor`. It loads the
-canonical palette and voxel-style catalogs, starts with an unsaved calibration object,
-and provides palette/style editing plus hex-voxel object authoring with semantic
-parts, masks, level slicing, deterministic preview rigs, camera controls, grouped
-undo/redo, explicit validated saves, external-change guards, and untracked crash
-recovery. A clean saved object can export a deterministic ten-view review pack,
-contact sheet, and semantic report under `.context/asset-workshop/`. Its RON schemas
-and fingerprints live in `hex_assets`. Terrain substances, liquids, construction
-metal, and unit presentation now resolve exact palette swatches at runtime; temporary
-Forest vegetation remains on its existing feature-renderer literals until that branch
-is reconciled. Runtime object rendering, Forest object integration, and procedural
-plant generation have not landed yet.
+canonical palette, voxel-style, and object catalogs, starts with an unsaved
+calibration object, and provides palette/style editing plus hex-voxel object authoring
+with semantic parts, masks, level slicing, deterministic preview rigs, camera
+controls, grouped undo/redo, explicit validated saves, external-change guards, and
+untracked crash recovery. A clean saved object can export a deterministic ten-view
+review pack, contact sheet, and semantic report under `.context/asset-workshop/`.
+
+The runtime resolves that complete art graph atomically and retains its last valid
+revision across a bad hot reload. `hex_objects` renders static instances from cached
+mesh chunks using the game prism and exact palette-backed material modes. The first
+production exemplar is the six-level `plant/small-broadleaf`. Terrain substances,
+liquids, construction metal, and unit presentation also resolve exact palette
+swatches. Forest still presents its generated temporary vegetation directly; adapting
+those placements to authored object instances and procedural plant synthesis have not
+landed yet.
 
 ## What is provisional
 
@@ -122,7 +156,7 @@ place** — they are meant to be replaced.
 
 | Thing | Now | What it is waiting for |
 |---|---|---|
-| **Initiative** | a number on a component, high to low, ties by stable `UnitId` | Derived from lattice size, per the design — which also solves boss action economy by giving a large lattice several slots |
+| **Initiative** | a number on a component, high to low, ties by stable `UnitId` | The initiative question; derived-from-lattice is one candidate and could also address boss action economy |
 | **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
 | **Damage** | disables lattice hexes; a player defender chooses and confirms live cells in the HUD, while non-player defenders use a deterministic cheapest-first policy | The fight-length question — how many hexes a spell should take is a feel question nobody has played with yet |
 | **Enemy behaviour** | close the distance, swing | A rout threshold to know when to stop, and a reason to cast. Units carry lattices now, so the AI *could* read `view()` and choose a spell; it still only strikes, which is the placeholder it always was |
@@ -140,9 +174,10 @@ produce the same order across runs and saves.
 It disables hexes and it can put a unit down, and that is deliberately as far as it
 goes. **Downed is provisional**: the design leaves both functional death — a threshold
 arriving before zero — and permadeath open, and a unit whose lattice is spent simply
-leaves the turn order revivable. How many hexes a spell disables, how long a fight runs,
-and what a strike costs are all knobs rather than answers; `strike_disables` sits in
-`combat.ron` beside the rest precisely so it can be moved without touching code.
+leaves the turn order while retaining its lattice for a future restoration flow.
+Reactivation is not implemented. How many hexes a spell disables, how long a fight
+runs, and what a strike costs are all knobs rather than answers; `strike_disables`
+sits in `combat.ron` beside the rest precisely so it can be moved without touching code.
 Further damage against an already downed target is refused before spending the action
 or mana, while non-damaging inspection such as Reveal can still reach the retained
 lattice.
@@ -159,10 +194,11 @@ The countdown lives **only** there. An earlier shape parked a `Vec<Burn>` inside
 source the lattice has no vocabulary for, and a tick point a rules engine with no turn
 order cannot see. The two settled rules hold — the tick point is **personal, not the round
 boundary**, and burn **ignores armour** while still going through the defender's choice,
-so its damage lands in the replay log like every other hit. What that does *not* settle
-is anything about the negative spiral it accelerates: fight length, functional death, and
-the brakes the design names (rout, surrender) are all still deferred, and burn deliberately
-ships without one. See [systems/combat.md](../systems/combat.md#effects-that-outlast-their-cast).
+so the nondeterministic choice is captured as a replayable command. No replay log is
+persisted yet. What that does *not* settle is anything about the negative spiral it
+accelerates: fight length, functional death, and the brakes the design names (rout,
+surrender) are all still deferred, and burn deliberately ships without one. See
+[systems/combat.md](../systems/combat.md#effects-that-outlast-their-cast).
 
 ## Not built, and not next
 
@@ -237,9 +273,9 @@ The first implementation also ships with explicit limitations:
   and `needs_los` on spell content is parsed but unenforced until then.
 - **A breached cave roof will not admit daylight.** Terrain edits already keep the
   interior *roof* projection current, but interior **membership** is never re-derived,
-  so a chamber you blow open still counts as inside. Nothing is wrong today — light
-  domains have no producer yet — but the two facts disagree the moment perception
-  lands ([boundary.md](boundary.md) ask I).
+  so a chamber you blow open still counts as inside. Live perception therefore
+  continues to classify the chamber as Interior and does not admit daylight
+  ([boundary.md](boundary.md) ask I).
 - **Casting is provisionally combat-only.** Recovery between fights is intended to be
   a rest action, but real-time casting still needs an interaction and rest flow.
   **Channelling and rituals are deferred** — `co_castable` parses and labels rituals
@@ -250,7 +286,8 @@ The first implementation also ships with explicit limitations:
   a unit and edits to its supporting surface until falling and footing reconciliation
   exist.
 - **Downed-first death is provisional.** A fully disabled unit initially leaves the
-  turn order and remains revivable; functional death and permadeath remain open.
+  turn order and retains its lattice for a future restoration flow. Reactivation is
+  not implemented; functional death and permadeath remain open.
 - **A unit effect reaches the unit on the anchor, not everyone in the volume — and an
   area spell is therefore refused at load.** `volumes::resolve` produces the full voxel
   list and the preview paints it, but `DisableHexes` and `Burn` both apply to whoever

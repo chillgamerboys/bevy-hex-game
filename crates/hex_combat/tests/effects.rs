@@ -22,13 +22,18 @@ use hex_assets::{
     ManaAxis, Spell, SpellBook, SpellFile, SubstanceTable, TargetShape, TargetingSpec,
 };
 use hex_combat::{
-    CombatEvent, CommandRefusal, FactionKnowledge, Initiative, PersistentEffects, TurnOrder,
+    CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, PersistentEffects, TurnOrder,
 };
 use hex_core::{
-    CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, HexCoord, HexSpan,
-    IssuedCommand, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen, TilePos, Turn, UnitId,
+    CommandQueue, ControlOwner, EffectEnd, EffectPayload, GameCommand, Headroom, HexCoord, HexSpan,
+    IssuedCommand, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, Screen,
+    SubstanceId, TilePos, Turn, UnitId,
 };
 use hex_lattice::{apply_cast, castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    SurfaceSnapshot, SurfaceSnapshots,
+};
 use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
 
 /// The level every unit in these tests stands on.
@@ -282,6 +287,47 @@ fn spawn(
     entity
 }
 
+/// Gives the combat adapter an explicit world-owned observation snapshot.
+#[expect(
+    clippy::expect_used,
+    reason = "duplicate test identities or surfaces invalidate the fixture"
+)]
+fn publish_spatial_knowledge(app: &mut App) {
+    let rows: Vec<(UnitId, Faction, TilePos, HexSpan)> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .map(|(id, faction, standing)| (*id, *faction, standing.0.pos, standing.0.span))
+            .collect()
+    };
+    let current =
+        SurfaceSnapshots::try_from_iter(rows.iter().map(|&(_, _, pos, span)| SurfaceSnapshot {
+            pos,
+            span,
+            substance: SubstanceId(0),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }))
+        .expect("test units occupy unique surfaces");
+    let observe_all = || {
+        let mut observation = FactionObservation::new();
+        for &(id, faction, pos, _) in &rows {
+            observation.insert_surface(pos);
+            observation
+                .try_insert_unit(ObservedUnit { id, faction, pos })
+                .expect("test unit ids are unique");
+        }
+        observation
+    };
+    let observations = FactionObservations::from_factions(observe_all(), observe_all());
+    let mut spatial = FactionMapKnowledge::new();
+    apply_observations(&mut spatial, &current, &observations);
+    app.insert_resource(spatial);
+}
+
 /// The caster, the defender, and the position the defender stands on.
 struct Fight {
     caster: Entity,
@@ -315,6 +361,7 @@ fn two_casters(app: &mut App) -> Fight {
         10,
         lattice_casting(&book, &catalog, "Ward", "Metal", 3),
     );
+    publish_spatial_knowledge(app);
 
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
@@ -349,6 +396,7 @@ fn two_scriers(app: &mut App) -> Fight {
         10,
         lattice_casting(&book, &catalog, "Ward", "Metal", 3),
     );
+    publish_spatial_knowledge(app);
 
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
@@ -383,6 +431,7 @@ fn two_ember_casters(app: &mut App) -> Fight {
         10,
         lattice_casting(&book, &catalog, "Ward", "Metal", 3),
     );
+    publish_spatial_knowledge(app);
 
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
@@ -591,7 +640,7 @@ fn reveal_exposes_a_complete_live_lattice_for_the_configured_rollovers() {
         .collect();
     let view = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, UnitId(2))
         .expect("base visibility was published");
     assert_eq!(view.known_capacity(), Some(revealed.len()));
@@ -621,7 +670,7 @@ fn reveal_exposes_a_complete_live_lattice_for_the_configured_rollovers() {
     assert_eq!(app.world().resource::<TurnOrder>().round, 1);
     assert_eq!(
         app.world()
-            .resource::<FactionKnowledge>()
+            .resource::<FactionLatticeKnowledge>()
             .view(Faction::Player, UnitId(2))
             .and_then(|known| known.known_capacity()),
         Some(5),
@@ -635,7 +684,7 @@ fn reveal_exposes_a_complete_live_lattice_for_the_configured_rollovers() {
     assert_eq!(app.world().resource::<TurnOrder>().round, 2);
     let expired = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, UnitId(2))
         .expect("existence and faction remain known");
     assert!(expired.is_opaque());
@@ -778,7 +827,7 @@ fn a_non_damaging_reveal_can_still_inspect_a_downed_unit() {
 
     let capacity = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, UnitId(2))
         .and_then(|known| known.known_capacity());
     assert_eq!(
@@ -877,7 +926,8 @@ fn a_burn_comes_due_at_the_start_of_its_targets_turn() {
     );
 }
 
-/// The burn's damage goes through `ChooseDisables`, so it lands in the replay log.
+/// The burn's damage goes through `ChooseDisables`, so a future replay can preserve
+/// the choice.
 ///
 /// Burn ignoring armour is **not** burn ignoring the defender's choice. A runtime that
 /// disabled hexes itself would satisfy every other test in this file — the hex would

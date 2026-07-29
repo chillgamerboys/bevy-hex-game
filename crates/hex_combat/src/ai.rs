@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use hex_ai::{
     ActionKey, AiAlgorithm, AiAlgorithmId, AiAlliedUnit, AiCellKind, AiController,
@@ -21,7 +22,7 @@ use hex_assets::{
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
     HexSpan, HexTile, IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems,
-    PendingDecision, Screen, Sextant, SubstanceId, TilePos, Turn, UnitId,
+    PendingDecision, Screen, Sextant, SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
 };
 use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState};
 use hex_units::{
@@ -30,7 +31,7 @@ use hex_units::{
 };
 use xxhash_rust::xxh3::xxh3_64;
 
-use crate::{delivers_anything, FactionKnowledge, PersistentEffects, TurnOrder};
+use crate::{delivers_anything, FactionLatticeKnowledge, PersistentEffects, TurnOrder};
 
 /// Registered mutable algorithm instances, scoped to one gameplay session.
 #[derive(Resource)]
@@ -216,10 +217,19 @@ fn clear_session(
     traces.entries.clear();
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the host projects independent authoritative stores into a pure request"
-)]
+#[derive(SystemParam)]
+struct AiWorld<'w> {
+    profiles: Option<Res<'w, AiProfileCatalog>>,
+    table: Option<Res<'w, SubstanceTable>>,
+    spells: Option<Res<'w, SpellBook>>,
+    content: Option<Res<'w, ContentIndex>>,
+    elements: Option<Res<'w, ElementCatalog>>,
+    combat: Option<Res<'w, CombatSettings>>,
+    knowledge: Res<'w, FactionLatticeKnowledge>,
+    effects: Res<'w, PersistentEffects>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+}
+
 fn drive_ai(
     turn_order: Res<TurnOrder>,
     unit_registry: Res<UnitRegistry>,
@@ -227,18 +237,11 @@ fn drive_ai(
     mut queue: ResMut<CommandQueue>,
     mut algorithms: ResMut<AiAlgorithmRegistry>,
     mut traces: ResMut<AiDecisionTraces>,
-    profiles: Option<Res<AiProfileCatalog>>,
-    table: Option<Res<SubstanceTable>>,
-    spells: Option<Res<SpellBook>>,
-    content: Option<Res<ContentIndex>>,
-    elements: Option<Res<ElementCatalog>>,
-    combat: Option<Res<CombatSettings>>,
-    knowledge: Res<FactionKnowledge>,
-    effects: Res<PersistentEffects>,
+    world: AiWorld,
     tiles: TileQuery,
     units: UnitQuery,
 ) {
-    let Some(table) = table else {
+    let Some(table) = world.table.as_deref() else {
         return;
     };
     let decision = match *pending {
@@ -278,7 +281,7 @@ fn drive_ai(
         group: None,
     };
     let controller = actor.9.unwrap_or(&fallback_controller);
-    let algorithm_id = configured_algorithm(controller, profiles.as_deref());
+    let algorithm_id = configured_algorithm(controller, world.profiles.as_deref());
     if !algorithms.contains(&algorithm_id) {
         warn!(
             "AI profile {:?} references unregistered algorithm {:?}; using baseline-v1",
@@ -291,17 +294,17 @@ fn drive_ai(
         AiAlgorithmId("baseline-v1".to_owned())
     };
 
-    let footing = Footing::from_tiles(tiles.iter(), &table, *actor.3);
+    let footing = Footing::from_tiles(tiles.iter(), table, *actor.3, world.blockers.as_deref());
     let commands = match kind {
         AiDecisionKind::TurnAction => enumerate_turn_actions(
             actor,
             &units,
             &footing,
             &tiles,
-            spells.as_deref(),
-            content.as_deref(),
-            elements.as_deref(),
-            combat.as_deref(),
+            world.spells.as_deref(),
+            world.content.as_deref(),
+            world.elements.as_deref(),
+            world.combat.as_deref(),
         ),
         AiDecisionKind::ChooseDisables => {
             enumerate_cell_choices(actor_id, actor.10, actor.11, count, false, None)
@@ -333,12 +336,12 @@ fn drive_ai(
         actor,
         &units,
         &turn_order,
-        &knowledge,
-        &effects,
+        &world.knowledge,
+        &world.effects,
         &footing,
-        spells.as_deref(),
-        content.as_deref(),
-        elements.as_deref(),
+        world.spells.as_deref(),
+        world.content.as_deref(),
+        world.elements.as_deref(),
     );
     let request = DecisionRequest {
         controller: actor.8.copied().unwrap_or_default().0,
@@ -639,7 +642,7 @@ fn build_observation(
     ),
     units: &UnitQuery,
     turn_order: &TurnOrder,
-    knowledge: &FactionKnowledge,
+    knowledge: &FactionLatticeKnowledge,
     effects: &PersistentEffects,
     footing: &Footing,
     spells: Option<&SpellBook>,
@@ -800,7 +803,7 @@ fn full_lattice(spec: Option<&LatticeSpec>, state: Option<&LatticeState>) -> AiL
 }
 
 fn known_lattice(
-    knowledge: &FactionKnowledge,
+    knowledge: &FactionLatticeKnowledge,
     viewer: Faction,
     subject: UnitId,
 ) -> AiLatticeObservation {

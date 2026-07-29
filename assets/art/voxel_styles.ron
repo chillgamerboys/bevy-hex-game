@@ -1,4 +1,33 @@
 (
     schema_version: 1,
-    styles: {},
+    styles: {
+        "plant/foliage-dark": (
+            display_name: "Dark Foliage",
+            base_swatch: "plant/foliage-dark",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
+        "plant/foliage-light": (
+            display_name: "Light Foliage",
+            base_swatch: "plant/foliage-light",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
+        "plant/foliage-mid": (
+            display_name: "Mid Foliage",
+            base_swatch: "plant/foliage-mid",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
+        "plant/trunk": (
+            display_name: "Tree Trunk",
+            base_swatch: "plant/trunk",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
+    },
 )

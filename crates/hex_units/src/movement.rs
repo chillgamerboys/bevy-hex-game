@@ -45,7 +45,7 @@ use serde::{Deserialize, Serialize};
 use hex_assets::SubstanceTable;
 use hex_core::{
     AppSystems, Headroom, HexCoord, HexSpan, Mode, PausableSystems, SubstanceId, TilePos,
-    TraversalEndpoint, TraversalProfile, UnitId,
+    TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
 };
 
 /// Ordering for systems that consume a unit's logical position.
@@ -201,6 +201,9 @@ impl Footing {
     /// - **Room enough**, from the [`Headroom`] the map reports. Zero headroom means
     ///   the tile is buried inside a column and is not a surface at all; too little
     ///   means the body does not fit.
+    /// - **Unblocked**, from the optional exact [`TraversalBlockers`] projection.
+    ///   Generated features such as tree trunks occupy otherwise-solid surfaces;
+    ///   omitting those roots would make presentation and pathfinding disagree.
     ///
     /// Both are checked here rather than in the caller's query, so there is exactly
     /// one place the rule lives. Getting this wrong is not subtle in its effects and
@@ -211,6 +214,7 @@ impl Footing {
         tiles: impl Iterator<Item = (&'a TilePos, &'a HexSpan, &'a SubstanceId, &'a Headroom)>,
         table: &SubstanceTable,
         body: Body,
+        blockers: Option<&TraversalBlockers>,
     ) -> Self {
         let profile = body.traversal_profile();
         let mut footing = Self {
@@ -221,6 +225,9 @@ impl Footing {
         };
 
         for (pos, span, substance, headroom) in tiles {
+            if blockers.is_some_and(|blockers| blockers.contains(*pos)) {
+                continue;
+            }
             if !profile.admits_surface(table.is_solid(*substance), *headroom) {
                 continue;
             }
@@ -538,6 +545,7 @@ mod tests {
                 .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
             &table(),
             body,
+            None,
         )
     }
 
@@ -930,8 +938,29 @@ mod tests {
             .into_iter(),
             &table(),
             NORMAL,
+            None,
         );
         assert!(footing.ground(coord).is_none());
+    }
+
+    #[test]
+    fn exact_feature_blockers_are_not_footing() {
+        let start = tile(HexCoord::ORIGIN, 4);
+        let blocked = tile(HexCoord::from_axial(1, 0), 4);
+        let tiles = [start, blocked];
+        let mut blockers = TraversalBlockers::new();
+        assert!(blockers.insert(blocked.0));
+        let footing = Footing::from_tiles(
+            tiles
+                .iter()
+                .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
+            &table(),
+            NORMAL,
+            Some(&blockers),
+        );
+
+        assert!(footing.at(start.0).is_some());
+        assert!(footing.at(blocked.0).is_none());
     }
 
     /// A run buried inside a column is not a surface, however solid it is.

@@ -3,10 +3,10 @@
 The turn loop as it is built: the two tempos, what a turn costs, how a move is
 committed, and what elevation buys.
 
-Read [the design](../design/game.md) for the game this is heading toward — **most of
-it does not exist yet**, and the gap is deliberate rather than a backlog. Which of
-the numbers here are placeholders, and what each is waiting for, is
-[planning/status.md](../planning/status.md).
+Read [the design](../design/game.md) for the game this is heading toward. The playable
+combat core exists, while party-scale behavior, outcomes, and several policy choices
+remain deliberately open. Which of the numbers here are placeholders, and what each
+is waiting for, is [planning/status.md](../planning/status.md).
 
 ## Two modes, one map
 
@@ -180,12 +180,12 @@ section exists to prevent.
 
 | Channel | Answers | Owner |
 |---|---|---|
-| **Spatial perception** | *Where is that unit, and can I see it* | world owner, future `hex_perception` |
+| **Spatial perception** | *Where is that unit, and can I see it* | world owner, `hex_perception` |
 | **Lattice knowledge** | *What do I know about that unit's lattice* | `hex_combat::knowledge` |
 
 **Seeing a unit reveals nothing about its gems, its fusions, or what it can cast.**
 Observing establishes a position and permits targeting; divination is what reveals
-contents. `FactionKnowledge::view(viewer, subject)` is **the** read path for the
+contents. `FactionLatticeKnowledge::view(viewer, subject)` is **the** read path for the
 second question — the AI included — and reading a hostile `LatticeState` directly
 is a bug.
 
@@ -213,8 +213,13 @@ writes it. A local `.chain()` would look correct and race.
 
 ### What observation publishes
 
-Base visibility establishes only that the subject exists and which faction it belongs
-to. **Shape and capacity are hidden information too.** Until divination learns capacity,
+`FactionMapKnowledge` is the sole authority for whether the subject is currently
+observed. A gameplay-owned adapter copies only existence and faction into the lattice
+read seam; it does not rederive sight from combat entities. Losing observation hides
+the entire lattice view immediately. Any unexpired divination facts remain stored on
+their independent clock and become readable again only if the subject is re-observed.
+
+**Shape and capacity are hidden information too.** Until divination learns capacity,
 `known_capacity()` and `unknown_count()` both return `None`; the target panel says only
 `lattice unknown`.
 
@@ -222,11 +227,11 @@ to. **Shape and capacity are hidden information too.** Until divination learns c
 
 Units carry lattices. `lattices.ron` holds the archetypes, `spawn_units` attaches
 a `LatticeSpec`, `LatticeState` and `LatticeStats` keyed by the unit's
-`Archetype`, and the publishing systems that matched nothing now populate the
-store every frame in gameplay. `view()` returns real base visibility.
+`Archetype`, and the adapter consumes world perception every frame in gameplay.
+`view()` returns base visibility only for currently observed subjects.
 
 The target panel reads no hostile `LatticeSpec` or `LatticeState`; it projects only
-`FactionKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
+`FactionLatticeKnowledge::view`. A complete Reveal (the shipped Scrying Eye) learns capacity
 and every cell. While it lasts, already-divined cells refresh mana and disabled state
 from live truth without resetting their expiry. Tier one lasts through the current
 partial round and the next complete round, expiring at the following rollover.
@@ -327,7 +332,7 @@ question nobody has played with yet.
 | `hex_core` | `Mode`, `Turn` and `RoundElapsed` — shared because `hex_combat` writes them and `hex_units` reads them, and neither can see the other. Also `KnowledgeSource` / `KnowledgeExpiry`, which both knowledge channels need, and the `{source, target, payload, start, end}` persistent-effect vocabulary |
 | `hex_units` | Bodies, positions, factions, where a unit may step |
 | `hex_combat` | The turn order, engagement, the placeholder AI, the lattice-knowledge store, and the persistent-effect runtime |
-| `hex_lattice` | The pure rules engine. `hex_combat` depends on it because knowledge *of* a lattice needs the lattice vocabulary — and because `hex_core → hex_lattice` is the dependency direction, so the store cannot live in `hex_core` |
+| `hex_lattice` | The pure rules engine for castability, mana, fusions, enchantments, and disables. `hex_combat` drives it and owns turns, effects, defender decisions, and knowledge around it |
 | `hex_anim` | Moving a transform over time. Knows nothing about any of the above |
 
 `hex_combat` depends on `hex_units` because a turn order is a fact *about* units. That

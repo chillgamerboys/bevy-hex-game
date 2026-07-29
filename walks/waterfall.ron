@@ -1,0 +1,20 @@
+// Waterfall presentation gate: the same generated world in map and close
+// character cameras. Run with:
+//   HEX_WALK_SCRIPT=walks/waterfall.ron \
+//   HEX_WALK_OUT=.context/visual-walks/waterfall \
+//   cargo run --release -p hex_game --features visual-walk
+[
+    AwaitScreen("Title"),
+    StartScenario(name: "Waterfall"),
+    AwaitScreen("Gameplay"),
+    AwaitTerrain,
+    Settle(120),
+    Capture("01-waterfall-map"),
+    Key("C"),
+    Settle(60),
+    Capture("02-waterfall-character"),
+    Key("C"),
+    Settle(30),
+    Key("Backspace"),
+    AwaitScreen("Title"),
+]

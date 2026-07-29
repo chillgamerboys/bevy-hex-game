@@ -1,11 +1,22 @@
 //! Composable reasons for hiding presentation entities.
 //!
-//! Fog, cave roof cutaways, and future canopy cutaways may all affect the same
+//! Fog, cave roof cutaways, and canopy cutaways may all affect the same
 //! entity. A reason set prevents one owner from restoring visibility while another
 //! owner still requires the entity to remain hidden.
 
 use bevy_ecs::prelude::*;
 use bevy_reflect::prelude::*;
+
+use crate::TilePos;
+
+/// Marks one rendered tree part as eligible for character-camera canopy cutaway.
+///
+/// The exact root surface keeps stacked forests unambiguous without exposing the
+/// generator's private feature plan. Presentation uses the entity transform for
+/// smooth intersection tests and this position for the bounded horizontal search.
+#[derive(Component, Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[reflect(Component)]
+pub struct CanopyOccluder(pub TilePos);
 
 /// One independent owner of presentation occlusion.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -84,6 +95,16 @@ impl PresentationOcclusion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::HexCoord;
+
+    #[test]
+    fn canopy_marker_preserves_the_exact_stacked_root() {
+        let lower = TilePos::new(HexCoord::ORIGIN, 5);
+        let upper = TilePos::new(HexCoord::ORIGIN, 15);
+
+        assert_ne!(CanopyOccluder(lower), CanopyOccluder(upper));
+        assert_eq!(CanopyOccluder(upper).0, upper);
+    }
 
     #[test]
     fn removing_one_reason_does_not_clear_another() {

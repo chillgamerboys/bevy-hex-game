@@ -8,11 +8,13 @@ description = "The game binary: app setup, plugin wiring, screens and menus."
 [dependencies]
 bevy = { workspace = true }
 hex_assets = { workspace = true }
+hex_objects = { workspace = true }
 hex_combat = { workspace = true }
 hex_core = { workspace = true }
 hex_lattice = { workspace = true }
 hex_units = { workspace = true }
 hex_map = { workspace = true }
+hex_perception = { workspace = true }
 hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
 # Only for the visual-walk feature's RON step scripts.

@@ -104,10 +104,11 @@ every UI root pointed at the redirected camera.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
-hex_core → hex_units → hex_perception → hex_combat  (planned)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
+hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
@@ -115,27 +116,33 @@ hex_core → hex_anim ───────────────────�
 **`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
 spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
 `App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
-design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
-`hex_assets` and the combat wiring consume it as the content and spawning land.
+design's open questions. `hex_assets` resolves authored content into it, `hex_units`
+carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
-The planned **`hex_perception`** crate owns authoritative illumination, faction sight,
-and map knowledge. It may depend on `hex_units` to observe unit positions.
-`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`,
-while `hex_combat` may consume the richer perception API. Neither gameplay crate may
-import map-generator internals.
+`hex_objects` is the renderer for static Workshop-authored objects. Producers publish
+the shared `hex_assets::ObjectInstance` contract; they do not depend on the renderer,
+and the renderer does not project gameplay blockers.
+
+**`hex_perception`** owns authoritative illumination, faction sight, and map
+knowledge. It depends on `hex_units` to observe unit positions.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`,
+while `hex_combat` consumes the richer current-observation API only to gate
+gameplay-owned lattice knowledge. Neither gameplay crate may import map-generator
+internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
-content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
-modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is
-shared. Every fact that crosses between them, and whether it is live, agreed, reserved,
-or still an ask, is `docs/contracts.md`; the open asks are
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared;
+`hex_objects` and `hex_editor` are shared presentation/tooling with no gameplay
+authority. Every fact that crosses between the owners, and whether it is live, agreed,
+reserved, or still an ask, is `docs/contracts.md`; the open asks are
 `docs/planning/boundary.md`.
 
 `hex_assets` ownership follows the concern, not the directory. Generic loader traits,
@@ -309,7 +316,7 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 1,070 tests. macOS is the primary
+terrain seed. Bevy 0.19, Rust 1.97.1, and 1,236 tests. macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

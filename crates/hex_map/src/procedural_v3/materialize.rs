@@ -62,7 +62,22 @@ impl MapPresentationProjection {
         &self.liquids
     }
 
+    /// Returns exact surface features in stable map-local identity order.
+    #[must_use]
+    pub(crate) const fn features(&self) -> &BTreeMap<FeatureId, PlannedFeature> {
+        &self.features
+    }
+
+    /// Retains feature presentations whose exact authored support remains valid.
+    ///
+    /// Terrain edits may remove presentation-only features such as tall grass.
+    /// Blocking structures use the separate conservative edit guard instead.
+    pub(crate) fn retain_features(&mut self, mut retain: impl FnMut(&PlannedFeature) -> bool) {
+        self.features.retain(|_id, feature| retain(feature));
+    }
+
     /// Iterates exact liquid voxels in deterministic [`TilePos`] order.
+    #[cfg(test)]
     pub(crate) fn iter_liquids(
         &self,
     ) -> impl ExactSizeIterator<Item = (&TilePos, &MaterializedLiquidVoxel)> {
@@ -71,6 +86,7 @@ impl MapPresentationProjection {
 
     /// Returns the presentation descriptor for one exact liquid voxel.
     #[must_use]
+    #[cfg(test)]
     pub(crate) fn liquid_at(&self, position: TilePos) -> Option<&MaterializedLiquidVoxel> {
         self.liquids.get(&position)
     }
@@ -85,6 +101,41 @@ impl MapPresentationProjection {
         self.liquids.keys().any(|liquid| {
             liquid.coord == position.coord && liquid.level.saturating_add(1) >= position.level
         })
+    }
+
+    /// Whether one exact voxel is occupied by an authored liquid fill.
+    ///
+    /// Terrain-edit consequence projection uses this to retain the biome identity
+    /// of a non-standable liquid bed while still removing ordinary surfaces buried
+    /// by newly placed solid terrain.
+    #[must_use]
+    pub(crate) fn contains_liquid(&self, position: TilePos) -> bool {
+        self.liquids.contains_key(&position)
+    }
+
+    /// Reports whether an edit would intersect an authored surface feature.
+    ///
+    /// V3 features are static projections until feature impacts and semantic
+    /// reprojection exist. Rejecting edits at or above a root prevents a voxel
+    /// from replacing the feature's support or being built through its visual
+    /// volume. Edits below the exact root remain ordinary terrain edits.
+    #[must_use]
+    pub(crate) fn protects_feature_edit(&self, position: TilePos) -> bool {
+        self.features.values().any(|feature| {
+            feature.kind == FeatureKind::Tree
+                && feature.root.coord == position.coord
+                && position.level >= feature.root.level
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_features(
+        features: impl IntoIterator<Item = (FeatureId, PlannedFeature)>,
+    ) -> Self {
+        Self {
+            features: features.into_iter().collect(),
+            ..Self::default()
+        }
     }
 }
 
@@ -1183,6 +1234,7 @@ mod tests {
                         },
                     ),
                 ]),
+                ..FeaturePlan::default()
             },
             structures: StructurePlan {
                 by_id: BTreeMap::from([(
@@ -1254,6 +1306,54 @@ mod tests {
         assert_eq!(output.presentation.features.len(), 2);
         assert_eq!(output.presentation.structures.len(), 1);
         assert_eq!(output.presentation.lights.len(), 1);
+    }
+
+    #[test]
+    fn feature_projection_is_ordered_and_protects_the_authored_root_volume() {
+        let output = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the valid world materializes");
+        let projected: Vec<_> = output
+            .presentation
+            .features()
+            .iter()
+            .map(|(id, feature)| (*id, *feature))
+            .collect();
+        assert_eq!(
+            projected
+                .iter()
+                .map(|(id, _feature)| id.0)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let tree = projected
+            .iter()
+            .find_map(|(_id, feature)| (feature.kind == FeatureKind::Tree).then_some(feature.root))
+            .expect("the fixture contains a tree");
+        assert!(output.presentation.protects_feature_edit(tree));
+        assert!(output
+            .presentation
+            .protects_feature_edit(TilePos::new(tree.coord, tree.level.saturating_add(12))));
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(tree.coord, tree.level.saturating_sub(1))));
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(HexCoord::from_axial(12, -12), tree.level)));
+
+        let grass = projected
+            .iter()
+            .find_map(|(_id, feature)| {
+                (feature.kind == FeatureKind::TallGrass).then_some(feature.root)
+            })
+            .expect("the fixture contains tall grass");
+        assert!(
+            !output.presentation.protects_feature_edit(grass),
+            "presentation-only grass must not make its supporting terrain immutable"
+        );
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(grass.coord, grass.level.saturating_add(12))));
     }
 
     #[test]

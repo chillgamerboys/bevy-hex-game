@@ -3,7 +3,10 @@ use bevy::light::EnvironmentMapLight;
 use bevy::prelude::*;
 
 use hex_assets::{to_color, CelestialBody, LightingProfile, LightingSettings, ResolvedLighting};
-use hex_core::{AppSystems, GameplaySetup, Screen};
+use hex_core::{
+    AppSystems, ExteriorIllumination, GameplaySetup, GameplaySetupFailure, IlluminationLevel,
+    PerceptionSystems, Screen,
+};
 
 use crate::LightingSystems;
 
@@ -30,6 +33,8 @@ impl Default for TimeOfDay {
 pub fn plugin(app: &mut App) {
     app.register_type::<TimeOfDay>()
         .register_type::<CelestialKeyLight>()
+        .register_type::<ExteriorIllumination>()
+        .register_type::<IlluminationLevel>()
         .configure_sets(
             Update,
             (LightingSystems::Resolve, LightingSystems::Apply)
@@ -47,7 +52,16 @@ pub fn plugin(app: &mut App) {
                 .chain()
                 .in_set(GameplaySetup::Terrain),
         )
-        .add_systems(OnExit(Screen::Gameplay), despawn_celestial_key_light)
+        .add_systems(
+            OnEnter(Screen::Gameplay),
+            publish_exterior_illumination
+                .after(resolve_lighting)
+                .in_set(PerceptionSystems::PublishAmbient),
+        )
+        .add_systems(
+            OnExit(Screen::Gameplay),
+            (despawn_celestial_key_light, clear_exterior_illumination),
+        )
         // A resolved frame changes only when its source asset or the inspector's
         // session clock changes. Applying it is similarly change-gated, so a frozen
         // time of day has no per-frame lighting work.
@@ -62,6 +76,14 @@ pub fn plugin(app: &mut App) {
             (apply_scene_lighting, apply_view_lighting)
                 .run_if(resource_exists_and_changed::<ResolvedLighting>)
                 .in_set(LightingSystems::Apply),
+        )
+        .add_systems(
+            Update,
+            publish_exterior_illumination
+                .run_if(resource_exists::<ResolvedLighting>)
+                .run_if(in_state(Screen::Gameplay))
+                .after(LightingSystems::Resolve)
+                .in_set(PerceptionSystems::PublishAmbient),
         );
 }
 
@@ -152,6 +174,41 @@ fn despawn_celestial_key_light(
     for entity in &lights {
         commands.entity(entity).despawn();
     }
+}
+
+/// Publishes the renderer-independent ambient tier used by gameplay perception.
+///
+/// Static lighting is authored as a daytime-readable look and therefore remains
+/// Bright. A cycle follows the body currently supplying its one key light: sunlight
+/// is Bright and stylized moonlight is Dim. Physical intensity and exposure are
+/// deliberately absent from this projection.
+fn publish_exterior_illumination(
+    mut commands: Commands,
+    lighting: Option<Res<ResolvedLighting>>,
+    current: Option<ResMut<ExteriorIllumination>>,
+) {
+    let Some(lighting) = lighting else {
+        let reason = "Gameplay lighting did not publish a resolved ambient frame.";
+        error!("{reason}");
+        commands.insert_resource(GameplaySetupFailure::new(reason));
+        return;
+    };
+    let level = match lighting.key_body {
+        Some(CelestialBody::Moon) => IlluminationLevel::Dim,
+        Some(CelestialBody::Sun) | None => IlluminationLevel::Bright,
+    };
+    let next = ExteriorIllumination::new(level);
+    match current {
+        Some(mut current) if *current != next => *current = next,
+        Some(_) => {}
+        None => {
+            commands.insert_resource(next);
+        }
+    }
+}
+
+fn clear_exterior_illumination(mut commands: Commands) {
+    commands.remove_resource::<ExteriorIllumination>();
 }
 
 fn key_light(lighting: &ResolvedLighting) -> DirectionalLight {
@@ -669,5 +726,59 @@ mod tests {
         assert_eq!(shadow_casting_directional_light_count(&mut app), 1);
         assert!(shadows);
         assert!(body_direction.distance(-ray_direction) < 1e-6);
+    }
+
+    #[test]
+    fn ambient_projection_tracks_static_sun_and_moon_profiles() {
+        let (mut static_app, _) = runtime_app(flat_settings(LightingProfile::Static), None);
+        enter(&mut static_app, Screen::Gameplay);
+        assert_eq!(
+            static_app.world().resource::<ExteriorIllumination>().level,
+            IlluminationLevel::Bright
+        );
+
+        let (mut cycle_app, _) = runtime_app(cycle_settings(), Some(12.0));
+        enter(&mut cycle_app, Screen::Gameplay);
+        assert_eq!(
+            cycle_app.world().resource::<ExteriorIllumination>().level,
+            IlluminationLevel::Bright
+        );
+
+        cycle_app.world_mut().resource_mut::<TimeOfDay>().hours = 0.0;
+        cycle_app.update();
+        assert_eq!(
+            cycle_app.world().resource::<ExteriorIllumination>().level,
+            IlluminationLevel::Dim
+        );
+    }
+
+    #[test]
+    fn ambient_projection_is_session_scoped() {
+        let (mut app, _) = runtime_app(flat_settings(LightingProfile::Static), None);
+        enter(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<ExteriorIllumination>());
+
+        enter(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<ExteriorIllumination>());
+
+        enter(&mut app, Screen::Gameplay);
+        assert_eq!(
+            app.world().resource::<ExteriorIllumination>().level,
+            IlluminationLevel::Bright
+        );
+    }
+
+    #[test]
+    fn missing_resolved_lighting_is_an_explicit_setup_failure() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_state::<Screen>();
+        app.add_systems(OnEnter(Screen::Gameplay), publish_exterior_illumination);
+
+        enter(&mut app, Screen::Gameplay);
+
+        let failure = app.world().resource::<GameplaySetupFailure>();
+        assert!(failure.reason.contains("resolved ambient frame"));
+        assert!(!app.world().contains_resource::<ExteriorIllumination>());
     }
 }

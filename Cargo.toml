@@ -9,19 +9,24 @@ default-members = ["crates/hex_game"]
 hex_core = { path = "crates/hex_core" }
 hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
+hex_objects = { path = "crates/hex_objects" }
 hex_anim = { path = "crates/hex_anim" }
 hex_ai = { path = "crates/hex_ai" }
 hex_combat = { path = "crates/hex_combat" }
 hex_world = { path = "crates/hex_world" }
 hex_units = { path = "crates/hex_units" }
 hex_map = { path = "crates/hex_map" }
+hex_perception = { path = "crates/hex_perception" }
 hex_dev = { path = "crates/hex_dev" }
 
 bevy = "0.19"
+bevy_app = "0.19"
 bevy_ecs = "0.19"
+bevy_log = "0.19"
 bevy_math = "0.19"
 bevy_platform = "0.19"
 bevy_reflect = "0.19"
+bevy_state = "0.19"
 bevy-inspector-egui = "0.37"
 bevy_egui = { version = "0.40.1", default-features = false, features = [
     "bevy_ui",

@@ -26,9 +26,9 @@ pub enum Screen {
     Title,
     /// Interactive sandbox for the lattice ruleset, reached from the title menu.
     ///
-    /// Exists so the magic rules — casting, fusions, mana, disables,
-    /// enchantments — have a manual-verification surface before they are wired
-    /// into real combat (HEX-12). Slated for gating or removal before release.
+    /// Exists as an isolated manual-verification surface for magic rules — casting,
+    /// fusions, mana, disables, and enchantments. Slated for gating or removal
+    /// before release.
     LatticeDemo,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
@@ -112,8 +112,8 @@ pub struct PausableSystems;
 /// Building a world has a dependency chain — resources, terrain, the things standing
 /// on the terrain, presentation derived from that complete geometry, then final
 /// contract checks — and each step lives in a different crate. `hex_map` validates and
-/// builds the map, `hex_units` spawns the player onto it, future perception derives
-/// what those actors can observe, and `hex_world` frames the result. Systems added to
+/// builds the map, `hex_units` spawns the player onto it, `hex_perception` derives what
+/// those actors can observe, and `hex_world` frames the result. Systems added to
 /// the same `OnEnter` schedule otherwise run in **unspecified order**, and `.chain()`
 /// cannot express ordering across a crate boundary because no leaf crate can see all
 /// the others' systems.
@@ -136,9 +136,8 @@ pub enum GameplaySetup {
     Actors,
     /// Derive illumination and initial faction knowledge from terrain and actors.
     ///
-    /// This phase is reserved for the future perception owner. Keeping it in the
-    /// setup contract now lets presentation depend on published knowledge without
-    /// changing cross-crate ordering later.
+    /// This phase lets later presentation depend on published knowledge without
+    /// creating direct crate dependencies.
     Perception,
     /// Apply presentation that depends on the completed terrain and its actors.
     ///

@@ -201,6 +201,7 @@ where
         semantic_plan_fingerprint: None,
         map_fingerprint,
         metrics: metrics.tactical(),
+        recipe_metrics: None,
         elapsed_micros,
         notes,
     };

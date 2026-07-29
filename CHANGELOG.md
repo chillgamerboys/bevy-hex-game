@@ -17,6 +17,8 @@ tagged build.
   non-player ownership.
 - Categorize all shipped scenarios into scrollable Map, Combat, and Demo menu columns,
   with Close Quarters as the combat showcase and Lattice Demo as the rules sandbox.
+- Add the deterministic V3 Waterfall showcase with directed water stages, an upstream
+  bridge, and two independent high-to-low land routes.
 - Export serde-capable combat outcomes and refusals using stable replay vocabulary.
 - Integrate the canonical runtime art palette and the Asset Workshop recovery and
   deterministic review workflow from `dev`.

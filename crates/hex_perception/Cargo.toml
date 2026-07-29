@@ -1,0 +1,22 @@
+[package]
+name = "hex_perception"
+version.workspace = true
+edition.workspace = true
+publish = false
+description = "Deterministic gameplay illumination, faction sight, and remembered map knowledge."
+
+[dependencies]
+bevy_app = { workspace = true }
+bevy_ecs = { workspace = true }
+bevy_log = { workspace = true }
+bevy_reflect = { workspace = true }
+bevy_state = { workspace = true, features = ["bevy_app", "bevy_reflect"] }
+hex_assets = { workspace = true }
+hex_core = { workspace = true }
+hex_units = { workspace = true }
+
+[dev-dependencies]
+bevy_platform = { workspace = true }
+
+[lints]
+workspace = true

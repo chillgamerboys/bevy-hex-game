@@ -8,7 +8,7 @@ use std::{
 use bevy::picking::Pickable;
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};
-use hex_combat::{CombatEvent, CombatSystems, CommandRefusal, FactionKnowledge};
+use hex_combat::{CombatEvent, CombatSystems, CommandRefusal, FactionLatticeKnowledge};
 use hex_core::{AppSystems, GameCommand, LatticeCoord, Screen, TilePos, UnitId};
 use hex_lattice::{CellKind, LatticeSpec};
 use hex_units::{Faction, Player, StandsOn, UnitRegistry};
@@ -173,7 +173,7 @@ fn ingest(
     registry: Res<UnitRegistry>,
     identities: IdentityQuery,
     own_lattices: Query<(&UnitId, &LatticeSpec), With<Player>>,
-    knowledge: Res<FactionKnowledge>,
+    knowledge: Res<FactionLatticeKnowledge>,
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
 ) {
@@ -257,7 +257,7 @@ fn format_event(
     registry: &UnitRegistry,
     identities: &IdentityQuery,
     own_lattices: &Query<(&UnitId, &LatticeSpec), With<Player>>,
-    knowledge: &FactionKnowledge,
+    knowledge: &FactionLatticeKnowledge,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
 ) -> Option<LogLine> {
@@ -438,7 +438,7 @@ fn disclosed_cells(
     registry: &UnitRegistry,
     identities: &IdentityQuery,
     own_lattices: &Query<(&UnitId, &LatticeSpec), With<Player>>,
-    knowledge: &FactionKnowledge,
+    knowledge: &FactionLatticeKnowledge,
     elements: Option<&ElementCatalog>,
     spells: Option<&SpellBook>,
 ) -> Vec<String> {
@@ -648,7 +648,7 @@ mod tests {
             .init_resource::<CombatLog>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
-            .init_resource::<FactionKnowledge>()
+            .init_resource::<FactionLatticeKnowledge>()
             .add_systems(Update, ingest);
 
         let source = UnitId(1);
@@ -667,7 +667,7 @@ mod tests {
             registry.register(target, target_entity);
         }
         app.world_mut()
-            .resource_mut::<FactionKnowledge>()
+            .resource_mut::<FactionLatticeKnowledge>()
             .observe_base(
                 Faction::Player,
                 target,
@@ -696,20 +696,23 @@ mod tests {
             .map(|line| line.text.clone());
         assert_eq!(opaque_line.as_deref(), Some("Ember damaged wolf #9"));
 
-        assert!(app.world_mut().resource_mut::<FactionKnowledge>().learn(
-            Faction::Player,
-            target,
-            known,
-            KnownCell {
-                kind: CellKind::Gem {
-                    element: ElementId(0),
+        assert!(app
+            .world_mut()
+            .resource_mut::<FactionLatticeKnowledge>()
+            .learn(
+                Faction::Player,
+                target,
+                known,
+                KnownCell {
+                    kind: CellKind::Gem {
+                        element: ElementId(0),
+                    },
+                    mana: Some(2),
+                    disabled: false,
+                    source: KnowledgeSource::Divination,
+                    expiry: KnowledgeExpiry::Sustained,
                 },
-                mana: Some(2),
-                disabled: false,
-                source: KnowledgeSource::Divination,
-                expiry: KnowledgeExpiry::Sustained,
-            },
-        ));
+            ));
         app.world_mut()
             .resource_mut::<Messages<CombatEvent>>()
             .write(event);
@@ -738,7 +741,7 @@ mod tests {
             .init_resource::<CombatLog>()
             .init_resource::<DamagePulse>()
             .init_resource::<UnitRegistry>()
-            .init_resource::<FactionKnowledge>()
+            .init_resource::<FactionLatticeKnowledge>()
             .add_systems(Update, ingest);
 
         let source = UnitId(1);
@@ -757,7 +760,7 @@ mod tests {
             registry.register(target, target_entity);
         }
         app.world_mut()
-            .resource_mut::<FactionKnowledge>()
+            .resource_mut::<FactionLatticeKnowledge>()
             .observe_base(
                 Faction::Player,
                 target,

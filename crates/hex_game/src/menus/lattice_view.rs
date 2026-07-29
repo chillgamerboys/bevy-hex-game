@@ -3,7 +3,7 @@
 //! Combat knowledge, demo truth, and player decisions all arrive here as an
 //! already-resolved [`LatticeCellView`]. Keeping the renderer ignorant of the
 //! source is the boundary that prevents a hostile readout from reaching around
-//! `FactionKnowledge` for more information.
+//! `FactionLatticeKnowledge` for more information.
 
 use bevy::prelude::*;
 use hex_assets::{ElementCatalog, SpellBook};

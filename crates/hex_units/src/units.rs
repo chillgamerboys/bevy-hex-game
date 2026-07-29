@@ -13,6 +13,7 @@
 //! nowhere to stand is not a unit that quietly does not appear — that is the failure
 //! mode this codebase is worst at seeing.
 
+use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::platform::collections::{HashMap, HashSet};
@@ -33,7 +34,7 @@ use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
     HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, PartyFormation,
     PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady, TilePos,
-    TraversalProfile, Turn, UnitId,
+    TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
@@ -364,6 +365,7 @@ fn on_tile_clicked(
     party: Option<Res<Party>>,
     formation: Option<Res<PartyFormation>>,
     formations: Option<Res<FormationCatalog>>,
+    blockers: Option<Res<TraversalBlockers>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
     pending: Option<Res<PendingDecision>>,
@@ -436,7 +438,8 @@ fn on_tile_clicked(
         else {
             return;
         };
-        let anchor_footing = Footing::from_tiles(tiles.iter(), &table, *anchor_body);
+        let anchor_footing =
+            Footing::from_tiles(tiles.iter(), &table, *anchor_body, blockers.as_deref());
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
         };
@@ -457,7 +460,7 @@ fn on_tile_clicked(
             members.push(FormationMember {
                 unit: *unit,
                 standing: standing.0,
-                footing: Footing::from_tiles(tiles.iter(), &table, *body),
+                footing: Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref()),
             });
         }
         match plan_formation_move(preset, formation, &anchor_path, members) {
@@ -498,7 +501,7 @@ fn on_tile_clicked(
         // small creature and a wall for a large one. With one player this is the same
         // work as hoisting it out of the loop; with a mixed party it is the difference
         // between right and wrong.
-        let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+        let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
         let Some(destination) = footing.at(*pos) else {
             continue;
         };
@@ -655,13 +658,13 @@ pub struct Archetype(pub String);
 /// **The provisional first implementation of death**, and provisional is the operative
 /// word — the design leaves both functional death (a threshold before zero) and
 /// permadeath open, and this settles neither. A downed unit leaves the turn order and is
-/// revivable by a restoring spell.
+/// retained with its lattice for a future restoration flow. Reactivation is not built.
 ///
 /// A marker rather than a despawn, for two reasons. `UnitRegistry` has no `unregister`
 /// and its own doc says death must add one or it will serve a dead entity — a marker
-/// avoids needing it at all. And a revival spell needs something to target: a despawned
-/// unit cannot be brought back, so despawning would quietly make the design's stated
-/// recovery path impossible.
+/// avoids needing it at all. A future restoration flow also needs something to target:
+/// a despawned unit cannot be brought back, so despawning would preclude that design
+/// option.
 ///
 /// Everything that decides who is *in* a fight filters on this: `engagement` and
 /// `begin_combat` in `hex_combat`, the AI's target search, selection, and targeting. A
@@ -695,6 +698,15 @@ fn coord_from(setting: CubeCoord) -> Result<HexCoord, String> {
     })
 }
 
+#[derive(SystemParam)]
+struct SpawnContent<'w> {
+    lattices: Option<Res<'w, LatticeLibrary>>,
+    profiles: Option<Res<'w, AiProfileCatalog>>,
+    formations: Option<Res<'w, FormationCatalog>>,
+    anchors: Option<Res<'w, MapAnchors>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+}
+
 /// Places every rostered unit on the terrain.
 ///
 /// Runs in `Actors`, after the map has built and flushed its tiles. Reading them any
@@ -717,10 +729,7 @@ fn spawn_units(
     // waits on — so in practice it is here. Optional rather than required because a
     // headless test harness has no content, and demanding it would make every one of
     // them build a library to spawn a unit that does not cast.
-    lattices: Option<Res<LatticeLibrary>>,
-    profiles: Option<Res<AiProfileCatalog>>,
-    formations: Option<Res<FormationCatalog>>,
-    anchors: Option<Res<MapAnchors>>,
+    content: SpawnContent,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
@@ -734,9 +743,9 @@ fn spawn_units(
     // Every unit shares a body for now. When lattices land, size becomes a property of
     // the archetype rather than a global setting, and this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
-    let footing = Footing::from_tiles(tiles.iter(), &table, body);
+    let footing = Footing::from_tiles(tiles.iter(), &table, body, content.blockers.as_deref());
 
-    let placements = match place_roster(&encounter, &footing, anchors.as_deref()) {
+    let placements = match place_roster(&encounter, &footing, content.anchors.as_deref()) {
         Ok(placements) => placements,
         Err(reason) => {
             error!("{reason}");
@@ -762,14 +771,15 @@ fn spawn_units(
     // rather than of this run.
     for (unit, standing) in placements {
         let faction = Faction::from(unit.faction);
-        let lattice = lattice_for(lattices.as_deref(), unit.archetype);
+        let lattice = lattice_for(content.lattices.as_deref(), unit.archetype);
         let controller = if faction == Faction::Hostile {
             let profile = unit
                 .ai_profile
                 .or_else(|| lattice.and_then(|archetype| archetype.ai_profile.as_deref()))
                 .unwrap_or("baseline");
             let profile_id = AiProfileId(profile.to_owned());
-            if profiles
+            if content
+                .profiles
                 .as_deref()
                 .is_some_and(|catalog| catalog.get(&profile_id).is_none())
             {
@@ -807,7 +817,8 @@ fn spawn_units(
             &mut identity,
         );
     }
-    if let Some(preset) = formations
+    if let Some(preset) = content
+        .formations
         .as_deref()
         .and_then(|catalog| catalog.get("Compact").or_else(|| catalog.presets.first()))
     {

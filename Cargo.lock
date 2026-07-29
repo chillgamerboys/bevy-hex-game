@@ -3248,6 +3248,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_lattice",
+ "hex_perception",
  "hex_units",
  "serde",
  "serde_json",
@@ -3306,6 +3307,8 @@ dependencies = [
  "hex_dev",
  "hex_lattice",
  "hex_map",
+ "hex_objects",
+ "hex_perception",
  "hex_units",
  "hex_world",
  "ron",
@@ -3335,6 +3338,30 @@ dependencies = [
  "ron",
  "serde",
  "xxhash-rust",
+]
+
+[[package]]
+name = "hex_objects"
+version = "0.3.0"
+dependencies = [
+ "bevy",
+ "hex_assets",
+ "hex_core",
+]
+
+[[package]]
+name = "hex_perception"
+version = "0.3.0"
+dependencies = [
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_platform",
+ "bevy_reflect",
+ "bevy_state",
+ "hex_assets",
+ "hex_core",
+ "hex_units",
 ]
 
 [[package]]

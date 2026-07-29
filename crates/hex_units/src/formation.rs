@@ -289,6 +289,7 @@ mod tests {
                 .map(|(pos, span, substance, headroom)| (pos, span, substance, headroom)),
             table,
             BODY,
+            None,
         )
     }
 

@@ -1,8 +1,8 @@
 //! Shared vocabulary for gameplay illumination, sight, and remembered terrain.
 //!
-//! This module deliberately contains no systems. The future `hex_perception` crate
-//! owns observation and faction knowledge, while consumers use the small projections
-//! defined here without depending on that crate.
+//! This module deliberately contains no systems. `hex_perception` owns observation
+//! and faction knowledge, while consumers use the small projections defined here
+//! without depending on that crate.
 
 use std::collections::BTreeMap;
 
@@ -90,13 +90,20 @@ pub struct SightProfile {
 }
 
 impl SightProfile {
+    /// Hard authored cap for downhill sight extension.
+    ///
+    /// Designer-facing settings must not exceed this value. Keeping the limit on
+    /// the shared contract prevents an asset loader from silently widening sight
+    /// beyond the rule used by headless tests and future adapters.
+    pub const MAX_DOWNHILL_BONUS: u32 = 6;
+
     /// Initial ordinary sight contract used by the V3 perception roadmap.
     pub const DEFAULT: Self = Self {
         bright: SightBand::new(36, 36),
         dim: SightBand::new(12, 12),
         dark: SightBand::new(1, 1),
         downhill_levels_per_bonus: 4,
-        max_downhill_bonus: 6,
+        max_downhill_bonus: Self::MAX_DOWNHILL_BONUS,
     };
 
     /// Returns the base limits for an illumination tier.
@@ -236,10 +243,10 @@ pub enum LightDomain {
 
 /// An obstruction-agnostic gameplay light source.
 ///
-/// The future perception system combines this component with the source entity's
-/// exact [`TilePos`] and freshly derived [`LightDomain`]. `radius` applies equally to
-/// horizontal hex distance and absolute vertical level distance. Physical lights and
-/// emissive materials are presentation details and do not establish gameplay sight.
+/// Perception combines this component with the source entity's exact [`TilePos`] and
+/// freshly derived [`LightDomain`]. `radius` applies equally to horizontal hex
+/// distance and absolute vertical level distance. Physical lights and emissive
+/// materials are presentation details and do not establish gameplay sight.
 #[derive(Component, Reflect, Debug, Clone, Copy, PartialEq, Eq)]
 #[reflect(Component)]
 pub struct GameplayLight {
@@ -273,8 +280,8 @@ pub struct KnownTraversal {
 
 /// Local player's traversal-facing projection of faction map knowledge.
 ///
-/// The richer faction knowledge and presentation state belong to the future
-/// `hex_perception` crate. `hex_units` consumes only this exact-surface projection.
+/// The richer faction knowledge and presentation state belong to `hex_perception`.
+/// `hex_units` will consume only this exact-surface projection.
 /// Unknown positions are absent and read back as [`KnowledgeState::Unknown`].
 #[derive(Resource, Debug, Default, Clone)]
 pub struct LocalMapKnowledge {
@@ -353,8 +360,7 @@ impl LocalMapKnowledge {
 /// Shared ordering phases for gameplay perception updates.
 ///
 /// The binary configures these in order for gameplay entry and later updates. Other
-/// crates opt into the shared phases without depending on the future perception
-/// owner.
+/// crates opt into the shared phases without depending on the perception owner.
 #[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub enum PerceptionSystems {
     /// Publish authored ambient facts such as [`ExteriorIllumination`].

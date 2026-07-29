@@ -96,7 +96,7 @@ pub(super) fn apply(
                 member: path.member,
             }));
         }
-        let footing = hex_units::Footing::from_tiles(tiles.iter(), table, body);
+        let footing = hex_units::Footing::from_tiles(tiles.iter(), table, body, ctx.blockers);
         let Some(steps) = ground_path(&path.path, standing, &footing) else {
             return Err(party_refusal(PartyMoveRefusal::InvalidMemberPath {
                 member: path.member,

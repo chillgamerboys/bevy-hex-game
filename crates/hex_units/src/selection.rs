@@ -32,7 +32,8 @@ use bevy::prelude::*;
 
 use hex_assets::{GameAssets, SubstanceTable};
 use hex_core::{
-    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos, Turn, UnitId,
+    CameraFocusTarget, GameplaySetup, HexTile, Mode, PausableSystems, Screen, TilePos,
+    TraversalBlockers, Turn, UnitId,
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
@@ -492,6 +493,7 @@ fn redraw_overlays(
     table: Option<Res<SubstanceTable>>,
     mode: Option<Res<State<Mode>>>,
     revision: Res<TerrainRevision>,
+    blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
     selected: Query<(Entity, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
     drawn: Query<Entity, DrawnOverlays>,
@@ -530,7 +532,7 @@ fn redraw_overlays(
     if key != preview.of {
         preview.reach = selection.and_then(|(_, standing, body, _)| {
             let key = key?;
-            let footing = Footing::from_tiles(tiles.iter(), &table, *body);
+            let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
             Some(Reach::from(standing.0, &footing, key.budget))
         });
         preview.of = key;

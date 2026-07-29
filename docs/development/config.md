@@ -8,11 +8,14 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
-| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and future objects |
+| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
+| `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
+| `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
+| `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
@@ -40,9 +43,11 @@ How quickly you *see* the change depends on which file:
 | `display.ron` | Straight away |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `art/palette.ron` | Substance and unit colours on the next world rebuild |
+| `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
+| `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
+| `perception.ron` | Straight away; observation and knowledge use the new profile on the next frame |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
@@ -294,6 +299,50 @@ checks that placement against the loaded combat policy so combat through rock ca
 interrupt entry. Recipe and environment combinations are validated together:
 Mountains requires `Frozen`, Caves requires `Rocky`, and invalid combinations leave
 the previous valid hot-reloaded settings active.
+
+**Use V3 Waterfall terrain.** The first shipped V3 recipe uses an explicit
+single-patch layout. Its edge-to-edge three-wide liquid topology, eleven-level fall,
+extended plunge basin, upper two-wide metal bridge, meandering escarpment, mid-height
+shelves, short two-wide dry bypass, and longer alternate terrace are structural
+recipe invariants rather than extra tuning fields:
+
+```ron
+terrain: Procedural((
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Waterfall(()),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
+    )),
+)),
+```
+
+As with earlier procedural scenarios, the reproducible seed belongs in
+`scenarios.ron`, not in the world recipe. V3 rejects unsupported
+recipe/environment pairs and incomplete edge contracts while deserializing.
+
+**Compare gameplay sight ranges.** `perception.ron` contains three fixed review
+profiles without coupling them to renderer brightness:
+
+```ron
+active: Expansive,
+```
+
+`Expansive` uses Bright/Dim/Dark horizontal and vertical limits of `36/12/1`,
+`Focused` uses `24/8/1`, and `Tight` uses `18/6/1`. Each axis remains independently
+authored, so vertical visibility can be tuned for caves and sky layers without
+widening the ground footprint. Every profile must keep Bright at least Dim, Dim at
+least Dark, and Dark exactly one in both axes. Invalid edits and unknown fields are
+reported while the last valid settings remain active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:

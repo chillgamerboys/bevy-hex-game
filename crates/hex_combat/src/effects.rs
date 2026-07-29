@@ -37,9 +37,10 @@
 //! identity is beating defences by ignoring them rather than overpowering them, and the
 //! design says so outright. It *does* go through the defender-chooses seam, exactly as a
 //! spell's damage does: the count is named, `PendingDecision::ChooseDisables` is
-//! parked, and something answers with a `ChooseDisables` command that lands in the
-//! replay log. Bypassing the subtraction is not the same as bypassing the choice, and
-//! conflating the two would make burn the one damage source a fight could not replay.
+//! parked, and something answers with a replayable `ChooseDisables` command. The live
+//! queue is not persisted yet. Bypassing the subtraction is not the same as bypassing
+//! the choice, and conflating the two would make burn the one damage source a future
+//! recorded fight could not reproduce.
 
 use std::collections::{BTreeMap, VecDeque};
 

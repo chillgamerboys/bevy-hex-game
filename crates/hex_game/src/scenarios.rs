@@ -429,20 +429,23 @@ mod tests {
     use hex_assets::{
         AiProfileCatalog, ArtPalette, CombatSettings, ContentIndex, CubeCoord, ElementCatalog,
         ElementFile, Encounter, EncounterFaction, EncounterPlacement, FormationCatalog,
-        FormationCenter, GameAssets, LatticeFile, LatticeLibrary, LightingSettings, PlayerSettings,
-        Roster, RosterEntry, ScenarioLibrary, SettingsRegistry, SpellBook, SpellFile,
-        SubstanceFile, SubstanceTable,
+        FormationCenter, GameAssets, LatticeFile, LatticeLibrary, LightingSettings,
+        PerceptionSettings, PlayerSettings, Roster, RosterEntry, ScenarioLibrary, SettingsRegistry,
+        SpellBook, SpellFile, SubstanceFile, SubstanceTable,
     };
     use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder};
     use hex_core::{
-        AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup,
-        GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegions,
-        IssuedCommand, LatticeCoord, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
-        PausableSystems, Pause, PendingDecision, PlayerSeat, ResolvedMapSeed, Screen,
-        SpecialMovementRegions, SubstanceId, TerrainReady, TilePos, Turn, UnitId,
+        AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
+        GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
+        IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
+        LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
+        PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
+        Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
+        TraversalBlockers, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
+    use hex_perception::FactionMapKnowledge;
     use hex_units::{
         either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
         FormationMember, Player, Reach, StandsOn,
@@ -1612,6 +1615,18 @@ mod tests {
         );
         app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
         app.configure_sets(
+            Update,
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(AppSystems::Update),
+        );
+        app.configure_sets(
             OnEnter(Screen::Gameplay),
             (
                 GameplaySetup::Resources,
@@ -1623,6 +1638,18 @@ mod tests {
             )
                 .chain(),
         );
+        app.configure_sets(
+            OnEnter(Screen::Gameplay),
+            (
+                PerceptionSystems::PublishAmbient,
+                PerceptionSystems::ResolveIllumination,
+                PerceptionSystems::ResolveObservation,
+                PerceptionSystems::PublishKnowledge,
+                PerceptionSystems::ApplyPresentation,
+            )
+                .chain()
+                .in_set(GameplaySetup::Perception),
+        );
         app.insert_resource(GameAssets {
             hex_tile: Handle::default(),
             player_pieces: [Handle::default(), Handle::default()],
@@ -1630,6 +1657,8 @@ mod tests {
         let substances = SubstanceTable::from_file(&substances, &palette)
             .expect("the shipped substances should resolve through the shipped palette");
         app.insert_resource(substances.clone());
+        app.insert_resource(PerceptionSettings::default());
+        app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Bright));
         app.insert_resource(player);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
@@ -1637,7 +1666,11 @@ mod tests {
         if let Some(seed) = seed {
             app.insert_resource(seed);
         }
-        app.add_plugins((hex_map::plugin, hex_units::movement::plugin));
+        app.add_plugins((
+            hex_map::plugin,
+            hex_units::movement::plugin,
+            hex_perception::plugin,
+        ));
         hex_units::units::plugin(&mut app);
         if with_combat {
             let combat: CombatSettings =
@@ -1698,7 +1731,12 @@ mod tests {
         let world = app.world_mut();
         let mut tiles =
             world.query_filtered::<(&TilePos, &HexSpan, &SubstanceId, &Headroom), With<HexTile>>();
-        Footing::from_tiles(tiles.iter(world), &substances, body)
+        Footing::from_tiles(
+            tiles.iter(world),
+            &substances,
+            body,
+            world.get_resource::<TraversalBlockers>(),
+        )
     }
 
     fn party_trial_move(app: &mut App) -> GameCommand {
@@ -2049,6 +2087,21 @@ mod tests {
             .expect("the map should publish hostile_start");
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world()
+                .resource::<LocalMapKnowledge>()
+                .state(first_party),
+            KnowledgeState::Observed,
+            "the real terrain and actor plugins should feed initial player knowledge"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<FactionMapKnowledge>()
+                .faction(hex_units::Faction::Player)
+                .state(first_hostile),
+            KnowledgeState::Observed,
+            "bright-map faction knowledge should include the hostile anchor"
+        );
         app.insert_resource(InteriorRegions::new());
         app.insert_resource(MapViewHint::new((1.0, 2.0, 3.0), (0.0, 0.0, 0.0)));
 
@@ -2060,6 +2113,8 @@ mod tests {
         assert!(!app.world().contains_resource::<InteriorRegions>());
         assert!(!app.world().contains_resource::<MapViewHint>());
         assert!(!app.world().contains_resource::<TerrainReady>());
+        assert!(!app.world().contains_resource::<LocalMapKnowledge>());
+        assert!(!app.world().contains_resource::<FactionMapKnowledge>());
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, With<HexGrid>>()
@@ -2076,6 +2131,13 @@ mod tests {
         assert!(app.world().contains_resource::<SpecialMovementRegions>());
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world()
+                .resource::<LocalMapKnowledge>()
+                .state(first_party),
+            KnowledgeState::Observed,
+            "re-entry should rebuild initial player knowledge"
+        );
         assert_eq!(
             app.world_mut()
                 .query_filtered::<Entity, With<HexGrid>>()
@@ -2128,6 +2190,8 @@ mod tests {
             "Sky Islands",
             "Mountains",
             "Caves",
+            "Waterfall",
+            "Forest",
         ] {
             let scenario = library()
                 .scenarios
@@ -2173,6 +2237,8 @@ mod tests {
             let recipe_anchors: &[&str] = match scenario_name {
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
+                "Waterfall" => &["fall_overlook", "basin_overlook"],
+                "Forest" => &["forest_clearing", "prairie_overlook"],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -2188,6 +2254,19 @@ mod tests {
                     "Sky Islands dropped its flight-gated upper layer"
                 ),
                 "Mountains" => {}
+                "Waterfall" => {
+                    assert_eq!(
+                        special_regions.len(),
+                        6,
+                        "Waterfall dropped a radius-12 mid-cliff shelf"
+                    );
+                    assert!(
+                        special_regions.iter().all(|(position, region)| {
+                            position.level == 21 && region == SpecialMovementRegion(0)
+                        }),
+                        "Waterfall changed its exact mid-cliff shelf contract"
+                    );
+                }
                 _ => assert!(
                     special_regions.is_empty(),
                     "{scenario_name} introduced an unexpected optional region"
@@ -2258,7 +2337,12 @@ mod tests {
                 &hex_core::SubstanceId,
                 &hex_core::Headroom,
             ), With<hex_core::HexTile>>();
-            Footing::from_tiles(tiles.iter(world), world.resource::<SubstanceTable>(), body)
+            Footing::from_tiles(
+                tiles.iter(world),
+                world.resource::<SubstanceTable>(),
+                body,
+                None,
+            )
         };
         let party = footing
             .at(party_position)

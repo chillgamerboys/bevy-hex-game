@@ -7,8 +7,9 @@ contact with the next change.
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
-hex_core → hex_units → hex_perception → hex_combat  (planned)
+hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, bevy-inspector-egui} → hex_dev ──────────────────────────────→ hex_game
@@ -29,12 +30,13 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
+| `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
 | `hex_world` | Sky, camera, and presentation cutaways | `hex_core`, `hex_assets` | world |
 | `hex_anim` | Moving a transform over time. Knows nothing about hexes | `hex_core` | gameplay |
 | `hex_units` | Units and their lattices, AI-controller attachment, picking, pathfinding, body size, and the movement preview | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_lattice` | gameplay |
-| `hex_perception` | **Planned:** authoritative illumination, faction sight, and map knowledge | `hex_core`, `hex_units` | world |
-| `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, faction knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice` | gameplay |
+| `hex_perception` | Authoritative illumination, faction sight, and remembered map knowledge | `hex_core`, `hex_assets`, `hex_units` | world |
+| `hex_combat` | The loop: modes, turn order, algorithm-neutral AI host and legal-action enumeration, persistent effects, and faction lattice knowledge | `hex_core`, `hex_ai`, `hex_assets`, `hex_anim`, `hex_units`, `hex_lattice`, `hex_perception` | gameplay |
 | `hex_dev` | World inspector. Behind the `dev` feature | Bevy, `bevy-inspector-egui` | gameplay |
 | `hex_game` | The binary: app setup, screens, menus, wiring | all of the above | shared |
 | `hex_editor` | Standalone palette, voxel-style, and object authoring; validated explicit writes, untracked recovery, and deterministic review packs | Bevy, `bevy_egui`, `hex_core`, `hex_assets` | shared tooling |
@@ -73,21 +75,20 @@ settles none of [the design's open questions](design/game.md#open-questions) —
 initiative, action economy, fight length, the functional-death threshold — it exposes
 primitives and leaves the policy to the crates above it.
 
-It still depends only on `hex_core`, and three crates now declare an edge to it — drawn
-ahead of the code so the damage-loop PRs stop contending over the same manifests. Each
-edge is for a different half of the job. **`hex_assets`** will implement the engine's
-content lookup traits over `elements.ron`/`spells.ron` and turn authored lattices into a
-`LatticeSpec`, so the engine reads content without knowing what a file is. **`hex_units`**
-will carry the result: a unit's spec, state and stats go on at spawn, keyed by its
-archetype. **`hex_combat`** drives it — casting through the command funnel, damage
-through `apply_disables`, and the defender-chooses decision the engine deliberately
-refuses to own; today it reads the lattice types only in `knowledge.rs`.
+It still depends only on `hex_core`, and three crates consume it for distinct reasons.
+**`hex_assets`** implements the engine's content lookup traits over
+`elements.ron`/`spells.ron` and turns authored lattices into a `LatticeSpec`, so the
+engine reads content without knowing what a file is. **`hex_units`** carries the
+result: a unit's spec, state, and stats are attached at spawn, keyed by its archetype.
+**`hex_combat`** drives it — casting through the command funnel, damage through
+`apply_disables`, defender-owned disable choices, persistent effects, and the
+knowledge seam the engine deliberately refuses to own.
 
-Drawing an edge early costs something worth naming: the compiler stops being the review
+Drawing an edge costs something worth naming: the compiler stops being the review
 signal for that boundary, since anything in those crates can now reach the engine. The
-trade is deliberate and temporary — the alternative was three PRs each editing the same
-two `Cargo.toml` files. Like the map, the engine is one person's, and its contract is
-the types it exposes.
+trade is deliberate — the compiler cannot distinguish an intended consumer from an
+accidental import once the edge exists. Like the map, the engine is one person's, and
+its contract is the types it exposes.
 
 Party state follows the same split. `hex_core` owns the serializable formation
 vocabulary and session resource, `hex_assets` loads and validates named presets,
@@ -102,7 +103,7 @@ Two roles, named so the arrangement survives a change of people:
 
 | Role | Owns |
 |---|---|
-| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), the planned `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, the future `perception.ron` and terrain-response table |
+| **World owner** | `hex_map`, `hex_world` (sky, camera, cutaway), `hex_perception`, world/perception schema and settings modules in `hex_assets`, and their content: world files, `substances.ron`, lighting profiles, `perception.ron`, and the future terrain-response table |
 | **Gameplay owner** | `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`, `hex_anim`, `hex_dev`, generic `hex_assets` loader infrastructure, and gameplay schema/settings modules and content: `combat.ron`, `spells.ron`, `elements.ron` |
 
 `hex_game` is **shared** — it is wiring, screens, scenarios and review tooling, and
@@ -122,6 +123,12 @@ the crate graph or the contract-first process.
 Authored-art schemas and `assets/art/` are a shared visual-content contract: either
 owner may add assets, while schema changes receive both reviews. Runtime adapters stay
 with the crate that draws or consumes them.
+
+`hex_objects` consumes the shared `ObjectInstance` request and renders it without
+learning who requested it. Map generation, spell presentation, and future prop systems
+can therefore publish an exact object id, origin voxel, level height, and rotation
+without depending on the renderer. The renderer never publishes traversal blockers or
+interprets object semantic parts as gameplay policy.
 
 Where the two meet is [contracts.md](contracts.md); what each is still asking of the
 other is [planning/boundary.md](planning/boundary.md).
@@ -145,11 +152,11 @@ commented last.
 **Contract bugs are the exception.** A wrong component on a tile entity, a broken
 boundary, a crash — those are not taste and either owner should block on them.
 
-The map reaches the rest of the game **only through components**. Tiles are spawned
-carrying a `HexTile` marker, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId` and
-`Headroom`; `hex_units` queries those. Nothing outside `hex_map` references
-`VoxelMap` or any generator, so terrain storage and generation can be replaced
-wholesale without anyone noticing.
+The map reaches the rest of the game only through shared `hex_core` components and
+resources. Tiles carry `HexTile`, `HexCoord`, `TilePos`, `HexSpan`, `SubstanceId`, and
+`Headroom`; exact resources publish anchors, interiors, blockers, biome membership,
+and view hints. Nothing outside `hex_map` references `VoxelMap` or generator internals,
+so terrain storage and generation can be replaced wholesale without anyone noticing.
 
 `Headroom` is on that list because only the map can measure it: a run carries its own
 extent but knows nothing about what is stacked on it, so gameplay cannot tell a surface
@@ -180,14 +187,16 @@ Anything they share goes in `hex_core`. That is why `HexTile`, `HexGrid` and
 `HexSpan` — which look like presentation concerns — live there: gameplay has to
 query tiles without depending on how they are generated or drawn.
 
-The planned `hex_perception` crate follows the same rule. It may depend on
-`hex_units` to observe unit positions, but it cannot expose map internals back to
-units. `hex_units` reads only the `LocalMapKnowledge` projection in `hex_core`;
-`hex_combat` may depend on the richer perception API for detection, targeting, and
-last-known-position behavior. A lighting-profile adapter publishes the core
-`ExteriorIllumination` projection before perception runs; it does not expose
-`hex_world` renderer state to perception. Physical lights and rendered fog are
-presentation. Neither is the authoritative gameplay visibility calculation.
+The `hex_perception` crate follows the same rule. It depends on `hex_units` only to
+snapshot stable unit identities, factions, and exact standing positions, and on
+`hex_assets` for validated sight settings and substance solidity. It cannot expose map
+internals back to units. `hex_units` will read only the `LocalMapKnowledge` projection
+in `hex_core`; `hex_combat` consumes its richer current-observation API only to gate
+access to gameplay-owned lattice knowledge. Combat retains divination facts on their
+own expiry clock, but never decides that a world unit is visible. A lighting-profile adapter
+publishes the core `ExteriorIllumination` projection before perception runs; it does
+not expose `hex_world` renderer state to perception. Physical lights and rendered fog
+are presentation. Neither is the authoritative gameplay visibility calculation.
 
 ## Positions are voxels, not coordinates
 
@@ -354,6 +363,7 @@ re-inserted on change. Whether that is *visible* depends on when the value is re
 |---|---|---|
 | Every frame | `camera.ron`, `display.ron`, all of `lighting.ron`, the session `TimeOfDay` resource | Immediate |
 | At interaction | `player.ron` speed | The next movement started; an in-flight move keeps its speed |
+| On coherent art-graph reload | `palette.ron`, `voxel_styles.ron`, `object_catalog.ron`, `objects/*.ron` | Existing authored object instances rebuild; a bad graph retains the last valid revision |
 | At spawn | `world.ron`, `substances.ron`, `palette.ron` substance/unit swatches, `player.ron` scale | Next `OnEnter(Screen::Gameplay)` |
 
 `lighting.ron` used to be split across the first and last rows: the sky shader read its
@@ -389,11 +399,11 @@ asks for is looking at the window.
 
 Two complementary layers across the workspace.
 
-**Unit tests** live in `hex_core`, `hex_map`, `hex_assets` and `hex_units`, none of
-which need a GPU: coordinate round-tripping, the cube invariant, line drawing including
-the degenerate zero-length case, span geometry, voxel columns and run-merging, substance
-id assignment, and the movement rules — including that a two-level body is refused a
-one-voxel crawlspace a one-level body walks into.
+**Unit tests** live beside behavior throughout the workspace and do not need a GPU:
+coordinate round-tripping, the cube invariant, lattice properties, content validation,
+object meshing, perception, voxel columns and run-merging, substance id assignment,
+and movement rules — including that a two-level body is refused a one-voxel crawlspace
+a one-level body walks into.
 
 **ECS integration tests** run a headless `App` with `MinimalPlugins` and inspect the
 world afterwards — `crates/hex_map/tests/`, `crates/hex_units/tests/` and

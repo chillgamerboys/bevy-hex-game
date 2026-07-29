@@ -14,9 +14,9 @@
 //! loop owns the refusal path and each handler stays a straight-line function
 //! that can be read on its own.
 //!
-//! That shape is load-bearing rather than tidiness: wave 3 adds casting,
-//! terrain impact and persistent effects, and each becomes **a new file plus
-//! one match arm** instead of another hundred lines inside one function. A verb
+//! That shape is load-bearing rather than tidiness: casting and defender choices
+//! each became **a new file plus one match arm** instead of another hundred lines
+//! inside one function. A verb
 //! needing a fact the handlers lack adds a field to [`Verb`] instead of
 //! changing every signature.
 //!
@@ -42,7 +42,7 @@ use hex_assets::{
 };
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
-    PausableSystems, PendingDecision, Screen, TilePos, Turn,
+    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
 };
 use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitRegistry};
 
@@ -114,12 +114,11 @@ struct Verb<'a> {
     pending: &'a mut PendingDecision,
     /// The ledger of effects that outlast the action that caused them.
     ///
-    /// The field this struct's docs promised: persistent effects were named as one of
-    /// wave 3's additions, and casting a burn is a verb needing a fact the handlers
-    /// lacked. One field here rather than a ninth argument on `cast::apply`.
+    /// Casting a burn needs the persistent-effect ledger. Keeping that fact here avoids
+    /// a ninth argument on `cast::apply`.
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
-    knowledge: &'a mut crate::knowledge::FactionKnowledge,
+    knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
     /// Restored units waiting for a round boundary before initiative.
@@ -129,6 +128,8 @@ struct Verb<'a> {
     party: &'a Party,
     formation: &'a mut PartyFormation,
     formations: Option<&'a FormationCatalog>,
+    /// Exact world-space obstacles excluded from footing for movement and reach.
+    blockers: Option<&'a TraversalBlockers>,
     /// Units this drain already committed presentation for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
@@ -141,7 +142,7 @@ struct Verb<'a> {
 struct ResolutionStores<'w> {
     pending: ResMut<'w, PendingDecision>,
     effects: ResMut<'w, crate::effects::PersistentEffects>,
-    knowledge: ResMut<'w, crate::knowledge::FactionKnowledge>,
+    knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
     events: MessageWriter<'w, CombatEvent>,
     revivals: ResMut<'w, crate::turns::PendingRevivals>,
     summary: ResMut<'w, crate::CombatSummary>,
@@ -263,6 +264,7 @@ fn apply_commands(
     elements: Option<Res<ElementCatalog>>,
     mut stores: ResolutionStores,
     combat: Option<Res<CombatSettings>>,
+    blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
     mut units: UnitStores,
     mut party_stores: PartyStores,
@@ -322,6 +324,7 @@ fn apply_commands(
             party: &party_stores.party,
             formation: &mut party_stores.formation,
             formations: party_stores.formations.as_deref(),
+            blockers: blockers.as_deref(),
             committed: &mut committed,
             in_combat,
         };

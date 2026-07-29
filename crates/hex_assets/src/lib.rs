@@ -28,6 +28,9 @@ pub mod formations;
 pub mod lattices;
 pub mod loader;
 pub mod object_blueprint;
+pub mod object_catalog;
+/// Validated gameplay sight settings.
+pub mod perception;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
@@ -59,6 +62,11 @@ pub use object_blueprint::{
     ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart, PropPart,
     MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
+pub use object_catalog::{
+    HexObjectRotation, ObjectCatalogError, ObjectCatalogFile, ObjectInstance, ObjectInstanceError,
+    ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus, OBJECT_CATALOG_SCHEMA_VERSION,
+};
+pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
 pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
@@ -89,6 +97,10 @@ pub fn plugin(app: &mut App) {
         .register_type::<CelestialCycleSettings>()
         .register_type::<LightingKeyframe>()
         .register_type::<CelestialBody>()
+        .register_type::<PerceptionSettings>()
+        .register_type::<SightPreset>()
+        .register_type::<SightRanges>()
+        .register_type::<SightBandSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
@@ -116,11 +128,13 @@ pub fn plugin(app: &mut App) {
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)
+        .load_settings::<PerceptionSettings>("config/perception.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
         .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS)
         .load_settings::<ArtPalette>("art/palette.ron", CONFIG_EXTENSIONS);
+    app.add_plugins(object_catalog::plugin);
 }
 
 /// Handles to everything the game loads from disk.

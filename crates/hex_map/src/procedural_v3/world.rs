@@ -31,10 +31,29 @@ pub(crate) struct PlannedFeature {
     pub(crate) kind: FeatureKind,
 }
 
+/// Exact ordinary surfaces reserved for one named critical route.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct ProtectedFeatureRoute {
+    /// Ordered walkable spine of the route.
+    ///
+    /// Keeping the order preserves bends and tapering independently from the
+    /// unordered feature-free footprint around it.
+    pub(crate) centerline: Vec<TilePos>,
+    pub(crate) surfaces: BTreeSet<TilePos>,
+}
+
+/// Exact ordinary surfaces reserved as one named feature-free clearing.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct FeatureClearing {
+    pub(crate) surfaces: BTreeSet<TilePos>,
+}
+
 /// Surface features keyed independently from their position.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct FeaturePlan {
     pub(crate) by_id: BTreeMap<FeatureId, PlannedFeature>,
+    pub(crate) protected_routes: BTreeMap<String, ProtectedFeatureRoute>,
+    pub(crate) clearings: BTreeMap<String, FeatureClearing>,
 }
 
 /// Stable map-local identity of one authored generated structure.
@@ -266,12 +285,87 @@ impl GeneratedWorldPlan {
     }
 
     fn validate_features_and_blockers(&self, issues: &mut Vec<WorldValidationIssue>) {
-        let mut expected_blockers = BTreeSet::new();
-        for (id, feature) in &self.features.by_id {
-            if !self.volume.surfaces.contains_key(&feature.root) {
+        let mut reserved_surfaces = BTreeSet::new();
+        let mut membership_names = BTreeSet::new();
+        for (name, route) in &self.features.protected_routes {
+            validate_feature_membership(
+                "protected route",
+                name,
+                &route.surfaces,
+                &self.volume,
+                issues,
+            );
+            if !membership_names.insert(name) {
                 issues.push(WorldValidationIssue::new(
                     WorldIssueCode::Feature,
-                    format!("feature {id:?} is not rooted on an exact generated surface"),
+                    format!("feature membership name {name:?} is not unique"),
+                ));
+            }
+            if route.centerline.is_empty() {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("protected route {name:?} contains no centerline"),
+                ));
+            }
+            let ordered_surfaces: BTreeSet<_> = route.centerline.iter().copied().collect();
+            if ordered_surfaces.len() != route.centerline.len() {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("protected route {name:?} repeats a centerline surface"),
+                ));
+            }
+            if !ordered_surfaces.is_subset(&route.surfaces) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!(
+                        "protected route {name:?} centerline leaves its reserved surface footprint"
+                    ),
+                ));
+            }
+            reserved_surfaces.extend(route.surfaces.iter().copied());
+        }
+        for (name, clearing) in &self.features.clearings {
+            validate_feature_membership("clearing", name, &clearing.surfaces, &self.volume, issues);
+            if !membership_names.insert(name) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("feature membership name {name:?} is not unique"),
+                ));
+            }
+            reserved_surfaces.extend(clearing.surfaces.iter().copied());
+        }
+
+        let mut expected_blockers = BTreeSet::new();
+        let mut roots = BTreeMap::new();
+        for (id, feature) in &self.features.by_id {
+            if let Some(previous) = roots.insert(feature.root, *id) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!(
+                        "features {previous:?} and {id:?} share duplicate root {:?}",
+                        feature.root
+                    ),
+                ));
+            }
+            if !matches!(
+                self.volume
+                    .surfaces
+                    .get(&feature.root)
+                    .map(|metadata| metadata.access),
+                Some(SurfaceAccess::Ordinary)
+            ) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("feature {id:?} is not rooted on an exact ordinary generated surface"),
+                ));
+            }
+            if reserved_surfaces.contains(&feature.root) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!(
+                        "feature {id:?} occupies protected route or clearing surface {:?}",
+                        feature.root
+                    ),
                 ));
             }
             if feature.kind == FeatureKind::Tree {
@@ -322,9 +416,14 @@ impl GeneratedWorldPlan {
     }
 
     fn validate_biomes(&self, issues: &mut Vec<WorldValidationIssue>) {
-        let surfaces: BTreeSet<_> = self.volume.surfaces.keys().copied().collect();
-        let memberships: BTreeSet<_> = self.biome_regions.keys().copied().collect();
-        if surfaces != memberships {
+        if self.volume.surfaces.len() != self.biome_regions.len()
+            || !self
+                .volume
+                .surfaces
+                .keys()
+                .copied()
+                .eq(self.biome_regions.keys().copied())
+        {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Biome,
                 "biome membership does not exactly cover every generated surface",
@@ -336,18 +435,6 @@ impl GeneratedWorldPlan {
             .values()
             .map(|patch| patch.biome_region)
             .collect();
-        let owning_regions: BTreeMap<_, _> = self
-            .layout
-            .patches
-            .values()
-            .flat_map(|patch| {
-                patch
-                    .mask
-                    .iter()
-                    .copied()
-                    .map(|coord| (coord, patch.biome_region))
-            })
-            .collect();
         for (position, region) in &self.biome_regions {
             if !declared_regions.contains(region) {
                 issues.push(WorldValidationIssue::new(
@@ -355,8 +442,14 @@ impl GeneratedWorldPlan {
                     format!("surface {position:?} names undeclared biome region {region:?}"),
                 ));
             }
-            match owning_regions.get(&position.coord) {
-                Some(expected) if expected != region => {
+            let expected = self
+                .layout
+                .patches
+                .values()
+                .find(|patch| patch.mask.contains(&position.coord))
+                .map(|patch| patch.biome_region);
+            match expected {
+                Some(expected) if expected != *region => {
                     issues.push(WorldValidationIssue::new(
                         WorldIssueCode::Biome,
                         format!(
@@ -699,6 +792,43 @@ fn append_liquid_issues(issues: &mut Vec<WorldValidationIssue>, liquid_issues: &
     );
 }
 
+fn validate_feature_membership(
+    kind: &str,
+    name: &str,
+    surfaces: &BTreeSet<TilePos>,
+    volume: &VolumePlan,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if !valid_stable_name(name) {
+        issues.push(WorldValidationIssue::new(
+            WorldIssueCode::Feature,
+            format!("{kind} name {name:?} is not a stable identifier"),
+        ));
+    }
+    if surfaces.is_empty() {
+        issues.push(WorldValidationIssue::new(
+            WorldIssueCode::Feature,
+            format!("{kind} {name:?} contains no surfaces"),
+        ));
+    }
+    for position in surfaces {
+        if !matches!(
+            volume
+                .surfaces
+                .get(position)
+                .map(|metadata| metadata.access),
+            Some(SurfaceAccess::Ordinary)
+        ) {
+            issues.push(WorldValidationIssue::new(
+                WorldIssueCode::Feature,
+                format!(
+                    "{kind} {name:?} member {position:?} is not an exact ordinary generated surface"
+                ),
+            ));
+        }
+    }
+}
+
 fn valid_stable_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -863,6 +993,250 @@ mod tests {
             anchors: BTreeMap::from([("party_start".to_owned(), floor)]),
             view_hint: MapViewHint::new((1.0, 4.0, 2.0), (0.0, 0.0, 0.0)),
         }
+    }
+
+    fn complete_feature_plan() -> GeneratedWorldPlan {
+        let mut plan = complete_stacked_plan();
+        let coord = hex_core::HexCoord::ORIGIN;
+        let tree_root = TilePos::new(coord, 0);
+        let route_surface = TilePos::new(coord, 6);
+        let clearing_surface = TilePos::new(coord, 10);
+
+        plan.volume
+            .surfaces
+            .get_mut(&route_surface)
+            .expect("the stacked fixture has its roof surface")
+            .access = SurfaceAccess::Ordinary;
+        plan.volume
+            .columns
+            .get_mut(&coord)
+            .expect("the stacked fixture has its column")
+            .elements
+            .push(VolumeElement::Solid(SolidMass {
+                levels: LevelInterval::new(10, 11),
+                material: SolidMaterialRole::Grass,
+                cutaway_for: None,
+            }));
+        plan.volume.surfaces.insert(
+            clearing_surface,
+            SurfaceMetadata {
+                access: SurfaceAccess::Ordinary,
+                interior: None,
+            },
+        );
+        plan.biome_regions
+            .insert(clearing_surface, BiomeRegionId(0));
+        plan.features = FeaturePlan {
+            by_id: BTreeMap::from([(
+                FeatureId(0),
+                PlannedFeature {
+                    root: tree_root,
+                    kind: FeatureKind::Tree,
+                },
+            )]),
+            protected_routes: BTreeMap::from([(
+                "main_route".to_owned(),
+                ProtectedFeatureRoute {
+                    centerline: vec![route_surface],
+                    surfaces: BTreeSet::from([route_surface]),
+                },
+            )]),
+            clearings: BTreeMap::from([(
+                "upper_meadow".to_owned(),
+                FeatureClearing {
+                    surfaces: BTreeSet::from([clearing_surface]),
+                },
+            )]),
+        };
+        plan.blockers = BTreeSet::from([tree_root]);
+        plan.anchors
+            .insert("party_start".to_owned(), clearing_surface);
+        plan
+    }
+
+    #[test]
+    fn feature_plan_accepts_exact_reserved_surfaces_and_tree_blockers() {
+        let plan = complete_feature_plan();
+        assert_eq!(plan.validate(), Vec::new());
+    }
+
+    #[test]
+    fn feature_membership_names_are_stable_and_unique() {
+        let mut invalid = complete_feature_plan();
+        let route = invalid
+            .features
+            .protected_routes
+            .remove("main_route")
+            .expect("the fixture has its route");
+        invalid
+            .features
+            .protected_routes
+            .insert("Main Route".to_owned(), route);
+        assert!(invalid.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue.detail.contains("is not a stable identifier")
+        }));
+
+        let mut duplicate = complete_feature_plan();
+        let clearing = duplicate
+            .features
+            .clearings
+            .remove("upper_meadow")
+            .expect("the fixture has its clearing");
+        duplicate
+            .features
+            .clearings
+            .insert("main_route".to_owned(), clearing);
+        assert!(duplicate.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature && issue.detail.contains("is not unique")
+        }));
+    }
+
+    #[test]
+    fn feature_memberships_require_nonempty_exact_ordinary_surfaces() {
+        let mut empty = complete_feature_plan();
+        empty
+            .features
+            .protected_routes
+            .get_mut("main_route")
+            .expect("the fixture has its route")
+            .surfaces
+            .clear();
+        assert!(empty.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature && issue.detail.contains("contains no surfaces")
+        }));
+
+        let mut nonordinary = complete_feature_plan();
+        let route_surface = TilePos::new(hex_core::HexCoord::ORIGIN, 6);
+        nonordinary
+            .volume
+            .surfaces
+            .get_mut(&route_surface)
+            .expect("the fixture has its route surface")
+            .access = SurfaceAccess::SpecialMovement(SpecialMovementRegion(7));
+        assert!(nonordinary.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue
+                    .detail
+                    .contains("not an exact ordinary generated surface")
+        }));
+    }
+
+    #[test]
+    fn protected_route_centerlines_are_nonempty_unique_and_inside_the_footprint() {
+        let mut empty = complete_feature_plan();
+        empty
+            .features
+            .protected_routes
+            .get_mut("main_route")
+            .expect("the fixture has its route")
+            .centerline
+            .clear();
+        assert!(empty.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature && issue.detail.contains("contains no centerline")
+        }));
+
+        let mut repeated = complete_feature_plan();
+        let route = repeated
+            .features
+            .protected_routes
+            .get_mut("main_route")
+            .expect("the fixture has its route");
+        let first = route
+            .centerline
+            .first()
+            .copied()
+            .expect("the fixture route has a centerline");
+        route.centerline.push(first);
+        assert!(repeated.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue.detail.contains("repeats a centerline surface")
+        }));
+
+        let mut outside = complete_feature_plan();
+        outside
+            .features
+            .protected_routes
+            .get_mut("main_route")
+            .expect("the fixture has its route")
+            .centerline
+            .push(TilePos::new(hex_core::HexCoord::ORIGIN, 10));
+        assert!(outside.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue
+                    .detail
+                    .contains("leaves its reserved surface footprint")
+        }));
+    }
+
+    #[test]
+    fn feature_roots_are_unique_ordinary_and_outside_reserved_surfaces() {
+        let mut duplicate = complete_feature_plan();
+        duplicate.features.by_id.insert(
+            FeatureId(1),
+            PlannedFeature {
+                root: TilePos::new(hex_core::HexCoord::ORIGIN, 0),
+                kind: FeatureKind::TallGrass,
+            },
+        );
+        assert!(duplicate.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature && issue.detail.contains("duplicate root")
+        }));
+
+        let mut missing = complete_feature_plan();
+        let missing_root = TilePos::new(hex_core::HexCoord::ORIGIN, 3);
+        missing
+            .features
+            .by_id
+            .get_mut(&FeatureId(0))
+            .expect("the fixture has its tree")
+            .root = missing_root;
+        missing.blockers = BTreeSet::from([missing_root]);
+        assert!(missing.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue
+                    .detail
+                    .contains("not rooted on an exact ordinary generated surface")
+        }));
+
+        let mut reserved = complete_feature_plan();
+        let clearing_surface = TilePos::new(hex_core::HexCoord::ORIGIN, 10);
+        reserved
+            .features
+            .by_id
+            .get_mut(&FeatureId(0))
+            .expect("the fixture has its tree")
+            .root = clearing_surface;
+        reserved.blockers = BTreeSet::from([clearing_surface]);
+        assert!(reserved.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Feature
+                && issue
+                    .detail
+                    .contains("occupies protected route or clearing surface")
+        }));
+    }
+
+    #[test]
+    fn blockers_exactly_equal_unique_tree_roots() {
+        let mut missing = complete_feature_plan();
+        missing.blockers.clear();
+        assert!(missing.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Blocker
+                && issue
+                    .detail
+                    .contains("do not exactly match blocking feature roots")
+        }));
+
+        let mut extra = complete_feature_plan();
+        extra
+            .blockers
+            .insert(TilePos::new(hex_core::HexCoord::ORIGIN, 6));
+        assert!(extra.validate().iter().any(|issue| {
+            issue.code == WorldIssueCode::Blocker
+                && issue
+                    .detail
+                    .contains("do not exactly match blocking feature roots")
+        }));
     }
 
     fn two_patch_liquid_plan() -> GeneratedWorldPlan {

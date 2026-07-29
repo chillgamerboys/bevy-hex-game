@@ -110,7 +110,7 @@ pub(super) fn apply(
     };
     // **Reach, not range.** Melee is the step rule both ways: an attacker five
     // levels up must not acquire a two-hex punch.
-    let footing = Footing::from_tiles(tiles.iter(), table, *body);
+    let footing = Footing::from_tiles(tiles.iter(), table, *body, ctx.blockers);
     if !(footing.admits_step(standing.0.pos, target_standing.pos)
         && footing.admits_step(target_standing.pos, standing.0.pos))
     {

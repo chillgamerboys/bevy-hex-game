@@ -101,11 +101,6 @@ impl VolumeElement {
             Self::Fill(fill) => fill.levels,
         }
     }
-
-    #[must_use]
-    const fn occupies(self, level: Level) -> bool {
-        self.levels().contains(level)
-    }
 }
 
 /// Ordered occupied intervals at one horizontal coordinate.
@@ -119,18 +114,21 @@ impl VolumeColumn {
     /// [`Column::headroom_above`].
     #[must_use]
     pub(crate) fn headroom_above(&self, from: Level) -> Headroom {
-        let clear = (0..MAX_HEADROOM)
-            .take_while(|offset| {
-                let level = from.saturating_add(*offset);
-                !self
-                    .elements
-                    .iter()
-                    .copied()
-                    .any(|element| element.occupies(level))
+        let clear = self
+            .elements
+            .iter()
+            .copied()
+            .filter_map(|element| {
+                let levels = element.levels();
+                if levels.contains(from) {
+                    Some(0)
+                } else {
+                    (levels.bottom > from).then_some(levels.bottom.saturating_sub(from))
+                }
             })
-            .count()
-            .try_into()
-            .unwrap_or(MAX_HEADROOM);
+            .min()
+            .unwrap_or(MAX_HEADROOM)
+            .clamp(0, MAX_HEADROOM);
         Headroom(clear)
     }
 }
@@ -334,8 +332,10 @@ impl VolumePlan {
             issues.push(VolumeIssue::DisconnectedMask);
         }
 
-        let column_coords: BTreeSet<_> = self.columns.keys().copied().collect();
-        if column_coords != self.mask {
+        if self.columns.len() != self.mask.len()
+            || !self.columns.keys().copied().eq(self.mask.iter().copied())
+        {
+            let column_coords: BTreeSet<_> = self.columns.keys().copied().collect();
             let missing: Vec<_> = self.mask.difference(&column_coords).copied().collect();
             let extra: Vec<_> = column_coords.difference(&self.mask).copied().collect();
             issues.push(VolumeIssue::MaskCoverage { missing, extra });
@@ -368,8 +368,14 @@ impl VolumePlan {
             issues.push(VolumeIssue::NoSolidMasses);
         }
 
-        let actual_surfaces: BTreeSet<_> = self.surfaces.keys().copied().collect();
-        if actual_surfaces != expected_surfaces {
+        if self.surfaces.len() != expected_surfaces.len()
+            || !self
+                .surfaces
+                .keys()
+                .copied()
+                .eq(expected_surfaces.iter().copied())
+        {
+            let actual_surfaces: BTreeSet<_> = self.surfaces.keys().copied().collect();
             let missing: Vec<_> = expected_surfaces
                 .difference(&actual_surfaces)
                 .copied()
@@ -385,7 +391,11 @@ impl VolumePlan {
             if !expected_surfaces.contains(surface) {
                 continue;
             }
-            let Some(headroom) = self.surface_headroom(*surface) else {
+            let Some(headroom) = self
+                .columns
+                .get(&surface.coord)
+                .map(|column| column.headroom_above(surface.level.saturating_add(1)))
+            else {
                 continue;
             };
             let walker_admitted = TraversalProfile::WALKER.admits_surface(true, headroom);

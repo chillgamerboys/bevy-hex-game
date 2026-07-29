@@ -163,7 +163,7 @@ impl Plugin for AppPlugin {
         );
 
         // World construction is split across crates — `hex_map` builds terrain,
-        // `hex_units` spawns actors, future perception publishes initial knowledge,
+        // `hex_units` spawns actors, `hex_perception` publishes initial knowledge,
         // and `hex_world` frames the result. Systems in the same `OnEnter` schedule
         // otherwise run in unspecified order. Chaining also gives each step a sync
         // point, so entities spawned by one set are queryable by the next.
@@ -194,9 +194,11 @@ impl Plugin for AppPlugin {
 
         app.add_plugins((
             hex_assets::plugin,
+            hex_objects::plugin,
             hex_map::plugin,
             hex_world::plugin,
             hex_units::plugin,
+            hex_perception::plugin,
             hex_combat::plugin,
             scenarios::plugin,
             screens::plugin,

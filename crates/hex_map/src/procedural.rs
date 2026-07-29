@@ -65,10 +65,81 @@ pub struct GenerationReport {
     pub map_fingerprint: u64,
     /// Tactical measurements of the selected result.
     pub metrics: TacticalMetrics,
+    /// Exact recipe-specific measurements for V3 worlds.
+    ///
+    /// V1/V2 retain their frozen tactical report and publish `None`.
+    pub recipe_metrics: Option<ProceduralRecipeMetrics>,
     /// Time spent evaluating all candidates, excluded from deterministic comparisons.
     pub elapsed_micros: u64,
     /// Validation notes. Empty for an ordinary valid candidate.
     pub notes: Vec<String>,
+}
+
+/// Exact metrics owned by the selected procedural V3 recipe.
+#[derive(Reflect, Debug, Clone, PartialEq, Eq)]
+pub enum ProceduralRecipeMetrics {
+    /// Directed river, fall, and dry-bypass measurements.
+    Waterfall(WaterfallMetrics),
+    /// Vegetation, clearing, route, and terrain measurements.
+    Forest(ForestMetrics),
+}
+
+/// Exact deterministic measurements of one selected V3 Waterfall plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct WaterfallMetrics {
+    /// Exact water-topology nodes across all three lanes.
+    pub water_nodes: u32,
+    /// Nodes authored as calm/still water.
+    pub still_nodes: u32,
+    /// Nodes authored as a directional current.
+    pub current_nodes: u32,
+    /// Nodes authored as rapids.
+    pub rapid_nodes: u32,
+    /// Exact top nodes which descend as the contiguous fall.
+    pub fall_nodes: u32,
+    /// Vertical fall drop in voxel levels.
+    pub fall_height: Level,
+    /// Ordinary walker surfaces in the connected dry network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in that dry network.
+    pub reachable_elevation_levels: u32,
+    /// Shortest walker distance between the required actor anchors.
+    pub bypass_steps: u32,
+    /// Authored step count along the independently climbable alternate terrace.
+    pub alternate_bypass_steps: u32,
+    /// Ordinary cells raised above their authored plateau datum.
+    pub raised_terrain: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Forest plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ForestMetrics {
+    /// Exact tree roots authored as traversal blockers.
+    pub tree_roots: u32,
+    /// Exact non-blocking tall-grass roots.
+    pub tall_grass_roots: u32,
+    /// Surface cells assigned to the woodland side.
+    pub woodland_surfaces: u32,
+    /// Surface cells assigned to the prairie side.
+    pub prairie_surfaces: u32,
+    /// Distinct authored clearings in the woodland.
+    pub clearing_count: u32,
+    /// Total surface cells inside authored clearings.
+    pub clearing_surfaces: u32,
+    /// Surface cells protected for ordinary walker routes.
+    pub protected_route_surfaces: u32,
+    /// Ordinary walker surfaces in the connected unblocked network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in that ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest ordinary surface.
+    pub relief: Level,
+    /// Shortest ordinary-walker path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Exact elevation difference between the required actor anchors.
+    pub spawn_height_difference: Level,
+    /// Difference between the highest reachable woodland and prairie surfaces.
+    pub woodland_prairie_high_ground_difference: Level,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.
@@ -548,6 +619,7 @@ fn build_with_candidate_selection_details(
         semantic_plan_fingerprint: None,
         map_fingerprint: map_fingerprint(&map, &special_regions),
         metrics,
+        recipe_metrics: None,
         elapsed_micros,
         notes,
     };

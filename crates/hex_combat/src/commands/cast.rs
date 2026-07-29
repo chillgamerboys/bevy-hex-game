@@ -584,9 +584,8 @@ fn effect_damages_unit(effect: &Effect) -> bool {
 /// one query at once. Keeping them apart makes each access a short scope rather than a
 /// lifetime puzzle.
 ///
-/// **Deliberately unfiltered by `Downed`.** Filtering it would have been the obvious
-/// thing and would have quietly broken the design: a downed unit is revivable by a
-/// restoring spell, and a spell cannot restore a lattice it cannot reach. Being downed
-/// stops a unit *acting*, which is the turn order's job, not its lattice's.
+/// **Deliberately unfiltered by `Downed`.** A future restoration flow needs access to
+/// the retained lattice even though reactivation is not built. Being downed stops a
+/// unit *acting*, which is the turn order's job, not its lattice's.
 pub(super) type LatticeQuery<'w, 's> =
     Query<'w, 's, (&'static LatticeSpec, &'static mut LatticeState)>;

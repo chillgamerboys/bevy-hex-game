@@ -71,7 +71,7 @@ fn wire_formats_are_pinned() {
     let json = serde_json::to_string(&owner).expect("serialize");
     assert_eq!(json, "0", "ControlOwner must serialize as its bare seat");
 
-    // A replay log line: the funnel's whole input, as a save would store it.
+    // A future replay-log line: the funnel's whole input, as a save would store it.
     let issued = IssuedCommand {
         seat: PlayerSeat(0),
         command: GameCommand::MoveAlong {

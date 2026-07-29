@@ -1,15 +1,16 @@
 //! The command funnel's vocabulary: what may be asked of the sim, and by whom.
 //!
-//! Every mutation of sim state — moving, striking, ending a turn — is expressed
-//! as a [`GameCommand`], stamped with the [`PlayerSeat`] that issued it, and
-//! pushed onto the [`CommandQueue`]. One applier (in `hex_combat`) drains the
-//! queue, validates each command against the rules, and either applies it or
-//! drops it with a logged reason. Input handlers and the AI *emit*; they no
-//! longer mutate.
+//! Player and AI intent — moving, striking, casting, choosing damage, ending a
+//! turn — is expressed as a [`GameCommand`], stamped with the [`PlayerSeat`] that
+//! issued it, and pushed onto the [`CommandQueue`]. One applier (in `hex_combat`)
+//! drains the queue, validates each command against the rules, and either applies
+//! it or drops it with a logged reason. Passive effects and derived consequences
+//! run at their own deterministic schedule points.
 //!
-//! That single choke point is what makes a replay possible — the sim's entire
-//! input is the ordered command sequence — and what makes co-op honest: a
-//! command from the wrong seat dies in validation rather than in a code review.
+//! That choke point makes a future replay possible: recording the ordered command
+//! sequence preserves every player/AI choice, while deterministic systems reproduce
+//! their consequences. The live queue itself is consumed and is not a replay log.
+//! Seat validation also gives co-op one authoritative place to reject commands.
 //!
 //! # Why a queue resource and not a `Message`
 //!
@@ -82,8 +83,8 @@ pub enum GameCommand {
     /// Cast a spell through the lattice and combat appliers.
     ///
     /// The payload is settled ahead of the implementation on purpose: the
-    /// command log is the replay log, so every field is a permanent save
-    /// commitment, and two separate tickets need different halves of it.
+    /// command wire format is a future replay/save commitment, and separate
+    /// implementations need different halves of it.
     /// Later additions arrive as optional serde-default fields or new
     /// variants — never as speculative fields added now.
     Cast {
@@ -103,8 +104,8 @@ pub enum GameCommand {
         #[serde(default)]
         mana: Option<u16>,
     },
-    /// Sustain a channelled spell. **Not built** — waits on channelling
-    /// (HEX-12).
+    /// Sustain a channelled spell. **Not built** — waits on the channelling
+    /// design and combat implementation.
     Channel {
         /// Who channels.
         unit: UnitId,

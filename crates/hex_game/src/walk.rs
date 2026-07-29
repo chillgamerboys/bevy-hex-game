@@ -231,6 +231,7 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "Escape" => Ok(KeyCode::Escape),
         "Space" => Ok(KeyCode::Space),
         "Enter" => Ok(KeyCode::Enter),
+        "C" => Ok(KeyCode::KeyC),
         // `Tab` and `Q` are casting's — step to the next target, and put the aim down.
         // `Enter` confirms an aim, and the casting walk drives that through the panel's
         // Confirm button instead: a `Click` that never finds its button stalls the walk
@@ -241,7 +242,7 @@ fn parse_key(name: &str) -> Result<KeyCode, String> {
         "KeyH" => Ok(KeyCode::KeyH),
         "KeyR" => Ok(KeyCode::KeyR),
         _ => Err(format!(
-            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, Tab, KeyQ, KeyH, or KeyR"
+            "unknown key {name:?}; expected Backspace, Escape, Space, Enter, C, Tab, KeyQ, KeyH, or KeyR"
         )),
     }
 }
@@ -901,6 +902,8 @@ mod tests {
             "../../walks/menus.ron",
             "../../walks/gameplay.ron",
             "../../walks/party_trial.ron",
+            "../../walks/waterfall.ron",
+            "../../walks/forest.ron",
         ] {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(script);
             let text = std::fs::read_to_string(&path)
@@ -913,6 +916,26 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
             }
         }
+    }
+
+    #[test]
+    fn forest_walk_pins_the_shipped_hero_seed() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenario library parses");
+        let hero_seed = library
+            .scenarios
+            .iter()
+            .find(|scenario| scenario.name == "Forest")
+            .and_then(|scenario| scenario.generation_seed)
+            .expect("the shipped Forest scenario has a hero seed");
+        let steps: Vec<WalkStep> = ron::from_str(include_str!("../../../walks/forest.ron"))
+            .expect("the shipped Forest walk parses");
+
+        assert!(steps.contains(&WalkStep::StartScenario {
+            name: "Forest".to_owned(),
+            seed: Some(hero_seed),
+        }));
     }
 
     /// Every scenario a shipped walk starts must still exist in `scenarios.ron`.
