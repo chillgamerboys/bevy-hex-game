@@ -92,6 +92,8 @@ pub enum ProceduralRecipeMetrics {
     Fort(FortMetrics),
     /// Underground topology, clearance, roof, and local-light measurements.
     Caves(CavesMetrics),
+    /// Whole-world traversal, seam, and semantic-content measurements.
+    Ring7(Ring7Metrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Hills plan.
@@ -293,6 +295,35 @@ pub struct CavesMetrics {
     pub reachable_elevation_levels: u32,
     /// Percentage of exterior surfaces topped with gravel.
     pub gravel_surface_percent: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Ring7 world.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Ring7Metrics {
+    /// Exact surfaces admitted by the ordinary walker profile.
+    pub ordinary_surfaces: u32,
+    /// Ordinary surfaces reachable from the required party anchor.
+    pub reachable_surfaces: u32,
+    /// Distinct elevations in that reachable ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest reachable ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary path between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Open patch-to-patch links in the validated macro route graph.
+    pub macro_edges: u32,
+    /// Biome regions retaining at least two independent macro routes.
+    pub redundant_regions: u32,
+    /// Exact directed liquid crossings installed across patch seams.
+    pub directed_liquid_seams: u32,
+    /// Authored surface-feature instances across the complete world.
+    pub feature_instances: u32,
+    /// Authored semantic structures across the complete world.
+    pub structures: u32,
+    /// Public gameplay-light sources across the complete world.
+    pub gameplay_lights: u32,
+    /// Exact interior domains across the complete world.
+    pub interiors: u32,
 }
 
 /// Small, deterministic measurements used to compare hard-valid candidates.
