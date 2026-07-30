@@ -91,7 +91,7 @@
         (
             id: "volcanic-hills",
             display_name: "Volcanic Hills",
-            description: "Basalt ridges and lava divide the field around a cooled alternate crossing.",
+            description: "A towering volcano feeds descending lava beneath one elevated stairway bridge.",
             tags: ["Lava", "Bridge", "Hazards"],
             preview: "ui/combat-lab/volcanic-hills.png",
             scenario: "Volcanic Hills",

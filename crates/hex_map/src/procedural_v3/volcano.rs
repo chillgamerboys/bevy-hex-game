@@ -14,6 +14,7 @@ use super::layout::{resolve_layout, HexSide, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
@@ -313,6 +314,31 @@ fn construct_patch_with_streams(
         streams.map(|streams| streams.massif),
     )?;
     let geometry = geometry_to_world(geometry, frame)?;
+    let lava_coords = geometry
+        .lava
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let walker_approaches = patch
+        .shared_edges()
+        .flat_map(|edge| edge.walker_ports())
+        .flat_map(|port| port.first_approach)
+        .collect::<BTreeSet<_>>();
+    if !lava_coords.is_disjoint(&walker_approaches) {
+        return Err(vec![recipe_issue(
+            "Volcano lava overlaps a resolved walker seam approach",
+        )]);
+    }
+    let mut surface_levels = geometry.surfaces.clone();
+    let seam_shape = shape_walker_seams(&patch, &mut surface_levels)?;
+    for coord in &geometry.massif {
+        if walker_approaches.contains(coord) {
+            continue;
+        }
+        if let Some(authored) = geometry.surfaces.get(coord).copied() {
+            surface_levels.insert(*coord, authored);
+        }
+    }
     let lava_by_coord = geometry
         .lava
         .iter()
@@ -359,8 +385,7 @@ fn construct_patch_with_streams(
             continue;
         }
 
-        let level = geometry
-            .surfaces
+        let level = surface_levels
             .get(coord)
             .copied()
             .unwrap_or(settings.base_level);
@@ -391,17 +416,43 @@ fn construct_patch_with_streams(
             },
         );
     }
-    let volume = VolumePlan {
+    let mut volume = VolumePlan {
         mask: patch.mask().clone(),
         columns,
         surfaces,
     };
+    seam_shape.apply(&mut volume)?;
     let biome_regions = volume
         .surfaces
         .keys()
         .copied()
         .map(|surface| (surface, patch.biome_region()))
         .collect();
+    let mut anchors = geometry.anchors;
+    for anchor in anchors.values_mut() {
+        if volume
+            .surfaces
+            .get(anchor)
+            .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+        {
+            continue;
+        }
+        let Some(projected) = volume
+            .surfaces
+            .iter()
+            .filter_map(|(surface, metadata)| {
+                (surface.coord == anchor.coord && metadata.access == SurfaceAccess::Ordinary)
+                    .then_some(*surface)
+            })
+            .max_by_key(|surface| surface.level)
+        else {
+            return Err(vec![recipe_issue(format!(
+                "Volcano anchor at {:?} has no ordinary surface after seam shaping",
+                anchor.coord
+            ))]);
+        };
+        *anchor = projected;
+    }
     let structures = StructurePlan {
         by_id: BTreeMap::from([
             (
@@ -420,11 +471,14 @@ fn construct_patch_with_streams(
             ),
         ]),
     };
-    let view_hint = frame.view_hint_to_world(volcano_view_hint(
-        frame.scale(),
-        settings.base_level.saturating_add(settings.summit_relief),
-        level_height,
-    )?);
+    let view_hint = frame.view_hint_rotated_to_world(
+        volcano_view_hint(
+            frame.scale(),
+            settings.base_level.saturating_add(settings.summit_relief),
+            level_height,
+        )?,
+        orientation,
+    );
     let fragment = GeneratedPatchPlan {
         patch_id: patch.id,
         volume,
@@ -447,23 +501,12 @@ fn construct_patch_with_streams(
         lights: BTreeMap::new(),
         biome_regions,
         interiors: InteriorPlan::default(),
-        anchors: geometry.anchors,
+        anchors,
         view_hint,
     };
-    let issues = fragment
-        .validate_against(patch.layout())
-        .into_iter()
-        .map(|issue| {
-            recipe_issue(format!(
-                "Volcano patch {:?} failed {:?}: {}",
-                issue.patch, issue.code, issue.detail
-            ))
-        })
-        .collect::<Vec<_>>();
-    if issues.is_empty() {
-        Ok(fragment)
-    } else {
-        Err(issues)
+    match validate_patch(patch, &fragment, settings) {
+        WorldValidation::Valid(_) => Ok(fragment),
+        WorldValidation::Invalid(issues) => Err(issues),
     }
 }
 
@@ -949,11 +992,119 @@ fn volcano_view_hint(
         .ok_or_else(|| vec![recipe_issue("Volcano camera hint is invalid")])
 }
 
+/// Revalidates one Volcano fragment against its resolved composite authority.
+pub(crate) fn validate_patch(
+    patch: PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    settings: &V3VolcanoSettings,
+) -> WorldValidation<VolcanoMetrics> {
+    let mut issues = fragment
+        .validate_against(patch.layout())
+        .into_iter()
+        .map(|issue| {
+            recipe_issue(format!(
+                "Volcano patch {:?} failed {:?}: {}",
+                issue.patch, issue.code, issue.detail
+            ))
+        })
+        .collect::<Vec<_>>();
+    issues.extend(validate_patch_walker_seams(&patch, &fragment.volume));
+    issues.extend(validate_composite_outlet(&patch, fragment));
+    if !issues.is_empty() {
+        return WorldValidation::Invalid(issues);
+    }
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return WorldValidation::Invalid(vec![recipe_issue(format!(
+                    "Volcano validation frame failed: {error}"
+                ))]);
+            }
+        };
+    match frame.canonical_local_world(fragment) {
+        Ok(plan) => validate_volcano_inner(&plan, settings, false),
+        Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
+            "Volcano validation projection failed: {error}"
+        ))]),
+    }
+}
+
+fn validate_composite_outlet(
+    patch: &PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+) -> Vec<WorldValidationIssue> {
+    if !patch.layout().kind.is_composite() {
+        return Vec::new();
+    }
+    let mut issues = Vec::new();
+    if !patch.is_world_boundary(HexSide::West) {
+        issues.push(recipe_issue(
+            "composite Volcano lava requires a western world-boundary outlet",
+        ));
+    }
+    if patch
+        .shared_edges()
+        .any(|edge| edge.liquid_port().is_some())
+    {
+        issues.push(recipe_issue(
+            "composite Volcano lava must remain separate from stitched liquid ports",
+        ));
+    }
+    let terminals = fragment
+        .liquids
+        .bodies
+        .values()
+        .filter(|body| body.material == FillMaterialRole::Lava)
+        .flat_map(|body| {
+            body.nodes.iter().filter_map(|(position, node)| {
+                node.downstream.is_none().then_some((*position, *node))
+            })
+        })
+        .collect::<Vec<_>>();
+    if terminals.len() != LAVA_LANES.len() {
+        issues.push(recipe_issue(format!(
+            "composite Volcano has {} lava terminals; expected exactly {}",
+            terminals.len(),
+            LAVA_LANES.len()
+        )));
+    }
+    for (position, node) in &terminals {
+        if node.state != LiquidFlowState::Still {
+            issues.push(recipe_issue(format!(
+                "composite Volcano terminal {position:?} is not Still"
+            )));
+        }
+        if patch
+            .layout()
+            .footprint
+            .contains(&HexSide::West.neighbor(position.coord))
+        {
+            issues.push(recipe_issue(format!(
+                "composite Volcano terminal {position:?} does not exit the western world boundary"
+            )));
+        }
+    }
+    issues
+}
+
 pub(crate) fn validate_volcano(
     plan: &GeneratedWorldPlan,
     settings: &V3VolcanoSettings,
 ) -> WorldValidation<VolcanoMetrics> {
-    let mut issues = plan.validate();
+    validate_volcano_inner(plan, settings, true)
+}
+
+fn validate_volcano_inner(
+    plan: &GeneratedWorldPlan,
+    settings: &V3VolcanoSettings,
+    validate_common: bool,
+) -> WorldValidation<VolcanoMetrics> {
+    let mut issues = if validate_common {
+        plan.validate()
+    } else {
+        Vec::new()
+    };
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let Some(party) = plan.anchors.get(PARTY_START).copied() else {
         issues.push(recipe_issue("Volcano is missing party_start"));
@@ -1058,7 +1209,24 @@ pub(crate) fn validate_volcano(
             BRIDGE_FLOW_ROWS.len().saturating_mul(LAVA_LANES.len())
         )));
     }
-    let bridge_clearance = bridge
+    let expected_bridge = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(surface, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && lava.nodes.keys().any(|lava| lava.coord == surface.coord)
+                && solid_material_at(&plan.volume, *surface) == Some(SolidMaterialRole::Metal))
+            .then_some(*surface)
+        })
+        .collect::<BTreeSet<_>>();
+    if bridge.voxels != expected_bridge {
+        issues.push(recipe_issue(format!(
+            "Volcano bridge structure does not exactly match its six rederived deck surfaces (structure {:?}, expected {expected_bridge:?})",
+            bridge.voxels
+        )));
+    }
+    let bridge_clearances = bridge
         .voxels
         .iter()
         .filter_map(|surface| {
@@ -1067,11 +1235,17 @@ pub(crate) fn validate_volcano(
                 .find(|lava| lava.coord == surface.coord)
                 .map(|lava| surface.level.saturating_sub(lava.level))
         })
-        .min()
-        .unwrap_or_default();
+        .collect::<BTreeSet<_>>();
+    let bridge_clearance = bridge_clearances.iter().next().copied().unwrap_or_default();
     if bridge_clearance < settings.bridge_clearance {
         issues.push(recipe_issue(format!(
             "Volcano bridge clearance is {bridge_clearance}; expected at least {}",
+            settings.bridge_clearance
+        )));
+    }
+    if bridge_clearances != BTreeSet::from([settings.bridge_clearance]) {
+        issues.push(recipe_issue(format!(
+            "Volcano bridge deck clearances are {bridge_clearances:?}; expected every cell at {}",
             settings.bridge_clearance
         )));
     }
@@ -1090,6 +1264,42 @@ pub(crate) fn validate_volcano(
             "Volcano bridge stairs contain a transition taller than one level",
         ));
     }
+    let centerline_surfaces = route.centerline.iter().copied().collect::<BTreeSet<_>>();
+    let second_lane = route
+        .surfaces
+        .difference(&centerline_surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let expected_low_lava = settings
+        .base_level
+        .saturating_add(3)
+        .saturating_sub(settings.bridge_clearance)
+        .max(3);
+    let expected_bridge_level = expected_low_lava.saturating_add(settings.bridge_clearance);
+    let expected_stair_steps = expected_bridge_level.saturating_sub(settings.base_level);
+    let expected_centerline = usize::try_from(
+        expected_stair_steps
+            .saturating_add(1)
+            .saturating_mul(2)
+            .saturating_add(1),
+    )
+    .unwrap_or(usize::MAX);
+    if route.centerline.len() != expected_centerline
+        || route.surfaces.len() != expected_centerline.saturating_mul(2)
+        || centerline_surfaces.len() != route.centerline.len()
+        || !centerline_surfaces.is_subset(&route.surfaces)
+        || second_lane.len() != route.centerline.len()
+        || !surface_set_connected(&ordinary, &second_lane)
+        || route.centerline.iter().any(|center| {
+            !second_lane
+                .iter()
+                .any(|surface| ordinary.admits(*center, *surface))
+        })
+    {
+        issues.push(recipe_issue(
+            "Volcano bridge route is not an exact two-wide ordinary stair approach",
+        ));
+    }
     if ordinary
         .reachable_avoiding(party, &bridge.voxels)
         .contains(&hostile)
@@ -1098,16 +1308,82 @@ pub(crate) fn validate_volcano(
             "Volcano retains an ordinary ford or dry passage around its sole bridge",
         ));
     }
-    if plan
+    let stair_structures = plan
         .structures
         .by_id
         .values()
         .filter(|structure| structure.kind == StructureKind::Stair)
-        .count()
-        != 1
+        .collect::<Vec<_>>();
+    let expected_stairs = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(surface, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && solid_material_at(&plan.volume, *surface)
+                    == Some(SolidMaterialRole::WorkedStone))
+            .then_some(*surface)
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_stair_count =
+        usize::try_from(expected_stair_steps.saturating_sub(1).saturating_mul(4))
+            .unwrap_or(usize::MAX);
+    if expected_stairs.len() != expected_stair_count {
+        issues.push(recipe_issue(format!(
+            "Volcano rederived {} worked-stone stair surfaces; expected exactly {expected_stair_count}",
+            expected_stairs.len(),
+        )));
+    }
+    match stair_structures.as_slice() {
+        [stairs] => {
+            if stairs.voxels != expected_stairs {
+                issues.push(recipe_issue(format!(
+                    "Volcano stair structure does not exactly match rederived worked-stone surfaces (structure {:?}, expected {expected_stairs:?})",
+                    stairs.voxels
+                )));
+            }
+            if !stairs.voxels.is_subset(&route.surfaces)
+                || !stairs.voxels.iter().all(|stair| {
+                    bridge.voxels.iter().any(|deck| {
+                        ordinary
+                            .distances_from(*stair)
+                            .get(deck)
+                            .is_some_and(|distance| {
+                                *distance
+                                    <= settings.bridge_clearance.unsigned_abs().saturating_add(2)
+                            })
+                    })
+                })
+            {
+                issues.push(recipe_issue(
+                    "Volcano stair structure leaves its protected two-wide bridge approach",
+                ));
+            }
+        }
+        _ => issues.push(recipe_issue(format!(
+            "Volcano has {} stair structures; expected exactly one",
+            stair_structures.len()
+        ))),
+    }
+    let structure_route = bridge
+        .voxels
+        .union(&expected_stairs)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let landings = route
+        .surfaces
+        .difference(&structure_route)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !structure_route.is_subset(&route.surfaces)
+        || landings.len() != 4
+        || landings.iter().any(|surface| {
+            surface.level != settings.base_level
+                || solid_material_at(&plan.volume, *surface) != Some(SolidMaterialRole::Basalt)
+        })
     {
         issues.push(recipe_issue(
-            "Volcano requires one exact paired stair structure",
+            "Volcano protected route does not exactly equal its deck, paired stairs, and four basalt landings",
         ));
     }
 
@@ -1196,6 +1472,26 @@ fn solid_material_at(volume: &VolumePlan, position: TilePos) -> Option<SolidMate
         })
 }
 
+fn surface_set_connected(graph: &OrdinaryGraph, surfaces: &BTreeSet<TilePos>) -> bool {
+    let Some(start) = surfaces.first().copied() else {
+        return false;
+    };
+    let mut visited = BTreeSet::from([start]);
+    let mut frontier = vec![start];
+    while let Some(current) = frontier.pop() {
+        for neighbor in surfaces {
+            if !visited.contains(neighbor)
+                && graph.admits(current, *neighbor)
+                && graph.admits(*neighbor, current)
+            {
+                visited.insert(*neighbor);
+                frontier.push(*neighbor);
+            }
+        }
+    }
+    visited.len() == surfaces.len()
+}
+
 fn recipe_issue(detail: impl Into<String>) -> WorldValidationIssue {
     WorldValidationIssue::new(WorldIssueCode::Recipe("volcano"), detail)
 }
@@ -1281,8 +1577,13 @@ mod tests {
             first.validated.semantic_fingerprint,
             second.validated.semantic_fingerprint
         );
+        assert_eq!(
+            first.validated.semantic_fingerprint,
+            6_901_546_631_227_104_688
+        );
         assert_eq!(first.metrics, second.metrics);
         assert!(!first.used_fallback, "{:#?}", first.notes);
+        assert_eq!(first.valid_candidates, 8);
         assert_eq!(first.metrics.summit_relief, 20);
         assert!((20..=30).contains(&first.metrics.massif_coverage_percent));
         assert_eq!(first.metrics.bridge_surfaces, 6);
@@ -1327,6 +1628,7 @@ mod tests {
             let selected = generate(radius, 0.4, &settings(radius), HERO_SEED)
                 .unwrap_or_else(|error| panic!("radius {radius} Volcano failed: {error}"));
             assert!(!selected.used_fallback);
+            assert_eq!(selected.valid_candidates, 8);
             assert_eq!(selected.metrics.summit_relief, 20);
             assert!((20..=30).contains(&selected.metrics.massif_coverage_percent));
             assert_eq!(selected.metrics.bridge_surfaces, 6);
@@ -1346,6 +1648,10 @@ mod tests {
                 !selected.used_fallback,
                 "Volcano seed {seed} used fallback: {:#?}",
                 selected.notes
+            );
+            assert_eq!(
+                selected.valid_candidates, 8,
+                "Volcano seed {seed} rejected an ordinary candidate"
             );
         }
     }

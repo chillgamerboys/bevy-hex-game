@@ -4,17 +4,17 @@ use hex_core::{SpecialMovementRegion, TilePos};
 
 use super::composition::GeneratedPatchPlan;
 use super::layout::ResolvedLiquidPort;
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, HexSide, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan};
 use super::liquid::LiquidFlowState;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
-use super::{caves, fort, hills, mountains, prairie, sky, waterfall};
+use super::{caves, fort, hills, mountains, prairie, sky, volcano, waterfall};
 use crate::settings::{
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings,
     V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
     V3LayoutSettings, V3MountainsSettings, V3PrairieSettings, V3RecipeSettings, V3Ring7Settings,
-    V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+    V3SkyIslandsSettings, V3VolcanoSettings, V3WaterfallSettings, WalkerPortSettings,
 };
 
 const LEVEL_HEIGHT: f32 = 0.4;
@@ -685,6 +685,226 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
             displaced,
         );
     assert_validation_rejects_with(validate(&wrong_level), "liquid approach");
+}
+
+#[test]
+fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
+    let (settings, _) = dry_ring_settings();
+    let layout = resolve_layout(33, &settings).expect("the dry Ring7 fixture should resolve");
+    let context = patch(&layout, 5).expect("western outer patch");
+    assert!(context.is_world_boundary(HexSide::West));
+    let volcano_settings = V3VolcanoSettings {
+        base_level: 15,
+        summit_relief: 20,
+        massif_coverage_percent: 25,
+        bridge_clearance: 4,
+    };
+    let baseline = volcano::construct_patch(
+        context,
+        &volcano_settings,
+        LEVEL_HEIGHT,
+        PatchBuildMode::CanonicalFallback,
+    )
+    .expect("Volcano should construct in the western outer patch");
+    assert_strict_patch(&layout, baseline.clone());
+    match volcano::validate_patch(context, &baseline, &volcano_settings) {
+        super::selection::WorldValidation::Valid(metrics) => {
+            assert_eq!(metrics.summit_relief, 20);
+            assert_eq!(metrics.bridge_clearance, 4);
+        }
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the resolved composite Volcano must validate: {issues:?}");
+        }
+    }
+
+    let body_id = *baseline
+        .liquids
+        .bodies
+        .keys()
+        .next()
+        .expect("Volcano lava body");
+    let terminals = baseline
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("Volcano lava body")
+        .nodes
+        .iter()
+        .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(terminals.len(), 3);
+    assert!(terminals.iter().all(|position| !context
+        .mask()
+        .contains(&HexSide::West.neighbor(position.coord))));
+    let validate =
+        |plan: &GeneratedPatchPlan| volcano::validate_patch(context, plan, &volcano_settings);
+
+    let terminal = *terminals.first().expect("one terminal");
+    let mut missing_terminal = baseline.clone();
+    missing_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .remove(&terminal);
+    assert_validation_rejects_with(validate(&missing_terminal), "expected exactly 3");
+
+    let mut moving_terminal = baseline.clone();
+    moving_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .get_mut(&terminal)
+        .expect("terminal")
+        .state = LiquidFlowState::Current;
+    assert_validation_rejects_with(validate(&moving_terminal), "is not Still");
+
+    let mut internal_terminal = baseline.clone();
+    let flowing = internal_terminal
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("lava body")
+        .nodes
+        .iter()
+        .find_map(|(position, node)| node.downstream.is_some().then_some(*position))
+        .expect("one flowing lava node");
+    let flowing_node = internal_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .get_mut(&flowing)
+        .expect("flowing node");
+    flowing_node.state = LiquidFlowState::Still;
+    flowing_node.downstream = None;
+    assert_validation_rejects_with(validate(&internal_terminal), "expected exactly 3");
+
+    let bridge_id = baseline
+        .structures
+        .by_id
+        .iter()
+        .find_map(|(id, structure)| {
+            (structure.kind == super::world::StructureKind::Bridge).then_some(*id)
+        })
+        .expect("bridge structure");
+    let bridge_voxel = *baseline
+        .structures
+        .by_id
+        .get(&bridge_id)
+        .and_then(|structure| structure.voxels.first())
+        .expect("bridge voxel");
+    let mut missing_bridge_membership = baseline.clone();
+    missing_bridge_membership
+        .structures
+        .by_id
+        .get_mut(&bridge_id)
+        .expect("bridge structure")
+        .voxels
+        .remove(&bridge_voxel);
+    assert_validation_rejects_with(
+        validate(&missing_bridge_membership),
+        "six rederived deck surfaces",
+    );
+
+    let stair_id = baseline
+        .structures
+        .by_id
+        .iter()
+        .find_map(|(id, structure)| {
+            (structure.kind == super::world::StructureKind::Stair).then_some(*id)
+        })
+        .expect("stair structure");
+    let stair_voxel = *baseline
+        .structures
+        .by_id
+        .get(&stair_id)
+        .and_then(|structure| structure.voxels.first())
+        .expect("stair voxel");
+    let mut missing_stair_membership = baseline.clone();
+    missing_stair_membership
+        .structures
+        .by_id
+        .get_mut(&stair_id)
+        .expect("stair structure")
+        .voxels
+        .remove(&stair_voxel);
+    assert_validation_rejects_with(
+        validate(&missing_stair_membership),
+        "rederived worked-stone surfaces",
+    );
+
+    let mut narrowed_route = baseline.clone();
+    let route = narrowed_route
+        .features
+        .protected_routes
+        .get_mut("bridge_route")
+        .expect("protected bridge route");
+    let centerline = route.centerline.iter().copied().collect::<BTreeSet<_>>();
+    let second_lane = route
+        .surfaces
+        .difference(&centerline)
+        .copied()
+        .next()
+        .expect("a second-lane route surface");
+    route.surfaces.remove(&second_lane);
+    assert_validation_rejects_with(
+        validate(&narrowed_route),
+        "exact two-wide ordinary stair approach",
+    );
+
+    let mut missing_west_layout = layout.clone();
+    let shared_reference = missing_west_layout
+        .patches
+        .get(&PatchId(5))
+        .and_then(|patch| patch.edges.get(&HexSide::East))
+        .copied()
+        .expect("western patch east seam");
+    assert!(matches!(shared_reference, ResolvedEdgeReference::Shared(_)));
+    missing_west_layout
+        .patches
+        .get_mut(&PatchId(5))
+        .expect("western patch")
+        .edges
+        .insert(HexSide::West, shared_reference);
+    let missing_west =
+        PatchRecipeContext::resolve(&missing_west_layout, PatchId(5)).expect("corrupt context");
+    assert_validation_rejects_with(
+        volcano::validate_patch(missing_west, &baseline, &volcano_settings),
+        "western world-boundary outlet",
+    );
+
+    let (mut wet_settings, _) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(ring) = &mut wet_settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    let wet_layout =
+        resolve_layout(33, &wet_settings).expect("the wet western seam should resolve");
+    let wet_context = patch(&wet_layout, 5).expect("wet western patch");
+    let construction_issues = volcano::construct_patch(
+        wet_context,
+        &volcano_settings,
+        LEVEL_HEIGHT,
+        PatchBuildMode::CanonicalFallback,
+    )
+    .expect_err("Volcano must reject a stitched liquid seam");
+    assert!(construction_issues
+        .iter()
+        .any(|issue| issue.detail.contains("separate from stitched liquid ports")));
+    assert_validation_rejects_with(
+        volcano::validate_patch(wet_context, &baseline, &volcano_settings),
+        "separate from stitched liquid ports",
+    );
 }
 
 fn assert_validation_rejects_with<T>(
