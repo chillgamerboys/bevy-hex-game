@@ -772,6 +772,26 @@ pub(crate) fn validate_sky(
             "SkyIslands primary island and bridge network is not climbable",
         ));
     }
+    let primary_island_levels = primary
+        .difference(&metal_primary_surfaces)
+        .map(|position| position.level)
+        .collect::<BTreeSet<_>>();
+    if primary_island_levels.len() < PRIMARY_ISLANDS {
+        issues.push(recipe_issue(format!(
+            "SkyIslands primary islands occupy {} elevation bands; expected at least {PRIMARY_ISLANDS}",
+            primary_island_levels.len()
+        )));
+    }
+    if metal_primary_surfaces.iter().any(|surface| {
+        metal_primary_surfaces
+            .iter()
+            .filter(|neighbor| surface.coord.distance(neighbor.coord) == 1)
+            .any(|neighbor| surface.level.abs_diff(neighbor.level) > 1)
+    }) {
+        issues.push(recipe_issue(
+            "SkyIslands upper bridges contain a transition taller than one level",
+        ));
+    }
     if satellites.is_empty() {
         issues.push(recipe_issue("SkyIslands has no separated satellite"));
     }
@@ -1132,10 +1152,10 @@ mod tests {
                 recipe: V3RecipeSettings::SkyIslands(V3SkyIslandsSettings {
                     ground: V3HillsSettings {
                         valley_level: 15,
-                        max_relief: 8,
+                        max_relief: 12,
                         hills_per_bank: 3,
                     },
-                    min_clearance: 14,
+                    min_clearance: 26,
                     upper_coverage_percent: 20,
                 }),
                 overlays: Vec::new(),
@@ -1163,9 +1183,23 @@ mod tests {
         );
         assert_eq!(first.metrics.ground_surfaces, 469);
         assert!((15..=25).contains(&first.metrics.upper_coverage_percent));
-        assert!(first.metrics.vertical_clearance >= 14);
+        assert!(first.metrics.vertical_clearance >= 26);
         assert_eq!(first.metrics.primary_islands, 3);
         assert_eq!(first.metrics.satellites, 1);
+        let primary_levels = first
+            .validated
+            .plan
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(position, metadata)| {
+                (metadata.access == SurfaceAccess::SpecialMovement(SpecialMovementRegion(0))
+                    && upper_surface_material(&first.validated.plan, *position)
+                        != Some(SolidMaterialRole::Metal))
+                .then_some(position.level)
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(primary_levels.len() >= PRIMARY_ISLANDS);
     }
 
     #[test]
@@ -1195,5 +1229,25 @@ mod tests {
         assert_eq!(ice_caps, 5);
         assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(0));
         assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(1));
+    }
+
+    #[test]
+    fn revised_sky_pr_corpus_validates_128_seeds_and_named_regression() {
+        let settings = settings();
+        let mut seeds = (0_u64..128).collect::<BTreeSet<_>>();
+        seeds.insert(1_592_598_566);
+        let mut fallback_seeds = Vec::new();
+        for seed in seeds {
+            let selected = generate(12, 0.4, &settings, seed)
+                .unwrap_or_else(|error| panic!("Sky Islands seed {seed}: {error}"));
+            assert_eq!(selected.candidates_evaluated, 8);
+            if selected.used_fallback {
+                fallback_seeds.push(seed);
+            }
+        }
+        assert!(
+            fallback_seeds.is_empty(),
+            "revised Sky Islands used fallback for seeds {fallback_seeds:?}"
+        );
     }
 }
