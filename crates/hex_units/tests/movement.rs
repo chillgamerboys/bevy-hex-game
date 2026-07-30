@@ -1491,7 +1491,8 @@ fn exploring_draws_the_path_but_not_a_range() {
 /// The count is spelled out rather than compared to a formula, because a formula
 /// would reproduce whatever mistake the implementation made. Nineteen coordinates lie
 /// within two steps of the origin; the crawlspace is one of them and is too low for
-/// this body; the piece is standing on another. Seventeen remain.
+/// this body; the piece is standing on another; and the enemy occupies one exact
+/// surface. Sixteen remain.
 #[test]
 fn combat_tints_exactly_what_this_turn_can_reach() {
     let mut app = test_app();
@@ -1505,8 +1506,8 @@ fn combat_tints_exactly_what_this_turn_can_reach() {
 
     assert_eq!(
         positions.len(),
-        17,
-        "two hexes of movement should reach seventeen other surfaces, got {positions:?}"
+        16,
+        "two hexes of movement should reach sixteen unoccupied surfaces, got {positions:?}"
     );
     assert!(
         positions
@@ -1517,6 +1518,10 @@ fn combat_tints_exactly_what_this_turn_can_reach() {
     assert!(
         !positions.iter().any(|pos| pos.coord == CRAWLSPACE),
         "the crawlspace is too low for this body and must not be offered"
+    );
+    assert!(
+        !positions.iter().any(|pos| pos.coord == ENEMY_START),
+        "another body's exact surface must not be offered"
     );
 }
 
