@@ -11,11 +11,7 @@ use hex_core::{HexCoord, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{
-    resolve_layout, HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedPatch,
-};
-use super::local_frame::LocalPatchFrame;
+use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
@@ -282,13 +278,6 @@ fn validate_recipe_settings(
     Ok(recipe)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "patch entry point is consumed when Ring19 composition integrates"
-    )
-)]
 pub(crate) fn construct_patch(
     patch: PatchRecipeContext<'_>,
     settings: &V3DeepForestSettings,
@@ -315,8 +304,9 @@ fn construct_patch_with_trees(
             "Deep Forest requires the TemperateGrassland environment",
         )]);
     }
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
-        .map_err(|error| vec![recipe_issue(error)])?;
+    let frame = patch
+        .local_frame()
+        .map_err(|error| vec![recipe_issue(error.to_string())])?;
     let mask = frame
         .local_mask(patch.mask())
         .map_err(|error| vec![recipe_issue(error)])?;
@@ -475,13 +465,13 @@ fn construct_patch_with_trees(
         biome_regions,
         interiors: InteriorPlan::default(),
         anchors,
-        view_hint: frame.view_hint_to_world(view_hint(
+        view_hint: view_hint(
             frame.scale(),
             settings.base_level,
             settings.max_relief,
             level_height,
             "deep forest",
-        )?),
+        )?,
     };
     frame
         .patch_to_world(&mut plan)
@@ -1086,64 +1076,54 @@ fn object_rotation(
     })
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "patch validator is consumed when Ring19 composition integrates"
-    )
-)]
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     settings: &V3DeepForestSettings,
     plan: &GeneratedPatchPlan,
     catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<DeepForestMetrics> {
-    let protected_approaches = patch.protected_approaches();
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Deep Forest validation frame failed: {error}"
+            ))]);
+        }
+    };
+    let protected_approaches = match patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(protected) => protected,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Deep Forest protected approach projection failed: {error}"
+            ))]);
+        }
+    };
     let trees = match TemperateTreeSet::resolve(catalog, "Deep Forest") {
         Ok(trees) => trees,
         Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
     };
-    let world = isolated_patch_world(patch, plan);
-    validate_deep_forest(&world, settings, &trees, &protected_approaches)
-}
-
-fn isolated_patch_world(
-    patch: PatchRecipeContext<'_>,
-    plan: &GeneratedPatchPlan,
-) -> GeneratedWorldPlan {
-    let edges = HexSide::ALL
-        .into_iter()
-        .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
-        .collect();
-    let layout = ResolvedLayoutPlan {
-        kind: LayoutKind::Single,
-        grid_radius: patch.grid_radius(),
-        footprint: plan.volume.mask.clone(),
-        patches: BTreeMap::from([(
-            PatchId(0),
-            ResolvedPatch {
-                biome_region: patch.biome_region(),
-                mask: plan.volume.mask.clone(),
-                edges,
-            },
-        )]),
-        shared_edges: BTreeMap::new(),
-        boundary_liquid_outlets: BTreeMap::new(),
+    let mut world = match frame.canonical_local_world(plan) {
+        Ok(world) => world,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Deep Forest validation projection failed: {error}"
+            ))]);
+        }
     };
-    GeneratedWorldPlan {
-        layout,
-        volume: plan.volume.clone(),
-        liquids: plan.liquids.clone(),
-        features: plan.features.clone(),
-        structures: plan.structures.clone(),
-        blockers: plan.blockers.clone(),
-        lights: plan.lights.clone(),
-        biome_regions: plan.biome_regions.clone(),
-        interiors: plan.interiors.clone(),
-        anchors: plan.anchors.clone(),
-        view_hint: plan.view_hint,
-    }
+    world.layout.grid_radius = world
+        .layout
+        .footprint
+        .iter()
+        .map(|coord| HexCoord::ORIGIN.distance(*coord))
+        .max()
+        .unwrap_or(12)
+        .max(12);
+    validate_deep_forest(&world, settings, &trees, &protected_approaches)
 }
 
 fn validate_deep_forest(

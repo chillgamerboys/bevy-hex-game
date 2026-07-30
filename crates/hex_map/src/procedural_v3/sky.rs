@@ -325,14 +325,25 @@ fn construct_patch_with_objects(
     let upper_base = upper_bottom.saturating_add(5);
 
     let composite_layout = patch.layout().kind.is_composite();
-    let mut centres = select_centres(
+    let selected_centres = select_centres(
         &upper_mask,
         &excluded,
         streams.map(|streams| streams.island_centres),
     )?;
-    if composite_layout {
-        centres = order_composite_centres(centres, &upper_mask)?;
-    }
+    let centres = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        order_composite_centres(selected_centres, &upper_mask).or_else(|_| {
+            let frame = patch.local_frame().map_err(|error| {
+                vec![recipe_issue(format!(
+                    "SkyIslands Ring19 local frame failed: {error}"
+                ))]
+            })?;
+            ring19_canonical_centres(frame, &upper_mask, &excluded)
+        })?
+    } else if composite_layout {
+        order_composite_centres(selected_centres, &upper_mask)?
+    } else {
+        selected_centres
+    };
     let bridge_rows = bridge_rows(&centres, &upper_mask);
     let ring_bridge_routes = if composite_layout {
         resolve_ring_bridge_routes(&bridge_rows, &upper_mask)?
@@ -702,7 +713,54 @@ fn order_composite_centres(
         .join("; ");
     Err(vec![recipe_issue(format!(
         "SkyIslands could not order its primary islands around two distinct two-wide bridges: \
-         {detail}"
+         selected centres {centres:?}; {detail}"
+    ))])
+}
+
+fn ring19_canonical_centres(
+    frame: LocalPatchFrame,
+    mask: &BTreeSet<HexCoord>,
+    excluded: &BTreeSet<HexCoord>,
+) -> Result<[HexCoord; PRIMARY_ISLANDS], Vec<WorldValidationIssue>> {
+    const AXIS_CENTRES: [HexCoord; PRIMARY_ISLANDS] = [
+        HexCoord::from_axial(-6, 0),
+        HexCoord::ORIGIN,
+        HexCoord::from_axial(6, 0),
+    ];
+    let mut last_issues = Vec::new();
+    for turns in 0..6 {
+        let projected = AXIS_CENTRES
+            .map(|coord| frame.to_world(rotate(coord, turns)))
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                vec![recipe_issue(format!(
+                    "SkyIslands Ring19 centre projection failed: {error}"
+                ))]
+            })?;
+        let Ok(projected) =
+            <Vec<HexCoord> as TryInto<[HexCoord; PRIMARY_ISLANDS]>>::try_into(projected)
+        else {
+            continue;
+        };
+        if projected
+            .iter()
+            .any(|coord| !mask.contains(coord) || excluded.contains(coord))
+        {
+            continue;
+        }
+        match order_composite_centres(projected, mask) {
+            Ok(ordered) => return Ok(ordered),
+            Err(issues) => last_issues = issues,
+        }
+    }
+    let detail = last_issues
+        .into_iter()
+        .map(|issue| issue.detail)
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(vec![recipe_issue(format!(
+        "SkyIslands could not place its canonical Ring19 primary-island chain: {detail}"
     ))])
 }
 
@@ -985,15 +1043,14 @@ pub(crate) fn validate_patch(
         Ok(vegetation) => vegetation,
         Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
     };
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "SkyIslands validation frame failed: {error}"
-                ))]);
-            }
-        };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "SkyIslands validation frame failed: {error}"
+            ))]);
+        }
+    };
     let protected_approaches = match patch
         .protected_approaches()
         .into_iter()
@@ -1620,6 +1677,14 @@ fn sky_view_hint(
         (0.0, focus + frame * 0.75, frame),
         (0.0, focus, 0.0),
     ))
+}
+
+fn rotate(coord: HexCoord, turns: u8) -> HexCoord {
+    let [mut x, mut y, mut z] = coord.to_cubic_array();
+    for _ in 0..turns % 6 {
+        (x, y, z) = (-z, -x, -y);
+    }
+    HexCoord::new_cubic(x, y, z)
 }
 
 fn percentage(part: usize, whole: usize) -> u32 {

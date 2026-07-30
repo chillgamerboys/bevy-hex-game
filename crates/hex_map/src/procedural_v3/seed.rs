@@ -15,8 +15,8 @@ const COORD_SAMPLE: u8 = 1;
 /// Root of every deterministic V3 stream for one world candidate and patch.
 ///
 /// Patch IDs are assigned by the resolved layout rather than by generation
-/// order: `Single` uses zero, while `Ring7` uses its fixed semantic slots. This
-/// keeps patch streams stable if planning or evaluation order changes.
+/// order: `Single` uses zero, while composite layouts use their fixed semantic
+/// slots. This keeps patch streams stable if planning or evaluation order changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct SeedStreams {
     world_seed: u64,

@@ -9,10 +9,12 @@ use std::collections::BTreeSet;
 use hex_core::{BiomeRegionId, HexCoord, Level};
 
 use super::layout::{
-    HexSide, PatchId, ResolvedBoundaryLiquidOutlet, ResolvedEdgeContract, ResolvedEdgeId,
-    ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
-    ResolvedPatch, ResolvedPort,
+    ring19_patch_center, HexSide, LayoutKind, PatchId, ResolvedBoundaryLiquidOutlet,
+    ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference, ResolvedLayoutPlan,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+    RING19_LOCAL_FRAME_SCALE,
 };
+use super::local_frame::LocalPatchFrame;
 use super::seed::SeedStreams;
 use super::V3GenerationError;
 
@@ -157,7 +159,7 @@ impl<'a> PatchSharedEdge<'a> {
     }
 }
 
-/// Stable recipe inputs for one patch of either a Single or Ring7 layout.
+/// Stable recipe inputs for one patch of a Single, Ring7, or Ring19 layout.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PatchRecipeContext<'a> {
     pub(crate) id: PatchId,
@@ -190,6 +192,50 @@ impl<'a> PatchRecipeContext<'a> {
     #[must_use]
     pub(crate) const fn biome_region(&self) -> BiomeRegionId {
         self.patch.biome_region
+    }
+
+    /// Clockwise turns applied to recipe-local authored geometry.
+    #[must_use]
+    pub(crate) const fn rotation_turns(&self) -> u8 {
+        self.patch.rotation_turns
+    }
+
+    /// Stable recipe-local frame, resolved in constant time for fixed Ring19 slots.
+    pub(crate) fn local_frame(&self) -> Result<LocalPatchFrame, V3GenerationError> {
+        self.local_frame_with_rotation(self.rotation_turns())
+    }
+
+    /// Stable recipe-local frame with an explicit recipe-owned orientation.
+    pub(crate) fn local_frame_with_rotation(
+        &self,
+        rotation: u8,
+    ) -> Result<LocalPatchFrame, V3GenerationError> {
+        if self.layout.kind == LayoutKind::Ring19 {
+            let center = ring19_patch_center(self.id).ok_or_else(|| {
+                V3GenerationError::RecipeContract(format!(
+                    "Ring19 patch {} has no fixed local-frame centre",
+                    self.id.0
+                ))
+            })?;
+            if !self.patch.mask.contains(&center) {
+                return Err(V3GenerationError::RecipeContract(format!(
+                    "Ring19 patch {} does not contain its fixed local-frame centre {center:?}",
+                    self.id.0
+                )));
+            }
+            return Ok(LocalPatchFrame::from_resolved_ring19(
+                center,
+                RING19_LOCAL_FRAME_SCALE,
+                rotation,
+            ));
+        }
+        LocalPatchFrame::resolve_rotated(
+            &self.patch.mask,
+            self.layout.kind,
+            self.layout.grid_radius,
+            rotation,
+        )
+        .map_err(V3GenerationError::RecipeContract)
     }
 
     /// All shared edges in clockwise side order.
@@ -325,6 +371,7 @@ mod tests {
                     PatchId(2),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(2),
+                        rotation_turns: 0,
                         mask: BTreeSet::from([first_coord]),
                         edges: first_edges,
                     },
@@ -333,6 +380,7 @@ mod tests {
                     PatchId(5),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(5),
+                        rotation_turns: 0,
                         mask: BTreeSet::from([second_coord]),
                         edges: second_edges,
                     },

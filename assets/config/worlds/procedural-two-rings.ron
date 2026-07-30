@@ -1,0 +1,289 @@
+// Fixed V3 nineteen-region review world.
+//
+// Region order is semantic: centre, six first-ring slots clockwise, then twelve
+// second-ring slots clockwise. The scenario owns the canonical review seed.
+(
+    grid_radius: 55,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Ring19((
+            regions: [
+                // 0: Hills confluence.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Hills((
+                        valley_level: 17,
+                        max_relief: 12,
+                        hills_per_bank: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 1: Frozen Hills.
+                (
+                    environment: Frozen,
+                    recipe: Hills((
+                        valley_level: 17,
+                        max_relief: 12,
+                        hills_per_bank: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 2: Forest A.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Forest(()),
+                    overlays: [],
+                    rotation_turns: 4,
+                ),
+                // 3: Prairie A.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Prairie((
+                        base_level: 15,
+                        max_relief: 4,
+                        grass_coverage_percent: 70,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 4: Downstream Hills.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Hills((
+                        valley_level: 17,
+                        max_relief: 12,
+                        hills_per_bank: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 5: Waterfall B.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Waterfall(()),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 6: Waterfall A.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Waterfall(()),
+                    overlays: [],
+                    rotation_turns: 5,
+                ),
+                // 7: Sky Islands.
+                (
+                    environment: TemperateGrassland,
+                    recipe: SkyIslands((
+                        ground: (
+                            valley_level: 17,
+                            max_relief: 12,
+                            hills_per_bank: 3,
+                        ),
+                        min_clearance: 26,
+                        upper_coverage_percent: 24,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 8: Deep Forest A.
+                (
+                    environment: TemperateGrassland,
+                    recipe: DeepForest((
+                        base_level: 15,
+                        max_relief: 4,
+                        blocker_coverage_percent: 30,
+                        clearing_count: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 9: Deep Forest B.
+                (
+                    environment: TemperateGrassland,
+                    recipe: DeepForest((
+                        base_level: 15,
+                        max_relief: 4,
+                        blocker_coverage_percent: 30,
+                        clearing_count: 3,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 10: Forest B.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Forest(()),
+                    overlays: [],
+                    rotation_turns: 4,
+                ),
+                // 11: Prairie B.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Prairie((
+                        base_level: 15,
+                        max_relief: 4,
+                        grass_coverage_percent: 70,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 12: Outlet Waterfall.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Waterfall(()),
+                    overlays: [],
+                    rotation_turns: 5,
+                ),
+                // 13: Fort.
+                (
+                    environment: TemperateGrassland,
+                    recipe: Fort(()),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 14: Caves.
+                (
+                    environment: Rocky,
+                    recipe: Caves((
+                        surface_level: 17,
+                        cave_floor_level: 6,
+                        chamber_count: 12,
+                    )),
+                    overlays: [
+                        (
+                            name: "cave_crystals",
+                            kind: Lighting,
+                        ),
+                    ],
+                    rotation_turns: 0,
+                ),
+                // 15: Volcano.
+                (
+                    environment: Volcanic,
+                    recipe: Volcano((
+                        base_level: 15,
+                        summit_relief: 20,
+                        massif_coverage_percent: 25,
+                        bridge_clearance: 4,
+                    )),
+                    overlays: [],
+                    rotation_turns: 3,
+                ),
+                // 16: Mountains A.
+                (
+                    environment: Frozen,
+                    recipe: Mountains((
+                        base_level: 17,
+                        relief: 32,
+                        peak_count: 7,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 17: Mountains B.
+                (
+                    environment: Frozen,
+                    recipe: Mountains((
+                        base_level: 17,
+                        relief: 32,
+                        peak_count: 7,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+                // 18: Mountains C.
+                (
+                    environment: Frozen,
+                    recipe: Mountains((
+                        base_level: 17,
+                        relief: 32,
+                        peak_count: 7,
+                    )),
+                    overlays: [],
+                    rotation_turns: 0,
+                ),
+            ],
+            seam_defaults: (
+                elevation: (
+                    preferred: 17,
+                    min: 16,
+                    max: 18,
+                ),
+                walker: (
+                    count: 2,
+                    width: 2,
+                ),
+                liquid: Dry,
+                approach_depth: 3,
+            ),
+            liquid_connections: [
+                (
+                    source_region: 16,
+                    sink_region: 5,
+                    width: 3,
+                    level: 29,
+                ),
+                (
+                    source_region: 5,
+                    sink_region: 0,
+                    width: 3,
+                    level: 16,
+                ),
+                (
+                    source_region: 17,
+                    sink_region: 6,
+                    width: 3,
+                    level: 29,
+                ),
+                (
+                    source_region: 6,
+                    sink_region: 0,
+                    width: 3,
+                    level: 16,
+                ),
+                (
+                    source_region: 18,
+                    sink_region: 1,
+                    width: 3,
+                    level: 16,
+                ),
+                (
+                    source_region: 1,
+                    sink_region: 0,
+                    width: 3,
+                    level: 16,
+                ),
+                (
+                    source_region: 0,
+                    sink_region: 4,
+                    width: 3,
+                    level: 16,
+                ),
+                (
+                    source_region: 4,
+                    sink_region: 12,
+                    width: 3,
+                    level: 16,
+                ),
+            ],
+            boundary_outlets: [
+                (
+                    source_region: 12,
+                    side: SouthEast,
+                    width: 3,
+                    level: 3,
+                ),
+                (
+                    source_region: 15,
+                    side: West,
+                    width: 3,
+                    level: 14,
+                ),
+            ],
+        )),
+    )),
+)

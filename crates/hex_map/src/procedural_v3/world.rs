@@ -1160,6 +1160,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask: mask.clone(),
                     edges,
                 },
@@ -1557,6 +1558,7 @@ mod tests {
                     PatchId(0),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(0),
+                        rotation_turns: 0,
                         mask: first_mask.clone(),
                         edges: first_edges,
                     },
@@ -1565,6 +1567,7 @@ mod tests {
                     PatchId(1),
                     ResolvedPatch {
                         biome_region: BiomeRegionId(1),
+                        rotation_turns: 0,
                         mask: second_mask.clone(),
                         edges: second_edges,
                     },
@@ -2069,6 +2072,7 @@ mod tests {
             PatchId(1),
             ResolvedPatch {
                 biome_region: BiomeRegionId(1),
+                rotation_turns: 0,
                 mask: BTreeSet::from([foreign_coord]),
                 edges: template.edges,
             },

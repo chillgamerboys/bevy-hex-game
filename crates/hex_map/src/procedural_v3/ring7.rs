@@ -16,7 +16,6 @@ use super::composition::{
 use super::layout::{
     resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
 };
-use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
@@ -25,7 +24,7 @@ use super::selection::{
 use super::traversal::OrdinaryGraph;
 use super::vegetation::CaveVegetationSet;
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
-use super::{caves, forest, fort, hills, mountains, sky, waterfall, V3GenerationError};
+use super::V3GenerationError;
 use crate::procedural::Ring7Metrics as Ring7ReportMetrics;
 use crate::settings::{
     PatchSpec, ProceduralV3Settings, V3EnvironmentSettings, V3LayoutSettings, V3RecipeSettings,
@@ -445,59 +444,15 @@ fn construct_fragment(
     art_catalog: &RuntimeArtCatalog,
     cave_vegetation: &CaveVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    match &spec.recipe {
-        V3RecipeSettings::Hills(settings) => hills::construct_patch_with_catalog(
-            patch,
-            settings,
-            spec.environment,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Mountains(settings) => mountains::construct_patch_with_catalog(
-            patch,
-            settings,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Waterfall(settings) => waterfall::construct_patch_with_catalog(
-            patch,
-            settings,
-            spec.environment,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Forest(settings) => forest::construct_patch(
-            patch,
-            settings,
-            spec.environment,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Fort(settings) => {
-            fort::construct_patch(patch, settings, level_height, mode)
-        }
-        V3RecipeSettings::Caves(settings) => {
-            caves::construct_patch(patch, settings, level_height, mode, cave_vegetation)
-        }
-        V3RecipeSettings::SkyIslands(settings) => sky::construct_patch_with_catalog(
-            patch,
-            settings,
-            spec.environment,
-            level_height,
-            mode,
-            art_catalog,
-        ),
-        V3RecipeSettings::Volcano(_)
-        | V3RecipeSettings::DeepForest(_)
-        | V3RecipeSettings::Prairie(_) => Err(vec![recipe_issue(format!(
-            "Ring7 does not admit the {} recipe",
-            recipe_name(&spec.recipe)
-        ))]),
-    }
+    super::composite_patch::construct_fragment(
+        patch,
+        spec.environment,
+        &spec.recipe,
+        level_height,
+        mode,
+        art_catalog,
+        cave_vegetation,
+    )
 }
 
 fn validate_fragment(
@@ -507,86 +462,14 @@ fn validate_fragment(
     art_catalog: &RuntimeArtCatalog,
     cave_vegetation: &CaveVegetationSet,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    let common = fragment.validate_against(patch.layout());
-    if !common.is_empty() {
-        return Err(common
-            .into_iter()
-            .map(|issue| {
-                recipe_issue(format!(
-                    "patch {} common validation {:?}: {}",
-                    issue.patch.0, issue.code, issue.detail
-                ))
-            })
-            .collect());
-    }
-
-    let validation = match &spec.recipe {
-        V3RecipeSettings::Waterfall(_) => {
-            waterfall::validate_patch(patch, fragment, art_catalog).map(|_| ())
-        }
-        V3RecipeSettings::Forest(_) => forest::validate_patch(patch, fragment).map(|_| ()),
-        V3RecipeSettings::Hills(settings) => {
-            hills::validate_patch(patch, fragment, settings, spec.environment, art_catalog)
-                .map(|_| ())
-        }
-        V3RecipeSettings::Mountains(settings) => {
-            mountains::validate_patch(patch, fragment, settings, art_catalog).map(|_| ())
-        }
-        V3RecipeSettings::Fort(_) => validate_canonical(patch, fragment, fort::validate_fort),
-        V3RecipeSettings::Caves(settings) => {
-            caves::validate_caves_with_surface_sink(patch, fragment, settings, cave_vegetation)
-                .map(|_| ())
-        }
-        V3RecipeSettings::SkyIslands(settings) => {
-            sky::validate_patch(patch, fragment, settings, spec.environment, art_catalog)
-                .map(|_| ())
-        }
-        V3RecipeSettings::Volcano(_)
-        | V3RecipeSettings::DeepForest(_)
-        | V3RecipeSettings::Prairie(_) => WorldValidation::Invalid(vec![recipe_issue(format!(
-            "Ring7 does not admit the {} recipe",
-            recipe_name(&spec.recipe)
-        ))]),
-    };
-    match validation {
-        WorldValidation::Valid(()) => Ok(()),
-        WorldValidation::Invalid(issues) => Err(issues),
-    }
-}
-
-fn validate_canonical<M>(
-    patch: PatchRecipeContext<'_>,
-    fragment: &GeneratedPatchPlan,
-    validate: impl FnOnce(&GeneratedWorldPlan) -> WorldValidation<M>,
-) -> WorldValidation<()> {
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "patch {} validation frame failed: {error}",
-                    patch.id.0
-                ))]);
-            }
-        };
-    let frame_center = frame.center();
-    let mut plan = match frame.canonical_local_world(fragment) {
-        Ok(plan) => plan,
-        Err(error) => {
-            return WorldValidation::Invalid(vec![recipe_issue(format!(
-                "patch {} validation projection around {frame_center:?} failed: {error}",
-                patch.id.0,
-            ))]);
-        }
-    };
-    plan.layout.grid_radius = plan
-        .layout
-        .footprint
-        .iter()
-        .map(|coord| HexCoord::ORIGIN.distance(*coord))
-        .max()
-        .unwrap_or_default();
-    validate(&plan).map(|_| ())
+    super::composite_patch::validate_fragment(
+        patch,
+        spec.environment,
+        &spec.recipe,
+        fragment,
+        art_catalog,
+        cave_vegetation,
+    )
 }
 
 fn validate_ring7(plan: &GeneratedWorldPlan) -> WorldValidation<Ring7Metrics> {
@@ -952,19 +835,6 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
 
 fn count_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
-}
-
-trait ValidationMap<M> {
-    fn map<N>(self, transform: impl FnOnce(M) -> N) -> WorldValidation<N>;
-}
-
-impl<M> ValidationMap<M> for WorldValidation<M> {
-    fn map<N>(self, transform: impl FnOnce(M) -> N) -> WorldValidation<N> {
-        match self {
-            WorldValidation::Valid(metrics) => WorldValidation::Valid(transform(metrics)),
-            WorldValidation::Invalid(issues) => WorldValidation::Invalid(issues),
-        }
-    }
 }
 
 #[cfg(test)]

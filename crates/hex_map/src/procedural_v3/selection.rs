@@ -1,7 +1,7 @@
 //! Whole-world candidate selection for procedural generator V3.
 //!
-//! A Ring7 candidate is one complete world. Patches cannot win independently, and
-//! neither repair nor fallback may smuggle legacy seed state into the result.
+//! A composite candidate is one complete world. Patches cannot win independently,
+//! and neither repair nor fallback may smuggle legacy seed state into the result.
 
 use super::fingerprint::semantic_plan_fingerprint;
 use super::world::{GeneratedWorldPlan, WorldValidationIssue};
@@ -542,6 +542,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask: mask.clone(),
                     edges,
                 },

@@ -297,7 +297,8 @@ fn construct_patch_with_streams(
     level_height: f32,
     streams: Option<VolcanoStreams<'_>>,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+    let frame = patch
+        .local_frame_with_rotation(0)
         .map_err(|error| vec![recipe_issue(format!("Volcano local frame failed: {error}"))])?;
     let local_mask = frame.local_mask(patch.mask()).map_err(|error| {
         vec![recipe_issue(format!(
@@ -536,6 +537,12 @@ fn volcano_orientation(
 
     // Local lava advances along +x. Three turns map that axis to world-West,
     // making every terminal lane exit the required outer boundary.
+    if patch.layout().kind == super::layout::LayoutKind::Ring19 && patch.rotation_turns() != 3 {
+        return Err(vec![recipe_issue(format!(
+            "Ring19 Volcano rotation_turns {} must match its western outlet orientation 3",
+            patch.rotation_turns()
+        ))]);
+    }
     Ok(3)
 }
 
@@ -1049,15 +1056,14 @@ pub(crate) fn validate_patch(
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
     }
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "Volcano validation frame failed: {error}"
-                ))]);
-            }
-        };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Volcano validation frame failed: {error}"
+            ))]);
+        }
+    };
     match frame.canonical_local_world(fragment) {
         Ok(plan) => validate_volcano_inner(&plan, settings, false),
         Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
@@ -1169,12 +1175,11 @@ fn expected_composite_terminal_positions(
     patch: &PatchRecipeContext<'_>,
     settings: &V3VolcanoSettings,
 ) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
-        .map_err(|error| {
-            vec![recipe_issue(format!(
-                "Volcano outlet validation frame failed: {error}"
-            ))]
-        })?;
+    let frame = patch.local_frame_with_rotation(0).map_err(|error| {
+        vec![recipe_issue(format!(
+            "Volcano outlet validation frame failed: {error}"
+        ))]
+    })?;
     let local_mask = frame.local_mask(patch.mask()).map_err(|error| {
         vec![recipe_issue(format!(
             "Volcano outlet validation mask failed: {error}"
@@ -2038,6 +2043,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: hex_core::BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask: mask.clone(),
                     edges,
                 },
@@ -2109,6 +2115,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: hex_core::BiomeRegionId(0),
+                    rotation_turns: 3,
                     mask: mask.clone(),
                     edges,
                 },
@@ -2201,6 +2208,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: hex_core::BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask,
                     edges,
                 },
@@ -2240,6 +2248,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: hex_core::BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask,
                     edges,
                 },

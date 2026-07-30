@@ -500,6 +500,9 @@ fn encode_layout_plan(
     for (id, patch) in &layout.patches {
         encoder.u32(id.0);
         encoder.u32(patch.biome_region.0);
+        if layout.kind == LayoutKind::Ring19 {
+            encoder.u8(patch.rotation_turns);
+        }
         encode_coord_set(encoder, &patch.mask)?;
         encoder.collection_count(patch.edges.len())?;
         for (side, reference) in &patch.edges {
@@ -957,6 +960,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask: mask.clone(),
                     edges,
                 },
@@ -1497,6 +1501,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask,
                     edges,
                 },
