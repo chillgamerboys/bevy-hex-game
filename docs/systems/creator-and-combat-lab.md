@@ -106,9 +106,10 @@ remain hidden and inactive.
 The map renders clickable world-space surface caps inside both authored regions.
 Candidates use the shared walker `Footing`, exact headroom and blockers, and the live
 terrain surface, so a click records the complete `TilePos`, including elevation.
-Occupied or invalid surfaces are rejected. The tester can select an earlier roster
-entry, Undo, Clear either side, or deterministically Auto-place nearest legal unused
-surfaces. Start Combat remains disabled until every unit has a unique valid placement.
+Occupied or invalid surfaces are rejected. Placement proceeds in roster order; the
+tester may Undo, Clear either side, or deterministically Auto-place nearest legal
+unused surfaces. Start Combat remains disabled until every unit has a unique valid
+placement.
 
 Start Combat repositions the frozen roster onto those exact surfaces without
 regenerating terrain, then enters `Active`. Retry retains the content snapshot, map

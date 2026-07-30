@@ -58,9 +58,9 @@ chooses which cells to surrender, so taking damage is a sequence of tactical
 decisions about what the character can still afford to be.
 
 This also makes a character's build their body. Tight, powerful lattices are brittle;
-roomy lattices endure. Variable-power rituals remain useful after binary spells have
-lost a required link, giving a battered character meaningful options instead of
-merely smaller numbers.
+roomy lattices endure. The design intends variable-power rituals to remain useful
+after binary spells have lost a required link, giving a battered character meaningful
+options instead of merely smaller numbers.
 
 ## Knowledge replaces dice
 
@@ -69,16 +69,16 @@ Uncertainty comes from incomplete information instead. Enemy lattices and intent
 begin hidden, while sight and Light-based divination reveal what is worth attacking
 or defending.
 
-The game does not protect a player from the consequences of positioning. Area
-effects can touch allies, enemies, and their caster. Magic can also persistently
-reshape terrain: a spell describes the energy and volume it applies, while the world
-decides how dirt, stone, water, or another material responds. Winning should come
-from understanding the board, not rerolling it.
+The design does not protect a player from the consequences of positioning. Future
+area effects may touch allies, enemies, and their caster. Planned terrain magic lets a
+spell describe the energy and volume it applies while the world decides how dirt,
+stone, water, or another material responds. Winning should come from understanding
+the board, not rerolling it.
 
-## The 0.3 playable slice
+## The current playable slice
 
-Version 0.3 is the first build in which the lattice idea is playable end to end. It is
-still an early skeleton, not the complete game described above: deterministic
+The current pre-alpha build makes the lattice idea playable end to end. It is still
+an early skeleton, not the complete game described above: deterministic
 procedural terrain, stacked-surface movement and path preview lead into combat on the
 same map, where live lattices power spells and absorb wounds.
 
@@ -114,19 +114,21 @@ turn-based fight share one battlefield.*
 
 The surrounding application is still deliberately pre-alpha, but it now has a real
 shell: New Game, one disposable exploration resume, persistent display and volume
-preferences, fixed centralized input actions, and normalized unsigned release
-artifacts. Terrain-changing spells, obstruction, rout and surrender, durable saves,
-audio content, input rebinding, signing, storefront integration, telemetry, and much
-of the larger design remain ahead. The exact boundary is recorded in the
+preferences, fixed centralized input actions, normalized unsigned release artifacts,
+separate character and spell creation, and a Combat Lab for deterministic deployment
+and fixture testing. Terrain-changing spells, unit obstruction, rout and surrender,
+durable saves, audio content, input rebinding, signing, storefront integration, and
+much of the larger design remain ahead. The exact boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
 
 The title screen separates development **Maps** and focused **Demos** from application
 **Actions**. **New Game** launches Party Trial as the one integrated default scenario;
-the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**. Combat Lab
-provides a transient roster/deployment Sandbox and a searchable fixed-fixture
-selector for Ability Lab, Raider Mirror, and creator-format matrices.
+the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**.
+Combat Lab provides a transient roster/deployment Sandbox across all thirteen shipped
+environments and a searchable fixed-fixture selector for Ability Lab, Raider Mirror,
+and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary
 loading flow. Saving is available only while paused in a safe exploration state;
 combat, movement, and open decisions refuse it. The slot is bound to its build,
@@ -134,19 +136,21 @@ scenario content, generator contract, roster, and terrain, so incompatible or co
 data is reported instead of partially loaded. New Game never overwrites it.
 
 <!--
-Regenerate readme_assets/prealpha-app-shell.png with:
-HEX_WALK_SCRIPT=walks/gameplay.ron \
-HEX_WALK_OUT=.context/readme-captures/shell \
+Regenerate the Creator and deployment screenshots with:
+HEX_WALK_SCRIPT=walks/readme_creator_lab.ron \
+HEX_WALK_OUT=.context/readme-captures/creator-lab \
 HEX_WALK_SIZE=1280x720 \
-HEX_GAME_DATA_DIR=.context/readme-captures/shell-data \
+HEX_GAME_DATA_DIR=.context/readme-captures/creator-lab-data \
 cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/shell/10-app-shell.png \
-  readme_assets/prealpha-app-shell.png
+cp .context/readme-captures/creator-lab/character-creator.png \
+  readme_assets/character-creator.png
+cp .context/readme-captures/creator-lab/combat-lab-deployment.png \
+  readme_assets/combat-lab-deployment.png
 -->
-![The Wave 5 Hex Game title screen, organized into Maps, focused Demos, and Actions with Continue unavailable until an exploration resume exists](readme_assets/prealpha-app-shell.png)
+![The Character Creator workspace, with an element-coloured tool palette, a true hexagonal lattice canvas, and the selected cell's stats and channelling controls](readme_assets/character-creator.png)
 
-*The pre-alpha app shell keeps development fixtures available without presenting
-them as separate ways to start the game.*
+*Characters are built as the same true-colour lattice used by combat, then saved
+before they can enter a map.*
 
 **Settings** persists fullscreen/window size, presentation mode, and master,
 music, effects, and UI volume values. The volume buses and fixed action map are seams
@@ -174,6 +178,11 @@ The Creator's local mechanics test remains the focused place to cast, channel,
 disable, restore, and break enchantments without constructing a map combat. See the
 [Creator and Combat Lab contract](docs/systems/creator-and-combat-lab.md) for saved
 content, readiness, fixtures, deployment, and frozen Retry behavior.
+
+![Combat Lab deployment on the Fort map, with exact player and hostile placement regions highlighted directly on the terrain](readme_assets/combat-lab-deployment.png)
+
+*Combat Lab loads the real terrain before combat and records exact elevated surfaces
+for every deployed unit.*
 
 ## Read more
 

@@ -1,8 +1,7 @@
 # Changelog
 
 Release sections are prepended here and dated when their promoted `main` commit is
-tagged. The repository has no earlier release tags; `v0.3.0` is planned as its first
-tagged build.
+tagged. `v0.3.0` is the first tagged build.
 
 ## Unreleased
 

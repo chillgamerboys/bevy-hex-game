@@ -26,19 +26,16 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
+| Wave 7: tactical integrity and Combat Lab tuning | exact-surface unit occupancy, a real Channel action, frozen Sandbox rule profiles, live and post-combat telemetry, comparable run reports, deterministic tuning fixtures, and an evidence-backed action-economy decision | units/combat/game |
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
-| Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
+| Co-casting and rituals | variable-mana group casting after Wave 7 supplies a real Channel action and evidence for initiative and action economy | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
-| Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
 | Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
-| Forest authored-object adoption | World-side Forest placements publish shared `ObjectInstance`s while blockers remain a separate exact projection; procedural plant synthesis follows only after exemplar review | map/shared presentation |
-| Structures and Fort | worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation | map |
-| Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
-| V3 recipe migration and legacy removal | rebuild every active V1/V2 recipe and scenario in V3; approve replacement corpora; then remove both legacy parsers, generators, assets, and runtime tests | map |
+| V1/V2 legacy removal | remove the frozen V1/V2 parsers, generators, assets, and runtime tests now that every active shipped procedural scenario resolves through V3 | map |
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
@@ -61,6 +58,11 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 | Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
+| V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, and Fort all use the V3 semantic pipeline in shipped scenarios |
+| Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s while exact blockers and canopy cutaway remain separate world projections |
+| Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
+| Seven-region composition | Ring7 composes all seven V3 recipe variants in one connected radius-33 world with global routes, elevation seams, and hydrology |
+| Cave lighting and presentation | V3 Caves publishes deterministic gameplay lights over required routes plus authored emissive crystals and restrained presentation-only physical lights |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -70,20 +72,21 @@ phase. It changed no behavior or existing `hex_units`/`hex_combat` systems; test
 harnesses only mirror the expanded shared setup chain. Both implementation lanes
 branched from updated `dev` after that contract merged.
 
-**Map lane:** Fort → `Ring7` → remaining recipe migration → V1/V2 removal.
-The map owner keeps semantic plans private and publishes exact shared consequences.
-Recipe PRs do not edit gameplay-owned crates.
+**Map lane:** every active shipped procedural scenario now uses V3 and `Ring7` is
+live. `RunBottom` is the next small world-owned contract; frozen V1/V2 removal remains
+independent cleanup. The map owner keeps semantic plans private and publishes exact
+shared consequences. Recipe PRs do not edit gameplay-owned crates.
 
-**Perception lane:** knowledge-safe casting and AI are live. Fog presentation and cave
-lights → movement adapter → engagement/ordinary-targeting/lost-contact adapters remain.
+**Perception lane:** knowledge-safe casting and AI plus cave gameplay-light and
+physical presentation are live. Fog presentation → movement adapter →
+engagement/ordinary-targeting/lost-contact adapters remain.
 `hex_perception` may observe unit positions, while `hex_units` reads only
 `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned crate is
 isolated and reviewed by that owner.
 
-Headless perception remains independent of the map lane. Forest and Fort do not
-depend on combat integration. `Ring7` waits for Waterfall, Forest, and Fort semantic
-plans; V3 migration waits for the composite contracts but not for final combat
-tuning.
+Headless perception remains independent of the map lane. The completed Forest, Fort,
+and `Ring7` work does not depend on combat integration, and Wave 7 does not reopen
+their private semantic plans.
 
 Until topology-aware rebuilding exists, V3 authored liquid voxels and every lower
 voxel in their columns remain protected as one atomic semantic dependency. The
@@ -98,12 +101,11 @@ The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collect
 group of ticket PRs in dependency order, a human walks the integrated build once, and
 the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
-- **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
-  disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
-  Encounters. `RunBottom` lands before Terrain magic starts, and Terrain magic starts
-  only after the declarative impact, outcome, and conjuration-admission asks G/H/L have
-  an agreed shape. Other wave work need not wait for those boundary contracts. Damage
-  exists at the end of it.
+- **Wave 3 — the slice becomes a game (delivered).** Lattices wired the damage loop
+  from casts through disables and downing, alongside persistent effects, knowledge and
+  divination, and authored encounters. Terrain magic remained gated: `RunBottom` must
+  land before it starts, and the declarative impact, outcome, and
+  conjuration-admission asks G/H/L retain their agreed shapes.
 - **Wave 4 — complete party combat (delivered).** Algorithm-neutral AI hosting, party
   controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
   scenario through a mandatory human playtest checkpoint. Casting UX and combat
@@ -118,12 +120,86 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
   gate.
 - **Wave 6 — creator and combat lab (delivered).** The Demos lane now owns separate
-  Character Creator and Spell Creator entries plus one Combat Lab. Local records have stable IDs,
-  atomic persistence, Draft/Ready and Map-ready diagnostics, dependency-safe deletion,
-  and immutable packaged templates. Sandbox builds ordered rosters on all eleven
-  distinct supported shipped maps, previews and describes each choice, resolves
-  deployment, freezes content for Retry, and refuses resume writes.
-  Fixed automated scenarios live behind one searchable stable-ID selector.
+  Character Creator and Spell Creator entries plus one Combat Lab. Local records have
+  stable IDs, atomic persistence, Draft/Ready and Map-ready diagnostics,
+  dependency-safe deletion, and immutable packaged templates. Sandbox builds ordered
+  rosters on all thirteen distinct supported shipped maps, previews and describes
+  each choice, resolves deployment, freezes content for Retry, and refuses resume
+  writes. Fixed automated scenarios live behind one searchable stable-ID selector.
+- **Wave 7 — tactical integrity and tempo (next).** Combat Lab becomes the
+  authoritative rules-testing workspace. Exact `TilePos` occupancy makes positioning
+  real, Channel closes the lattice resource loop, and deterministic profiles,
+  telemetry, fixtures, and comparable reports turn action-economy choices into
+  measured decisions rather than guesses. Flat deterministic one-slot initiative
+  remains the baseline; boss initiative, co-casting, rout, terrain magic, perception
+  adapters, and campaign persistence remain outside the wave.
+
+#### Wave 7 outcome and topology
+
+Wave 7 is one gameplay wave because occupancy and Channel both change canonical legal
+actions and AI, while the Lab UI, fixtures, reports, Retry, and automation prove only
+their combined behavior. Its lanes enter the integration branch in this order:
+
+1. **Measurement and profile foundation (`hex_combat`, `hex_assets`, `hex_game`).**
+   Extend the gameplay-owned serializable combat summary, define a validated
+   session-local rules profile, and let the shared game layer combine them with the
+   frozen launch snapshot into one deterministic Lab report. Every report names its
+   profile, map and seed, frozen content revision, roster order, resolved deployment,
+   fixture or Sandbox origin, outcome, and summary fingerprint.
+2. **Exact unit occupancy (`hex_units`, `hex_combat`).** One `TilePos` occupancy
+   projection drives movement preview, path construction, command validation, party
+   formation, AI legal actions, and deployment. Units may neither share an endpoint
+   nor route through another body. Preview and authoritative refusal always agree.
+3. **Channel action (`hex_lattice`, `hex_combat`, AI).** An active, non-downed unit
+   without an open modal decision may spend its action to recover mana using the
+   lattice's per-element Channelling values. Channel never repairs disabled cells,
+   bypasses an enchantment lock, or grants a second action.
+4. **Combat Lab tuning workspace (`hex_game`).** Sandbox becomes
+   `Map → Rosters → Rules → Deploy`. Deployment roster rows become directly selectable
+   for repositioning. A focused dashboard, outcome report, comparison view, and
+   fixture-to-Sandbox copy flow share the same report projection.
+5. **Fixtures and decision gate.** Add immutable Occupancy Matrix, Channel Attrition,
+   and Tempo Matrix fixtures. Run the same frozen setups across the shipped baseline,
+   a two-step tactical profile, and bounded custom profiles; close the wave by
+   selecting and documenting the default movement/action policy.
+
+The initial Rules panel exposes only already-understood numeric seams:
+movement per turn, strike disables, engage range, disengage margin, levels per bonus
+range, and Reveal duration. It offers **Shipped**, **Tactical two-step**, and
+validated **Custom** profiles, shows every deviation from shipped values, and resets
+without editing `combat.ron`. Initiative algorithms, multiple actions, Channel cost,
+rout policy, and co-casting are not disguised as numeric switches before those
+behaviors exist. The chosen profile is frozen into launch and Retry.
+
+The Rules step presents preset cards above labelled steppers, a plain-language
+description of each parameter's effect, a visible changed-from-shipped state, Reset,
+and validation at the point of editing. Active Lab sessions add a collapsible
+statistics drawer without replacing the ordinary gameplay HUD. Outcomes open a
+full-screen report with **Overview**, **Units**, **Spells & Effects**, **Timeline**,
+and **Compare** modes. Comparison shows both frozen profile/roster headers and
+labelled numeric deltas; colour is never the only indication of improvement or
+regression. Outcome actions distinguish **Retry Exact** from **Tune & Run Again**:
+the former reuses the frozen launch unchanged, while the latter returns to Rules with
+the same map, rosters, and still-valid resolved deployment before creating a new
+report.
+
+The live dashboard and post-combat report provide totals and per-unit breakdowns for
+rounds and turns; movement distance and budget use; successful and refused commands;
+casts by spell and delivered effect; Channel actions and mana restored by element;
+strikes; raw, prevented, and applied disables; restorations, downings, and revivals;
+idle turns; no-progress stretches; AI selections; and the final outcome. Reports are
+versioned, bounded, explicitly saved local Lab data, separate from Creator records and
+Continue. A user can compare two saved reports or delete them. Fixed fixtures never
+read that local history, but their result can be copied into Sandbox with the exact
+map, roster, placement, and profile for controlled experimentation.
+
+Combined acceptance runs human and baseline-AI occupancy chokepoints, Channel under
+attrition and enchantment locks, every numeric profile boundary, direct deployment
+repositioning, fixture copying, report comparison/deletion, Retry, exit/re-entry, and
+Creator-origin return routing. Automated fixture walks launch by stable ID and emit
+the same deterministic report schema used by the UI. The final human pass compares
+the shipped and two-step tempo profiles on Party Trial and at least one full six-unit
+Sandbox roster before the default action economy changes.
 
 The Wave 5 resume slot deliberately uses explicit seeded regeneration and refuses
 generator/content drift. It is a development convenience, not the production save

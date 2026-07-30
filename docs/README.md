@@ -60,7 +60,7 @@ doc or the code, not drift.
 | [development/parallel-development.md](development/parallel-development.md) | Contributors, agents, integrators | Choosing independent, stacked, or wave topology; ownership lanes; combined review and cleanup | Both, jointly |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
-| [development/release.md](development/release.md) | Release contributors | Pre-alpha artifact shape, application identity, retained symbols, and reserved future credential boundaries | Whoever changes packaging |
+| [development/release.md](development/release.md) | Release contributors | Promotion, versioning, tagging, artifact verification, application identity, retained symbols, and reserved credential boundaries | Whoever changes packaging |
 | [development/troubleshooting.md](development/troubleshooting.md) | Everyone | The single list of failure modes, including the ones that log nothing at all | Whoever hits a new one |
 | [planning/status.md](planning/status.md) | Everyone | What is built, what is a placeholder, what each placeholder waits on — **the one doc allowed to drift** | Whoever lands a feature; `/update-docs` reports what a diff falsified |
 | [planning/roadmap.md](planning/roadmap.md) | Both devs | The epic table `/seed-tickets` turns into Linear tickets, plus the detail behind each | Whoever claims or finishes a row |

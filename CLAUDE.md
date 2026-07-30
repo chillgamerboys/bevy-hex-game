@@ -98,7 +98,8 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title, Settings, and lattice-demo loop;
+run. `walks/menus.ron` covers the title, Settings, both Creators, Combat Lab, and
+return routing;
 `walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
 Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
 through an offscreen render target (the window surface is not readable on
