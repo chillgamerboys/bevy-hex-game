@@ -11,6 +11,7 @@ use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
@@ -21,8 +22,8 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::volume::{
-    LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
-    VolumeElement, VolumePlan,
+    FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
+    SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
     FeaturePlan, GeneratedWorldPlan, InteriorPlan, ProtectedFeatureRoute, StructurePlan,
@@ -40,6 +41,7 @@ const CONFLICT_CENTER: &str = "conflict_center";
 const HIGH_PASS: &str = "high_pass";
 const LOWER_BYPASS: &str = "lower_bypass";
 const LOW_BYPASS_ANCHOR: &str = "low_bypass";
+const MOUNTAIN_FALL_HEIGHT: Level = 3;
 
 /// Deterministic measurements for one admitted Mountains plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +70,11 @@ struct MountainsRecipe {
 pub(crate) struct MountainStreams<'a> {
     orientation: SeedStream<'a>,
     peaks: SeedStream<'a>,
+}
+
+#[derive(Debug)]
+struct MountainStream {
+    nodes: BTreeMap<TilePos, LiquidNode>,
 }
 
 /// Runs the common eight-candidate selector for one native V3 Mountains world.
@@ -372,19 +379,58 @@ fn construct_patch_with_streams(
             surface_by_coord.insert(coord, authored_level);
         }
     }
+    let mountain_streams = build_mountain_streams(
+        &patch,
+        &surface_by_coord,
+        &peaks,
+        &route_cells,
+        settings.base_level,
+    )?;
+    let stream_nodes_by_coord = mountain_streams
+        .iter()
+        .enumerate()
+        .flat_map(|(body, stream)| {
+            stream
+                .nodes
+                .iter()
+                .map(move |(position, node)| (position.coord, (body, *position, *node)))
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let mut columns = BTreeMap::new();
     let mut surfaces = BTreeMap::new();
     for (coord, level) in &surface_by_coord {
-        let exposed = is_exposed_stone(*coord, *level, &surface_by_coord, settings);
-        columns.insert(*coord, mountain_column(*level, exposed));
-        surfaces.insert(
-            TilePos::new(*coord, *level),
-            SurfaceMetadata {
-                access: SurfaceAccess::Ordinary,
-                interior: None,
-            },
-        );
+        if let Some((_, position, node)) = stream_nodes_by_coord.get(coord).copied() {
+            let crossing = route_cells.contains(coord).then_some(*level);
+            let (column, bed, crossing) = mountain_stream_column(position, node, crossing);
+            columns.insert(*coord, column);
+            surfaces.insert(
+                bed,
+                SurfaceMetadata {
+                    access: SurfaceAccess::NonStandable,
+                    interior: None,
+                },
+            );
+            if let Some(crossing) = crossing {
+                surfaces.insert(
+                    crossing,
+                    SurfaceMetadata {
+                        access: SurfaceAccess::Ordinary,
+                        interior: None,
+                    },
+                );
+            }
+        } else {
+            let exposed = is_exposed_stone(*coord, *level, &surface_by_coord, settings);
+            columns.insert(*coord, mountain_column(*level, exposed));
+            surfaces.insert(
+                TilePos::new(*coord, *level),
+                SurfaceMetadata {
+                    access: SurfaceAccess::Ordinary,
+                    interior: None,
+                },
+            );
+        }
     }
     let mut volume = VolumePlan {
         mask: mask.clone(),
@@ -449,7 +495,21 @@ fn construct_patch_with_streams(
     let fragment = GeneratedPatchPlan {
         patch_id: patch.id,
         volume,
-        liquids: Default::default(),
+        liquids: LiquidPlan {
+            bodies: mountain_streams
+                .into_iter()
+                .enumerate()
+                .map(|(index, stream)| {
+                    (
+                        LiquidBodyId(u32::try_from(index).unwrap_or(u32::MAX)),
+                        LiquidBodyPlan {
+                            material: FillMaterialRole::Water,
+                            nodes: stream.nodes,
+                        },
+                    )
+                })
+                .collect(),
+        },
         features,
         structures: StructurePlan::default(),
         blockers: BTreeSet::new(),
@@ -632,6 +692,197 @@ fn shortest_path(
     Some(reversed)
 }
 
+fn build_mountain_streams(
+    patch: &PatchRecipeContext<'_>,
+    levels: &BTreeMap<HexCoord, Level>,
+    peaks: &[HexCoord],
+    route_cells: &BTreeSet<HexCoord>,
+    base_level: Level,
+) -> Result<Vec<MountainStream>, Vec<WorldValidationIssue>> {
+    let boundary = patch
+        .mask()
+        .iter()
+        .copied()
+        .filter(|coord| {
+            coord
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| !patch.mask().contains(&neighbor))
+        })
+        .collect::<BTreeSet<_>>();
+    if patch.layout().kind == super::layout::LayoutKind::Single {
+        let mut outlets = boundary
+            .iter()
+            .copied()
+            .filter(|coord| !route_cells.contains(coord))
+            .collect::<Vec<_>>();
+        outlets.sort_unstable_by_key(|coord| {
+            (levels.get(coord).copied().unwrap_or(Level::MAX), *coord)
+        });
+        let outlet_level = base_level.saturating_sub(1);
+        for outlet in outlets.into_iter().take(12) {
+            if let Some(stream) = build_mountain_stream(
+                patch.mask(),
+                levels,
+                peaks,
+                route_cells,
+                &BTreeSet::new(),
+                &boundary,
+                outlet,
+                outlet_level,
+            ) {
+                return Ok(vec![stream]);
+            }
+        }
+        return Err(vec![recipe_issue(
+            "Mountains could not route a peak-fed stream to the world boundary",
+        )]);
+    }
+
+    let mut outlets = Vec::new();
+    for edge in patch.shared_edges() {
+        let Some((is_source, port)) = edge.liquid_port() else {
+            continue;
+        };
+        if !is_source {
+            return Err(vec![recipe_issue(
+                "Mountains supports source/outlet liquid contracts, not incoming liquid",
+            )]);
+        }
+        let endpoint_level = edge
+            .preferred_level()
+            .saturating_sub(1)
+            .max(edge.contract.elevation.min)
+            .min(edge.contract.elevation.max);
+        outlets.extend(port.lanes.iter().map(|(local, _)| (*local, endpoint_level)));
+    }
+    if outlets.is_empty() {
+        return Ok(Vec::new());
+    }
+    outlets.sort_unstable();
+    let reserved_outlets = outlets
+        .iter()
+        .map(|(coord, _)| *coord)
+        .collect::<BTreeSet<_>>();
+    let mut used = BTreeSet::new();
+    let mut streams = Vec::new();
+    for (outlet, outlet_level) in outlets {
+        let other_outlets = reserved_outlets
+            .iter()
+            .copied()
+            .filter(|coord| *coord != outlet)
+            .collect::<BTreeSet<_>>();
+        let Some(stream) = build_mountain_stream(
+            patch.mask(),
+            levels,
+            peaks,
+            route_cells,
+            &used.union(&other_outlets).copied().collect(),
+            &boundary,
+            outlet,
+            outlet_level,
+        ) else {
+            return Err(vec![recipe_issue(format!(
+                "Mountains could not route a peak-fed stream to liquid outlet {outlet:?}"
+            ))]);
+        };
+        used.extend(stream.nodes.keys().map(|position| position.coord));
+        streams.push(stream);
+    }
+    Ok(streams)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "stream routing keeps each immutable geometry contract explicit"
+)]
+fn build_mountain_stream(
+    mask: &BTreeSet<HexCoord>,
+    levels: &BTreeMap<HexCoord, Level>,
+    peaks: &[HexCoord],
+    route_cells: &BTreeSet<HexCoord>,
+    reserved: &BTreeSet<HexCoord>,
+    boundary: &BTreeSet<HexCoord>,
+    outlet: HexCoord,
+    outlet_level: Level,
+) -> Option<MountainStream> {
+    let desired_land_level = outlet_level
+        .saturating_add(MOUNTAIN_FALL_HEIGHT)
+        .saturating_add(1);
+    let mut sources = levels
+        .iter()
+        .filter_map(|(coord, level)| {
+            (!route_cells.contains(coord)
+                && !reserved.contains(coord)
+                && !boundary.contains(coord)
+                && !peaks.contains(coord)
+                && *level >= desired_land_level
+                && coord.distance(outlet) >= 5)
+                .then_some((*coord, *level))
+        })
+        .collect::<Vec<_>>();
+    sources.sort_unstable_by_key(|(coord, level)| {
+        (
+            level.abs_diff(desired_land_level),
+            peaks
+                .iter()
+                .map(|peak| peak.distance(*coord))
+                .min()
+                .unwrap_or(u32::MAX),
+            u32::MAX.saturating_sub(coord.distance(outlet)),
+            *coord,
+        )
+    });
+    let mut forbidden = reserved.clone();
+    forbidden.extend(peaks.iter().copied());
+    forbidden.remove(&outlet);
+    for (source, _land_level) in sources.into_iter().take(24) {
+        let Some(path) = shortest_path(mask, source, outlet, &forbidden) else {
+            continue;
+        };
+        let edges = path.len().saturating_sub(1);
+        if edges < 2 {
+            continue;
+        }
+        let source_level = outlet_level.saturating_add(MOUNTAIN_FALL_HEIGHT);
+        let water_levels = std::iter::once(source_level)
+            .chain(std::iter::repeat_n(outlet_level, edges))
+            .collect::<Vec<_>>();
+        if path.iter().zip(&water_levels).any(|(coord, water)| {
+            levels
+                .get(coord)
+                .is_none_or(|surface| *surface < water.saturating_add(1))
+        }) {
+            continue;
+        }
+        let positions = path
+            .iter()
+            .copied()
+            .zip(water_levels)
+            .map(|(coord, level)| TilePos::new(coord, level))
+            .collect::<Vec<_>>();
+        let nodes = positions
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, position)| {
+                let downstream = positions.get(index.saturating_add(1)).copied();
+                let state = downstream.map_or(LiquidFlowState::Still, |downstream| match position
+                    .level
+                    .saturating_sub(downstream.level)
+                {
+                    0 => LiquidFlowState::Current,
+                    1 => LiquidFlowState::Rapid,
+                    _ => LiquidFlowState::Fall,
+                });
+                (position, LiquidNode { state, downstream })
+            })
+            .collect();
+        return Some(MountainStream { nodes });
+    }
+    None
+}
+
 fn two_wide_footprint(
     mask: &BTreeSet<HexCoord>,
     centerline: &[HexCoord],
@@ -801,6 +1052,68 @@ fn mountain_column(surface: Level, exposed: bool) -> VolumeColumn {
     VolumeColumn { elements }
 }
 
+fn mountain_stream_column(
+    position: TilePos,
+    node: LiquidNode,
+    crossing_level: Option<Level>,
+) -> (VolumeColumn, TilePos, Option<TilePos>) {
+    let (bed_level, fill_bottom) = if node.state == LiquidFlowState::Fall {
+        node.downstream.map_or_else(
+            || {
+                (
+                    position.level.saturating_sub(2),
+                    position.level.saturating_sub(1),
+                )
+            },
+            |downstream| (downstream.level.saturating_sub(1), downstream.level),
+        )
+    } else {
+        (
+            position.level.saturating_sub(2),
+            position.level.saturating_sub(1),
+        )
+    };
+    let mut elements = vec![
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(0, 1),
+            material: SolidMaterialRole::Bedrock,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(1, bed_level),
+            material: SolidMaterialRole::Stone,
+            cutaway_for: None,
+        }),
+        VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(bed_level, bed_level.saturating_add(1)),
+            material: SolidMaterialRole::Gravel,
+            cutaway_for: None,
+        }),
+        VolumeElement::Fill(NonSolidFill {
+            levels: LevelInterval::new(fill_bottom, position.level.saturating_add(1)),
+            material: FillMaterialRole::Water,
+        }),
+    ];
+    if let Some(crossing_level) = crossing_level {
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(crossing_level, crossing_level.saturating_add(1)),
+            material: SolidMaterialRole::Metal,
+            cutaway_for: None,
+        }));
+        (
+            VolumeColumn { elements },
+            TilePos::new(position.coord, bed_level),
+            Some(TilePos::new(position.coord, crossing_level)),
+        )
+    } else {
+        (
+            VolumeColumn { elements },
+            TilePos::new(position.coord, bed_level),
+            None,
+        )
+    }
+}
+
 fn exact_position(
     levels: &BTreeMap<HexCoord, Level>,
     coord: HexCoord,
@@ -845,6 +1158,7 @@ pub(crate) fn validate_mountains(
         plan,
         settings,
         settings.base_level.saturating_add(settings.relief / 2),
+        1,
     )
 }
 
@@ -902,6 +1216,13 @@ pub(crate) fn validate_patch(
         &local,
         settings,
         settings.base_level.saturating_add(available_rise),
+        patch
+            .shared_edges()
+            .filter_map(|edge| {
+                edge.liquid_port()
+                    .and_then(|(is_source, port)| is_source.then_some(port.lanes.len()))
+            })
+            .sum(),
     )
 }
 
@@ -909,11 +1230,10 @@ fn validate_mountains_inner(
     plan: &GeneratedWorldPlan,
     settings: &V3MountainsSettings,
     required_saddle: Level,
+    expected_streams: usize,
 ) -> WorldValidation<MountainsMetrics> {
     let mut issues = plan.validate();
-    if !plan.liquids.bodies.is_empty() {
-        issues.push(recipe_issue("Mountains must remain dry"));
-    }
+    validate_mountain_streams(plan, expected_streams, &mut issues);
     let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let Some(party) = plan.anchors.get(PARTY_START).copied() else {
         issues.push(recipe_issue("Mountains is missing party_start"));
@@ -994,17 +1314,12 @@ fn validate_mountains_inner(
             "Mountains exposes {accessible_mountain_percent}% of its raised standable surfaces to ordinary movement; expected at least 60%"
         )));
     }
-    let min_level = all_positions
-        .iter()
-        .map(|position| position.level)
-        .min()
-        .unwrap_or_default();
     let max_level = all_positions
         .iter()
         .map(|position| position.level)
         .max()
         .unwrap_or_default();
-    let relief = max_level.saturating_sub(min_level);
+    let relief = max_level.saturating_sub(settings.base_level);
     if relief != settings.relief {
         issues.push(recipe_issue(format!(
             "Mountains relief is {relief}; expected {}",
@@ -1063,6 +1378,85 @@ fn validate_mountains_inner(
         high_pass_steps: count_u32(high_pass.centerline.len().saturating_sub(1)),
         lower_bypass_steps,
     })
+}
+
+fn validate_mountain_streams(
+    plan: &GeneratedWorldPlan,
+    expected_streams: usize,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if plan.liquids.bodies.len() != expected_streams {
+        issues.push(recipe_issue(format!(
+            "Mountains has {} peak-fed stream bodies; expected {expected_streams}",
+            plan.liquids.bodies.len()
+        )));
+        return;
+    }
+    for (body_id, body) in &plan.liquids.bodies {
+        if body.material != FillMaterialRole::Water {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} is not water"
+            )));
+        }
+        let fall_nodes = body
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.state == LiquidFlowState::Fall)
+            .collect::<Vec<_>>();
+        if fall_nodes.len() != 1 {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} has {} waterfall nodes; expected one",
+                fall_nodes.len()
+            )));
+        } else if fall_nodes.first().is_some_and(|(position, node)| {
+            node.downstream.is_none_or(|downstream| {
+                position.level.saturating_sub(downstream.level) != MOUNTAIN_FALL_HEIGHT
+            })
+        }) {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} does not contain the exact {MOUNTAIN_FALL_HEIGHT}-level fall"
+            )));
+        }
+        let terminals = body
+            .nodes
+            .iter()
+            .filter_map(|(position, node)| {
+                (node.state == LiquidFlowState::Still && node.downstream.is_none())
+                    .then_some(*position)
+            })
+            .collect::<Vec<_>>();
+        if terminals.len() != 1 {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} has {} boundary outlets; expected one",
+                terminals.len()
+            )));
+        } else if terminals.first().is_some_and(|terminal| {
+            terminal
+                .coord
+                .neighbors()
+                .into_iter()
+                .all(|neighbor| plan.layout.footprint.contains(&neighbor))
+        }) {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} does not terminate at a patch boundary"
+            )));
+        }
+        let downstream_targets = body
+            .nodes
+            .values()
+            .filter_map(|node| node.downstream)
+            .collect::<BTreeSet<_>>();
+        let sources = body
+            .nodes
+            .keys()
+            .filter(|position| !downstream_targets.contains(position))
+            .count();
+        if sources != 1 {
+            issues.push(recipe_issue(format!(
+                "Mountains stream {body_id:?} has {sources} spring sources; expected one"
+            )));
+        }
+    }
 }
 
 fn validate_route(
@@ -1289,7 +1683,18 @@ mod tests {
                 usize::try_from(first.metrics.mountain_surfaces).unwrap_or(usize::MAX)
             ) >= 60
         );
-        assert!(first.validated.plan.liquids.bodies.is_empty());
+        let streams = &first.validated.plan.liquids.bodies;
+        assert_eq!(streams.len(), 1);
+        let stream = streams.values().next().expect("one mountain stream");
+        assert_eq!(stream.material, FillMaterialRole::Water);
+        assert_eq!(
+            stream
+                .nodes
+                .values()
+                .filter(|node| node.state == LiquidFlowState::Fall)
+                .count(),
+            1
+        );
     }
 
     #[test]

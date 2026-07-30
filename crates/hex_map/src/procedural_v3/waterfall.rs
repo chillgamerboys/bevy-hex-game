@@ -331,6 +331,7 @@ pub(crate) fn construct_patch(
     } else {
         LOW_WATER_LEVEL
     };
+    validate_waterfall_liquid_ports(&patch, frame, &watercourse, low_water_level)?;
     let ring_secondary_flank = if composite_layout {
         ring_secondary_flank_apron(patch_radius, &mask)?
     } else {
@@ -670,7 +671,7 @@ fn waterfall_rotation(patch: &PatchRecipeContext<'_>) -> Result<u8, Vec<WorldVal
         .collect::<Vec<_>>();
     let [outlet] = outlets.as_slice() else {
         return Err(vec![recipe_issue(
-            "Ring7 Waterfall requires exactly one directed liquid outlet",
+            "Composite Waterfall requires exactly one directed liquid outlet",
         )]);
     };
     Ok(match outlet {
@@ -681,6 +682,91 @@ fn waterfall_rotation(patch: &PatchRecipeContext<'_>) -> Result<u8, Vec<WorldVal
         super::layout::HexSide::SouthWest => 4,
         super::layout::HexSide::SouthEast => 5,
     })
+}
+
+fn validate_waterfall_liquid_ports(
+    patch: &PatchRecipeContext<'_>,
+    frame: LocalPatchFrame,
+    watercourse: &Watercourse,
+    low_water_level: Level,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    if patch.layout().kind == super::layout::LayoutKind::Single {
+        return Ok(());
+    }
+    let mut incoming = Vec::new();
+    let mut outgoing = Vec::new();
+    for edge in patch.shared_edges() {
+        let Some((is_source, port)) = edge.liquid_port() else {
+            continue;
+        };
+        let boundary = port
+            .lanes
+            .iter()
+            .map(|(local, _)| frame.to_local(*local))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Waterfall liquid port conversion failed: {error}"
+                ))]
+            })?;
+        let contract = (
+            boundary,
+            edge.contract.elevation.min,
+            edge.contract.elevation.max,
+        );
+        if is_source {
+            outgoing.push(contract);
+        } else {
+            incoming.push(contract);
+        }
+    }
+    let [outlet] = outgoing.as_slice() else {
+        return Err(vec![recipe_issue(format!(
+            "Composite Waterfall has {} directed liquid outlets; expected one",
+            outgoing.len()
+        ))]);
+    };
+    if incoming.len() > 1 {
+        return Err(vec![recipe_issue(format!(
+            "Composite Waterfall has {} directed liquid inlets; expected at most one",
+            incoming.len()
+        ))]);
+    }
+    let starts = watercourse
+        .main_lanes
+        .iter()
+        .filter_map(|lane| lane.first().copied())
+        .collect::<BTreeSet<_>>();
+    let ends = watercourse
+        .main_lanes
+        .iter()
+        .filter_map(|lane| lane.last().copied())
+        .collect::<BTreeSet<_>>();
+    if outlet.0 != ends {
+        return Err(vec![recipe_issue(
+            "Composite Waterfall outlet does not exactly match all three downstream water lanes",
+        )]);
+    }
+    if !(outlet.1..=outlet.2).contains(&low_water_level) {
+        return Err(vec![recipe_issue(format!(
+            "Composite Waterfall outlet level {low_water_level} leaves its declared elevation band {}..={}",
+            outlet.1, outlet.2
+        ))]);
+    }
+    if let Some(inlet) = incoming.first() {
+        if inlet.0 != starts {
+            return Err(vec![recipe_issue(
+                "Composite Waterfall inlet does not exactly match all three upstream water lanes",
+            )]);
+        }
+        if !(inlet.1..=inlet.2).contains(&HIGH_WATER_LEVEL) {
+            return Err(vec![recipe_issue(format!(
+                "Composite Waterfall inlet level {HIGH_WATER_LEVEL} leaves its declared elevation band {}..={}",
+                inlet.1, inlet.2
+            ))]);
+        }
+    }
+    Ok(())
 }
 
 fn project_surface_through_walker_seams(
@@ -1346,6 +1432,23 @@ pub(crate) fn validate_patch(
             ))]);
         }
     };
+    let local_mask = match frame.local_mask(patch.mask()) {
+        Ok(mask) => mask,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Waterfall validation mask conversion failed: {error}"
+            ))]);
+        }
+    };
+    let watercourse = match watercourse(&local_mask) {
+        Ok(watercourse) => watercourse,
+        Err(issues) => return WorldValidation::Invalid(issues),
+    };
+    if let Err(port_issues) =
+        validate_waterfall_liquid_ports(&patch, frame, &watercourse, COMPOSITE_LOW_WATER_LEVEL)
+    {
+        return WorldValidation::Invalid(port_issues);
+    }
     let seam_context = match stitched_seam_context(patch, plan, frame) {
         Ok(context) => context,
         Err(issue) => return WorldValidation::Invalid(vec![issue]),
