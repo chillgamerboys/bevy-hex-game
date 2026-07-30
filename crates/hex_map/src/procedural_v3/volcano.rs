@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, HexSide, PatchId, ResolvedLayoutPlan};
+use super::layout::{
+    resolve_layout, HexSide, PatchId, ResolvedBoundaryLiquidOutlet, ResolvedLayoutPlan,
+};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
@@ -530,10 +532,32 @@ fn volcano_orientation(
             "composite Volcano lava must remain separate from stitched liquid ports",
         )]);
     }
+    ring19_volcano_outlet(patch).map_err(|error| vec![recipe_issue(error)])?;
 
     // Local lava advances along +x. Three turns map that axis to world-West,
     // making every terminal lane exit the required outer boundary.
     Ok(3)
+}
+
+fn ring19_volcano_outlet<'layout>(
+    patch: &PatchRecipeContext<'layout>,
+) -> Result<Option<&'layout ResolvedBoundaryLiquidOutlet>, String> {
+    if patch.layout().kind != super::layout::LayoutKind::Ring19 {
+        return Ok(None);
+    }
+    let outlets = patch.boundary_liquid_outlets().collect::<Vec<_>>();
+    let [outlet] = outlets.as_slice() else {
+        return Err(format!(
+            "Ring19 Volcano requires exactly one resolved boundary outlet; found {}",
+            outlets.len()
+        ));
+    };
+    if outlet.side != HexSide::West || outlet.lanes.len() != LAVA_LANES.len() {
+        return Err(
+            "Ring19 Volcano requires one exact three-lane western boundary outlet".to_owned(),
+        );
+    }
+    Ok(Some(outlet))
 }
 
 fn plan_geometry(
@@ -1100,6 +1124,27 @@ fn validate_composite_outlet(
         issues.push(recipe_issue(format!(
             "composite Volcano terminals do not match the exact contiguous three-lane western outlet positions (actual {terminal_positions:?}, expected {expected_terminals:?})"
         )));
+    }
+    match ring19_volcano_outlet(patch) {
+        Ok(Some(outlet)) => {
+            let declared_terminals = outlet
+                .lanes
+                .iter()
+                .map(|(inside, _)| TilePos::new(*inside, outlet.level))
+                .collect::<BTreeSet<_>>();
+            if outlet.side != HexSide::West
+                || outlet.lanes.len() != LAVA_LANES.len()
+                || expected_terminals
+                    .as_ref()
+                    .is_some_and(|expected| declared_terminals != *expected)
+            {
+                issues.push(recipe_issue(format!(
+                "Ring19 Volcano resolved outlet must exactly equal the recipe's three western terminals (declared {declared_terminals:?}, expected {expected_terminals:?})"
+            )));
+            }
+        }
+        Ok(None) => {}
+        Err(error) => issues.push(recipe_issue(error)),
     }
     for (position, node) in &terminals {
         if node.state != LiquidFlowState::Still {
@@ -2022,6 +2067,116 @@ mod tests {
         assert!(terminals
             .iter()
             .all(|coord| !mask.contains(&HexSide::West.neighbor(*coord))));
+    }
+
+    #[test]
+    fn ring19_volcano_consumes_the_exact_resolved_western_outlet() {
+        let mask = HexCoord::ORIGIN
+            .within_radius(12)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let fixture = settings(12);
+        let V3LayoutSettings::Single(spec) = &fixture.layout else {
+            unreachable!("fixture is Single");
+        };
+        let V3RecipeSettings::Volcano(volcano) = &spec.recipe else {
+            unreachable!("fixture is Volcano");
+        };
+        let geometry = plan_geometry(&mask, 12, volcano, 3, None).expect("valid geometry");
+        let terminals = geometry
+            .lava
+            .iter()
+            .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
+            .collect::<BTreeSet<_>>();
+        let level = terminals
+            .first()
+            .map(|terminal| terminal.level)
+            .expect("three terminals");
+        assert!(terminals.iter().all(|terminal| terminal.level == level));
+        let lanes = terminals
+            .iter()
+            .map(|terminal| (terminal.coord, HexSide::West.neighbor(terminal.coord)))
+            .collect::<BTreeSet<_>>();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let mut layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring19,
+            grid_radius: 55,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: hex_core::BiomeRegionId(0),
+                    mask: mask.clone(),
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::from([(
+                (PatchId(0), HexSide::West),
+                ResolvedBoundaryLiquidOutlet {
+                    source: PatchId(0),
+                    side: HexSide::West,
+                    lanes,
+                    inward_approach: terminals.iter().map(|terminal| terminal.coord).collect(),
+                    approach_depth: 1,
+                    level,
+                },
+            )]),
+        };
+        let fragment = GeneratedPatchPlan {
+            patch_id: PatchId(0),
+            volume: VolumePlan::new(mask),
+            liquids: LiquidPlan {
+                bodies: BTreeMap::from([(
+                    LiquidBodyId(0),
+                    LiquidBodyPlan {
+                        material: FillMaterialRole::Lava,
+                        nodes: geometry.lava,
+                    },
+                )]),
+            },
+            features: FeaturePlan::default(),
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::new(),
+            lights: BTreeMap::new(),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((1.0, 1.0, 1.0), (0.0, 0.0, 0.0)),
+        };
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        assert_eq!(volcano_orientation(&patch, 1), Ok(3));
+        assert_eq!(
+            validate_composite_outlet(&patch, &fragment, volcano),
+            Vec::new()
+        );
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("one outlet")
+            .level = level.saturating_add(1);
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        assert!(validate_composite_outlet(&patch, &fragment, volcano)
+            .iter()
+            .any(|issue| issue.detail.contains("must exactly equal")));
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("one outlet")
+            .lanes
+            .pop_last();
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        assert!(volcano_orientation(&patch, 1)
+            .expect_err("two lanes must fail")
+            .iter()
+            .any(|issue| issue.detail.contains("three-lane")));
     }
 
     #[test]
