@@ -193,6 +193,7 @@ pub(crate) fn ensure_recipe_available(
             &patch.recipe,
         ))),
         V3LayoutSettings::Ring7(_) => Ok(()),
+        V3LayoutSettings::Ring19(_) => Err(V3GenerationError::RecipeUnavailable("Ring19")),
     }
 }
 
@@ -360,6 +361,7 @@ pub(crate) fn build(
                 |metrics| ProceduralRecipeMetrics::Ring7(ring7_recipe_metrics(metrics)),
             )
         }
+        V3LayoutSettings::Ring19(_) => Err(V3GenerationError::RecipeUnavailable("Ring19")),
     }
 }
 
@@ -745,6 +747,9 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
