@@ -191,6 +191,23 @@
             ),
         ),
         (
+            id: "deep-forest",
+            display_name: "Deep Forest",
+            description: "Dense authored woodland preserves one winding trail and three irregular clearings.",
+            tags: ["Dense", "Woodland", "Trail"],
+            preview: "ui/combat-lab/deep-forest.png",
+            scenario: "Deep Forest",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "prairie",
             display_name: "Prairie",
             description: "Open rolling grassland provides long sightlines and dense nonblocking vegetation.",

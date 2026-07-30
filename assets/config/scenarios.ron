@@ -120,6 +120,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Deep Forest",
+            category: Map,
+            blurb: "Dense rolling woodland crossed by one winding trail and three irregular clearings.",
+            world: "config/worlds/procedural-deep-forest.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Prairie",
             category: Map,
             blurb: "Open rolling grassland covered in tall authored grass, without trees or a constructed road.",

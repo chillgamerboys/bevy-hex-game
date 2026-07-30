@@ -3276,6 +3276,10 @@ mod tests {
                 3,
             ),
             (
+                include_str!("../../../assets/config/worlds/procedural-deep-forest.ron"),
+                3,
+            ),
+            (
                 include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
                 3,
             ),

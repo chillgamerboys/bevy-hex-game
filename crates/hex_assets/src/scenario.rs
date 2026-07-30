@@ -333,8 +333,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            11,
-            "the scenario library should include all eleven generated maps"
+            12,
+            "the scenario library should include all twelve generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -354,7 +354,7 @@ mod tests {
             duplicate_seeds,
             BTreeMap::from([(
                 1_592_598_566,
-                BTreeSet::from(["Prairie", "Procedural Hills"]),
+                BTreeSet::from(["Deep Forest", "Prairie", "Procedural Hills"]),
             )]),
             "only the approved directly comparable maps may share a configured seed"
         );

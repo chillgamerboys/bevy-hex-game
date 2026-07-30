@@ -2404,6 +2404,11 @@ mod tests {
     }
 
     #[test]
+    fn deep_forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Deep Forest");
+    }
+
+    #[test]
     fn prairie_reenters_with_the_same_authored_features_and_art_graph() {
         assert_vegetation_scenario_reenters_with_the_same_art("Prairie");
     }
@@ -2452,6 +2457,7 @@ mod tests {
             "Caves",
             "Waterfall",
             "Forest",
+            "Deep Forest",
             "Prairie",
         ] {
             let scenario = library()
@@ -2484,18 +2490,28 @@ mod tests {
                 !report.used_fallback,
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
-            if scenario_name == "Prairie" {
-                let Some(ProceduralRecipeMetrics::Prairie(metrics)) =
-                    report.recipe_metrics.as_ref()
-                else {
-                    panic!("Prairie did not publish its recipe-specific metrics");
-                };
-                assert!(metrics.grass_roots > 0, "Prairie did not publish grass");
-                assert!(
-                    (65..=75).contains(&metrics.grass_coverage_percent),
-                    "Prairie grass coverage left its approved band: {}%",
-                    metrics.grass_coverage_percent
-                );
+            match (scenario_name, report.recipe_metrics.as_ref()) {
+                ("Deep Forest", Some(ProceduralRecipeMetrics::DeepForest(metrics))) => {
+                    assert!(metrics.tree_roots > 0, "Deep Forest did not publish trees");
+                    assert_eq!(metrics.clearing_count, 3);
+                    assert!(
+                        (28..=32).contains(&metrics.blocker_coverage_percent),
+                        "Deep Forest blocker coverage left its approved band: {}%",
+                        metrics.blocker_coverage_percent
+                    );
+                }
+                ("Prairie", Some(ProceduralRecipeMetrics::Prairie(metrics))) => {
+                    assert!(metrics.grass_roots > 0, "Prairie did not publish grass");
+                    assert!(
+                        (65..=75).contains(&metrics.grass_coverage_percent),
+                        "Prairie grass coverage left its approved band: {}%",
+                        metrics.grass_coverage_percent
+                    );
+                }
+                ("Deep Forest" | "Prairie", metrics) => {
+                    panic!("{scenario_name} published unexpected metrics: {metrics:?}");
+                }
+                _ => {}
             }
             let encounter = encounter_of(&scenario);
             let anchors = app.world().resource::<MapAnchors>();
@@ -2513,6 +2529,7 @@ mod tests {
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
                 "Waterfall" => &["fall_overlook", "basin_overlook"],
                 "Forest" => &["forest_clearing", "prairie_overlook"],
+                "Deep Forest" => &["deep_forest_clearing"],
                 "Prairie" => &["prairie_overlook"],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
