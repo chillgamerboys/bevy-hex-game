@@ -370,6 +370,21 @@ fn v3_waterfall_app() -> App {
     app
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "the tracked Volcano world is a compile-time integration fixture"
+)]
+fn v3_volcano_app() -> App {
+    let mut app = procedural_app();
+    let settings: MapSettings = ron::from_str(include_str!(
+        "../../../assets/config/worlds/procedural-volcanic.ron"
+    ))
+    .expect("tracked Volcano settings should parse");
+    app.insert_resource(settings);
+    app.insert_resource(ResolvedMapSeed(444_211_238));
+    app
+}
+
 fn v3_forest_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(runtime_art_catalog());
@@ -2552,6 +2567,101 @@ fn v3_waterfall_spawns_caps_and_a_non_shadowing_fall_curtain() {
     assert_eq!(
         curtains, 1,
         "the three adjacent fall lanes share one water curtain mesh"
+    );
+}
+
+#[test]
+fn v3_volcano_materializes_and_reenters_with_exact_lava_and_report_state() {
+    let mut app = v3_volcano_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let Some(ProceduralRecipeMetrics::Volcano(metrics)) = first_report.recipe_metrics.as_ref()
+    else {
+        panic!("V3 Volcano should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.summit_relief, 20);
+    assert!((20..=30).contains(&metrics.massif_coverage_percent));
+    assert!(metrics.fall_nodes >= 3);
+    assert!(metrics.maximum_fall_height >= 2);
+    assert_eq!(metrics.bridge_surfaces, 6);
+    assert!(metrics.bridge_clearance >= 4);
+    assert!(!first_report.used_fallback, "{:?}", first_report.notes);
+
+    let first_anchors: BTreeMap<String, TilePos> = app
+        .world()
+        .resource::<MapAnchors>()
+        .iter()
+        .map(|(id, position)| (id.as_str().to_owned(), position))
+        .collect();
+    for required in [
+        "party_start",
+        "hostile_start",
+        "conflict_center",
+        "bridge",
+        "crater_overlook",
+    ] {
+        assert!(first_anchors.contains_key(required), "missing {required}");
+    }
+    let first_tile_count = tile_count(&mut app);
+    let first_presentations = liquid_presentations(&mut app);
+    let first_caps = first_presentations
+        .iter()
+        .filter(|(entity, _, _)| {
+            app.world()
+                .get::<Name>(*entity)
+                .is_some_and(|name| name.as_str() == "LiquidCap")
+        })
+        .count();
+    let first_curtains = first_presentations.len().saturating_sub(first_caps);
+    assert!(first_caps >= metrics.lava_nodes as usize);
+    assert_eq!(
+        first_curtains, 1,
+        "all adjacent lava falls should share one curtain mesh"
+    );
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(liquid_presentations(&mut app).is_empty());
+    assert!(!app.world().contains_resource::<GenerationReport>());
+    assert!(!app.world().contains_resource::<TerrainReady>());
+
+    enter_gameplay(&mut app);
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    assert_eq!(
+        liquid_presentations(&mut app).len(),
+        first_presentations.len()
+    );
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
+    assert_eq!(
+        app.world()
+            .resource::<MapAnchors>()
+            .iter()
+            .map(|(id, position)| (id.as_str().to_owned(), position))
+            .collect::<BTreeMap<_, _>>(),
+        first_anchors
     );
 }
 

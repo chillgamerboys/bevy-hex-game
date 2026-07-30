@@ -2525,6 +2525,7 @@ mod tests {
                 );
             }
             let recipe_anchors: &[&str] = match scenario_name {
+                "Volcanic Hills" => &["conflict_center", "bridge", "crater_overlook"],
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
                 "Waterfall" => &["fall_overlook", "basin_overlook"],
@@ -2591,6 +2592,51 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    #[test]
+    fn volcanic_hills_scenario_uses_the_native_volcano_contract() {
+        let mut app = procedural_gameplay_app("Volcanic Hills");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let report = app.world().resource::<GenerationReport>();
+        assert_eq!(
+            report.semantic_plan_fingerprint,
+            Some(6_901_546_631_227_104_688)
+        );
+        assert_eq!(report.map_fingerprint, 7_940_527_797_927_330_083);
+        assert_eq!(report.valid_candidates, 8);
+        let Some(ProceduralRecipeMetrics::Volcano(metrics)) = &report.recipe_metrics else {
+            panic!(
+                "Volcanic Hills published the wrong recipe metrics: {:?}",
+                report.recipe_metrics
+            );
+        };
+        assert_eq!(metrics.summit_relief, 20);
+        assert_eq!(metrics.bridge_clearance, 4);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        for required in [
+            "party_start",
+            "hostile_start",
+            "conflict_center",
+            "bridge",
+            "crater_overlook",
+        ] {
+            assert!(
+                anchors.get(&MapAnchorId::from(required)).is_some(),
+                "Volcanic Hills omitted {required}"
+            );
+        }
+        assert!(
+            anchors
+                .get(&MapAnchorId::from("alternate_crossing"))
+                .is_none(),
+            "the native Volcano resurrected the removed cooled crossing"
+        );
+        assert!(standing_pos::<Player>(&mut app).is_some());
+        assert!(standing_pos::<Enemy>(&mut app).is_some());
     }
 
     #[test]

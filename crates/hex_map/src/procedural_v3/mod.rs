@@ -18,7 +18,7 @@ use crate::procedural::{
     ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
     HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
     PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    VolcanoMetrics as VolcanoReportMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -70,6 +70,7 @@ mod sky;
 mod traversal;
 mod vegetation;
 mod vegetation_landform;
+mod volcano;
 #[expect(
     dead_code,
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"
@@ -191,6 +192,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Fort(_)
                     | V3RecipeSettings::Caves(_)
                     | V3RecipeSettings::DeepForest(_)
+                    | V3RecipeSettings::Volcano(_)
                     | V3RecipeSettings::Prairie(_)
             ) =>
         {
@@ -408,6 +410,20 @@ pub(crate) fn build(
                 started,
                 prairie_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Prairie(prairie_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Volcano(_)) => {
+            finish_build(
+                volcano::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                volcano_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Volcano(volcano_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -722,6 +738,34 @@ fn prairie_report_metrics(metrics: &PrairieReportMetrics) -> TacticalMetrics {
 
 const fn prairie_recipe_metrics(metrics: &PrairieReportMetrics) -> PrairieReportMetrics {
     *metrics
+}
+
+fn volcano_report_metrics(metrics: &volcano::VolcanoMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.summit_relief,
+        barrier_cells: metrics.lava_nodes,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.massif_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn volcano_recipe_metrics(metrics: &volcano::VolcanoMetrics) -> VolcanoReportMetrics {
+    VolcanoReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        summit_relief: metrics.summit_relief,
+        massif_surfaces: metrics.massif_surfaces,
+        massif_coverage_percent: metrics.massif_coverage_percent,
+        lava_nodes: metrics.lava_nodes,
+        fall_nodes: metrics.fall_nodes,
+        maximum_fall_height: metrics.maximum_fall_height,
+        bridge_surfaces: metrics.bridge_surfaces,
+        bridge_clearance: metrics.bridge_clearance,
+        critical_route_steps: metrics.critical_route_steps,
+    }
 }
 
 fn fort_report_metrics(metrics: &fort::FortMetrics) -> TacticalMetrics {

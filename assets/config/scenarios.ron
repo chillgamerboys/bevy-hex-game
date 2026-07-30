@@ -74,7 +74,7 @@
         (
             name: "Volcanic Hills",
             category: Map,
-            blurb: "A basalt and lava probe with a cooled alternate crossing.",
+            blurb: "A crater-fed lava descent crossed by one elevated stairway bridge.",
             world: "config/worlds/procedural-volcanic.ron",
             generation_seed: Some(444211238),
             encounter: "config/encounters/anchored-skirmish.ron",

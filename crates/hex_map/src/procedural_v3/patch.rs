@@ -54,6 +54,18 @@ impl<'a> PatchSharedEdge<'a> {
         self.contract.elevation.preferred
     }
 
+    /// Lowest liquid or surface level admitted by this shared edge.
+    #[must_use]
+    pub(crate) const fn minimum_level(&self) -> Level {
+        self.contract.elevation.min
+    }
+
+    /// Highest liquid or surface level admitted by this shared edge.
+    #[must_use]
+    pub(crate) const fn maximum_level(&self) -> Level {
+        self.contract.elevation.max
+    }
+
     /// Exact cells on this side which local decoration and hazards must preserve.
     #[must_use]
     pub(crate) fn protected_approaches(&self) -> &'a BTreeSet<HexCoord> {
@@ -158,6 +170,15 @@ impl<'a> PatchRecipeContext<'a> {
                 patch_is_first,
             })
         })
+    }
+
+    /// Whether this exact patch side exits the complete resolved world.
+    #[must_use]
+    pub(crate) fn is_world_boundary(&self, side: HexSide) -> bool {
+        matches!(
+            self.patch.edges.get(&side),
+            Some(ResolvedEdgeReference::WorldBoundary)
+        )
     }
 
     /// Union of exact approach cells which recipe-local features must not occupy.

@@ -1,20 +1,21 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{SpecialMovementRegion, TilePos};
 
 use super::composition::GeneratedPatchPlan;
 use super::layout::ResolvedLiquidPort;
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, HexSide, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan};
 use super::liquid::LiquidFlowState;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
-use super::{caves, deep_forest, fort, hills, mountains, prairie, sky, waterfall};
+use super::{caves, deep_forest, fort, hills, mountains, prairie, sky, volcano, waterfall};
 use crate::settings::{
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings,
     V3CavesSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
     V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3PrairieSettings, V3RecipeSettings,
-    V3Ring7Settings, V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+    V3Ring7Settings, V3SkyIslandsSettings, V3VolcanoSettings, V3WaterfallSettings,
+    WalkerPortSettings,
 };
 
 const LEVEL_HEIGHT: f32 = 0.4;
@@ -462,6 +463,1105 @@ fn rotated_waterfall_outlet_aligns_with_the_center_hills_inlet() {
     }
 }
 
+#[test]
+fn center_hills_routes_three_inlets_into_one_outlet() {
+    let (mut settings, recipes) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.center.edges.north_east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.mountains.edges.south_west =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.center.edges.north_west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.sky_islands.edges.south_east =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.center.edges.south_west =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.fort.edges.north_east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+
+    let layout = resolve_layout(33, &settings).expect("the confluence fixture should resolve");
+    let context = patch(&layout, 0).expect("center patch");
+    let mode = PatchBuildMode::CanonicalFallback;
+    let first = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("central Hills should construct a confluence");
+    let second = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("the same confluence should construct again");
+    assert_eq!(first.volume, second.volume);
+    assert_eq!(first.liquids, second.liquids);
+    assert_strict_patch(&layout, first.clone());
+    let seeded = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        PatchBuildMode::Candidate {
+            world_seed: 1_592_598_566,
+            candidate: 0,
+        },
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("the exact Ring19 confluence should construct as a seeded candidate");
+    assert_strict_patch(&layout, seeded.clone());
+    match hills::validate_patch(
+        context,
+        &seeded,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        super::vegetation::tests::runtime_art_catalog(),
+    ) {
+        super::selection::WorldValidation::Valid(_) => {}
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the seeded Ring19 confluence must validate: {issues:?}");
+        }
+    }
+    let mut revised_hills = recipes.hills.clone();
+    revised_hills.max_relief = 12;
+    for mode in [
+        PatchBuildMode::CanonicalFallback,
+        PatchBuildMode::Candidate {
+            world_seed: 1_592_598_566,
+            candidate: 0,
+        },
+    ] {
+        let revised = hills::construct_patch_with_catalog(
+            context,
+            &revised_hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            LEVEL_HEIGHT,
+            mode,
+            super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("the revised relief-12 Hills confluence should construct");
+        assert_strict_patch(&layout, revised.clone());
+        let ordinary_without_blockers = revised
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(position, metadata)| {
+                (metadata.access == super::volume::SurfaceAccess::Ordinary).then_some(*position)
+            })
+            .collect::<BTreeSet<_>>();
+        let ordinary_with_blockers = ordinary_without_blockers
+            .difference(&revised.blockers)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            test_surface_components(&ordinary_without_blockers).len(),
+            1,
+            "seam closure must not recreate the observed 351+15 surface split"
+        );
+        assert_eq!(
+            test_surface_components(&ordinary_with_blockers).len(),
+            1,
+            "authored vegetation must preserve the repaired confluence network"
+        );
+        let metrics = match hills::validate_patch(
+            context,
+            &revised,
+            &revised_hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        ) {
+            super::selection::WorldValidation::Valid(metrics) => metrics,
+            super::selection::WorldValidation::Invalid(issues) => {
+                panic!("the revised relief-12 Hills confluence must validate: {issues:?}");
+            }
+        };
+        assert!(
+            metrics.relief >= 10,
+            "the revised confluence must retain at least ten reachable relief levels"
+        );
+    }
+
+    let body = first
+        .liquids
+        .bodies
+        .values()
+        .next()
+        .expect("Hills confluence body");
+    let nodes_by_coord = body
+        .nodes
+        .iter()
+        .map(|(position, node)| (position.coord, (*position, *node)))
+        .collect::<BTreeMap<_, _>>();
+    let mut inlets = Vec::new();
+    let mut outlets = BTreeSet::new();
+    let mut liquid_approaches = BTreeSet::new();
+    for edge in context.shared_edges() {
+        let Some((source, port)) = edge.liquid_port() else {
+            continue;
+        };
+        let boundary = port
+            .lanes
+            .iter()
+            .map(|(coord, _)| *coord)
+            .collect::<BTreeSet<_>>();
+        liquid_approaches.extend(port.first_approach.iter().copied());
+        assert!(port
+            .first_approach
+            .iter()
+            .all(|coord| nodes_by_coord.contains_key(coord)));
+        if source {
+            outlets.extend(boundary);
+        } else {
+            inlets.extend(boundary);
+        }
+    }
+    assert_eq!(inlets.len(), 9);
+    assert_eq!(outlets.len(), 3);
+    assert!(outlets.iter().all(|coord| {
+        nodes_by_coord.get(coord).is_some_and(|(_, node)| {
+            node.state == LiquidFlowState::Still && node.downstream.is_none()
+        })
+    }));
+    assert!(inlets.iter().all(|coord| {
+        let Some((mut position, _)) = nodes_by_coord.get(coord).copied() else {
+            return false;
+        };
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(position) {
+                return false;
+            }
+            if outlets.contains(&position.coord) {
+                break true;
+            }
+            let Some(next) = body.nodes.get(&position).and_then(|node| node.downstream) else {
+                break false;
+            };
+            position = next;
+        }
+    }));
+    let mut indegree = BTreeMap::<TilePos, usize>::new();
+    for downstream in body.nodes.values().filter_map(|node| node.downstream) {
+        *indegree.entry(downstream).or_default() += 1;
+    }
+    assert!(indegree.values().any(|count| *count > 1));
+
+    let walker_only_approaches = context
+        .protected_approaches()
+        .difference(&liquid_approaches)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert!(walker_only_approaches
+        .is_disjoint(&nodes_by_coord.keys().copied().collect::<BTreeSet<_>>()));
+    match hills::validate_patch(
+        context,
+        &first,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        super::vegetation::tests::runtime_art_catalog(),
+    ) {
+        super::selection::WorldValidation::Valid(_) => {}
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the confluence must pass Hills validation: {issues:?}");
+        }
+    }
+
+    let body_id = *first
+        .liquids
+        .bodies
+        .keys()
+        .next()
+        .expect("Hills confluence body id");
+    let inlet_position = nodes_by_coord
+        .get(inlets.first().expect("an inlet coordinate"))
+        .map(|(position, _)| *position)
+        .expect("inlet position");
+    let outlet_position = nodes_by_coord
+        .get(outlets.first().expect("an outlet coordinate"))
+        .map(|(position, _)| *position)
+        .expect("outlet position");
+    let validate = |plan: &GeneratedPatchPlan| {
+        hills::validate_patch(
+            context,
+            plan,
+            &recipes.hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        )
+    };
+    let (mut unsupported_settings, _) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(unsupported_ring) = &mut unsupported_settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    for side in HexSide::ALL {
+        let (center, outer) = if side == HexSide::SouthWest {
+            (
+                EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+            )
+        } else if matches!(side, HexSide::East | HexSide::West | HexSide::NorthWest) {
+            (
+                EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+            )
+        } else {
+            (EdgeLiquidSettings::Dry, EdgeLiquidSettings::Dry)
+        };
+        set_center_liquid_pair(unsupported_ring, side, center, outer);
+    }
+    let unsupported_layout =
+        resolve_layout(33, &unsupported_settings).expect("unsupported topology still resolves");
+    let unsupported_context = patch(&unsupported_layout, 0).expect("unsupported center patch");
+    assert_validation_rejects_with(
+        hills::validate_patch(
+            unsupported_context,
+            &first,
+            &recipes.hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        ),
+        "requires an inlet opposite its",
+    );
+
+    let fill_coords = first
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let bridge = first
+        .features
+        .protected_routes
+        .get("bridge_crossing")
+        .expect("main bridge route");
+    let alternate = first
+        .features
+        .protected_routes
+        .get("alternate_crossing")
+        .expect("main alternate route");
+    assert_eq!(bridge.surfaces.len(), 14);
+    assert_eq!(alternate.surfaces.len(), 14);
+    let main_crossings = bridge
+        .surfaces
+        .union(&alternate.surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let auxiliary_crossings = first
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == super::volume::SurfaceAccess::Ordinary
+                && fill_coords.contains(&position.coord)
+                && !main_crossings.contains(position))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(auxiliary_crossings.len(), 2);
+    let walkable = first
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == super::volume::SurfaceAccess::Ordinary
+                && !first.blockers.contains(position))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        test_surface_components(&walkable).len(),
+        1,
+        "the unmodified confluence walker network must be connected"
+    );
+    for auxiliary in &auxiliary_crossings {
+        let mut without_auxiliary = walkable.clone();
+        without_auxiliary.remove(auxiliary);
+        assert!(
+            test_surface_components(&without_auxiliary).len() > 1,
+            "selected auxiliary crossing {auxiliary:?} must be indispensable"
+        );
+    }
+
+    let auxiliary = *auxiliary_crossings
+        .first()
+        .expect("one exact auxiliary tributary crossing");
+    let mut misclassified_auxiliary = first.clone();
+    misclassified_auxiliary
+        .features
+        .protected_routes
+        .get_mut("alternate_crossing")
+        .expect("alternate route")
+        .surfaces
+        .insert(auxiliary);
+    assert_validation_rejects_with(
+        validate(&misclassified_auxiliary),
+        "cannot rederive auxiliary tributary crossings",
+    );
+
+    let mut wrong_auxiliary_material = first.clone();
+    let auxiliary_support = wrong_auxiliary_material
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Solid(solid)
+                if solid.levels.bottom <= auxiliary.level && auxiliary.level < solid.levels.top =>
+            {
+                Some(solid)
+            }
+            _ => None,
+        })
+        .expect("auxiliary causeway support");
+    auxiliary_support.material = super::volume::SolidMaterialRole::Stone;
+    assert_validation_rejects_with(
+        validate(&wrong_auxiliary_material),
+        "does not use the exact causeway material",
+    );
+
+    let mut missing_auxiliary_membership = first.clone();
+    missing_auxiliary_membership
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("auxiliary biome-region membership");
+    assert_validation_rejects_with(
+        validate(&missing_auxiliary_membership),
+        "missing exact biome-region membership",
+    );
+
+    let mut auxiliary_support_gap = first.clone();
+    let auxiliary_fill = auxiliary_support_gap
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Fill(fill) => Some(fill),
+            _ => None,
+        })
+        .expect("auxiliary liquid fill");
+    auxiliary_fill.levels = super::volume::LevelInterval::new(
+        auxiliary_fill.levels.bottom,
+        auxiliary_fill.levels.top.saturating_sub(1),
+    );
+    assert_validation_rejects_with(validate(&auxiliary_support_gap), "unsupported vertical gap");
+
+    let moved_coord = auxiliary
+        .coord
+        .neighbors()
+        .into_iter()
+        .find(|coord| {
+            fill_coords.contains(coord)
+                && !auxiliary_crossings
+                    .iter()
+                    .any(|surface| surface.coord == *coord)
+                && !main_crossings.iter().any(|surface| surface.coord == *coord)
+                && !first.volume.surfaces.iter().any(|(surface, metadata)| {
+                    surface.coord == *coord
+                        && metadata.access == super::volume::SurfaceAccess::Ordinary
+                })
+        })
+        .expect("a neighboring supported tributary liquid cell");
+    let moved_position = TilePos::new(moved_coord, auxiliary.level);
+    let mut moved_auxiliary = first.clone();
+    let auxiliary_metadata = moved_auxiliary
+        .volume
+        .surfaces
+        .remove(&auxiliary)
+        .expect("old auxiliary surface metadata");
+    let auxiliary_biome = moved_auxiliary
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("old auxiliary biome membership");
+    moved_auxiliary
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("old auxiliary column")
+        .elements
+        .retain(|element| {
+            !matches!(
+                element,
+                super::volume::VolumeElement::Solid(solid)
+                    if solid.material == super::volume::SolidMaterialRole::Gravel
+                        && solid.levels.bottom <= auxiliary.level
+                        && auxiliary.level < solid.levels.top
+            )
+        });
+    moved_auxiliary
+        .volume
+        .columns
+        .get_mut(&moved_coord)
+        .expect("new auxiliary column")
+        .elements
+        .push(super::volume::VolumeElement::Solid(
+            super::volume::SolidMass {
+                levels: super::volume::LevelInterval::new(
+                    moved_position.level,
+                    moved_position.level.saturating_add(1),
+                ),
+                material: super::volume::SolidMaterialRole::Gravel,
+                cutaway_for: None,
+            },
+        ));
+    assert!(moved_auxiliary
+        .volume
+        .surfaces
+        .insert(moved_position, auxiliary_metadata)
+        .is_none());
+    assert!(moved_auxiliary
+        .biome_regions
+        .insert(moved_position, auxiliary_biome)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&moved_auxiliary),
+        "do not match their rederived liquid-branch authority",
+    );
+
+    let shifted_position = TilePos::new(auxiliary.coord, auxiliary.level.saturating_add(1));
+    let mut shifted_auxiliary = first.clone();
+    let auxiliary_metadata = shifted_auxiliary
+        .volume
+        .surfaces
+        .remove(&auxiliary)
+        .expect("old auxiliary surface metadata");
+    let auxiliary_biome = shifted_auxiliary
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("old auxiliary biome membership");
+    let auxiliary_support = shifted_auxiliary
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Solid(solid)
+                if solid.material == super::volume::SolidMaterialRole::Gravel
+                    && solid.levels.bottom <= auxiliary.level
+                    && auxiliary.level < solid.levels.top =>
+            {
+                Some(solid)
+            }
+            _ => None,
+        })
+        .expect("auxiliary causeway support");
+    auxiliary_support.levels = super::volume::LevelInterval::new(
+        shifted_position.level,
+        shifted_position.level.saturating_add(1),
+    );
+    assert!(shifted_auxiliary
+        .volume
+        .surfaces
+        .insert(shifted_position, auxiliary_metadata)
+        .is_none());
+    assert!(shifted_auxiliary
+        .biome_regions
+        .insert(shifted_position, auxiliary_biome)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&shifted_auxiliary),
+        "do not match their rederived liquid-branch authority",
+    );
+
+    let mut missing_inlet = first.clone();
+    missing_inlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .remove(&inlet_position);
+    assert_validation_rejects_with(validate(&missing_inlet), "liquid approach");
+
+    let mut stopped_inlet = first.clone();
+    let inlet_node = stopped_inlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&inlet_position)
+        .expect("inlet");
+    inlet_node.state = LiquidFlowState::Still;
+    inlet_node.downstream = None;
+    assert_validation_rejects_with(validate(&stopped_inlet), "does not flow into the patch");
+
+    let mut flowing_outlet = first.clone();
+    let outlet_node = flowing_outlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&outlet_position)
+        .expect("outlet");
+    outlet_node.state = LiquidFlowState::Current;
+    outlet_node.downstream = Some(inlet_position);
+    assert_validation_rejects_with(
+        validate(&flowing_outlet),
+        "must be Still before composition",
+    );
+
+    let mut cycle = first.clone();
+    let internal = cycle
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("body")
+        .nodes
+        .keys()
+        .copied()
+        .find(|position| !outlets.contains(&position.coord) && position != &inlet_position)
+        .expect("internal flow node");
+    cycle
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&internal)
+        .expect("internal flow node")
+        .downstream = Some(internal);
+    assert_validation_rejects_with(validate(&cycle), "internal terminal or cycle");
+
+    let undeclared_boundary = context
+        .shared_edges()
+        .filter(|edge| edge.liquid_port().is_none())
+        .flat_map(|edge| edge.boundary_pairs())
+        .map(|(inside, _)| inside)
+        .find(|coord| !nodes_by_coord.contains_key(coord))
+        .expect("a dry shared-boundary coordinate");
+    let mut leaked = first.clone();
+    leaked
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .insert(
+            TilePos::new(undeclared_boundary, inlet_position.level),
+            super::liquid::LiquidNode {
+                state: LiquidFlowState::Still,
+                downstream: None,
+            },
+        );
+    assert_validation_rejects_with(validate(&leaked), "undeclared shared-boundary cells");
+
+    let mut wrong_level = first;
+    let displaced = wrong_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .remove(&outlet_position)
+        .expect("outlet node");
+    wrong_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .insert(
+            TilePos::new(
+                outlet_position.coord,
+                outlet_position.level.saturating_add(20),
+            ),
+            displaced,
+        );
+    assert_validation_rejects_with(validate(&wrong_level), "liquid approach");
+}
+
+#[test]
+fn center_hills_confluence_topology_policy_is_exhaustive() {
+    let mut supported = 0_usize;
+    let mut rejected = 0_usize;
+    let catalog = super::vegetation::tests::runtime_art_catalog();
+
+    for (outlet_index, outlet) in HexSide::ALL.into_iter().enumerate() {
+        for inlet_bits in 0_u8..(1_u8 << HexSide::ALL.len()) {
+            if inlet_bits & (1_u8 << outlet_index) != 0
+                || !(2..=5).contains(&inlet_bits.count_ones())
+            {
+                continue;
+            }
+            let (mut settings, recipes) = dry_ring_settings();
+            let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+                panic!("the fixture must remain Ring7");
+            };
+            for (side_index, side) in HexSide::ALL.into_iter().enumerate() {
+                let (center, outer) = if side == outlet {
+                    (
+                        EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                        EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                    )
+                } else if inlet_bits & (1_u8 << side_index) != 0 {
+                    (
+                        EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                        EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                    )
+                } else {
+                    (EdgeLiquidSettings::Dry, EdgeLiquidSettings::Dry)
+                };
+                set_center_liquid_pair(ring, side, center, outer);
+            }
+
+            let layout =
+                resolve_layout(33, &settings).expect("the settings-valid topology should resolve");
+            let context = patch(&layout, 0).expect("center patch");
+            let result = hills::construct_patch_with_catalog(
+                context,
+                &recipes.hills,
+                V3EnvironmentSettings::TemperateGrassland,
+                LEVEL_HEIGHT,
+                PatchBuildMode::CanonicalFallback,
+                catalog,
+            );
+            let opposite_index = HexSide::ALL
+                .iter()
+                .position(|side| *side == outlet.opposite())
+                .expect("every side has one opposite");
+            if inlet_bits & (1_u8 << opposite_index) != 0 {
+                let plan = result.unwrap_or_else(|issues| {
+                    panic!(
+                        "supported confluence outlet {outlet:?}, inlet bits {inlet_bits:06b} failed construction: {issues:?}"
+                    )
+                });
+                match hills::validate_patch(
+                    context,
+                    &plan,
+                    &recipes.hills,
+                    V3EnvironmentSettings::TemperateGrassland,
+                    catalog,
+                ) {
+                    super::selection::WorldValidation::Valid(_) => {}
+                    super::selection::WorldValidation::Invalid(issues) => panic!(
+                        "supported confluence outlet {outlet:?}, inlet bits {inlet_bits:06b} failed validation: {issues:?}"
+                    ),
+                }
+                supported = supported.saturating_add(1);
+            } else {
+                let issues = result.expect_err(
+                    "a confluence without an opposite inlet must fail its explicit recipe policy",
+                );
+                assert!(
+                    issues.iter().any(|issue| issue
+                        .detail
+                        .contains("requires an inlet opposite its")),
+                    "unexpected policy error for outlet {outlet:?}, inlet bits {inlet_bits:06b}: {issues:?}"
+                );
+                rejected = rejected.saturating_add(1);
+            }
+        }
+    }
+
+    assert_eq!(supported, 90);
+    assert_eq!(rejected, 66);
+}
+
+#[test]
+fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
+    let (settings, _) = dry_ring_settings();
+    let layout = resolve_layout(33, &settings).expect("the dry Ring7 fixture should resolve");
+    let context = patch(&layout, 5).expect("western outer patch");
+    assert!(context.is_world_boundary(HexSide::West));
+    let volcano_settings = V3VolcanoSettings {
+        base_level: 15,
+        summit_relief: 20,
+        massif_coverage_percent: 25,
+        bridge_clearance: 4,
+    };
+    let baseline = volcano::construct_patch(
+        context,
+        &volcano_settings,
+        LEVEL_HEIGHT,
+        PatchBuildMode::CanonicalFallback,
+    )
+    .expect("Volcano should construct in the western outer patch");
+    assert_strict_patch(&layout, baseline.clone());
+    match volcano::validate_patch(context, &baseline, &volcano_settings) {
+        super::selection::WorldValidation::Valid(metrics) => {
+            assert_eq!(metrics.summit_relief, 20);
+            assert_eq!(metrics.bridge_clearance, 4);
+        }
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the resolved composite Volcano must validate: {issues:?}");
+        }
+    }
+
+    let body_id = *baseline
+        .liquids
+        .bodies
+        .keys()
+        .next()
+        .expect("Volcano lava body");
+    let terminals = baseline
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("Volcano lava body")
+        .nodes
+        .iter()
+        .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(terminals.len(), 3);
+    assert!(terminal_coords_are_connected(&terminals));
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|position| position.level)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([volcano_settings
+            .base_level
+            .saturating_add(3)
+            .saturating_sub(volcano_settings.bridge_clearance)
+            .max(3),])
+    );
+    assert!(terminals.iter().all(|position| !context
+        .mask()
+        .contains(&HexSide::West.neighbor(position.coord))));
+    let validate =
+        |plan: &GeneratedPatchPlan| volcano::validate_patch(context, plan, &volcano_settings);
+
+    let terminal = *terminals.first().expect("one terminal");
+    let mut missing_terminal = baseline.clone();
+    missing_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .remove(&terminal);
+    assert_validation_rejects_with(validate(&missing_terminal), "expected exactly 3");
+
+    let mut moving_terminal = baseline.clone();
+    moving_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .get_mut(&terminal)
+        .expect("terminal")
+        .state = LiquidFlowState::Current;
+    assert_validation_rejects_with(validate(&moving_terminal), "is not Still");
+
+    let mut extra_terminal = baseline.clone();
+    let flowing = extra_terminal
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("lava body")
+        .nodes
+        .iter()
+        .find_map(|(position, node)| node.downstream.is_some().then_some(*position))
+        .expect("one flowing lava node");
+    let flowing_node = extra_terminal
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .get_mut(&flowing)
+        .expect("flowing node");
+    flowing_node.state = LiquidFlowState::Still;
+    flowing_node.downstream = None;
+    assert_validation_rejects_with(validate(&extra_terminal), "expected exactly 3");
+
+    let mut wrong_terminal_level = baseline.clone();
+    let shifted_terminal = TilePos::new(terminal.coord, terminal.level.saturating_add(1));
+    let terminal_node = wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .remove(&terminal)
+        .expect("terminal node");
+    let terminal_predecessor = wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .values_mut()
+        .find(|node| node.downstream == Some(terminal))
+        .expect("terminal predecessor");
+    terminal_predecessor.downstream = Some(shifted_terminal);
+    assert!(wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .insert(shifted_terminal, terminal_node)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&wrong_terminal_level),
+        "exact contiguous three-lane western outlet positions",
+    );
+
+    let mut relocated_terminals = baseline.clone();
+    for terminal in &terminals {
+        reverse_lava_terminal_tail(
+            relocated_terminals
+                .liquids
+                .bodies
+                .get_mut(&body_id)
+                .expect("lava body"),
+            *terminal,
+            1,
+        );
+    }
+    let relocated_positions = lava_terminals(
+        relocated_terminals
+            .liquids
+            .bodies
+            .get(&body_id)
+            .expect("lava body"),
+    );
+    assert_eq!(relocated_positions.len(), terminals.len());
+    assert_ne!(relocated_positions, terminals);
+    assert!(terminal_coords_are_connected(&relocated_positions));
+    assert_validation_rejects_with(
+        validate(&relocated_terminals),
+        "exact contiguous three-lane western outlet positions",
+    );
+
+    let noncontiguous_terminals = (2..=6)
+        .find_map(|steps| {
+            let mut corrupted = baseline.clone();
+            reverse_lava_terminal_tail(
+                corrupted
+                    .liquids
+                    .bodies
+                    .get_mut(&body_id)
+                    .expect("lava body"),
+                terminal,
+                steps,
+            );
+            let relocated =
+                lava_terminals(corrupted.liquids.bodies.get(&body_id).expect("lava body"));
+            (!terminal_coords_are_connected(&relocated)).then_some(corrupted)
+        })
+        .expect("moving one terminal inward must break the exact contiguous lane set");
+    assert_validation_rejects_with(
+        validate(&noncontiguous_terminals),
+        "exact contiguous three-lane western outlet positions",
+    );
+
+    let bridge_id = baseline
+        .structures
+        .by_id
+        .iter()
+        .find_map(|(id, structure)| {
+            (structure.kind == super::world::StructureKind::Bridge).then_some(*id)
+        })
+        .expect("bridge structure");
+    let bridge_voxel = *baseline
+        .structures
+        .by_id
+        .get(&bridge_id)
+        .and_then(|structure| structure.voxels.first())
+        .expect("bridge voxel");
+    let mut missing_bridge_membership = baseline.clone();
+    missing_bridge_membership
+        .structures
+        .by_id
+        .get_mut(&bridge_id)
+        .expect("bridge structure")
+        .voxels
+        .remove(&bridge_voxel);
+    assert_validation_rejects_with(
+        validate(&missing_bridge_membership),
+        "exact oriented 2-by-3 deck authority",
+    );
+
+    let stair_id = baseline
+        .structures
+        .by_id
+        .iter()
+        .find_map(|(id, structure)| {
+            (structure.kind == super::world::StructureKind::Stair).then_some(*id)
+        })
+        .expect("stair structure");
+    let stair_voxel = *baseline
+        .structures
+        .by_id
+        .get(&stair_id)
+        .and_then(|structure| structure.voxels.first())
+        .expect("stair voxel");
+    let mut missing_stair_membership = baseline.clone();
+    missing_stair_membership
+        .structures
+        .by_id
+        .get_mut(&stair_id)
+        .expect("stair structure")
+        .voxels
+        .remove(&stair_voxel);
+    assert_validation_rejects_with(
+        validate(&missing_stair_membership),
+        "rederived worked-stone surfaces",
+    );
+
+    let mut narrowed_route = baseline.clone();
+    let route = narrowed_route
+        .features
+        .protected_routes
+        .get_mut("bridge_route")
+        .expect("protected bridge route");
+    let centerline = route.centerline.iter().copied().collect::<BTreeSet<_>>();
+    let second_lane = route
+        .surfaces
+        .difference(&centerline)
+        .copied()
+        .next()
+        .expect("a second-lane route surface");
+    route.surfaces.remove(&second_lane);
+    assert_validation_rejects_with(
+        validate(&narrowed_route),
+        "exact two-wide ordinary stair approach",
+    );
+
+    let mut missing_west_layout = layout.clone();
+    let shared_reference = missing_west_layout
+        .patches
+        .get(&PatchId(5))
+        .and_then(|patch| patch.edges.get(&HexSide::East))
+        .copied()
+        .expect("western patch east seam");
+    assert!(matches!(shared_reference, ResolvedEdgeReference::Shared(_)));
+    missing_west_layout
+        .patches
+        .get_mut(&PatchId(5))
+        .expect("western patch")
+        .edges
+        .insert(HexSide::West, shared_reference);
+    let missing_west =
+        PatchRecipeContext::resolve(&missing_west_layout, PatchId(5)).expect("corrupt context");
+    assert_validation_rejects_with(
+        volcano::validate_patch(missing_west, &baseline, &volcano_settings),
+        "western world-boundary outlet",
+    );
+
+    let (mut wet_settings, _) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(ring) = &mut wet_settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    let wet_layout =
+        resolve_layout(33, &wet_settings).expect("the wet western seam should resolve");
+    let wet_context = patch(&wet_layout, 5).expect("wet western patch");
+    let construction_issues = volcano::construct_patch(
+        wet_context,
+        &volcano_settings,
+        LEVEL_HEIGHT,
+        PatchBuildMode::CanonicalFallback,
+    )
+    .expect_err("Volcano must reject a stitched liquid seam");
+    assert!(construction_issues
+        .iter()
+        .any(|issue| issue.detail.contains("separate from stitched liquid ports")));
+    assert_validation_rejects_with(
+        volcano::validate_patch(wet_context, &baseline, &volcano_settings),
+        "separate from stitched liquid ports",
+    );
+}
+
+fn lava_terminals(body: &super::liquid::LiquidBodyPlan) -> BTreeSet<TilePos> {
+    body.nodes
+        .iter()
+        .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
+        .collect()
+}
+
+fn reverse_lava_terminal_tail(
+    body: &mut super::liquid::LiquidBodyPlan,
+    terminal: TilePos,
+    steps: usize,
+) {
+    let mut reversed = vec![terminal];
+    for _ in 0..steps {
+        let current = *reversed.last().expect("terminal tail");
+        let predecessor = body
+            .nodes
+            .iter()
+            .find_map(|(position, node)| (node.downstream == Some(current)).then_some(*position))
+            .expect("lava terminal predecessor");
+        reversed.push(predecessor);
+    }
+    for pair in reversed.windows(2) {
+        let [from, to] = pair else {
+            unreachable!("windows are exact pairs");
+        };
+        let node = body.nodes.get_mut(from).expect("reversed lava node");
+        node.state = LiquidFlowState::Current;
+        node.downstream = Some(*to);
+    }
+    let relocated = *reversed.last().expect("relocated terminal");
+    let node = body
+        .nodes
+        .get_mut(&relocated)
+        .expect("relocated lava terminal");
+    node.state = LiquidFlowState::Still;
+    node.downstream = None;
+}
+
+fn terminal_coords_are_connected(terminals: &BTreeSet<TilePos>) -> bool {
+    let coords = terminals
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let Some(start) = coords.first().copied() else {
+        return false;
+    };
+    let mut reachable = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(coord) = frontier.pop_front() {
+        for neighbor in coord.neighbors() {
+            if coords.contains(&neighbor) && reachable.insert(neighbor) {
+                frontier.push_back(neighbor);
+            }
+        }
+    }
+    reachable.len() == coords.len()
+}
+
 fn assert_validation_rejects_with<T>(
     validation: super::selection::WorldValidation<T>,
     expected_detail: &str,
@@ -680,4 +1780,40 @@ fn shared_edge(liquid: EdgeLiquidSettings) -> PatchEdgeContractSettings {
         liquid,
         approach_depth: 2,
     })
+}
+
+fn set_center_liquid_pair(
+    ring: &mut V3Ring7Settings,
+    side: HexSide,
+    center: EdgeLiquidSettings,
+    outer: EdgeLiquidSettings,
+) {
+    let center = shared_edge(center);
+    let outer = shared_edge(outer);
+    match side {
+        HexSide::NorthEast => {
+            ring.center.edges.north_east = center;
+            ring.mountains.edges.south_west = outer;
+        }
+        HexSide::East => {
+            ring.center.edges.east = center;
+            ring.waterfall.edges.west = outer;
+        }
+        HexSide::SouthEast => {
+            ring.center.edges.south_east = center;
+            ring.forest.edges.north_west = outer;
+        }
+        HexSide::SouthWest => {
+            ring.center.edges.south_west = center;
+            ring.fort.edges.north_east = outer;
+        }
+        HexSide::West => {
+            ring.center.edges.west = center;
+            ring.caves.edges.east = outer;
+        }
+        HexSide::NorthWest => {
+            ring.center.edges.north_west = center;
+            ring.sky_islands.edges.south_east = outer;
+        }
+    }
 }

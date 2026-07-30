@@ -151,9 +151,20 @@ impl LocalPatchFrame {
     /// Moves a locally authored camera frame over the resolved patch.
     #[must_use]
     pub(crate) fn view_hint_to_world(self, hint: MapViewHint) -> MapViewHint {
+        self.view_hint_rotated_to_world(hint, 0)
+    }
+
+    /// Moves and additionally rotates a recipe-selected camera frame into world space.
+    #[must_use]
+    pub(crate) fn view_hint_rotated_to_world(
+        self,
+        hint: MapViewHint,
+        additional_rotation: u8,
+    ) -> MapViewHint {
         let offset = self.center().to_world(0.0);
-        let eye = rotate_world_point(hint.eye, self.rotation);
-        let focus = rotate_world_point(hint.focus, self.rotation);
+        let rotation = self.rotation.saturating_add(additional_rotation) % 6;
+        let eye = rotate_world_point(hint.eye, rotation);
+        let focus = rotate_world_point(hint.focus, rotation);
         MapViewHint::new(
             (eye.0 + offset.x, eye.1, eye.2 + offset.z),
             (focus.0 + offset.x, focus.1, focus.2 + offset.z),
@@ -561,6 +572,29 @@ mod tests {
         assert_eq!(
             translated.eye,
             (local.eye.0 + offset.x, local.eye.1, local.eye.2 + offset.z),
+        );
+    }
+
+    #[test]
+    fn recipe_camera_rotation_composes_with_the_patch_frame() {
+        let translation = HexCoord::from_axial(21, 0);
+        let local: BTreeSet<_> = HexCoord::ORIGIN.within_radius(12).into_iter().collect();
+        let world = local
+            .iter()
+            .copied()
+            .map(|coord| checked_coord_sum(coord, translation).expect("small translation"))
+            .collect();
+        let frame = LocalPatchFrame::resolve(&world, LayoutKind::Ring7, 33)
+            .expect("translated composite mask should frame");
+        let hint = MapViewHint::new((12.0, 20.0, -5.0), (3.0, 6.0, 2.0));
+        let locally_rotated = MapViewHint::new(
+            rotate_world_point(hint.eye, 2),
+            rotate_world_point(hint.focus, 2),
+        );
+
+        assert_eq!(
+            frame.view_hint_rotated_to_world(hint, 2),
+            frame.view_hint_to_world(locally_rotated)
         );
     }
 }

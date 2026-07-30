@@ -2,7 +2,8 @@
 //!
 //! The ordinary voxel prisms remain the authoritative volume, pick target, and
 //! shadow caster. This module adds only a biased horizontal cap to each exposed
-//! water or lava run and a combined vertical curtain for semantic V3 falls.
+//! water or lava run, a combined vertical curtain for semantic V3 falls, and
+//! deterministic landing-splash geometry for lava falls.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -30,11 +31,16 @@ const PHASE_WRAP_SECONDS: f32 = 400.0;
 const CURRENT_FLOW_SPEED: f32 = 0.22;
 const RAPID_FLOW_SPEED: f32 = 0.55;
 const FALL_FLOW_SPEED: f32 = 0.85;
+const LAVA_STILL_PULSE_RATE: f32 = 0.05;
+const LAVA_CURRENT_PULSE_RATE: f32 = 0.10;
+const LAVA_RAPID_PULSE_RATE: f32 = 0.25;
+const LAVA_FALL_PULSE_RATE: f32 = 0.40;
 #[cfg(test)]
 const SECONDARY_WAVE_PHASE_RATE: f32 = 0.025;
 const LIQUID_CAP_BIAS_RATIO: f32 = 0.02;
 const LIQUID_CAP_BIAS_MAX: f32 = 0.002 * HEX_CIRCUMRADIUS;
 const LIQUID_CURTAIN_EDGE_BIAS: f32 = 0.002 * HEX_CIRCUMRADIUS;
+const LAVA_SPLASH_SURFACE_BIAS: f32 = 0.001 * HEX_CIRCUMRADIUS;
 const HEX_INRADIUS: f32 = 0.5 * HEX_SMALL_DIAMETER;
 
 /// Uniform shared by one visual liquid flow class.
@@ -44,6 +50,8 @@ struct LiquidMaterialParams {
     flow_phase_scale: Vec4,
     /// Highlight, foam, roughness reduction, and cross-wave frequency.
     modulation: Vec4,
+    /// Base emission, pulse amplitude, pulse rate, and reserved future control.
+    emission: Vec4,
     /// Canonical palette-backed foam colour in linear RGB.
     foam_color: Vec4,
 }
@@ -615,7 +623,12 @@ fn build_fall_meshes(
     falls
         .into_iter()
         .map(|(role, strips)| {
-            curtain_geometry(&strips, level_height).map(|geometry| (role, geometry))
+            let mut geometry = curtain_geometry(&strips, level_height)?;
+            if role == FillMaterialRole::Lava {
+                append_lava_landing_splashes(&mut geometry, &strips, level_height)?;
+            }
+            geometry.validate_finite()?;
+            Ok((role, geometry))
         })
         .collect()
 }
@@ -672,6 +685,62 @@ enum MaterialStyle {
     Fall,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LiquidMaterialProfile {
+    flow_velocity: Vec2,
+    modulation: Vec4,
+    emission: Vec4,
+    double_sided: bool,
+}
+
+impl LiquidMaterialProfile {
+    fn new(role: FillMaterialRole, style: MaterialStyle) -> Self {
+        let foam_scale = match role {
+            FillMaterialRole::Water => 1.0,
+            FillMaterialRole::Lava => 0.0,
+        };
+        let (flow_velocity, modulation, double_sided) = match style {
+            MaterialStyle::Still => (Vec2::ZERO, Vec4::new(0.08, 0.0, 0.04, 0.65), false),
+            MaterialStyle::Current => (
+                Vec2::new(0.0, CURRENT_FLOW_SPEED),
+                Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
+                false,
+            ),
+            MaterialStyle::Rapid => (
+                Vec2::new(0.0, RAPID_FLOW_SPEED),
+                Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
+                false,
+            ),
+            MaterialStyle::Fall => (
+                Vec2::new(0.0, FALL_FLOW_SPEED),
+                Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
+                true,
+            ),
+        };
+        let emission = match (role, style) {
+            (FillMaterialRole::Water, _) => Vec4::ZERO,
+            (FillMaterialRole::Lava, MaterialStyle::Still) => {
+                Vec4::new(0.20, 0.10, LAVA_STILL_PULSE_RATE, 0.0)
+            }
+            (FillMaterialRole::Lava, MaterialStyle::Current) => {
+                Vec4::new(0.26, 0.10, LAVA_CURRENT_PULSE_RATE, 0.0)
+            }
+            (FillMaterialRole::Lava, MaterialStyle::Rapid) => {
+                Vec4::new(0.34, 0.14, LAVA_RAPID_PULSE_RATE, 0.0)
+            }
+            (FillMaterialRole::Lava, MaterialStyle::Fall) => {
+                Vec4::new(0.52, 0.18, LAVA_FALL_PULSE_RATE, 0.0)
+            }
+        };
+        Self {
+            flow_velocity,
+            modulation,
+            emission,
+            double_sided,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct MaterialSet {
     role: FillMaterialRole,
@@ -689,44 +758,20 @@ impl MaterialSet {
         phase_seconds: f32,
         materials: &mut Assets<LiquidMaterial>,
     ) -> Self {
-        let foam_scale = match role {
-            FillMaterialRole::Water => 1.0,
-            FillMaterialRole::Lava => 0.0,
+        let mut add = |style| {
+            materials.add(liquid_material(
+                color,
+                phase_seconds,
+                foam,
+                LiquidMaterialProfile::new(role, style),
+            ))
         };
         Self {
             role,
-            still: materials.add(liquid_material(
-                color,
-                Vec2::ZERO,
-                phase_seconds,
-                Vec4::new(0.08, 0.0, 0.04, 0.65),
-                foam,
-                false,
-            )),
-            current: materials.add(liquid_material(
-                color,
-                Vec2::new(0.0, CURRENT_FLOW_SPEED),
-                phase_seconds,
-                Vec4::new(0.18, 0.05 * foam_scale, 0.08, 0.75),
-                foam,
-                false,
-            )),
-            rapid: materials.add(liquid_material(
-                color,
-                Vec2::new(0.0, RAPID_FLOW_SPEED),
-                phase_seconds,
-                Vec4::new(0.28, 0.32 * foam_scale, 0.12, 0.95),
-                foam,
-                false,
-            )),
-            fall: materials.add(liquid_material(
-                color,
-                Vec2::new(0.0, FALL_FLOW_SPEED),
-                phase_seconds,
-                Vec4::new(0.34, 0.48 * foam_scale, 0.14, 1.25),
-                foam,
-                true,
-            )),
+            still: add(MaterialStyle::Still),
+            current: add(MaterialStyle::Current),
+            rapid: add(MaterialStyle::Rapid),
+            fall: add(MaterialStyle::Fall),
         }
     }
 
@@ -761,11 +806,9 @@ fn material_handle(
 
 fn liquid_material(
     color: Color,
-    flow_velocity: Vec2,
     phase_seconds: f32,
-    modulation: Vec4,
     foam: Color,
-    double_sided: bool,
+    profile: LiquidMaterialProfile,
 ) -> LiquidMaterial {
     let foam = foam.to_linear();
     LiquidMaterial {
@@ -775,19 +818,24 @@ fn liquid_material(
             reflectance: 0.72,
             alpha_mode: AlphaMode::Opaque,
             opaque_render_method: OpaqueRendererMethod::Forward,
-            cull_mode: if double_sided { None } else { Some(Face::Back) },
-            double_sided,
+            cull_mode: if profile.double_sided {
+                None
+            } else {
+                Some(Face::Back)
+            },
+            double_sided: profile.double_sided,
             ..default()
         },
         extension: LiquidExtension {
             params: LiquidMaterialParams {
                 flow_phase_scale: Vec4::new(
-                    flow_velocity.x,
-                    flow_velocity.y,
+                    profile.flow_velocity.x,
+                    profile.flow_velocity.y,
                     wrap_phase(phase_seconds),
                     3.0,
                 ),
-                modulation,
+                modulation: profile.modulation,
+                emission: profile.emission,
                 foam_color: Vec4::new(foam.red, foam.green, foam.blue, 1.0),
             },
         },
@@ -913,6 +961,42 @@ fn curtain_geometry(
     }
     mesh.validate_finite()?;
     Ok(mesh)
+}
+
+fn append_lava_landing_splashes(
+    mesh: &mut RawMesh,
+    falls: &[FallGeometry],
+    level_height: f32,
+) -> Result<(), LiquidPresentationError> {
+    for fall in falls {
+        let base = u32::try_from(mesh.positions.len())
+            .map_err(|_error| LiquidPresentationError::MeshIndexOverflow)?;
+        let rotation = side_rotation(fall.side);
+        let center = fall.downstream.coord.to_world(0.0);
+        let y = surface_y(fall.downstream.level, level_height) + LAVA_SPLASH_SURFACE_BIAS;
+        for (x, z, uv) in [
+            (
+                -HEX_INRADIUS + LIQUID_CURTAIN_EDGE_BIAS,
+                -0.46 * HEX_CIRCUMRADIUS,
+                [0.0, 0.0],
+            ),
+            (
+                -HEX_INRADIUS + LIQUID_CURTAIN_EDGE_BIAS,
+                0.46 * HEX_CIRCUMRADIUS,
+                [1.0, 0.0],
+            ),
+            (-0.12 * HEX_INRADIUS, 0.68 * HEX_CIRCUMRADIUS, [1.0, 1.0]),
+            (-0.12 * HEX_INRADIUS, -0.68 * HEX_CIRCUMRADIUS, [0.0, 1.0]),
+        ] {
+            let world = center + rotation * Vec3::new(x, 0.0, z) + Vec3::Y * y;
+            mesh.positions.push(world.to_array());
+            mesh.normals.push(Vec3::Y.to_array());
+            mesh.uvs.push(uv);
+        }
+        mesh.indices
+            .extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    Ok(())
 }
 
 fn cap_transform(position: TilePos, direction: Option<HexSide>, level_height: f32) -> Transform {
@@ -1045,6 +1129,10 @@ mod tests {
             CURRENT_FLOW_SPEED,
             RAPID_FLOW_SPEED,
             FALL_FLOW_SPEED,
+            LAVA_STILL_PULSE_RATE,
+            LAVA_CURRENT_PULSE_RATE,
+            LAVA_RAPID_PULSE_RATE,
+            LAVA_FALL_PULSE_RATE,
             SECONDARY_WAVE_PHASE_RATE,
         ] {
             let cycles = rate * PHASE_WRAP_SECONDS;
@@ -1203,6 +1291,77 @@ mod tests {
     }
 
     #[test]
+    fn lava_profiles_pulse_slowly_when_still_and_brighten_when_falling() {
+        let water = LiquidMaterialProfile::new(FillMaterialRole::Water, MaterialStyle::Still);
+        assert_eq!(water.emission, Vec4::ZERO);
+
+        let still = LiquidMaterialProfile::new(FillMaterialRole::Lava, MaterialStyle::Still);
+        let fall = LiquidMaterialProfile::new(FillMaterialRole::Lava, MaterialStyle::Fall);
+        assert_eq!(still.flow_velocity, Vec2::ZERO);
+        assert_f32_near(still.emission.z, LAVA_STILL_PULSE_RATE);
+        assert!(still.emission.y > 0.0);
+        assert_f32_near(fall.flow_velocity.y, FALL_FLOW_SPEED);
+        assert!(fall.flow_velocity.y > RAPID_FLOW_SPEED);
+        assert!(fall.emission.x > still.emission.x);
+        assert!(fall.emission.y > still.emission.y);
+        assert!(fall.emission.z > still.emission.z);
+        assert!(fall.double_sided);
+    }
+
+    #[test]
+    fn lava_falls_add_deterministic_landing_splashes_without_changing_water() {
+        let source = TilePos::new(HexCoord::ORIGIN, 8);
+        let downstream = TilePos::new(coord(1, 0, -1), 4);
+        let surfaces = |role| {
+            [
+                LiquidSurface {
+                    position: source,
+                    role,
+                    flow: LiquidFlowState::Fall,
+                    downstream: Some(downstream),
+                },
+                LiquidSurface {
+                    position: downstream,
+                    role,
+                    flow: LiquidFlowState::Still,
+                    downstream: None,
+                },
+            ]
+        };
+
+        let water = build_fall_meshes(&surfaces(FillMaterialRole::Water), 0.4)
+            .expect("water curtain should remain valid");
+        let water = water
+            .get(&FillMaterialRole::Water)
+            .expect("water curtain should exist");
+        assert_eq!(water.positions.len(), 4);
+        assert_eq!(water.indices.len(), 6);
+
+        let first = build_fall_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
+            .expect("lava fall effect should be valid");
+        let second = build_fall_meshes(&surfaces(FillMaterialRole::Lava), 0.4)
+            .expect("lava fall effect should be repeatable");
+        assert_eq!(first, second);
+        let lava = first
+            .get(&FillMaterialRole::Lava)
+            .expect("lava fall effect should exist");
+        assert_eq!(lava.positions.len(), 8);
+        assert_eq!(lava.indices.len(), 12);
+        let [_, splash_y, _] = *lava
+            .positions
+            .get(4)
+            .expect("lava effect should append splash vertices");
+        assert!(splash_y > surface_y(downstream.level, 0.4));
+        let splash_normals = lava
+            .normals
+            .get(4..)
+            .expect("lava effect should append splash normals");
+        assert!(splash_normals
+            .iter()
+            .all(|normal| Vec3::from_array(*normal).abs_diff_eq(Vec3::Y, 1.0e-6)));
+    }
+
+    #[test]
     fn fall_contract_requires_an_exposed_exact_landing() {
         let source = LiquidSurface {
             position: TilePos::new(HexCoord::ORIGIN, 8),
@@ -1267,10 +1426,13 @@ mod tests {
         let modulation = shader
             .find("modulation: vec4<f32>")
             .expect("shader must declare modulation");
+        let emission = shader
+            .find("emission: vec4<f32>")
+            .expect("shader must declare emission");
         let foam = shader
             .find("foam_color: vec4<f32>")
             .expect("shader must declare palette-backed foam");
-        assert!(flow < modulation && modulation < foam);
+        assert!(flow < modulation && modulation < emission && emission < foam);
         assert!(shader.contains("@binding(100)"));
         assert!(shader.contains("pbr_input_from_standard_material"));
         assert!(shader.contains("apply_pbr_lighting"));
@@ -1278,6 +1440,8 @@ mod tests {
         assert!(shader.contains("pbr_input.material.base_color = vec4<f32>"));
         assert!(!shader.contains("pbr_input.material.base_color.rgb ="));
         assert!(shader.contains("liquid.foam_color.rgb"));
+        assert!(shader.contains("pbr_input.material.emissive = vec4<f32>"));
+        assert!(shader.contains("liquid.emission.y"));
         assert!(!shader.contains("vec3<f32>(0.78, 0.91, 0.98)"));
         assert!(shader.contains(&format!(
             "liquid.flow_phase_scale.z * {SECONDARY_WAVE_PHASE_RATE}"
