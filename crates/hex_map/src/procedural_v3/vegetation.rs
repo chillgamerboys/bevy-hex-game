@@ -17,11 +17,41 @@ pub(super) const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
 pub(super) const TALL_NARROW_ID: &str = "plant/tall-narrow";
 pub(super) const OLD_GROWTH_ID: &str = "plant/old-growth";
 pub(super) const GRASS_TUFT_ID: &str = "prop/grass-tuft";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_SMALL_BROADLEAF_ID: &str = "plant/snowy-small-broadleaf";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_TALL_NARROW_ID: &str = "plant/snowy-tall-narrow";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_OLD_GROWTH_ID: &str = "plant/snowy-old-growth";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_GRASS_TUFT_ID: &str = "prop/snowy-grass-tuft";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by cave integration")]
 pub(super) const CAVE_MOSS_ID: &str = "prop/cave-moss";
+#[expect(
+    clippy::allow_attributes,
+    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+)]
+#[allow(dead_code, reason = "consumed by cave integration")]
 pub(super) const CAVE_LICHEN_ID: &str = "prop/cave-lichen";
 
 #[derive(Debug, Clone)]
@@ -34,7 +64,6 @@ pub(super) struct TemperateVegetationSet {
 
 impl TemperateVegetationSet {
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
-        validate_shared_environment_sets(catalog, recipe)?;
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
                 catalog,
@@ -70,6 +99,11 @@ impl TemperateVegetationSet {
 
 /// Snow-covered counterparts resolved through the same exact authored contract.
 #[derive(Debug, Clone)]
+#[allow(
+    dead_code,
+    clippy::allow_attributes,
+    reason = "staged authority is consumed by frozen landform integration"
+)]
 pub(super) struct SnowyVegetationSet {
     pub(super) small_broadleaf: VegetationObjectSpec,
     pub(super) tall_narrow: VegetationObjectSpec,
@@ -78,6 +112,11 @@ pub(super) struct SnowyVegetationSet {
 }
 
 impl SnowyVegetationSet {
+    #[expect(
+        clippy::allow_attributes,
+        reason = "staged sibling-lane authority is deliberately unused on this source branch"
+    )]
+    #[allow(dead_code, reason = "consumed by frozen landform integration")]
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
@@ -114,12 +153,22 @@ impl SnowyVegetationSet {
 
 /// Nonblocking cave vegetation resolved as an exact pair of authored props.
 #[derive(Debug, Clone)]
+#[allow(
+    dead_code,
+    clippy::allow_attributes,
+    reason = "staged authority is consumed by cave integration"
+)]
 pub(super) struct CaveVegetationSet {
     pub(super) moss: VegetationObjectSpec,
     pub(super) lichen: VegetationObjectSpec,
 }
 
 impl CaveVegetationSet {
+    #[expect(
+        clippy::allow_attributes,
+        reason = "staged sibling-lane authority is deliberately unused on this source branch"
+    )]
+    #[allow(dead_code, reason = "consumed by cave integration")]
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             moss: VegetationObjectSpec::resolve(
@@ -138,23 +187,6 @@ impl CaveVegetationSet {
             )?,
         })
     }
-}
-
-fn validate_shared_environment_sets(
-    catalog: &RuntimeArtCatalog,
-    recipe: &str,
-) -> Result<(), String> {
-    let snowy = SnowyVegetationSet::resolve(catalog, recipe)?;
-    let cave = CaveVegetationSet::resolve(catalog, recipe)?;
-    let _validated_objects = (
-        snowy.small_broadleaf.id.as_str(),
-        snowy.tall_narrow.id.as_str(),
-        snowy.old_growth.id.as_str(),
-        snowy.grass_tuft.id.as_str(),
-        cave.moss.id.as_str(),
-        cave.lichen.id.as_str(),
-    );
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
