@@ -20,10 +20,14 @@ use super::world::{
     StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 
-const PATCH_NAMESPACE_BITS: u32 = 4;
-const LOCAL_ID_BITS: u32 = u32::BITS - PATCH_NAMESPACE_BITS;
-const MAX_PATCH_ID: u32 = (1 << PATCH_NAMESPACE_BITS) - 1;
-const MAX_LOCAL_ID: u32 = (1 << LOCAL_ID_BITS) - 1;
+const LEGACY_PATCH_NAMESPACE_BITS: u32 = 4;
+const LEGACY_LOCAL_ID_BITS: u32 = u32::BITS - LEGACY_PATCH_NAMESPACE_BITS;
+const LEGACY_MAX_PATCH_ID: u32 = (1 << LEGACY_PATCH_NAMESPACE_BITS) - 1;
+const LEGACY_MAX_LOCAL_ID: u32 = (1 << LEGACY_LOCAL_ID_BITS) - 1;
+const RING19_PATCH_NAMESPACE_BITS: u32 = 5;
+const RING19_LOCAL_ID_BITS: u32 = u32::BITS - RING19_PATCH_NAMESPACE_BITS;
+const RING19_MAX_PATCH_ID: u32 = (1 << RING19_PATCH_NAMESPACE_BITS) - 1;
+const RING19_MAX_LOCAL_ID: u32 = (1 << RING19_LOCAL_ID_BITS) - 1;
 
 /// Complete semantic output owned by exactly one resolved V3 patch.
 #[derive(Debug, Clone)]
@@ -228,7 +232,11 @@ impl GeneratedPatchPlan {
         }
     }
 
-    fn namespace(mut self, namespace_names: bool) -> Result<Self, WorldCompositionError> {
+    fn namespace(
+        mut self,
+        layout_kind: LayoutKind,
+        namespace_names: bool,
+    ) -> Result<Self, WorldCompositionError> {
         let patch = self.patch_id;
 
         for column in self.volume.columns.values_mut() {
@@ -238,6 +246,7 @@ impl GeneratedPatchPlan {
                 };
                 if let Some(region) = mass.cutaway_for {
                     mass.cutaway_for = Some(InteriorRegionId(namespace_numeric(
+                        layout_kind,
                         patch,
                         region.0,
                         NamespaceKind::Interior,
@@ -248,29 +257,34 @@ impl GeneratedPatchPlan {
         for metadata in self.volume.surfaces.values_mut() {
             if let Some(region) = metadata.interior {
                 metadata.interior = Some(InteriorRegionId(namespace_numeric(
+                    layout_kind,
                     patch,
                     region.0,
                     NamespaceKind::Interior,
                 )?));
             }
             if let SurfaceAccess::SpecialMovement(region) = metadata.access {
-                metadata.access = SurfaceAccess::SpecialMovement(SpecialMovementRegion(
-                    namespace_numeric(patch, region.0, NamespaceKind::SpecialMovement)?,
-                ));
+                metadata.access =
+                    SurfaceAccess::SpecialMovement(SpecialMovementRegion(namespace_numeric(
+                        layout_kind,
+                        patch,
+                        region.0,
+                        NamespaceKind::SpecialMovement,
+                    )?));
             }
         }
 
         self.liquids.bodies = std::mem::take(&mut self.liquids.bodies)
             .into_iter()
             .map(|(id, body)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Liquid)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Liquid)
                     .map(|id| (LiquidBodyId(id), body))
             })
             .collect::<Result<_, _>>()?;
         self.features.by_id = std::mem::take(&mut self.features.by_id)
             .into_iter()
             .map(|(id, feature)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Feature)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Feature)
                     .map(|id| (FeatureId(id), feature))
             })
             .collect::<Result<_, _>>()?;
@@ -283,20 +297,21 @@ impl GeneratedPatchPlan {
         self.structures.by_id = std::mem::take(&mut self.structures.by_id)
             .into_iter()
             .map(|(id, structure)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Structure)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Structure)
                     .map(|id| (StructureId(id), structure))
             })
             .collect::<Result<_, _>>()?;
         self.lights = std::mem::take(&mut self.lights)
             .into_iter()
             .map(|(id, light)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Light).map(|id| (LightId(id), light))
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Light)
+                    .map(|id| (LightId(id), light))
             })
             .collect::<Result<_, _>>()?;
         self.interiors.by_id = std::mem::take(&mut self.interiors.by_id)
             .into_iter()
             .map(|(id, interior)| {
-                namespace_numeric(patch, id.0, NamespaceKind::Interior)
+                namespace_numeric(layout_kind, patch, id.0, NamespaceKind::Interior)
                     .map(|id| (InteriorRegionId(id), interior))
             })
             .collect::<Result<_, _>>()?;
@@ -332,14 +347,27 @@ fn patch_slug(patch: PatchId) -> String {
 }
 
 fn namespace_numeric(
+    layout_kind: LayoutKind,
     patch: PatchId,
     local: u32,
     kind: NamespaceKind,
 ) -> Result<u32, WorldCompositionError> {
-    if patch.0 > MAX_PATCH_ID || local > MAX_LOCAL_ID {
+    let (local_bits, maximum_patch, maximum_local) = match layout_kind {
+        LayoutKind::Single | LayoutKind::Ring7 => (
+            LEGACY_LOCAL_ID_BITS,
+            LEGACY_MAX_PATCH_ID,
+            LEGACY_MAX_LOCAL_ID,
+        ),
+        LayoutKind::Ring19 => (
+            RING19_LOCAL_ID_BITS,
+            RING19_MAX_PATCH_ID,
+            RING19_MAX_LOCAL_ID,
+        ),
+    };
+    if patch.0 > maximum_patch || local > maximum_local {
         return Err(WorldCompositionError::NamespaceOverflow { patch, kind, local });
     }
-    Ok((patch.0 << LOCAL_ID_BITS) | local)
+    Ok((patch.0 << local_bits) | local)
 }
 
 /// Recipe-independent category for a patch-local validation issue.
@@ -535,7 +563,7 @@ pub(crate) fn compose_world(
     let mut anchors = BTreeMap::new();
 
     for fragment in by_patch.into_values() {
-        let fragment = fragment.namespace(namespace_names)?;
+        let fragment = fragment.namespace(layout.kind, namespace_names)?;
         merge_map(
             &mut volume.columns,
             fragment.volume.columns,
@@ -1100,7 +1128,7 @@ mod tests {
         assert_eq!(world.biome_regions.len(), world.volume.surfaces.len());
 
         for patch in layout.patches.keys().copied() {
-            let prefix = patch.0 << LOCAL_ID_BITS;
+            let prefix = patch.0 << LEGACY_LOCAL_ID_BITS;
             assert!(world.liquids.bodies.contains_key(&LiquidBodyId(prefix)));
             assert!(world.features.by_id.contains_key(&FeatureId(prefix)));
             assert!(world.structures.by_id.contains_key(&StructureId(prefix)));
@@ -1138,8 +1166,8 @@ mod tests {
         )
         .expect("complete dry Ring7 fragments should compose");
         let patch = PatchId(5);
-        let interior = InteriorRegionId((patch.0 << LOCAL_ID_BITS) | 3);
-        let special = SpecialMovementRegion((patch.0 << LOCAL_ID_BITS) | 2);
+        let interior = InteriorRegionId((patch.0 << LEGACY_LOCAL_ID_BITS) | 3);
+        let special = SpecialMovementRegion((patch.0 << LEGACY_LOCAL_ID_BITS) | 2);
         let plan = world
             .interiors
             .by_id
@@ -1405,19 +1433,29 @@ mod tests {
     #[test]
     fn namespace_bounds_reject_aliasing_instead_of_truncating_ids() {
         assert_eq!(
-            namespace_numeric(PatchId(MAX_PATCH_ID + 1), 0, NamespaceKind::Feature),
+            namespace_numeric(
+                LayoutKind::Ring7,
+                PatchId(LEGACY_MAX_PATCH_ID + 1),
+                0,
+                NamespaceKind::Feature
+            ),
             Err(WorldCompositionError::NamespaceOverflow {
-                patch: PatchId(MAX_PATCH_ID + 1),
+                patch: PatchId(LEGACY_MAX_PATCH_ID + 1),
                 kind: NamespaceKind::Feature,
                 local: 0,
             })
         );
         assert_eq!(
-            namespace_numeric(PatchId(0), MAX_LOCAL_ID + 1, NamespaceKind::Structure),
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(0),
+                RING19_MAX_LOCAL_ID + 1,
+                NamespaceKind::Structure
+            ),
             Err(WorldCompositionError::NamespaceOverflow {
                 patch: PatchId(0),
                 kind: NamespaceKind::Structure,
-                local: MAX_LOCAL_ID + 1,
+                local: RING19_MAX_LOCAL_ID + 1,
             })
         );
     }
@@ -1425,15 +1463,20 @@ mod tests {
     #[test]
     fn ring7_numeric_and_named_namespaces_keep_the_legacy_encoding() {
         assert_eq!(
-            namespace_numeric(PatchId(0), 42, NamespaceKind::Liquid),
+            namespace_numeric(LayoutKind::Ring7, PatchId(0), 42, NamespaceKind::Liquid),
             Ok(42)
         );
         assert_eq!(
-            namespace_numeric(PatchId(6), 42, NamespaceKind::Feature),
+            namespace_numeric(LayoutKind::Ring7, PatchId(6), 42, NamespaceKind::Feature),
             Ok(0x6000_002a)
         );
         assert_eq!(
-            namespace_numeric(PatchId(6), MAX_LOCAL_ID, NamespaceKind::Interior),
+            namespace_numeric(
+                LayoutKind::Ring7,
+                PatchId(6),
+                LEGACY_MAX_LOCAL_ID,
+                NamespaceKind::Interior
+            ),
             Ok(0x6fff_ffff)
         );
 
@@ -1452,6 +1495,40 @@ mod tests {
                 "update only with an explicit shipped Ring7 named-namespace decision"
             );
         }
+    }
+
+    #[test]
+    fn ring19_numeric_namespace_admits_patch_eighteen_without_aliasing() {
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring19, PatchId(18), 42, NamespaceKind::Liquid),
+            Ok(0x9000_002a)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(18),
+                RING19_MAX_LOCAL_ID,
+                NamespaceKind::Interior
+            ),
+            Ok(0x97ff_ffff)
+        );
+        assert_eq!(
+            namespace_numeric(LayoutKind::Ring19, PatchId(19), 0, NamespaceKind::Feature),
+            Ok(0x9800_0000)
+        );
+        assert_eq!(
+            namespace_numeric(
+                LayoutKind::Ring19,
+                PatchId(RING19_MAX_PATCH_ID + 1),
+                0,
+                NamespaceKind::Feature
+            ),
+            Err(WorldCompositionError::NamespaceOverflow {
+                patch: PatchId(RING19_MAX_PATCH_ID + 1),
+                kind: NamespaceKind::Feature,
+                local: 0,
+            })
+        );
     }
 
     #[test]
