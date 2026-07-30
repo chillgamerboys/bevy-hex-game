@@ -1475,6 +1475,7 @@ fn count_u32(value: usize) -> u32 {
 #[cfg(test)]
 mod tests {
     use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
 
     use super::super::{deep_forest, prairie, vegetation_landform};
     use super::*;
@@ -2051,6 +2052,111 @@ mod tests {
         assert_ring19_mountain_hydrology(&first.validated.plan, false);
     }
 
+    #[test]
+    #[ignore = "manual release-mode Ring7/Ring19 generation benchmark"]
+    fn ring19_generation_p95_stays_within_three_and_a_half_times_ring7() {
+        assert!(
+            !cfg!(debug_assertions),
+            "run this manual gate with `cargo test --release -p hex_map \
+             procedural_v3::ring19::tests::ring19_generation_p95_stays_within_three_and_a_half_times_ring7 \
+             -- --ignored --exact --nocapture`"
+        );
+
+        const WARMUP_RUNS: usize = 2;
+        const SAMPLE_COUNT: usize = 20;
+        const RING7_REVIEW_SEED: u64 = 703_700_113;
+        const RING19_REVIEW_SEED: u64 = 1_592_598_566;
+
+        let ring7_map = seven_regions_map_settings();
+        let ring19_map = two_rings_map_settings();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ring7_settings)) =
+            &ring7_map.terrain
+        else {
+            panic!("tracked Seven Regions world should select procedural V3");
+        };
+        let generate_ring7 = || {
+            super::super::ring7::generate(
+                ring7_map.grid_radius,
+                ring7_map.level_height,
+                ring7_settings,
+                RING7_REVIEW_SEED,
+                runtime_art_catalog(),
+            )
+            .expect("canonical Seven Regions generation should succeed")
+        };
+        let generate_ring19 = || {
+            generate(
+                ring19_map.grid_radius,
+                ring19_map.level_height,
+                settings(),
+                RING19_REVIEW_SEED,
+                runtime_art_catalog(),
+            )
+            .expect("canonical Two Rings generation should succeed")
+        };
+
+        for _ in 0..WARMUP_RUNS {
+            std::hint::black_box(generate_ring7());
+            std::hint::black_box(generate_ring19());
+        }
+
+        let mut ring7_samples = Vec::with_capacity(SAMPLE_COUNT);
+        let mut ring19_samples = Vec::with_capacity(SAMPLE_COUNT);
+        for sample in 0..SAMPLE_COUNT {
+            if sample.is_multiple_of(2) {
+                ring7_samples.push(measure_generation(&generate_ring7));
+                ring19_samples.push(measure_generation(&generate_ring19));
+            } else {
+                ring19_samples.push(measure_generation(&generate_ring19));
+                ring7_samples.push(measure_generation(&generate_ring7));
+            }
+        }
+        ring7_samples.sort_unstable();
+        ring19_samples.sort_unstable();
+
+        let ring7_median = sample_median(&ring7_samples);
+        let ring7_p95 = sample_p95(&ring7_samples);
+        let ring19_median = sample_median(&ring19_samples);
+        let ring19_p95 = sample_p95(&ring19_samples);
+        eprintln!(
+            "Ring generation release benchmark ({SAMPLE_COUNT} samples, {WARMUP_RUNS} warm-ups): \
+             Ring7 median={ring7_median:?} p95={ring7_p95:?}; \
+             Ring19 median={ring19_median:?} p95={ring19_p95:?}"
+        );
+
+        assert!(
+            ring19_p95.as_nanos().saturating_mul(2) <= ring7_p95.as_nanos().saturating_mul(7),
+            "Ring19 p95 {ring19_p95:?} exceeded 3.5x Ring7 p95 {ring7_p95:?}"
+        );
+    }
+
+    fn measure_generation<T>(generate: impl FnOnce() -> T) -> Duration {
+        let started = Instant::now();
+        let generated = std::hint::black_box(generate());
+        let elapsed = started.elapsed();
+        std::hint::black_box(generated);
+        elapsed
+    }
+
+    fn sample_median(samples: &[Duration]) -> Duration {
+        samples
+            .get(samples.len() / 2)
+            .copied()
+            .expect("benchmark should record samples")
+    }
+
+    fn sample_p95(samples: &[Duration]) -> Duration {
+        let rank = samples
+            .len()
+            .saturating_mul(95)
+            .div_ceil(100)
+            .saturating_sub(1);
+        samples
+            .get(rank)
+            .copied()
+            .expect("benchmark should record samples")
+    }
+
     fn assert_ring19_mountain_hydrology(
         plan: &GeneratedWorldPlan,
         require_translated_high_streams: bool,
@@ -2244,19 +2350,35 @@ mod tests {
         }
     }
 
-    fn settings() -> &'static ProceduralV3Settings {
-        static SETTINGS: OnceLock<ProceduralV3Settings> = OnceLock::new();
+    fn seven_regions_map_settings() -> &'static MapSettings {
+        static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
         SETTINGS.get_or_init(|| {
-            let map: MapSettings = ron::from_str(include_str!(concat!(
+            ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/config/worlds/procedural-ring7.ron"
+            )))
+            .expect("tracked Seven Regions world should parse")
+        })
+    }
+
+    fn two_rings_map_settings() -> &'static MapSettings {
+        static SETTINGS: OnceLock<MapSettings> = OnceLock::new();
+        SETTINGS.get_or_init(|| {
+            ron::from_str(include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
                 "/../../assets/config/worlds/procedural-two-rings.ron"
             )))
-            .expect("tracked Two Rings world should parse");
-            let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) = map.terrain else {
-                panic!("tracked Two Rings world should select procedural V3");
-            };
-            settings
+            .expect("tracked Two Rings world should parse")
         })
+    }
+
+    fn settings() -> &'static ProceduralV3Settings {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(settings)) =
+            &two_rings_map_settings().terrain
+        else {
+            panic!("tracked Two Rings world should select procedural V3");
+        };
+        settings
     }
 
     fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
