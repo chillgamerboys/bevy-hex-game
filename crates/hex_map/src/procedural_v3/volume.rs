@@ -141,7 +141,8 @@ pub(crate) enum SurfaceAccess {
     Ordinary,
     /// Geometrically standable, but outside the ordinary walker network.
     SpecialMovement(SpecialMovementRegion),
-    /// Not valid footing, for example a submerged bed or a low opening.
+    /// Not valid footing, for example a submerged bed, low opening, or authored
+    /// slippery Ice hazard.
     NonStandable,
 }
 
@@ -400,6 +401,16 @@ impl VolumePlan {
                 continue;
             };
             let walker_admitted = TraversalProfile::WALKER.admits_surface(true, headroom);
+            let authored_ice_hazard = self.columns.get(&surface.coord).is_some_and(|column| {
+                column.elements.iter().any(|element| {
+                    matches!(
+                        element,
+                        VolumeElement::Solid(mass)
+                            if mass.material == SolidMaterialRole::Ice
+                                && mass.levels.contains(surface.level)
+                    )
+                })
+            });
             match metadata.access {
                 SurfaceAccess::Ordinary | SurfaceAccess::SpecialMovement(_) if !walker_admitted => {
                     issues.push(VolumeIssue::InsufficientHeadroom {
@@ -407,7 +418,7 @@ impl VolumePlan {
                         clear_levels: headroom.0,
                     });
                 }
-                SurfaceAccess::NonStandable if walker_admitted => {
+                SurfaceAccess::NonStandable if walker_admitted && !authored_ice_hazard => {
                     issues.push(VolumeIssue::NonStandableWithHeadroom {
                         surface: *surface,
                         clear_levels: headroom.0,
@@ -931,6 +942,31 @@ mod tests {
             .validate()
             .expect_err("one clear level cannot admit the walker");
         assert!(issues_text(&issues).contains("only 1 clear level"));
+    }
+
+    #[test]
+    fn exposed_ice_may_be_an_authored_nonstandable_hazard() {
+        let coord = HexCoord::ORIGIN;
+        let mut plan = VolumePlan::new(BTreeSet::from([coord]));
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(0, 2, SolidMaterialRole::Ice, None)];
+        let ice = TilePos::new(coord, 1);
+        plan.surfaces
+            .insert(ice, surface(SurfaceAccess::NonStandable, None));
+
+        assert_eq!(plan.surface_headroom(ice), Some(Headroom(MAX_HEADROOM)));
+        assert!(plan.validate().is_ok());
+
+        plan.columns
+            .get_mut(&coord)
+            .expect("the origin is in the test mask")
+            .elements = vec![mass(0, 2, SolidMaterialRole::Stone, None)];
+        let issues = plan
+            .validate()
+            .expect_err("ordinary stone with full headroom cannot hide from traversal");
+        assert!(issues_text(&issues).contains("marked non-standable"));
     }
 
     #[test]
