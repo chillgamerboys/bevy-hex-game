@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
@@ -22,6 +23,10 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::{
+    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationMetrics,
+    LandformVegetationSet,
+};
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
@@ -63,6 +68,8 @@ const CLIFF_SHELF_REGION: SpecialMovementRegion = SpecialMovementRegion(0);
 const RING_ISOLATED_TERRAIN_REGION: SpecialMovementRegion = SpecialMovementRegion(1);
 const MAX_RING_CLOSED_POCKET_CELLS: usize = 3;
 const RELIEF_CENTERS_PER_BANK: u64 = 3;
+const WATERFALL_TREE_TARGET: usize = 3;
+const WATERFALL_GRASS_PERCENT: usize = 20;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const FALL_OVERLOOK: &str = "fall_overlook";
@@ -85,6 +92,8 @@ pub(crate) struct WaterfallMetrics {
     pub(crate) dry_relief: u32,
     pub(crate) spawn_height_difference: u32,
     pub(crate) bank_high_ground_difference: u32,
+    pub(crate) tree_roots: u32,
+    pub(crate) grass_roots: u32,
     pub(crate) grass_surface_percent: u32,
 }
 
@@ -92,6 +101,7 @@ pub(crate) struct WaterfallMetrics {
 struct WaterfallRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
+    vegetation: LandformVegetationSet,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -100,14 +110,17 @@ struct WaterfallRecipe {
 struct WaterfallStreams<'a> {
     relief: SeedStream<'a>,
     cliff: SeedStream<'a>,
+    trees: SeedStream<'a>,
+    grass: SeedStream<'a>,
 }
 
 /// Runs the common eight-candidate V3 selector for one Waterfall world.
-pub(crate) fn generate(
+pub(crate) fn generate_with_catalog(
     grid_radius: u32,
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<WaterfallMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -118,16 +131,39 @@ pub(crate) fn generate(
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
     validate_footprint_capacity(&layout)?;
+    let vegetation = LandformVegetationSet::resolve(
+        catalog,
+        V3EnvironmentSettings::TemperateGrassland,
+        "Waterfall",
+    )
+    .map_err(V3GenerationError::RecipeContract)?;
     run_recipe(
         &WaterfallRecipe {
             level_height,
             layout,
+            vegetation,
             #[cfg(test)]
             reject_candidates: false,
         },
         settings,
         grid_radius,
         seed,
+    )
+}
+
+#[cfg(test)]
+fn generate(
+    grid_radius: u32,
+    level_height: f32,
+    settings: &ProceduralV3Settings,
+    seed: u64,
+) -> Result<ValidatedWorldSelection<WaterfallMetrics>, V3GenerationError> {
+    generate_with_catalog(
+        grid_radius,
+        level_height,
+        settings,
+        seed,
+        super::vegetation::tests::runtime_art_catalog(),
     )
 }
 
@@ -158,7 +194,7 @@ impl V3Recipe for WaterfallRecipe {
         }
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &V3WaterfallSettings,
             V3EnvironmentSettings::TemperateGrassland,
@@ -167,6 +203,7 @@ impl V3Recipe for WaterfallRecipe {
                 world_seed: context.seed,
                 candidate: context.candidate,
             },
+            &self.vegetation,
         )
         .map_err(CandidateAttemptError::Rejected)?;
         compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
@@ -219,12 +256,13 @@ impl V3Recipe for WaterfallRecipe {
             ));
         }
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &V3WaterfallSettings,
             V3EnvironmentSettings::TemperateGrassland,
             self.level_height,
             PatchBuildMode::CanonicalFallback,
+            &self.vegetation,
         )
         .map_err(recipe_issues_to_error)?;
         compose_single_patch(self.layout.clone(), fragment)
@@ -292,12 +330,33 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_patch(
+pub(crate) fn construct_patch_with_catalog(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3WaterfallSettings,
+    environment: V3EnvironmentSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+    catalog: &RuntimeArtCatalog,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let vegetation = LandformVegetationSet::resolve(catalog, environment, "Waterfall")
+        .map_err(|error| vec![recipe_issue(error)])?;
+    construct_patch_with_objects(
+        patch,
+        settings,
+        environment,
+        level_height,
+        mode,
+        &vegetation,
+    )
+}
+
+fn construct_patch_with_objects(
     patch: PatchRecipeContext<'_>,
     _settings: &V3WaterfallSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
     mode: PatchBuildMode,
+    vegetation: &LandformVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     if environment != V3EnvironmentSettings::TemperateGrassland {
         return Err(vec![recipe_issue(
@@ -320,6 +379,8 @@ pub(crate) fn construct_patch(
     let streams = mode.seed_streams(&patch).map(|streams| WaterfallStreams {
         relief: streams.stage("waterfall.relief"),
         cliff: streams.stage("waterfall.cliff"),
+        trees: streams.stage("waterfall.vegetation.trees"),
+        grass: streams.stage("waterfall.vegetation.grass"),
     });
     let watercourse = watercourse(&mask)?;
     let bypass = bypass_tiles(patch_radius, &mask)?;
@@ -650,6 +711,75 @@ pub(crate) fn construct_patch(
         plan.anchors.insert(PARTY_START.to_owned(), party_start);
         plan.anchors.insert(HOSTILE_START.to_owned(), hostile_start);
     }
+    let ordinary_surfaces = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut vegetation_reserved = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    let mut route_coords = bypass
+        .iter()
+        .chain(&secondary_bypass)
+        .flatten()
+        .chain(&secondary_apron)
+        .chain(&ring_secondary_flank)
+        .map(|position| {
+            frame.to_world(position.coord).map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Waterfall vegetation route conversion failed: {error}"
+                ))]
+            })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    if composite_layout {
+        route_coords.insert(frame.to_world(RING_BRIDGE_FLANK.coord).map_err(|error| {
+            vec![recipe_issue(format!(
+                "Waterfall vegetation bridge-flank conversion failed: {error}"
+            ))]
+        })?);
+    }
+    for coord in route_coords
+        .into_iter()
+        .chain(
+            plan.structures
+                .by_id
+                .values()
+                .flat_map(|structure| structure.voxels.iter().map(|voxel| voxel.coord)),
+        )
+        .chain(plan.anchors.values().map(|anchor| anchor.coord))
+        .chain(patch.protected_approaches())
+    {
+        vegetation_reserved.extend(coord.within_radius(2));
+    }
+    let eligible_dry = ordinary_surfaces
+        .keys()
+        .filter(|coord| !vegetation_reserved.contains(coord))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let grass_target = eligible_dry.len().saturating_mul(WATERFALL_GRASS_PERCENT) / 100;
+    append_landform_vegetation(
+        "Waterfall",
+        vegetation,
+        &ordinary_surfaces,
+        &eligible_dry,
+        &eligible_dry,
+        &vegetation_reserved,
+        WATERFALL_TREE_TARGET,
+        grass_target,
+        streams.map(|streams| streams.trees),
+        streams.map(|streams| streams.grass),
+        &mut plan.features,
+        &mut plan.blockers,
+    )
+    .map_err(|error| vec![recipe_issue(error)])?;
     let seam_issues = validate_patch_walker_seams(&patch, &plan.volume);
     if seam_issues.is_empty() {
         Ok(plan)
@@ -1410,6 +1540,125 @@ fn water_column(cell: WaterCell, bridge_deck: Option<TilePos>) -> (VolumeColumn,
     (VolumeColumn { elements }, bed)
 }
 
+fn waterfall_route_centres(
+    grid_radius: u32,
+    mask: &BTreeSet<HexCoord>,
+    include_ring_landings: bool,
+) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
+    let bypass = bypass_tiles(grid_radius, mask)?;
+    let secondary = secondary_bypass_tiles(grid_radius, mask)?;
+    let apron = secondary_slope_apron(grid_radius, mask)?;
+    let mut centres = bypass
+        .iter()
+        .chain(&secondary)
+        .flatten()
+        .chain(&apron)
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    if include_ring_landings {
+        centres.extend(
+            ring_secondary_flank_apron(grid_radius, mask)?
+                .into_iter()
+                .map(|position| position.coord),
+        );
+        centres.insert(RING_BRIDGE_FLANK.coord);
+    }
+    Ok(centres)
+}
+
+fn validate_waterfall_vegetation(
+    volume: &VolumePlan,
+    liquids: &LiquidPlan,
+    features: &FeaturePlan,
+    structures: &StructurePlan,
+    blockers: &BTreeSet<TilePos>,
+    anchors: &BTreeMap<String, TilePos>,
+    protected_centres: impl IntoIterator<Item = HexCoord>,
+    issues: &mut Vec<WorldValidationIssue>,
+) -> (LandformVegetationMetrics, u32) {
+    let vegetation = match landform_vegetation_metrics(
+        "Waterfall",
+        V3EnvironmentSettings::TemperateGrassland,
+        features.by_id.values(),
+    ) {
+        Ok(metrics) => metrics,
+        Err(error) => {
+            issues.push(recipe_issue(error));
+            LandformVegetationMetrics { trees: 0, grass: 0 }
+        }
+    };
+    if !(2..=5).contains(&vegetation.trees) {
+        issues.push(recipe_issue(format!(
+            "Waterfall has {} authored trees; expected 2 through 5",
+            vegetation.trees
+        )));
+    }
+
+    let ordinary_surfaces = volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut reserved = liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    for coord in protected_centres
+        .into_iter()
+        .chain(
+            structures
+                .by_id
+                .values()
+                .flat_map(|structure| structure.voxels.iter().map(|voxel| voxel.coord)),
+        )
+        .chain(anchors.values().map(|anchor| anchor.coord))
+    {
+        reserved.extend(coord.within_radius(2));
+    }
+    let eligible_dry = ordinary_surfaces
+        .keys()
+        .filter(|coord| !reserved.contains(coord))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for feature in features.by_id.values() {
+        if !eligible_dry.contains(&feature.root.coord) {
+            issues.push(recipe_issue(format!(
+                "Waterfall authored vegetation at {:?} leaves eligible dry terrain (reserved={}, \
+                 surface_access={:?})",
+                feature.root,
+                reserved.contains(&feature.root.coord),
+                volume
+                    .surfaces
+                    .get(&feature.root)
+                    .map(|metadata| metadata.access)
+            )));
+        }
+    }
+    let authored_blockers = features
+        .by_id
+        .values()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if authored_blockers != *blockers {
+        issues.push(recipe_issue(
+            "Waterfall blockers must exactly equal its authored tree footprints",
+        ));
+    }
+    let grass_percent = count_u32(vegetation.grass)
+        .saturating_mul(100)
+        .checked_div(count_u32(eligible_dry.len()))
+        .unwrap_or_default();
+    if !(15..=25).contains(&grass_percent) {
+        issues.push(recipe_issue(format!(
+            "Waterfall covers {grass_percent}% of eligible dry surfaces with grass; expected 15 through 25%"
+        )));
+    }
+    (vegetation, grass_percent)
+}
+
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     plan: &GeneratedPatchPlan,
@@ -1440,6 +1689,39 @@ pub(crate) fn validate_patch(
             ))]);
         }
     };
+    let local_protected_centres = match waterfall_route_centres(
+        frame.scale(),
+        &local_mask,
+        patch.layout().kind.is_composite(),
+    ) {
+        Ok(centres) => centres,
+        Err(mut route_issues) => {
+            issues.append(&mut route_issues);
+            BTreeSet::new()
+        }
+    };
+    let mut protected_centres = match local_protected_centres
+        .into_iter()
+        .map(|coord| frame.to_world(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(centres) => centres,
+        Err(issue) => {
+            issues.push(issue);
+            BTreeSet::new()
+        }
+    };
+    protected_centres.extend(patch.protected_approaches());
+    validate_waterfall_vegetation(
+        &plan.volume,
+        &plan.liquids,
+        &plan.features,
+        &plan.structures,
+        &plan.blockers,
+        &plan.anchors,
+        protected_centres,
+        &mut issues,
+    );
     let watercourse = match watercourse(&local_mask) {
         Ok(watercourse) => watercourse,
         Err(issues) => return WorldValidation::Invalid(issues),
@@ -1651,7 +1933,7 @@ fn validate_stitched_waterfall(
     validate_stitched_escarpment(plan, seam, issues);
     validate_stitched_closed_pockets(plan, seam, issues);
 
-    let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
+    let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     let bypass = match bypass_tiles(plan.layout.grid_radius, &plan.layout.footprint) {
         Ok(bypass) => validate_stitched_bypass(
             plan,
@@ -2372,7 +2654,7 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
                 Vec::new()
             }
         };
-    let ordinary = OrdinaryGraph::from_volume(&plan.volume, None);
+    let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
     validate_bypass(
         plan,
         &ordinary,
@@ -2482,10 +2764,27 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
     let bank_high_ground_difference = high_bank
         .zip(low_bank)
         .map_or(0, |(high, low)| high.abs_diff(low));
-    let grass_surface_percent = count_u32(ordinary.len())
-        .saturating_mul(100)
-        .checked_div(count_u32(plan.volume.surfaces.len()))
-        .unwrap_or_default();
+    let protected_centres = match waterfall_route_centres(
+        plan.layout.grid_radius,
+        &plan.layout.footprint,
+        plan.layout.kind.is_composite(),
+    ) {
+        Ok(centres) => centres,
+        Err(mut route_issues) => {
+            issues.append(&mut route_issues);
+            BTreeSet::new()
+        }
+    };
+    let (vegetation, grass_surface_percent) = validate_waterfall_vegetation(
+        &plan.volume,
+        &plan.liquids,
+        &plan.features,
+        &plan.structures,
+        &plan.blockers,
+        &plan.anchors,
+        protected_centres,
+        &mut issues,
+    );
 
     let metrics = WaterfallMetrics {
         water_nodes: count_u32(body.nodes.len()),
@@ -2510,6 +2809,8 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
         dry_relief: u32::try_from(dry_relief).unwrap_or(u32::MAX),
         spawn_height_difference,
         bank_high_ground_difference,
+        tree_roots: count_u32(vegetation.trees),
+        grass_roots: count_u32(vegetation.grass),
         grass_surface_percent,
     };
     if issues.is_empty() {
@@ -3299,6 +3600,9 @@ mod tests {
                 assert_eq!(selected.metrics.fall_nodes, 3);
                 assert_eq!(selected.metrics.fall_height, 13);
                 assert_eq!(selected.metrics.bypass_steps, 11);
+                assert_eq!(selected.metrics.tree_roots, 3);
+                assert!(selected.metrics.grass_roots > 0);
+                assert!((15..=25).contains(&selected.metrics.grass_surface_percent));
                 assert_eq!(selected.validated.plan.validate(), Vec::new());
             }
         }
@@ -3721,6 +4025,12 @@ mod tests {
             &WaterfallRecipe {
                 level_height: 0.4,
                 layout: resolve_layout(12, &settings()).expect("test layout should resolve"),
+                vegetation: LandformVegetationSet::resolve(
+                    super::super::vegetation::tests::runtime_art_catalog(),
+                    V3EnvironmentSettings::TemperateGrassland,
+                    "Waterfall",
+                )
+                .expect("tracked Waterfall vegetation should resolve"),
                 reject_candidates: true,
             },
             &settings(),

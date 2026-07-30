@@ -413,11 +413,11 @@ impl GeneratedWorldPlan {
                     .surfaces
                     .get(&feature.root)
                     .map(|metadata| metadata.access),
-                Some(SurfaceAccess::Ordinary)
+                Some(SurfaceAccess::Ordinary | SurfaceAccess::SpecialMovement(_))
             ) {
                 issues.push(WorldValidationIssue::new(
                     WorldIssueCode::Feature,
-                    format!("feature {id:?} is not rooted on an exact ordinary generated surface"),
+                    format!("feature {id:?} is not rooted on an exact standable generated surface"),
                 ));
             }
             if reserved_surfaces.contains(&feature.root) {
@@ -504,11 +504,11 @@ impl GeneratedWorldPlan {
                     .surfaces
                     .get(position)
                     .map(|metadata| metadata.access),
-                Some(SurfaceAccess::Ordinary)
+                Some(SurfaceAccess::Ordinary | SurfaceAccess::SpecialMovement(_))
             ) {
                 issues.push(WorldValidationIssue::new(
                     WorldIssueCode::Blocker,
-                    format!("blocker {position:?} does not name ordinary walker footing"),
+                    format!("blocker {position:?} does not name exact standable footing"),
                 ));
             }
         }
@@ -1296,7 +1296,7 @@ mod tests {
     }
 
     #[test]
-    fn feature_roots_are_unique_ordinary_and_outside_reserved_surfaces() {
+    fn feature_roots_are_unique_standable_and_outside_reserved_surfaces() {
         let mut duplicate = complete_feature_plan();
         duplicate.features.by_id.insert(
             FeatureId(1),
@@ -1326,8 +1326,31 @@ mod tests {
             issue.code == WorldIssueCode::Feature
                 && issue
                     .detail
-                    .contains("not rooted on an exact ordinary generated surface")
+                    .contains("not rooted on an exact standable generated surface")
         }));
+
+        let mut special = complete_feature_plan();
+        let special_root = special
+            .features
+            .by_id
+            .get(&FeatureId(0))
+            .expect("the fixture has its tree")
+            .root;
+        special
+            .volume
+            .surfaces
+            .get_mut(&special_root)
+            .expect("the tree root is an exact surface")
+            .access = SurfaceAccess::SpecialMovement(SpecialMovementRegion(9));
+        assert!(
+            special.validate().iter().all(|issue| {
+                !(matches!(
+                    issue.code,
+                    WorldIssueCode::Feature | WorldIssueCode::Blocker
+                ) && issue.detail.contains("standable"))
+            }),
+            "special-movement surfaces must support authored vegetation and blockers"
+        );
 
         let mut reserved = complete_feature_plan();
         let clearing_surface = TilePos::new(hex_core::HexCoord::ORIGIN, 10);

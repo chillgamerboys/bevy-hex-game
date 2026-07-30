@@ -124,20 +124,22 @@ fn rotated_waterfall_outlet_aligns_with_the_center_hills_inlet() {
         world_seed: 17,
         candidate: 2,
     };
-    let hills = hills::construct_patch(
+    let hills = hills::construct_patch_with_catalog(
         patch(&layout, 0).expect("center patch"),
         &recipes.hills,
         V3EnvironmentSettings::TemperateGrassland,
         LEVEL_HEIGHT,
         mode,
+        super::vegetation::tests::runtime_art_catalog(),
     )
     .expect("center Hills should align its river inlet");
-    let waterfall = waterfall::construct_patch(
+    let waterfall = waterfall::construct_patch_with_catalog(
         patch(&layout, 2).expect("Waterfall patch"),
         &V3WaterfallSettings,
         V3EnvironmentSettings::TemperateGrassland,
         LEVEL_HEIGHT,
         mode,
+        super::vegetation::tests::runtime_art_catalog(),
     )
     .expect("Waterfall should rotate its low outlet toward the center");
     let edge = layout
@@ -193,22 +195,30 @@ fn construct_dry_plans(
     mode: PatchBuildMode,
 ) -> Result<Vec<GeneratedPatchPlan>, Vec<super::world::WorldValidationIssue>> {
     Ok(vec![
-        hills::construct_patch(
+        hills::construct_patch_with_catalog(
             patch(layout, 0)?,
             &recipes.hills,
             V3EnvironmentSettings::TemperateGrassland,
             LEVEL_HEIGHT,
             mode,
+            super::vegetation::tests::runtime_art_catalog(),
         )?,
-        mountains::construct_patch(patch(layout, 1)?, &recipes.mountains, LEVEL_HEIGHT, mode)?,
+        mountains::construct_patch_with_catalog(
+            patch(layout, 1)?,
+            &recipes.mountains,
+            LEVEL_HEIGHT,
+            mode,
+            super::vegetation::tests::runtime_art_catalog(),
+        )?,
         fort::construct_patch(patch(layout, 4)?, &V3FortSettings, LEVEL_HEIGHT, mode)?,
         caves::construct_patch(patch(layout, 5)?, &recipes.caves, LEVEL_HEIGHT, mode)?,
-        sky::construct_patch(
+        sky::construct_patch_with_catalog(
             patch(layout, 6)?,
             &recipes.sky,
             V3EnvironmentSettings::TemperateGrassland,
             LEVEL_HEIGHT,
             mode,
+            super::vegetation::tests::runtime_art_catalog(),
         )?,
     ])
 }

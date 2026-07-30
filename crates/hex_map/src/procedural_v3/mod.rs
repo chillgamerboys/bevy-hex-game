@@ -228,8 +228,13 @@ pub(crate) fn build(
     let started = Instant::now();
     match &settings.layout {
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Hills(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Hills requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                hills::generate(grid_radius, level_height, settings, seed)?,
+                hills::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -244,8 +249,13 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::SkyIslands(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Sky Islands requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                sky::generate(grid_radius, level_height, settings, seed)?,
+                sky::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -260,8 +270,13 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Mountains(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Mountains requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                mountains::generate(grid_radius, level_height, settings, seed)?,
+                mountains::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -276,8 +291,19 @@ pub(crate) fn build(
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
         {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Waterfall requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
             finish_build(
-                waterfall::generate(grid_radius, level_height, settings, seed)?,
+                waterfall::generate_with_catalog(
+                    grid_radius,
+                    level_height,
+                    settings,
+                    seed,
+                    art_catalog,
+                )?,
                 grid_radius,
                 level_height,
                 settings,

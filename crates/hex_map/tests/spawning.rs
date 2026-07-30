@@ -220,7 +220,11 @@ fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalo
         include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
         include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
         include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
+        include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
         include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+        include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
@@ -292,6 +296,7 @@ fn v2_hills_app() -> App {
 
 fn v3_hills_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -338,6 +343,7 @@ fn v3_frozen_hills_app() -> App {
 
 fn v3_waterfall_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -893,9 +899,9 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(12_223_039_404_442_798_248)
+        Some(2_940_332_537_625_721_792)
     );
-    assert_eq!(report.map_fingerprint, 1_240_755_793_707_644_182);
+    assert_eq!(report.map_fingerprint, 18_345_439_249_093_579_610);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
@@ -933,7 +939,28 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
     assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 6);
     assert!(app.world().resource::<InteriorRegions>().is_empty());
-    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    let blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let roots = feature_roots(&mut app);
+    let tree_roots = roots
+        .iter()
+        .filter_map(|(_entity, kind, position, _parent)| {
+            (kind == "GeneratedTree").then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    let grass_roots = roots
+        .iter()
+        .filter_map(|(_entity, kind, position, _parent)| {
+            (kind == "GeneratedTallGrass").then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(tree_roots.len(), 3);
+    assert!(tree_roots.is_subset(&blockers));
+    assert_eq!(blockers.len(), 3);
+    assert!(grass_roots.is_disjoint(&blockers));
     assert_eq!(app.world().resource::<BiomeRegions>().len(), 475);
     assert!(app.world().resource::<MapViewHint>().is_valid());
 }

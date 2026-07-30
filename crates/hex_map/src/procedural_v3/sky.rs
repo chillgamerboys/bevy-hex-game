@@ -2,11 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::hills;
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
 use super::seed::SeedStream;
@@ -14,11 +16,14 @@ use super::selection::{
     run_recipe, CandidateAttemptError, CandidateContext, FallbackContext, RepairOutcome, V3Recipe,
     ValidatedWorldSelection, WorldValidation,
 };
+use super::vegetation::{
+    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+};
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement,
 };
 use super::world::{
-    GeneratedWorldPlan, PlannedStructure, StructureId, StructureKind, WorldIssueCode,
+    FeatureKind, GeneratedWorldPlan, PlannedStructure, StructureId, StructureKind, WorldIssueCode,
     WorldValidationIssue,
 };
 use super::V3GenerationError;
@@ -29,6 +34,8 @@ use crate::settings::{
 
 const PRIMARY_ISLANDS: usize = 3;
 const SATELLITES: usize = 1;
+const UPPER_TREE_TARGET: usize = 3;
+const UPPER_GRASS_PERCENT: usize = 25;
 
 /// Measurements owned by the layered Sky Islands recipe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +47,9 @@ pub(crate) struct SkyMetrics {
     pub(crate) satellites: u8,
     pub(crate) bridge_surfaces: u32,
     pub(crate) vertical_clearance: Level,
+    pub(crate) upper_tree_roots: u32,
+    pub(crate) upper_grass_roots: u32,
+    pub(crate) upper_grass_percent: u32,
 }
 
 #[derive(Debug)]
@@ -48,6 +58,7 @@ struct SkyRecipe {
     layout: ResolvedLayoutPlan,
     settings: V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
+    vegetation: LandformVegetationSet,
 }
 
 pub(crate) fn generate(
@@ -55,6 +66,7 @@ pub(crate) fn generate(
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<SkyMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -64,12 +76,15 @@ pub(crate) fn generate(
     let (sky, environment) = recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
+    let vegetation = LandformVegetationSet::resolve(catalog, environment, "Sky Islands")
+        .map_err(V3GenerationError::RecipeContract)?;
     run_recipe(
         &SkyRecipe {
             level_height,
             layout,
             settings: sky.clone(),
             environment,
+            vegetation,
         },
         settings,
         grid_radius,
@@ -89,7 +104,7 @@ impl V3Recipe for SkyRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.environment,
@@ -98,6 +113,7 @@ impl V3Recipe for SkyRecipe {
                 world_seed: context.seed,
                 candidate: context.candidate,
             },
+            &self.vegetation,
         )
         .map_err(CandidateAttemptError::Rejected)?;
         compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
@@ -112,7 +128,7 @@ impl V3Recipe for SkyRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_sky(plan, &self.settings)
+        validate_sky(plan, &self.settings, self.environment)
     }
 
     fn repair(
@@ -152,12 +168,13 @@ impl V3Recipe for SkyRecipe {
             ));
         }
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.environment,
             self.level_height,
             PatchBuildMode::CanonicalFallback,
+            &self.vegetation,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -180,8 +197,12 @@ impl V3Recipe for SkyRecipe {
 pub(crate) struct SkyStreams<'a> {
     ground_orientation: SeedStream<'a>,
     ground_centres: SeedStream<'a>,
+    ground_trees: SeedStream<'a>,
+    ground_grass: SeedStream<'a>,
     island_centres: SeedStream<'a>,
     satellite: SeedStream<'a>,
+    upper_trees: SeedStream<'a>,
+    upper_grass: SeedStream<'a>,
 }
 
 fn recipe_settings(
@@ -226,28 +247,58 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_patch(
+pub(crate) fn construct_patch_with_catalog(
     patch: PatchRecipeContext<'_>,
     settings: &V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
     mode: PatchBuildMode,
+    catalog: &RuntimeArtCatalog,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let vegetation = LandformVegetationSet::resolve(catalog, environment, "Sky Islands")
+        .map_err(|error| vec![recipe_issue(error)])?;
+    construct_patch_with_objects(
+        patch,
+        settings,
+        environment,
+        level_height,
+        mode,
+        &vegetation,
+    )
+}
+
+fn construct_patch_with_objects(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3SkyIslandsSettings,
+    environment: V3EnvironmentSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+    vegetation: &LandformVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let root_streams = mode.seed_streams(&patch);
     let streams = root_streams.map(|streams| SkyStreams {
         ground_orientation: streams.stage("sky.ground.orientation"),
         ground_centres: streams.stage("sky.ground.centres"),
+        ground_trees: streams.stage("sky.ground.vegetation.trees"),
+        ground_grass: streams.stage("sky.ground.vegetation.grass"),
         island_centres: streams.stage("sky.island_centres"),
         satellite: streams.stage("sky.satellite"),
+        upper_trees: streams.stage("sky.upper.vegetation.trees"),
+        upper_grass: streams.stage("sky.upper.vegetation.grass"),
     });
-    let ground_streams =
-        streams.map(|streams| (streams.ground_orientation, streams.ground_centres));
+    let ground_streams = streams.map(|streams| hills::HillsStreams {
+        orientation: streams.ground_orientation,
+        centres: streams.ground_centres,
+        trees: streams.ground_trees,
+        grass: streams.ground_grass,
+    });
     let mut plan = hills::construct_patch_with_streams(
         patch,
         &settings.ground,
         environment,
         level_height,
         ground_streams,
+        Some(vegetation),
     )?;
     let mask = patch.mask().clone();
     let excluded = patch.protected_approaches();
@@ -272,24 +323,30 @@ pub(crate) fn construct_patch(
         .saturating_add(settings.min_clearance);
     let upper_base = upper_bottom.saturating_add(5);
 
-    let centres = select_centres(
+    let composite_layout = patch.layout().kind.is_composite();
+    let mut centres = select_centres(
         &upper_mask,
         &excluded,
         streams.map(|streams| streams.island_centres),
     )?;
+    if composite_layout {
+        centres = order_composite_centres(centres, &upper_mask)?;
+    }
     let bridge_rows = bridge_rows(&centres, &upper_mask);
     let bridge_estimate = bridge_rows
         .iter()
         .flat_map(|row| row.iter().copied())
         .collect::<BTreeSet<_>>()
         .len();
+    let satellite_target = if composite_layout { 1 } else { 7 };
     let target = mask
         .len()
         .saturating_mul(usize::from(settings.upper_coverage_percent))
         / 100;
     let primary_target = target
         .saturating_sub(bridge_estimate)
-        .saturating_sub(7)
+        .saturating_sub(satellite_target)
+        .saturating_add(usize::from(composite_layout).saturating_mul(3))
         .max(PRIMARY_ISLANDS);
     let primary_cells = grow_primary_islands(&upper_mask, &excluded, &centres, primary_target);
     let satellite_cells = select_satellite(
@@ -298,6 +355,7 @@ pub(crate) fn construct_patch(
         &primary_cells,
         &bridge_rows,
         streams.map(|streams| streams.satellite),
+        composite_layout,
     )?;
 
     let primary_region = SpecialMovementRegion(0);
@@ -321,7 +379,6 @@ pub(crate) fn construct_patch(
             },
         );
     }
-    let composite_layout = patch.layout().kind.is_composite();
     let first_sky_bridge_id = plan
         .structures
         .by_id
@@ -443,6 +500,44 @@ pub(crate) fn construct_patch(
         );
         plan.biome_regions.insert(position, patch.biome_region());
     }
+    let upper_surfaces = upper
+        .iter()
+        .filter_map(|(coord, cell)| {
+            (!cell.bridge && cell.region == primary_region)
+                .then_some((*coord, TilePos::new(*coord, cell.level)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut vegetation_reserved = BTreeSet::new();
+    for coord in upper
+        .iter()
+        .filter_map(|(coord, cell)| cell.bridge.then_some(*coord))
+    {
+        vegetation_reserved.insert(coord);
+    }
+    for coord in patch.protected_approaches() {
+        vegetation_reserved.extend(coord.within_radius(2));
+    }
+    let eligible_upper = upper_surfaces
+        .keys()
+        .filter(|coord| !vegetation_reserved.contains(coord))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let upper_grass_target = eligible_upper.len().saturating_mul(UPPER_GRASS_PERCENT) / 100;
+    append_landform_vegetation(
+        "Sky Islands",
+        vegetation,
+        &upper_surfaces,
+        &eligible_upper,
+        &eligible_upper,
+        &vegetation_reserved,
+        UPPER_TREE_TARGET,
+        upper_grass_target,
+        streams.map(|streams| streams.upper_trees),
+        streams.map(|streams| streams.upper_grass),
+        &mut plan.features,
+        &mut plan.blockers,
+    )
+    .map_err(|error| vec![recipe_issue(error)])?;
     plan.view_hint = sky_view_hint(patch.grid_radius(), upper_base, level_height)?;
     let mut issues = validate_patch_walker_seams(&patch, &plan.volume);
     issues.extend(
@@ -528,6 +623,58 @@ fn bridge_rows(
         .collect()
 }
 
+fn order_composite_centres(
+    centres: [HexCoord; PRIMARY_ISLANDS],
+    mask: &BTreeSet<HexCoord>,
+) -> Result<[HexCoord; PRIMARY_ISLANDS], Vec<WorldValidationIssue>> {
+    const ORDERS: [[usize; PRIMARY_ISLANDS]; 6] = [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ];
+    let mut last_issues = Vec::new();
+    for order in ORDERS {
+        let [first, second, third] = order;
+        let Some(first) = centres.get(first).copied() else {
+            continue;
+        };
+        let Some(second) = centres.get(second).copied() else {
+            continue;
+        };
+        let Some(third) = centres.get(third).copied() else {
+            continue;
+        };
+        let ordered = [first, second, third];
+        let mut reserved = BTreeSet::new();
+        let mut valid = true;
+        for row in bridge_rows(&ordered, mask) {
+            match ring_bridge_route(&row, mask, &reserved) {
+                Ok(route) => reserved.extend(route.surfaces),
+                Err(issues) => {
+                    last_issues = issues;
+                    valid = false;
+                    break;
+                }
+            }
+        }
+        if valid {
+            return Ok(ordered);
+        }
+    }
+    let detail = last_issues
+        .into_iter()
+        .map(|issue| issue.detail)
+        .collect::<Vec<_>>()
+        .join("; ");
+    Err(vec![recipe_issue(format!(
+        "SkyIslands could not order its primary islands around two distinct two-wide bridges: \
+         {detail}"
+    ))])
+}
+
 fn grow_primary_islands(
     mask: &BTreeSet<HexCoord>,
     excluded: &BTreeSet<HexCoord>,
@@ -564,6 +711,7 @@ fn select_satellite(
     primary: &BTreeSet<HexCoord>,
     bridge_rows: &[Vec<HexCoord>],
     stream: Option<SeedStream<'_>>,
+    compact: bool,
 ) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
     let bridge_cells: BTreeSet<_> = bridge_rows.iter().flatten().copied().collect();
     let mut candidates: Vec<_> = mask
@@ -588,11 +736,15 @@ fn select_satellite(
             "SkyIslands cannot place a separated satellite",
         )]);
     };
-    Ok(center
-        .within_radius(1)
-        .into_iter()
-        .filter(|coord| mask.contains(coord))
-        .collect())
+    if compact {
+        Ok(BTreeSet::from([center]))
+    } else {
+        Ok(center
+            .within_radius(1)
+            .into_iter()
+            .filter(|coord| mask.contains(coord))
+            .collect())
+    }
 }
 
 fn two_wide_cells(coord: HexCoord, mask: &BTreeSet<HexCoord>) -> BTreeSet<HexCoord> {
@@ -728,6 +880,64 @@ const fn surface_material(environment: V3EnvironmentSettings) -> SolidMaterialRo
 pub(crate) fn validate_sky(
     plan: &GeneratedWorldPlan,
     settings: &V3SkyIslandsSettings,
+    environment: V3EnvironmentSettings,
+) -> WorldValidation<SkyMetrics> {
+    validate_sky_inner(plan, settings, environment, false, &BTreeSet::new())
+}
+
+pub(crate) fn validate_patch(
+    patch: PatchRecipeContext<'_>,
+    fragment: &GeneratedPatchPlan,
+    settings: &V3SkyIslandsSettings,
+    environment: V3EnvironmentSettings,
+) -> WorldValidation<SkyMetrics> {
+    let frame =
+        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+            Ok(frame) => frame,
+            Err(error) => {
+                return WorldValidation::Invalid(vec![recipe_issue(format!(
+                    "SkyIslands validation frame failed: {error}"
+                ))]);
+            }
+        };
+    let protected_approaches = match patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(protected) => protected,
+        Err(issue) => return WorldValidation::Invalid(vec![issue]),
+    };
+    match frame.canonical_local_world(fragment) {
+        Ok(mut plan) => {
+            plan.layout.grid_radius = plan
+                .layout
+                .footprint
+                .iter()
+                .map(|coord| HexCoord::ORIGIN.distance(*coord))
+                .max()
+                .unwrap_or_default();
+            validate_sky_inner(
+                &plan,
+                settings,
+                environment,
+                patch.layout().kind.is_composite(),
+                &protected_approaches,
+            )
+        }
+        Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
+            "SkyIslands validation projection failed: {error}"
+        ))]),
+    }
+}
+
+fn validate_sky_inner(
+    plan: &GeneratedWorldPlan,
+    settings: &V3SkyIslandsSettings,
+    environment: V3EnvironmentSettings,
+    composite_layout: bool,
+    additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<SkyMetrics> {
     let mut issues = plan.validate();
     let mut ground = BTreeMap::<HexCoord, TilePos>::new();
@@ -822,6 +1032,178 @@ pub(crate) fn validate_sky(
         }
         count
     };
+    let all_vegetation =
+        landform_vegetation_metrics("Sky Islands", environment, plan.features.by_id.values());
+    if let Err(error) = all_vegetation {
+        issues.push(recipe_issue(error));
+    }
+    let ground_features = plan
+        .features
+        .by_id
+        .values()
+        .filter(|feature| {
+            plan.volume
+                .surfaces
+                .get(&feature.root)
+                .is_some_and(|metadata| metadata.access == SurfaceAccess::Ordinary)
+        })
+        .collect::<Vec<_>>();
+    let ground_vegetation = landform_vegetation_metrics(
+        "Sky Islands ground",
+        environment,
+        ground_features.iter().copied(),
+    )
+    .unwrap_or_else(|error| {
+        issues.push(recipe_issue(error));
+        super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+    });
+    if !(2..=5).contains(&ground_vegetation.trees) || ground_vegetation.grass == 0 {
+        issues.push(recipe_issue(format!(
+            "SkyIslands ground has {} trees and {} grass tufts; expected revised Hills vegetation",
+            ground_vegetation.trees, ground_vegetation.grass
+        )));
+    }
+    let mut ground_reserved = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    for coord in plan
+        .features
+        .protected_routes
+        .values()
+        .flat_map(|route| route.surfaces.iter().map(|surface| surface.coord))
+        .chain(plan.anchors.values().map(|anchor| anchor.coord))
+        .chain(
+            plan.layout
+                .shared_edges
+                .values()
+                .flat_map(|edge| edge.protected_approaches.values())
+                .flatten()
+                .copied()
+                .chain(additional_vegetation_protected.iter().copied()),
+        )
+    {
+        ground_reserved.extend(coord.within_radius(2));
+    }
+    let eligible_ground_dry = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && !ground_reserved.contains(&position.coord))
+            .then_some(position.coord)
+        })
+        .collect::<BTreeSet<_>>();
+    let eligible_ground_valley = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && position.level
+                    <= hills::vegetation_valley_ceiling(&settings.ground, composite_layout)
+                && !ground_reserved.contains(&position.coord))
+            .then_some(position.coord)
+        })
+        .collect::<BTreeSet<_>>();
+    if ground_features.iter().any(|feature| match feature.kind {
+        FeatureKind::Tree => !eligible_ground_dry.contains(&feature.root.coord),
+        FeatureKind::TallGrass => !eligible_ground_valley.contains(&feature.root.coord),
+    }) {
+        issues.push(recipe_issue(
+            "SkyIslands ground vegetation leaves eligible dry terrain, the revised Hills valley, or protected clearances",
+        ));
+    }
+    let upper_features = plan
+        .features
+        .by_id
+        .values()
+        .filter(|feature| {
+            matches!(
+                plan.volume
+                    .surfaces
+                    .get(&feature.root)
+                    .map(|metadata| metadata.access),
+                Some(SurfaceAccess::SpecialMovement(region)) if region == primary_region
+            )
+        })
+        .collect::<Vec<_>>();
+    let upper_vegetation = landform_vegetation_metrics(
+        "Sky Islands upper layer",
+        environment,
+        upper_features.iter().copied(),
+    )
+    .unwrap_or_else(|error| {
+        issues.push(recipe_issue(error));
+        super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+    });
+    if !(2..=5).contains(&upper_vegetation.trees) {
+        issues.push(recipe_issue(format!(
+            "SkyIslands upper layer has {} trees; expected 2 through 5",
+            upper_vegetation.trees
+        )));
+    }
+    if plan.features.by_id.values().any(|feature| {
+        matches!(
+            plan.volume
+                .surfaces
+                .get(&feature.root)
+                .map(|metadata| metadata.access),
+            Some(SurfaceAccess::SpecialMovement(region)) if region != primary_region
+        )
+    }) {
+        issues.push(recipe_issue(
+            "SkyIslands vegetation occupies a satellite or unknown optional region",
+        ));
+    }
+    let mut upper_reserved = BTreeSet::new();
+    for coord in metal_primary_surfaces.iter().map(|surface| surface.coord) {
+        upper_reserved.insert(coord);
+    }
+    for coord in plan
+        .layout
+        .shared_edges
+        .values()
+        .flat_map(|edge| edge.protected_approaches.values())
+        .flatten()
+        .copied()
+        .chain(additional_vegetation_protected.iter().copied())
+    {
+        upper_reserved.extend(coord.within_radius(2));
+    }
+    let eligible_upper = primary
+        .difference(&metal_primary_surfaces)
+        .filter(|surface| !upper_reserved.contains(&surface.coord))
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    if upper_features
+        .iter()
+        .any(|feature| !eligible_upper.contains(&feature.root.coord))
+    {
+        issues.push(recipe_issue(
+            "SkyIslands upper vegetation leaves a primary island or bridge, landing, or seam clearance",
+        ));
+    }
+    let authored_blockers = plan
+        .features
+        .by_id
+        .values()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if authored_blockers != plan.blockers {
+        issues.push(recipe_issue(
+            "SkyIslands blockers must exactly equal its authored tree footprints",
+        ));
+    }
+    let upper_grass_percent = percentage(upper_vegetation.grass, eligible_upper.len());
+    if !(15..=35).contains(&upper_grass_percent) {
+        issues.push(recipe_issue(format!(
+            "SkyIslands covers {upper_grass_percent}% of eligible upper surfaces with grass; expected a moderate 15 through 35%"
+        )));
+    }
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
     }
@@ -833,6 +1215,9 @@ pub(crate) fn validate_sky(
         satellites: u8::try_from(SATELLITES).unwrap_or(u8::MAX),
         bridge_surfaces,
         vertical_clearance: minimum_clearance,
+        upper_tree_roots: count_u32(upper_vegetation.trees),
+        upper_grass_roots: count_u32(upper_vegetation.grass),
+        upper_grass_percent,
     })
 }
 
@@ -1175,8 +1560,22 @@ mod tests {
     #[test]
     fn layered_sky_is_deterministic_clear_and_grounded_independently() {
         let settings = settings();
-        let first = generate(12, 0.4, &settings, 991).expect("valid sky");
-        let second = generate(12, 0.4, &settings, 991).expect("same valid sky");
+        let first = generate(
+            12,
+            0.4,
+            &settings,
+            991,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid sky");
+        let second = generate(
+            12,
+            0.4,
+            &settings,
+            991,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("same valid sky");
         assert_eq!(
             first.validated.semantic_fingerprint,
             second.validated.semantic_fingerprint
@@ -1186,6 +1585,9 @@ mod tests {
         assert!(first.metrics.vertical_clearance >= 26);
         assert_eq!(first.metrics.primary_islands, 3);
         assert_eq!(first.metrics.satellites, 1);
+        assert_eq!(first.metrics.upper_tree_roots, 3);
+        assert!((15..=35).contains(&first.metrics.upper_grass_percent));
+        assert!(first.metrics.upper_grass_roots > 0);
         let primary_levels = first
             .validated
             .plan
@@ -1209,10 +1611,24 @@ mod tests {
             unreachable!("test uses Single")
         };
         patch.environment = V3EnvironmentSettings::Frozen;
-        let selected =
-            generate(12, 0.4, &settings, 1_592_598_566).expect("valid Frozen Sky Islands");
+        let selected = generate(
+            12,
+            0.4,
+            &settings,
+            1_592_598_566,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Frozen Sky Islands");
         assert_eq!(selected.metrics.primary_islands, 3);
         assert_eq!(selected.metrics.satellites, 1);
+        assert_eq!(selected.metrics.upper_tree_roots, 3);
+        assert!(selected
+            .validated
+            .plan
+            .features
+            .by_id
+            .values()
+            .all(|feature| feature.object_id.as_str().contains("snowy-")));
 
         let ice_caps = selected
             .validated
@@ -1247,8 +1663,14 @@ mod tests {
         seeds.insert(1_592_598_566);
         let mut fallback_seeds = Vec::new();
         for seed in seeds {
-            let selected = generate(12, 0.4, &settings, seed)
-                .unwrap_or_else(|error| panic!("Sky Islands seed {seed}: {error}"));
+            let selected = generate(
+                12,
+                0.4,
+                &settings,
+                seed,
+                super::super::vegetation::tests::runtime_art_catalog(),
+            )
+            .unwrap_or_else(|error| panic!("Sky Islands seed {seed}: {error}"));
             assert_eq!(selected.candidates_evaluated, 8);
             if selected.used_fallback {
                 fallback_seeds.push(seed);

@@ -12,34 +12,19 @@ use hex_assets::{
     ObjectCategory, ObjectPart, PlantPart, RuntimeArtCatalog,
 };
 use hex_core::{HexCoord, TilePos};
+use xxhash_rust::xxh3::xxh3_64;
+
+use super::seed::SeedStream;
+use super::world::{FeatureId, FeatureKind, FeaturePlan, PlannedFeature};
+use crate::settings::V3EnvironmentSettings;
 
 pub(super) const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
 pub(super) const TALL_NARROW_ID: &str = "plant/tall-narrow";
 pub(super) const OLD_GROWTH_ID: &str = "plant/old-growth";
 pub(super) const GRASS_TUFT_ID: &str = "prop/grass-tuft";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_SMALL_BROADLEAF_ID: &str = "plant/snowy-small-broadleaf";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_TALL_NARROW_ID: &str = "plant/snowy-tall-narrow";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_OLD_GROWTH_ID: &str = "plant/snowy-old-growth";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_GRASS_TUFT_ID: &str = "prop/snowy-grass-tuft";
 #[expect(
     clippy::allow_attributes,
@@ -119,24 +104,21 @@ impl GrassVegetationSpec {
 
 /// Snow-covered counterparts resolved through the same exact authored contract.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    clippy::allow_attributes,
-    reason = "staged authority is consumed by frozen landform integration"
-)]
 pub(super) struct SnowyVegetationSet {
     pub(super) small_broadleaf: VegetationObjectSpec,
     pub(super) tall_narrow: VegetationObjectSpec,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the snowy old-growth variant is catalogued for galleries; sparse frozen landforms deliberately use smaller trees"
+        )
+    )]
     pub(super) old_growth: VegetationObjectSpec,
     pub(super) grass_tuft: VegetationObjectSpec,
 }
 
 impl SnowyVegetationSet {
-    #[expect(
-        clippy::allow_attributes,
-        reason = "staged sibling-lane authority is deliberately unused on this source branch"
-    )]
-    #[allow(dead_code, reason = "consumed by frozen landform integration")]
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
@@ -169,6 +151,353 @@ impl SnowyVegetationSet {
             )?,
         })
     }
+}
+
+/// Exact temperate or snow-covered vegetation used by non-Forest landforms.
+#[derive(Debug, Clone)]
+pub(super) struct LandformVegetationSet {
+    small_broadleaf: VegetationObjectSpec,
+    tall_narrow: VegetationObjectSpec,
+    grass_tuft: VegetationObjectSpec,
+}
+
+impl LandformVegetationSet {
+    pub(super) fn resolve(
+        catalog: &RuntimeArtCatalog,
+        environment: V3EnvironmentSettings,
+        recipe: &str,
+    ) -> Result<Self, String> {
+        match environment {
+            V3EnvironmentSettings::TemperateGrassland => {
+                let set = TemperateVegetationSet::resolve(catalog, recipe)?;
+                Ok(Self {
+                    small_broadleaf: set.small_broadleaf,
+                    tall_narrow: set.tall_narrow,
+                    grass_tuft: set.grass_tuft,
+                })
+            }
+            V3EnvironmentSettings::Frozen => {
+                let set = SnowyVegetationSet::resolve(catalog, recipe)?;
+                Ok(Self {
+                    small_broadleaf: set.small_broadleaf,
+                    tall_narrow: set.tall_narrow,
+                    grass_tuft: set.grass_tuft,
+                })
+            }
+            unsupported => Err(format!(
+                "{recipe} cannot resolve landform vegetation for {unsupported:?}"
+            )),
+        }
+    }
+
+    fn object(&self, id: &ObjectAssetId) -> Option<&VegetationObjectSpec> {
+        [&self.small_broadleaf, &self.tall_narrow, &self.grass_tuft]
+            .into_iter()
+            .find(|object| object.id == *id)
+    }
+
+    fn tree_order(&self, hash: u64) -> [&VegetationObjectSpec; 2] {
+        if hash.is_multiple_of(3) {
+            [&self.tall_narrow, &self.small_broadleaf]
+        } else {
+            [&self.small_broadleaf, &self.tall_narrow]
+        }
+    }
+}
+
+/// Deterministic feature counts produced by one shared placement pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct LandformVegetationMetrics {
+    pub(super) trees: usize,
+    pub(super) grass: usize,
+}
+
+pub(super) fn landform_vegetation_metrics<'a>(
+    recipe: &str,
+    environment: V3EnvironmentSettings,
+    features: impl IntoIterator<Item = &'a PlannedFeature>,
+) -> Result<LandformVegetationMetrics, String> {
+    let (tree_ids, grass_id) = match environment {
+        V3EnvironmentSettings::TemperateGrassland => {
+            ([SMALL_BROADLEAF_ID, TALL_NARROW_ID], GRASS_TUFT_ID)
+        }
+        V3EnvironmentSettings::Frozen => (
+            [SNOWY_SMALL_BROADLEAF_ID, SNOWY_TALL_NARROW_ID],
+            SNOWY_GRASS_TUFT_ID,
+        ),
+        _ => {
+            let count = features.into_iter().count();
+            return (count == 0)
+                .then_some(LandformVegetationMetrics { trees: 0, grass: 0 })
+                .ok_or_else(|| {
+                    format!(
+                        "{recipe} publishes {count} authored vegetation features in unsupported \
+                         {environment:?}"
+                    )
+                });
+        }
+    };
+    let mut metrics = LandformVegetationMetrics { trees: 0, grass: 0 };
+    for feature in features {
+        let id = feature.object_id.as_str();
+        if tree_ids.contains(&id) && feature.kind == FeatureKind::Tree {
+            metrics.trees = metrics.trees.saturating_add(1);
+        } else if id == grass_id && feature.kind == FeatureKind::TallGrass {
+            metrics.grass = metrics.grass.saturating_add(1);
+        } else {
+            return Err(format!(
+                "{recipe} feature '{}' has the wrong environment or semantic kind",
+                feature.object_id
+            ));
+        }
+    }
+    Ok(metrics)
+}
+
+/// Adds exact authored vegetation while preserving all pre-existing feature IDs.
+///
+/// Every selected tree is tried through all six rotations. A placement is admitted
+/// only when its complete visual volume remains above known support, inside the
+/// supplied surface domain, clear of reserved horizontal columns, and disjoint from
+/// neighboring authored vegetation. Tree blocker footprints are projected from the
+/// same accepted rotation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared placement boundary keeps each spatial authority explicit"
+)]
+pub(super) fn append_landform_vegetation(
+    recipe: &str,
+    objects: &LandformVegetationSet,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    tree_candidates: &BTreeSet<HexCoord>,
+    grass_candidates: &BTreeSet<HexCoord>,
+    reserved: &BTreeSet<HexCoord>,
+    tree_target: usize,
+    grass_target: usize,
+    tree_stream: Option<SeedStream<'_>>,
+    grass_stream: Option<SeedStream<'_>>,
+    features: &mut FeaturePlan,
+    blockers: &mut BTreeSet<TilePos>,
+) -> Result<LandformVegetationMetrics, String> {
+    let mut occupied_visual = BTreeSet::new();
+    for feature in features.by_id.values() {
+        let Some(object) = objects.object(&feature.object_id) else {
+            continue;
+        };
+        let projected = object
+            .project_visual_volume(feature.root, feature.rotation)
+            .ok_or_else(|| {
+                format!(
+                    "{recipe} existing object '{}' cannot project its accepted rotation at {:?}",
+                    feature.object_id, feature.root
+                )
+            })?;
+        occupied_visual.extend(projected.cells);
+    }
+    let mut occupied_blockers = blockers.clone();
+    let mut planned = Vec::with_capacity(tree_target.saturating_add(grass_target));
+
+    let mut tree_roots = tree_candidates
+        .iter()
+        .filter_map(|coord| {
+            (!reserved.contains(coord))
+                .then(|| surfaces.get(coord).copied())
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    tree_roots.sort_unstable_by_key(|root| {
+        (
+            vegetation_priority(tree_stream, root.coord, 0),
+            root.coord,
+            root.level,
+        )
+    });
+    for root in tree_roots {
+        if planned
+            .iter()
+            .filter(|feature: &&PlannedFeature| feature.kind == FeatureKind::Tree)
+            .count()
+            >= tree_target
+        {
+            break;
+        }
+        let family_hash = vegetation_priority(tree_stream, root.coord, 17);
+        let first_rotation = vegetation_rotation(tree_stream, root.coord, 29, recipe)?;
+        let mut selected = None;
+        for object in objects.tree_order(family_hash) {
+            for offset in 0..6 {
+                let rotation =
+                    HexObjectRotation::new(first_rotation.steps().saturating_add(offset) % 6)
+                        .map_err(|error| {
+                            format!("{recipe} authored tree rotation failed: {error}")
+                        })?;
+                let Some((visual, projected_blockers)) = project_landform_object(
+                    object,
+                    root,
+                    rotation,
+                    surfaces,
+                    reserved,
+                    &occupied_visual,
+                    &occupied_blockers,
+                ) else {
+                    continue;
+                };
+                selected = Some((object, rotation, visual, projected_blockers));
+                break;
+            }
+            if selected.is_some() {
+                break;
+            }
+        }
+        let Some((object, rotation, visual, projected_blockers)) = selected else {
+            continue;
+        };
+        occupied_visual.extend(visual);
+        occupied_blockers.extend(projected_blockers.iter().copied());
+        planned.push(PlannedFeature {
+            root,
+            kind: FeatureKind::Tree,
+            object_id: object.id.clone(),
+            rotation,
+            blocker_footprint: projected_blockers,
+        });
+    }
+    let tree_count = planned
+        .iter()
+        .filter(|feature| feature.kind == FeatureKind::Tree)
+        .count();
+    if tree_count != tree_target {
+        return Err(format!(
+            "{recipe} exact authored bounds can place only {tree_count} trees; expected {tree_target}"
+        ));
+    }
+
+    let mut grass_roots = grass_candidates
+        .iter()
+        .filter_map(|coord| {
+            (!reserved.contains(coord))
+                .then(|| surfaces.get(coord).copied())
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    grass_roots.sort_unstable_by_key(|root| {
+        (
+            vegetation_priority(grass_stream, root.coord, 0),
+            root.coord,
+            root.level,
+        )
+    });
+    let grass_start = planned.len();
+    for root in grass_roots {
+        if planned.len().saturating_sub(grass_start) >= grass_target {
+            break;
+        }
+        let rotation = vegetation_rotation(grass_stream, root.coord, 41, recipe)?;
+        let Some((visual, projected_blockers)) = project_landform_object(
+            &objects.grass_tuft,
+            root,
+            rotation,
+            surfaces,
+            reserved,
+            &occupied_visual,
+            &occupied_blockers,
+        ) else {
+            continue;
+        };
+        if !projected_blockers.is_empty() {
+            return Err(format!(
+                "{recipe} grass '{}' unexpectedly projected blockers",
+                objects.grass_tuft.id
+            ));
+        }
+        occupied_visual.extend(visual);
+        planned.push(PlannedFeature {
+            root,
+            kind: FeatureKind::TallGrass,
+            object_id: objects.grass_tuft.id.clone(),
+            rotation,
+            blocker_footprint: BTreeSet::new(),
+        });
+    }
+    let grass_count = planned.len().saturating_sub(grass_start);
+    if grass_count != grass_target {
+        return Err(format!(
+            "{recipe} exact authored bounds can place only {grass_count} grass tufts; expected {grass_target}"
+        ));
+    }
+
+    let first_id = features
+        .by_id
+        .keys()
+        .next_back()
+        .map_or(0, |id| id.0.saturating_add(1));
+    for (offset, feature) in planned.into_iter().enumerate() {
+        let id = FeatureId(first_id.saturating_add(u32::try_from(offset).unwrap_or(u32::MAX)));
+        if features.by_id.insert(id, feature).is_some() {
+            return Err(format!("{recipe} reused feature id {id:?}"));
+        }
+    }
+    *blockers = occupied_blockers;
+    Ok(LandformVegetationMetrics {
+        trees: tree_count,
+        grass: grass_count,
+    })
+}
+
+fn project_landform_object(
+    object: &VegetationObjectSpec,
+    root: TilePos,
+    rotation: HexObjectRotation,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    reserved: &BTreeSet<HexCoord>,
+    occupied_visual: &BTreeSet<TilePos>,
+    occupied_blockers: &BTreeSet<TilePos>,
+) -> Option<(BTreeSet<TilePos>, BTreeSet<TilePos>)> {
+    let projected_blockers = object.project_blockers(root, rotation, surfaces)?;
+    if projected_blockers
+        .iter()
+        .any(|position| reserved.contains(&position.coord) || occupied_blockers.contains(position))
+    {
+        return None;
+    }
+    let volume = object.project_visual_volume(root, rotation)?;
+    if !volume.cells.is_disjoint(occupied_visual)
+        || volume.cells.iter().any(|cell| {
+            reserved.contains(&cell.coord)
+                || surfaces
+                    .get(&cell.coord)
+                    .is_none_or(|support| cell.level <= support.level)
+        })
+    {
+        return None;
+    }
+    Some((volume.cells, projected_blockers))
+}
+
+fn vegetation_rotation(
+    stream: Option<SeedStream<'_>>,
+    coord: HexCoord,
+    salt: u64,
+    recipe: &str,
+) -> Result<HexObjectRotation, String> {
+    let steps = u8::try_from(vegetation_priority(stream, coord, salt) % 6).unwrap_or_default();
+    HexObjectRotation::new(steps)
+        .map_err(|error| format!("{recipe} authored vegetation rotation failed: {error}"))
+}
+
+fn vegetation_priority(stream: Option<SeedStream<'_>>, coord: HexCoord, salt: u64) -> u64 {
+    stream.map_or_else(
+        || {
+            let mut bytes = Vec::with_capacity(56);
+            bytes.extend_from_slice(b"bevy-hex-game/v3/landform-vegetation");
+            bytes.extend_from_slice(&coord.x().to_le_bytes());
+            bytes.extend_from_slice(&coord.y().to_le_bytes());
+            bytes.extend_from_slice(&coord.z().to_le_bytes());
+            bytes.extend_from_slice(&salt.to_le_bytes());
+            xxh3_64(&bytes)
+        },
+        |stream| stream.sample_coord(coord, salt),
+    )
 }
 
 /// Nonblocking cave vegetation resolved as an exact pair of authored props.

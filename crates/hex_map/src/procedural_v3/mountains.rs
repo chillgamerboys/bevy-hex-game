@@ -8,6 +8,7 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
@@ -22,6 +23,9 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::{
+    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+};
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
@@ -46,6 +50,7 @@ const STREAM_SOURCE_OVERLOOK: &str = "stream_source_overlook";
 const STREAM_FALL_OVERLOOK: &str = "stream_fall_overlook";
 const MOUNTAIN_FALL_HEIGHT: Level = 3;
 const STREAM_OVERLOOK_RADIUS: u32 = 3;
+const MOUNTAIN_TREE_TARGET: usize = 2;
 
 /// Deterministic measurements for one admitted Mountains plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,6 +66,7 @@ pub(crate) struct MountainsMetrics {
     pub(crate) cliff_edges: u32,
     pub(crate) high_pass_steps: u32,
     pub(crate) lower_bypass_steps: u32,
+    pub(crate) tree_roots: u32,
 }
 
 #[derive(Debug)]
@@ -68,12 +74,14 @@ struct MountainsRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
     settings: V3MountainsSettings,
+    vegetation: LandformVegetationSet,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MountainStreams<'a> {
     orientation: SeedStream<'a>,
     peaks: SeedStream<'a>,
+    trees: SeedStream<'a>,
 }
 
 #[derive(Debug)]
@@ -90,6 +98,7 @@ pub(crate) fn generate(
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<MountainsMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -99,11 +108,15 @@ pub(crate) fn generate(
     let mountain_settings = recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
+    let vegetation =
+        LandformVegetationSet::resolve(catalog, V3EnvironmentSettings::Frozen, "Mountains")
+            .map_err(V3GenerationError::RecipeContract)?;
     run_recipe(
         &MountainsRecipe {
             level_height,
             layout,
             settings: mountain_settings.clone(),
+            vegetation,
         },
         settings,
         grid_radius,
@@ -123,7 +136,7 @@ impl V3Recipe for MountainsRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.level_height,
@@ -131,6 +144,7 @@ impl V3Recipe for MountainsRecipe {
                 world_seed: context.seed,
                 candidate: context.candidate,
             },
+            &self.vegetation,
         )
         .map_err(CandidateAttemptError::Rejected)?;
         compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
@@ -184,11 +198,12 @@ impl V3Recipe for MountainsRecipe {
             ));
         }
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.level_height,
             PatchBuildMode::CanonicalFallback,
+            &self.vegetation,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -246,11 +261,25 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_patch(
+pub(crate) fn construct_patch_with_catalog(
     patch: PatchRecipeContext<'_>,
     settings: &V3MountainsSettings,
     level_height: f32,
     mode: PatchBuildMode,
+    catalog: &RuntimeArtCatalog,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let vegetation =
+        LandformVegetationSet::resolve(catalog, V3EnvironmentSettings::Frozen, "Mountains")
+            .map_err(|error| vec![recipe_issue(error)])?;
+    construct_patch_with_objects(patch, settings, level_height, mode, &vegetation)
+}
+
+fn construct_patch_with_objects(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3MountainsSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+    vegetation: &LandformVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let streams = mode.seed_streams(&patch);
     construct_patch_with_streams(
@@ -260,7 +289,9 @@ pub(crate) fn construct_patch(
         streams.map(|streams| MountainStreams {
             orientation: streams.stage("mountains.orientation"),
             peaks: streams.stage("mountains.peaks"),
+            trees: streams.stage("mountains.vegetation.trees"),
         }),
+        vegetation,
     )
 }
 
@@ -269,6 +300,7 @@ fn construct_patch_with_streams(
     settings: &V3MountainsSettings,
     level_height: f32,
     streams: Option<MountainStreams<'_>>,
+    vegetation: &LandformVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let mask = patch.mask().clone();
     let orientation = streams.map_or(0, |streams| {
@@ -493,7 +525,7 @@ fn construct_patch_with_streams(
             stream_overlook(&reachable, stream.fall)?,
         );
     }
-    let features = FeaturePlan {
+    let mut features = FeaturePlan {
         by_id: BTreeMap::new(),
         protected_routes: BTreeMap::from([
             (HIGH_PASS.to_owned(), high_route),
@@ -501,6 +533,46 @@ fn construct_patch_with_streams(
         ]),
         clearings: BTreeMap::new(),
     };
+    let ordinary_surfaces = volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut vegetation_reserved = mountain_streams
+        .iter()
+        .flat_map(|stream| stream.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    vegetation_reserved.extend(
+        features
+            .protected_routes
+            .values()
+            .flat_map(|route| route.surfaces.iter().map(|surface| surface.coord))
+            .chain(anchors.values().map(|anchor| anchor.coord))
+            .chain(patch.protected_approaches()),
+    );
+    let tree_candidates = ordinary_surfaces
+        .keys()
+        .filter(|coord| !vegetation_reserved.contains(coord))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut blockers = BTreeSet::new();
+    append_landform_vegetation(
+        "Mountains",
+        vegetation,
+        &ordinary_surfaces,
+        &tree_candidates,
+        &BTreeSet::new(),
+        &vegetation_reserved,
+        MOUNTAIN_TREE_TARGET,
+        0,
+        streams.map(|streams| streams.trees),
+        None,
+        &mut features,
+        &mut blockers,
+    )
+    .map_err(|error| vec![recipe_issue(error)])?;
     let biome_regions = volume
         .surfaces
         .keys()
@@ -530,7 +602,7 @@ fn construct_patch_with_streams(
         },
         features,
         structures: StructurePlan::default(),
-        blockers: BTreeSet::new(),
+        blockers,
         lights: BTreeMap::new(),
         biome_regions,
         interiors: InteriorPlan::default(),
@@ -1315,6 +1387,7 @@ pub(crate) fn validate_mountains(
         settings,
         settings.base_level.saturating_add(settings.relief / 2),
         1,
+        &BTreeSet::new(),
     )
 }
 
@@ -1368,6 +1441,14 @@ pub(crate) fn validate_patch(
         .map(|coord| HexCoord::ORIGIN.distance(*coord))
         .max()
         .unwrap_or_default();
+    let protected_approaches = match seam_approaches
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(protected) => protected,
+        Err(issue) => return WorldValidation::Invalid(vec![issue]),
+    };
     validate_mountains_inner(
         &local,
         settings,
@@ -1379,6 +1460,7 @@ pub(crate) fn validate_patch(
                     .and_then(|(is_source, port)| is_source.then_some(port.lanes.len()))
             })
             .sum(),
+        &protected_approaches,
     )
 }
 
@@ -1387,6 +1469,7 @@ fn validate_mountains_inner(
     settings: &V3MountainsSettings,
     required_saddle: Level,
     expected_streams: usize,
+    additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<MountainsMetrics> {
     let mut issues = plan.validate();
     validate_mountain_streams(plan, settings, expected_streams, &mut issues);
@@ -1511,6 +1594,56 @@ fn validate_mountains_inner(
         issues.push(recipe_issue("Mountains contains no deliberate cliff edges"));
     }
     validate_shared_approaches(plan, &ordinary, &mut issues);
+    let vegetation = landform_vegetation_metrics(
+        "Mountains",
+        V3EnvironmentSettings::Frozen,
+        plan.features.by_id.values(),
+    )
+    .unwrap_or_else(|error| {
+        issues.push(recipe_issue(error));
+        super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+    });
+    if !(1..=2).contains(&vegetation.trees) || vegetation.grass != 0 {
+        issues.push(recipe_issue(format!(
+            "Mountains has {} frozen trees and {} grass tufts; expected 1 through 2 trees and no grass",
+            vegetation.trees, vegetation.grass
+        )));
+    }
+    let mut vegetation_reserved = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.keys().map(|position| position.coord))
+        .collect::<BTreeSet<_>>();
+    vegetation_reserved.extend(
+        plan.features
+            .protected_routes
+            .values()
+            .flat_map(|route| route.surfaces.iter().map(|surface| surface.coord))
+            .chain(plan.anchors.values().map(|anchor| anchor.coord))
+            .chain(additional_vegetation_protected.iter().copied()),
+    );
+    if plan
+        .features
+        .by_id
+        .values()
+        .any(|feature| vegetation_reserved.contains(&feature.root.coord))
+    {
+        issues.push(recipe_issue(
+            "Mountains frozen trees leave dry terrain or a protected route, anchor, seam, or stream clearance",
+        ));
+    }
+    let authored_blockers = plan
+        .features
+        .by_id
+        .values()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if authored_blockers != plan.blockers {
+        issues.push(recipe_issue(
+            "Mountains blockers must exactly equal its authored tree footprints",
+        ));
+    }
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
     }
@@ -1533,6 +1666,7 @@ fn validate_mountains_inner(
         cliff_edges,
         high_pass_steps: count_u32(high_pass.centerline.len().saturating_sub(1)),
         lower_bypass_steps,
+        tree_roots: count_u32(vegetation.trees),
     })
 }
 
@@ -1940,8 +2074,22 @@ mod tests {
     #[test]
     fn native_mountains_are_broad_sharp_and_offer_two_routes() {
         let settings = settings();
-        let first = generate(12, 0.4, &settings, 5_181).expect("valid Mountains");
-        let second = generate(12, 0.4, &settings, 5_181).expect("same valid Mountains");
+        let first = generate(
+            12,
+            0.4,
+            &settings,
+            5_181,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Mountains");
+        let second = generate(
+            12,
+            0.4,
+            &settings,
+            5_181,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("same valid Mountains");
 
         assert_eq!(
             first.validated.semantic_fingerprint,
@@ -2023,7 +2171,14 @@ mod tests {
             },
             _ => unreachable!("test uses Single"),
         };
-        let selected = generate(12, 0.4, &settings, 5_181).expect("valid Mountains");
+        let selected = generate(
+            12,
+            0.4,
+            &settings,
+            5_181,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Mountains");
         let mut corrupted = selected.validated.plan;
         let body = corrupted
             .liquids
@@ -2079,9 +2234,23 @@ mod tests {
     fn revised_mountains_validate_supported_radius_coverage() {
         let settings = settings();
         for radius in [12, 20, 40] {
-            let selected = generate(radius, 0.4, &settings, 1_592_598_566)
-                .unwrap_or_else(|error| panic!("Mountains radius {radius}: {error}"));
+            let selected = generate(
+                radius,
+                0.4,
+                &settings,
+                1_592_598_566,
+                super::super::vegetation::tests::runtime_art_catalog(),
+            )
+            .unwrap_or_else(|error| panic!("Mountains radius {radius}: {error}"));
             assert_eq!(selected.metrics.relief, 32);
+            assert_eq!(selected.metrics.tree_roots, 2);
+            assert!(selected
+                .validated
+                .plan
+                .features
+                .by_id
+                .values()
+                .all(|feature| feature.object_id.as_str().contains("snowy-")));
             assert!(
                 percent(
                     usize::try_from(selected.metrics.accessible_mountain_surfaces)
@@ -2099,8 +2268,14 @@ mod tests {
         seeds.insert(1_592_598_566);
         let mut fallback_seeds = Vec::new();
         for seed in seeds {
-            let selected = generate(12, 0.4, &settings, seed)
-                .unwrap_or_else(|error| panic!("Mountains seed {seed}: {error}"));
+            let selected = generate(
+                12,
+                0.4,
+                &settings,
+                seed,
+                super::super::vegetation::tests::runtime_art_catalog(),
+            )
+            .unwrap_or_else(|error| panic!("Mountains seed {seed}: {error}"));
             assert_eq!(selected.candidates_evaluated, 8);
             if selected.used_fallback {
                 fallback_seeds.push(seed);
@@ -2119,6 +2294,13 @@ mod tests {
             unreachable!("test uses Single")
         };
         patch.environment = V3EnvironmentSettings::Rocky;
-        assert!(generate(12, 0.4, &settings, 1).is_err());
+        assert!(generate(
+            12,
+            0.4,
+            &settings,
+            1,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .is_err());
     }
 }

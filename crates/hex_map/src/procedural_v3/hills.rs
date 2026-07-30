@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
@@ -20,13 +21,17 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::{
+    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+};
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedStructure, ProtectedFeatureRoute,
-    StructureId, StructureKind, StructurePlan, WorldIssueCode, WorldValidationIssue,
+    FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedStructure,
+    ProtectedFeatureRoute, StructureId, StructureKind, StructurePlan, WorldIssueCode,
+    WorldValidationIssue,
 };
 use super::V3GenerationError;
 use crate::settings::{
@@ -46,6 +51,8 @@ const APPROACH_HALF_LENGTH: i32 = 3;
 const RIVER_DEPTH: Level = 3;
 const SMALL_FALL_HEIGHT: Level = 3;
 const FROZEN_ICE_CAP_TARGET: usize = 5;
+const HILLS_TREE_TARGET: usize = 3;
+const HILLS_GRASS_PERCENT: usize = 70;
 
 /// Deterministic measurements for one admitted Hills plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +65,9 @@ pub(crate) struct HillsMetrics {
     pub(crate) barrier_cells: u32,
     pub(crate) bridge_surfaces: u32,
     pub(crate) alternate_crossing_surfaces: u32,
+    pub(crate) tree_roots: u32,
+    pub(crate) grass_roots: u32,
+    pub(crate) valley_grass_percent: u32,
 }
 
 #[derive(Debug)]
@@ -66,6 +76,15 @@ struct HillsRecipe {
     layout: ResolvedLayoutPlan,
     settings: V3HillsSettings,
     environment: V3EnvironmentSettings,
+    vegetation: Option<LandformVegetationSet>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct HillsStreams<'a> {
+    pub(super) orientation: SeedStream<'a>,
+    pub(super) centres: SeedStream<'a>,
+    pub(super) trees: SeedStream<'a>,
+    pub(super) grass: SeedStream<'a>,
 }
 
 /// Runs the common eight-candidate selector for one native V3 Hills world.
@@ -74,6 +93,7 @@ pub(crate) fn generate(
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<HillsMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -83,12 +103,24 @@ pub(crate) fn generate(
     let (hills, environment) = recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
+    let vegetation = if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) {
+        Some(
+            LandformVegetationSet::resolve(catalog, environment, "Hills")
+                .map_err(V3GenerationError::RecipeContract)?,
+        )
+    } else {
+        None
+    };
     run_recipe(
         &HillsRecipe {
             level_height,
             layout,
             settings: hills.clone(),
             environment,
+            vegetation,
         },
         settings,
         grid_radius,
@@ -108,7 +140,7 @@ impl V3Recipe for HillsRecipe {
     ) -> Result<GeneratedWorldPlan, CandidateAttemptError> {
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))
             .map_err(CandidateAttemptError::Fatal)?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.environment,
@@ -117,6 +149,7 @@ impl V3Recipe for HillsRecipe {
                 world_seed: context.seed,
                 candidate: context.candidate,
             },
+            self.vegetation.as_ref(),
         )
         .map_err(CandidateAttemptError::Rejected)?;
         compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
@@ -131,7 +164,7 @@ impl V3Recipe for HillsRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_hills(plan, &self.settings)
+        validate_hills(plan, &self.settings, self.environment)
     }
 
     fn repair(
@@ -171,12 +204,13 @@ impl V3Recipe for HillsRecipe {
             ));
         }
         let patch = PatchRecipeContext::resolve(&self.layout, PatchId(0))?;
-        let fragment = construct_patch(
+        let fragment = construct_patch_with_objects(
             patch,
             &self.settings,
             self.environment,
             self.level_height,
             PatchBuildMode::CanonicalFallback,
+            self.vegetation.as_ref(),
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -234,12 +268,42 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
     }
 }
 
-pub(crate) fn construct_patch(
+pub(crate) fn construct_patch_with_catalog(
     patch: PatchRecipeContext<'_>,
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
     mode: PatchBuildMode,
+    catalog: &RuntimeArtCatalog,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let vegetation = if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) {
+        Some(
+            LandformVegetationSet::resolve(catalog, environment, "Hills")
+                .map_err(|error| vec![recipe_issue(error)])?,
+        )
+    } else {
+        None
+    };
+    construct_patch_with_objects(
+        patch,
+        settings,
+        environment,
+        level_height,
+        mode,
+        vegetation.as_ref(),
+    )
+}
+
+fn construct_patch_with_objects(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3HillsSettings,
+    environment: V3EnvironmentSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+    vegetation: Option<&LandformVegetationSet>,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let streams = mode.seed_streams(&patch);
     construct_patch_with_streams(
@@ -247,12 +311,13 @@ pub(crate) fn construct_patch(
         settings,
         environment,
         level_height,
-        streams.map(|streams| {
-            (
-                streams.stage("hills.orientation"),
-                streams.stage("hills.centres"),
-            )
+        streams.map(|streams| HillsStreams {
+            orientation: streams.stage("hills.orientation"),
+            centres: streams.stage("hills.centres"),
+            trees: streams.stage("hills.vegetation.trees"),
+            grass: streams.stage("hills.vegetation.grass"),
         }),
+        vegetation,
     )
 }
 
@@ -261,7 +326,8 @@ pub(crate) fn construct_patch_with_streams(
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
     level_height: f32,
-    streams: Option<(SeedStream<'_>, SeedStream<'_>)>,
+    streams: Option<HillsStreams<'_>>,
+    vegetation: Option<&LandformVegetationSet>,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
         .map_err(|error| vec![recipe_issue(format!("Hills local frame failed: {error}"))])?;
@@ -270,10 +336,10 @@ pub(crate) fn construct_patch_with_streams(
             "Hills local mask conversion failed: {error}"
         ))]
     })?;
-    let requested_orientation = streams.map_or(0, |(orientation, _)| {
-        u8::try_from(orientation.sample(0) % 6).unwrap_or_default()
+    let requested_orientation = streams.map_or(0, |streams| {
+        u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
-    let centre_stream = streams.map(|(_, centres)| centres);
+    let centre_stream = streams.map(|streams| streams.centres);
     let protected = patch
         .protected_approaches()
         .into_iter()
@@ -598,7 +664,7 @@ pub(crate) fn construct_patch_with_streams(
         &crossings.ford_route,
         &ordinary_by_coord,
     )?;
-    let features = FeaturePlan {
+    let mut features = FeaturePlan {
         by_id: BTreeMap::new(),
         protected_routes: BTreeMap::from([
             (BRIDGE_ROUTE.to_owned(), bridge_route),
@@ -606,6 +672,57 @@ pub(crate) fn construct_patch_with_streams(
         ]),
         clearings: BTreeMap::new(),
     };
+    let mut blockers = BTreeSet::new();
+    if let Some(vegetation) = vegetation {
+        let mut reserved = crossings.river.clone();
+        for coord in features
+            .protected_routes
+            .values()
+            .flat_map(|route| route.surfaces.iter().map(|surface| surface.coord))
+            .chain(anchors.values().map(|anchor| anchor.coord))
+            .chain(patch.protected_approaches())
+        {
+            reserved.extend(coord.within_radius(2));
+        }
+        let valley_candidates = ordinary_by_coord
+            .iter()
+            .filter_map(|(coord, position)| {
+                (position.level
+                    <= vegetation_valley_ceiling(settings, patch.layout().kind.is_composite()))
+                .then_some(*coord)
+            })
+            .collect::<BTreeSet<_>>();
+        let eligible_valley = valley_candidates
+            .difference(&reserved)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let eligible_dry = ordinary_by_coord
+            .keys()
+            .filter(|coord| !reserved.contains(coord))
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let grass_target =
+            hills_grass_target(eligible_valley.len()).map_err(|error| vec![recipe_issue(error)])?;
+        append_landform_vegetation(
+            if environment == V3EnvironmentSettings::Frozen {
+                "Frozen Hills"
+            } else {
+                "Hills"
+            },
+            vegetation,
+            &ordinary_by_coord,
+            &eligible_dry,
+            &eligible_valley,
+            &reserved,
+            HILLS_TREE_TARGET,
+            grass_target,
+            streams.map(|streams| streams.trees),
+            streams.map(|streams| streams.grass),
+            &mut features,
+            &mut blockers,
+        )
+        .map_err(|error| vec![recipe_issue(error)])?;
+    }
     let liquid_material = if environment == V3EnvironmentSettings::Volcanic {
         FillMaterialRole::Lava
     } else {
@@ -663,7 +780,7 @@ pub(crate) fn construct_patch_with_streams(
                 },
             )]),
         },
-        blockers: BTreeSet::new(),
+        blockers,
         lights: BTreeMap::new(),
         biome_regions,
         interiors: InteriorPlan::default(),
@@ -1439,14 +1556,16 @@ fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColu
 pub(crate) fn validate_hills(
     plan: &GeneratedWorldPlan,
     settings: &V3HillsSettings,
+    environment: V3EnvironmentSettings,
 ) -> WorldValidation<HillsMetrics> {
-    validate_hills_inner(plan, settings, true)
+    validate_hills_inner(plan, settings, environment, true, false, &BTreeSet::new())
 }
 
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     fragment: &GeneratedPatchPlan,
     settings: &V3HillsSettings,
+    environment: V3EnvironmentSettings,
 ) -> WorldValidation<HillsMetrics> {
     let frame =
         match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
@@ -1457,8 +1576,24 @@ pub(crate) fn validate_patch(
                 ))]);
             }
         };
+    let protected_approaches = match patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(protected) => protected,
+        Err(issue) => return WorldValidation::Invalid(vec![issue]),
+    };
     match frame.canonical_local_world(fragment) {
-        Ok(plan) => validate_hills_inner(&plan, settings, false),
+        Ok(plan) => validate_hills_inner(
+            &plan,
+            settings,
+            environment,
+            false,
+            patch.layout().kind.is_composite(),
+            &protected_approaches,
+        ),
         Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
             "Hills validation projection failed: {error}"
         ))]),
@@ -1468,7 +1603,10 @@ pub(crate) fn validate_patch(
 fn validate_hills_inner(
     plan: &GeneratedWorldPlan,
     settings: &V3HillsSettings,
+    environment: V3EnvironmentSettings,
     validate_common: bool,
+    composite_layout: bool,
+    additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<HillsMetrics> {
     let mut issues = if validate_common {
         plan.validate()
@@ -1578,6 +1716,108 @@ fn validate_hills_inner(
         .any(|position| solid_material_at(&plan.volume, position) == Some(SolidMaterialRole::Snow));
     validate_frozen_ice_caps(plan, frozen, &protected_surfaces, &mut issues);
     validate_small_fall(plan, validate_common, &mut issues);
+    let vegetation = landform_vegetation_metrics(
+        if environment == V3EnvironmentSettings::Frozen {
+            "Frozen Hills"
+        } else {
+            "Hills"
+        },
+        environment,
+        plan.features.by_id.values(),
+    )
+    .map_err(recipe_issue);
+    let vegetation = match vegetation {
+        Ok(metrics) => metrics,
+        Err(issue) => {
+            issues.push(issue);
+            super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+        }
+    };
+    if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) && !(2..=5).contains(&vegetation.trees)
+    {
+        issues.push(recipe_issue(format!(
+            "Hills has {} authored trees; expected 2 through 5",
+            vegetation.trees
+        )));
+    }
+    let mut vegetation_reserved = fill_coords.clone();
+    for coord in protected_surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .chain(plan.anchors.values().map(|anchor| anchor.coord))
+        .chain(
+            plan.layout
+                .shared_edges
+                .values()
+                .flat_map(|edge| edge.protected_approaches.values())
+                .flatten()
+                .copied()
+                .chain(additional_vegetation_protected.iter().copied()),
+        )
+    {
+        vegetation_reserved.extend(coord.within_radius(2));
+    }
+    let eligible_valley = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && position.level <= vegetation_valley_ceiling(settings, composite_layout)
+                && !vegetation_reserved.contains(&position.coord))
+            .then_some(position.coord)
+        })
+        .collect::<BTreeSet<_>>();
+    let eligible_dry = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && !vegetation_reserved.contains(&position.coord))
+            .then_some(position.coord)
+        })
+        .collect::<BTreeSet<_>>();
+    if plan
+        .features
+        .by_id
+        .values()
+        .any(|feature| match feature.kind {
+            FeatureKind::Tree => !eligible_dry.contains(&feature.root.coord),
+            FeatureKind::TallGrass => !eligible_valley.contains(&feature.root.coord),
+        })
+    {
+        issues.push(recipe_issue(
+            "Hills authored vegetation leaves eligible dry terrain, the grass valley, or its protected clearances",
+        ));
+    }
+    let authored_blockers = plan
+        .features
+        .by_id
+        .values()
+        .flat_map(|feature| feature.blocker_footprint.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if authored_blockers != plan.blockers {
+        issues.push(recipe_issue(
+            "Hills blockers must exactly equal its authored tree footprints",
+        ));
+    }
+    let valley_grass_percent = percent(vegetation.grass, eligible_valley.len());
+    if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) && !(65..=80).contains(&valley_grass_percent)
+    {
+        issues.push(recipe_issue(format!(
+            "Hills covers {valley_grass_percent}% of eligible valley surfaces with grass \
+             ({}/{}); expected 65 through 80%",
+            vegetation.grass,
+            eligible_valley.len()
+        )));
+    }
 
     let bridge_barrier: BTreeSet<_> = bridge
         .surfaces
@@ -1655,6 +1895,9 @@ fn validate_hills_inner(
         barrier_cells: count_u32(fill_coords.len()),
         bridge_surfaces: count_u32(bridge.surfaces.len()),
         alternate_crossing_surfaces: count_u32(alternate.surfaces.len()),
+        tree_roots: count_u32(vegetation.trees),
+        grass_roots: count_u32(vegetation.grass),
+        valley_grass_percent,
     })
 }
 
@@ -2139,6 +2382,42 @@ fn count_u32(value: usize) -> u32 {
     u32::try_from(value).unwrap_or(u32::MAX)
 }
 
+fn percent(part: usize, total: usize) -> u32 {
+    count_u32(part)
+        .saturating_mul(100)
+        .checked_div(count_u32(total))
+        .unwrap_or_default()
+}
+
+fn hills_grass_target(eligible: usize) -> Result<usize, String> {
+    if eligible == 0 {
+        return Err("Hills has no eligible valley surface for authored grass".to_owned());
+    }
+    let minimum = eligible.saturating_mul(65).div_ceil(100);
+    let maximum = eligible.saturating_mul(80) / 100;
+    if minimum > maximum {
+        return Err(format!(
+            "Hills cannot realize integral 65-80% grass coverage across {eligible} eligible valley surfaces"
+        ));
+    }
+    Ok(eligible
+        .saturating_mul(HILLS_GRASS_PERCENT)
+        .div_ceil(100)
+        .clamp(minimum, maximum))
+}
+
+pub(super) fn vegetation_valley_ceiling(
+    settings: &V3HillsSettings,
+    composite_layout: bool,
+) -> Level {
+    let lower_band = if composite_layout {
+        settings.max_relief.saturating_div(2)
+    } else {
+        settings.max_relief.saturating_div(3)
+    };
+    settings.valley_level.saturating_add(lower_band.max(2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2176,19 +2455,36 @@ mod tests {
     #[test]
     fn native_hills_are_deterministic_connected_and_stratified() {
         let settings = settings();
-        let first = generate(12, 0.4, &settings, 883).expect("valid Hills");
-        let second = generate(12, 0.4, &settings, 883).expect("same valid Hills");
+        let first = generate(
+            12,
+            0.4,
+            &settings,
+            883,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Hills");
+        let second = generate(
+            12,
+            0.4,
+            &settings,
+            883,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("same valid Hills");
         assert_eq!(
             first.validated.semantic_fingerprint,
             second.validated.semantic_fingerprint
         );
-        assert_eq!(first.metrics.ordinary_surfaces, 408);
+        assert_eq!(first.metrics.ordinary_surfaces, 405);
         assert_eq!(first.metrics.hill_centres, 6);
         assert_eq!(first.metrics.barrier_cells, 73);
         assert_eq!(first.metrics.bridge_surfaces, 14);
         assert_eq!(first.metrics.alternate_crossing_surfaces, 14);
         assert!(first.metrics.relief <= 8);
         assert!(first.metrics.reachable_elevation_levels >= 2);
+        assert_eq!(first.metrics.tree_roots, 3);
+        assert!((65..=80).contains(&first.metrics.valley_grass_percent));
+        assert!(first.metrics.grass_roots > 0);
 
         let plan = &first.validated.plan;
         assert_eq!(plan.volume.columns.len(), 469);
@@ -2246,7 +2542,23 @@ mod tests {
             unreachable!("test uses Single")
         };
         frozen_patch.environment = V3EnvironmentSettings::Frozen;
-        let frozen = generate(12, 0.4, &frozen, 91).expect("valid Frozen Hills");
+        let frozen = generate(
+            12,
+            0.4,
+            &frozen,
+            91,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Frozen Hills");
+        assert_eq!(frozen.metrics.tree_roots, 3);
+        assert!((65..=80).contains(&frozen.metrics.valley_grass_percent));
+        assert!(frozen
+            .validated
+            .plan
+            .features
+            .by_id
+            .values()
+            .all(|feature| feature.object_id.as_str().contains("snowy-")));
         assert!(frozen
             .validated
             .plan
@@ -2280,7 +2592,14 @@ mod tests {
             unreachable!("test uses Single")
         };
         volcanic_patch.environment = V3EnvironmentSettings::Volcanic;
-        let volcanic = generate(12, 0.4, &volcanic, 91).expect("valid Volcanic Hills");
+        let volcanic = generate(
+            12,
+            0.4,
+            &volcanic,
+            91,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("valid Volcanic Hills");
         let plan = &volcanic.validated.plan;
         assert!(plan
             .liquids
@@ -2321,8 +2640,14 @@ mod tests {
                 unreachable!("test uses Hills")
             };
             hills.max_relief = 12;
-            let selected =
-                generate(12, 0.4, &revised, 1_592_598_566).expect("revised Hills should generate");
+            let selected = generate(
+                12,
+                0.4,
+                &revised,
+                1_592_598_566,
+                super::super::vegetation::tests::runtime_art_catalog(),
+            )
+            .expect("revised Hills should generate");
             assert!(selected.metrics.relief >= 10);
             let plan = &selected.validated.plan;
             let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
@@ -2360,8 +2685,14 @@ mod tests {
             hills.max_relief = 12;
             let mut fallback_seeds = Vec::new();
             for seed in &seeds {
-                let selected = generate(12, 0.4, &revised, *seed)
-                    .unwrap_or_else(|error| panic!("{environment:?} Hills seed {seed}: {error}"));
+                let selected = generate(
+                    12,
+                    0.4,
+                    &revised,
+                    *seed,
+                    super::super::vegetation::tests::runtime_art_catalog(),
+                )
+                .unwrap_or_else(|error| panic!("{environment:?} Hills seed {seed}: {error}"));
                 if selected.used_fallback {
                     fallback_seeds.push(*seed);
                 }
@@ -2382,6 +2713,13 @@ mod tests {
             unreachable!("test uses Single")
         };
         patch.environment = V3EnvironmentSettings::Rocky;
-        assert!(generate(12, 0.4, &settings, 1).is_err());
+        assert!(generate(
+            12,
+            0.4,
+            &settings,
+            1,
+            super::super::vegetation::tests::runtime_art_catalog(),
+        )
+        .is_err());
     }
 }
