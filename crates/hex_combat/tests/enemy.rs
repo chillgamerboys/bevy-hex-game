@@ -17,8 +17,8 @@ use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
-    SwatchId,
+    ArtPalette, ElementCatalog, ElementFile, PaletteSwatch, PlayerSettings, SrgbColor, Substance,
+    SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_combat::{
     AiDecisionTraces, CombatSummary, CombatTranscriptRecorder, EncounterOutcome,
@@ -607,6 +607,63 @@ fn an_adjacent_enemy_attacks_without_moving() {
         Some(adjacent),
         "an attack should not change which surface the enemy stands on"
     );
+}
+
+#[test]
+fn a_depleted_enemy_channels_only_from_its_canonical_legal_actions() {
+    let mut app = test_app();
+    let elements = ElementCatalog::from_file(&ElementFile {
+        wheel: vec!["Fire".to_owned(), "Water".to_owned()],
+        fusions: bevy::platform::collections::HashMap::default(),
+    });
+    let Some(fire) = elements.id("Fire") else {
+        unreachable!("the fixture defines Fire")
+    };
+    app.insert_resource(elements);
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+        10,
+    );
+    let gem = LatticeCoord::ORIGIN;
+    let spec = LatticeSpec::default().with(gem, CellKind::Gem { element: fire });
+    let empty = LatticeStats::default();
+    let state = LatticeState::new(&spec, &empty);
+    let stats = LatticeStats::new(BTreeMap::from([(fire, 3)]), BTreeMap::from([(fire, 2)]));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert((spec, state, stats));
+    enter_gameplay(&mut app);
+
+    end_turn(&mut app);
+
+    let enemy_id = unit_id(&app, enemy);
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let Some(trace) = traces.entries.last() else {
+        panic!("the enemy should produce a decision trace")
+    };
+    assert!(
+        trace
+            .legal_actions
+            .actions()
+            .iter()
+            .any(|action| action.command == GameCommand::Channel { unit: enemy_id }),
+        "combat must place Channel in the canonical set before the algorithm can choose it"
+    );
+    assert_eq!(
+        trace.command,
+        Some(GameCommand::Channel { unit: enemy_id }),
+        "the baseline's depleted-lattice choice is deterministic"
+    );
+    assert_eq!(
+        app.world()
+            .get::<LatticeState>(enemy)
+            .map(|state| state.mana(gem)),
+        Some(2)
+    );
+    assert_eq!(app.world().resource::<CombatSummary>().channels, 1);
 }
 
 /// A hostile strike can park resolution on a human defender choice. The AI must not

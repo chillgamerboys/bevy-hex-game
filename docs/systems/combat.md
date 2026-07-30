@@ -136,6 +136,28 @@ authored amount and the cells currently disabled. Restoring at least one cell re
 `Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
 it rejoins the initiative sort by initiative then stable `UnitId`.
 
+### Channel closes the mana loop
+
+`GameCommand::Channel` is a canonical combat action for an active, non-downed unit
+whose one action remains. The command passes through the same modal, seat, turn,
+busy, and action gates as casting and striking. It consumes exactly that action even
+when every eligible gem is already full; it neither spends movement nor grants
+another action.
+
+The applier delegates the refill itself to `hex_lattice::channel`. For each element
+in stable ID order, the unit's Channelling budget fills live unlocked gems in
+`LatticeCoord` order up to their per-gem Attunement capacity. Disabled cells are not
+repaired and enchantment locks are not bypassed. The returned per-element amounts are
+resolved through the loaded element catalog before mutation and emitted as one
+`CombatEvent::Channelled` under stable names. Missing or inconsistent catalog/lattice
+facts fail closed.
+
+The player action panel emits Channel through the command queue. Combat includes it
+in the baseline AI's canonical legal-action set only when the actor carries the full
+lattice/spec/stats contract; the deterministic baseline selects it when a live gem is
+empty and no higher-priority restoration, reveal, damaging cast, enchantment, or
+strike applies.
+
 ### Focused automation and Party Trial
 
 `CombatSummary` is the session-scoped, serde-capable verification artifact. It records

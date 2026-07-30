@@ -24,7 +24,7 @@ use hex_core::{
     IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems, PendingDecision, Screen,
     Sextant, TilePos, Turn, UnitId,
 };
-use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState};
+use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
     targeting, volumes, Body, Downed, Enemy, Faction, Footing, Player, Reach, StandsOn,
@@ -116,6 +116,7 @@ type UnitQuery<'w, 's> = Query<
         Option<&'static AiController>,
         Option<&'static LatticeSpec>,
         Option<&'static LatticeState>,
+        Option<&'static LatticeStats>,
         Has<Enemy>,
     ),
 >;
@@ -277,7 +278,7 @@ fn drive_ai(
     let Ok(actor) = units.get(actor_entity) else {
         return;
     };
-    if !actor.12 || actor.7 {
+    if !actor.13 || actor.7 {
         return;
     }
     if kind == AiDecisionKind::TurnAction && actor.5.is_none() {
@@ -556,6 +557,7 @@ fn enumerate_turn_actions(
         Option<&AiController>,
         Option<&LatticeSpec>,
         Option<&LatticeState>,
+        Option<&LatticeStats>,
         bool,
     ),
     units: &UnitQuery,
@@ -600,6 +602,9 @@ fn enumerate_turn_actions(
     let mut commands = vec![GameCommand::EndTurn { unit: id }];
     if turn.acted {
         return commands;
+    }
+    if !actor.6 && actor.10.is_some() && actor.11.is_some() && actor.12.is_some() {
+        commands.push(GameCommand::Channel { unit: id });
     }
 
     if turn.movement_left > 0 {
@@ -793,6 +798,7 @@ fn build_observation(
         Option<&AiController>,
         Option<&LatticeSpec>,
         Option<&LatticeState>,
+        Option<&LatticeStats>,
         bool,
     ),
     units: &UnitQuery,
@@ -903,6 +909,7 @@ fn allied(
         Option<&AiController>,
         Option<&LatticeSpec>,
         Option<&LatticeState>,
+        Option<&LatticeStats>,
         bool,
     ),
     spells: Option<&SpellBook>,
@@ -1049,15 +1056,16 @@ fn command_semantic_key(command: &GameCommand) -> String {
             unit.0,
             tile_key(target)
         ),
-        GameCommand::EndTurn { unit } => format!("3:{:010}", unit.0),
+        GameCommand::Channel { unit } => format!("3:{:010}", unit.0),
+        GameCommand::EndTurn { unit } => format!("4:{:010}", unit.0),
         GameCommand::ChooseDisables { unit, cells } => {
-            format!("4:{:010}:{cells:?}", unit.0)
+            format!("5:{:010}:{cells:?}", unit.0)
         }
         GameCommand::ChooseRestores {
             unit,
             target,
             cells,
-        } => format!("5:{:010}:{:010}:{cells:?}", unit.0, target.0),
+        } => format!("6:{:010}:{:010}:{cells:?}", unit.0, target.0),
         other => format!("9:{other:?}"),
     }
 }

@@ -627,6 +627,16 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
         return Some(key);
     }
 
+    if request.observation.actor.lattice.cells.iter().any(|cell| {
+        cell.kind == Some(AiCellKind::Gem) && cell.disabled == Some(false) && cell.mana == Some(0)
+    }) {
+        if let Some(key) = actions.iter().find_map(|action| {
+            matches!(action.command, GameCommand::Channel { .. }).then_some(action.key)
+        }) {
+            return Some(key);
+        }
+    }
+
     actions
         .iter()
         .filter_map(|action| match &action.command {
@@ -999,6 +1009,35 @@ mod tests {
                 .resolve(last)
                 .map(|action| &action.command),
             Some(GameCommand::EndTurn { .. })
+        ));
+    }
+
+    #[test]
+    fn baseline_channels_a_depleted_lattice_from_the_canonical_set() {
+        let mut request = request();
+        request.observation.actor.lattice.cells = vec![AiLatticeCell {
+            coord: LatticeCoord::ORIGIN,
+            kind: Some(AiCellKind::Gem),
+            disabled: Some(false),
+            mana: Some(0),
+        }];
+        request.legal_actions = LegalActionSet::from_canonical_commands(
+            LegalActionFingerprint(10),
+            vec![
+                GameCommand::EndTurn { unit: UnitId(1) },
+                GameCommand::Channel { unit: UnitId(1) },
+            ],
+        );
+
+        let AiSelection::Action(key) = BaselineAlgorithm.select(&request) else {
+            panic!("a normal turn should select an action");
+        };
+        assert!(matches!(
+            request
+                .legal_actions
+                .resolve(key)
+                .map(|action| &action.command),
+            Some(GameCommand::Channel { unit: UnitId(1) })
         ));
     }
 

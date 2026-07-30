@@ -67,6 +67,9 @@ pub(super) struct CastingPanel;
 #[derive(Component)]
 pub(super) struct EndTurnControl;
 
+#[derive(Component)]
+pub(super) struct ChannelControl;
+
 /// Spawns the panel frame, and clears whatever the last session left in the interface.
 ///
 /// Resetting the readout here is load-bearing rather than tidy: the rebuild is driven
@@ -220,7 +223,7 @@ pub(super) fn rebuild_panel(
         }
         if readout.spells.is_empty() {
             rows.spawn(blurb(&assets, "this unit inscribes no spells"));
-            spawn_end_turn(rows, &assets);
+            spawn_turn_controls(rows, &assets);
             return;
         }
         if let Some(reason) = readout.unavailable {
@@ -228,14 +231,23 @@ pub(super) fn rebuild_panel(
         }
         if aiming.0.is_some() {
             spawn_footer(rows, &readout, &aiming, &volume, &assets);
-            spawn_end_turn(rows, &assets);
+            spawn_turn_controls(rows, &assets);
         } else {
             for row in &readout.spells {
                 spawn_row(rows, row, readout.unavailable.is_some(), &assets);
             }
-            spawn_end_turn(rows, &assets);
+            spawn_turn_controls(rows, &assets);
         }
     });
+}
+
+fn spawn_turn_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
+    rows.spawn((row_button("Channel", 94.0), ChannelControl))
+        .with_children(|button| {
+            button.spawn(blurb(assets, "channel"));
+            button.spawn(fine(assets, "restore mana"));
+        });
+    spawn_end_turn(rows, assets);
 }
 
 fn spawn_end_turn(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
@@ -356,6 +368,25 @@ fn spawn_row(
     });
 }
 
+pub(super) fn channel_from_button(
+    clicks: Query<&Interaction, (Changed<Interaction>, With<ChannelControl>)>,
+    order: Res<TurnOrder>,
+    pending: Res<PendingDecision>,
+    registry: Res<UnitRegistry>,
+    owners: Query<(Option<&ControlOwner>, &Faction)>,
+    mut queue: ResMut<CommandQueue>,
+) {
+    issue_current_player_command(
+        &clicks,
+        &order,
+        &pending,
+        &registry,
+        &owners,
+        &mut queue,
+        |unit| GameCommand::Channel { unit },
+    );
+}
+
 pub(super) fn end_turn_from_button(
     clicks: Query<&Interaction, (Changed<Interaction>, With<EndTurnControl>)>,
     order: Res<TurnOrder>,
@@ -363,6 +394,26 @@ pub(super) fn end_turn_from_button(
     registry: Res<UnitRegistry>,
     owners: Query<(Option<&ControlOwner>, &Faction)>,
     mut queue: ResMut<CommandQueue>,
+) {
+    issue_current_player_command(
+        &clicks,
+        &order,
+        &pending,
+        &registry,
+        &owners,
+        &mut queue,
+        |unit| GameCommand::EndTurn { unit },
+    );
+}
+
+fn issue_current_player_command<M: Component>(
+    clicks: &Query<&Interaction, (Changed<Interaction>, With<M>)>,
+    order: &TurnOrder,
+    pending: &PendingDecision,
+    registry: &UnitRegistry,
+    owners: &Query<(Option<&ControlOwner>, &Faction)>,
+    queue: &mut CommandQueue,
+    command: impl FnOnce(hex_core::UnitId) -> GameCommand,
 ) {
     if pending.is_open()
         || !clicks
@@ -385,7 +436,7 @@ pub(super) fn end_turn_from_button(
     }
     queue.push(IssuedCommand {
         seat: owner.copied().unwrap_or_default().0,
-        command: GameCommand::EndTurn { unit },
+        command: command(unit),
     });
 }
 

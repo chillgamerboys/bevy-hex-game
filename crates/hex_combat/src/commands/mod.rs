@@ -52,6 +52,7 @@ use crate::turns::TurnOrder;
 
 pub(crate) mod cast;
 pub use cast::{delivers_anything, UNDELIVERABLE};
+mod channel;
 mod choose_disables;
 mod choose_restores;
 mod end_turn;
@@ -113,6 +114,8 @@ struct Verb<'a> {
     tables: Option<ContentTables<'a>>,
     /// The one open decision, if resolution is parked on somebody's answer.
     pending: &'a mut PendingDecision,
+    /// Stable names for per-element structured outcomes.
+    elements: Option<&'a ElementCatalog>,
     /// The ledger of effects that outlast the action that caused them.
     ///
     /// Casting a burn needs the persistent-effect ledger. Keeping that fact here avoids
@@ -323,6 +326,7 @@ fn apply_commands(
                 .zip(elements.as_deref())
                 .map(|(index, elements)| index.tables(elements)),
             pending: &mut stores.pending,
+            elements: elements.as_deref(),
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
             spatial: stores.spatial.as_deref(),
@@ -386,7 +390,14 @@ fn apply_commands(
                 target,
                 facing,
             ),
-            GameCommand::Channel { .. } => Err(CommandRefusal::ChannelUnavailable),
+            GameCommand::Channel { .. } => channel::apply(
+                &mut verb,
+                &mut units.actors,
+                &mut units.lattices,
+                &units.lattice_stats,
+                unit,
+                entity,
+            ),
             GameCommand::ChooseDisables { ref cells, .. } => {
                 choose_disables::apply(&mut verb, &mut units.lattices, unit, entity, cells)
             }

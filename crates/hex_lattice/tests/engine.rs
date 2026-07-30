@@ -455,7 +455,8 @@ fn an_evocation_removes_exactly_its_plan_and_channel_refills_within_caps() {
     // Channel refills toward capacity, never past it, and is deterministic.
     let drained = state.total_gem_mana();
     let mut twice = state.clone();
-    channel(&mut state, &spec, &stats);
+    let restored = channel(&mut state, &spec, &stats);
+    assert_eq!(restored.get(&FIRE).copied().map(u32::from), Some(cost));
     let refilled = state.total_gem_mana();
     assert_eq!(
         refilled - drained,
@@ -618,7 +619,8 @@ fn channel_distributes_a_budget_across_gems_in_coordinate_order() {
     assert_eq!(state.mana(low), 0);
     assert_eq!(state.mana(high), 0);
 
-    channel(&mut state, &spec, &stats);
+    let restored = channel(&mut state, &spec, &stats);
+    assert_eq!(restored, BTreeMap::from([(FIRE, 3)]));
     assert_eq!(state.mana(low), 3, "the lower coordinate fills first");
     assert_eq!(
         state.mana(high),
@@ -764,7 +766,8 @@ fn channel_never_exceeds_capacity() {
     let spec = LatticeSpec::default().with(gem_coord, gem(FIRE));
     let stats = LatticeStats::new(BTreeMap::from([(FIRE, 3)]), BTreeMap::from([(FIRE, 100)]));
     let mut state = LatticeState::new(&spec, &stats);
-    channel(&mut state, &spec, &stats);
+    let restored = channel(&mut state, &spec, &stats);
+    assert!(restored.is_empty(), "full mana restores nothing");
     assert_eq!(state.mana(gem_coord), 3, "a full gem stays at capacity");
 }
 
@@ -791,12 +794,17 @@ fn channelling_never_refills_a_locked_gem() {
     assert!(state.is_locked(gem_coord));
     let locked_residual = state.mana(gem_coord);
 
-    channel(&mut state, &spec, &stats);
+    let restored = channel(&mut state, &spec, &stats);
 
     assert_eq!(
         state.mana(gem_coord),
         locked_residual,
         "a locked gem is capacity, not throughput — channelling must not touch it"
+    );
+    assert_eq!(
+        restored,
+        BTreeMap::new(),
+        "full unlocked gems and locked gems restore no mana"
     );
     assert_eq!(
         state.mana(free_gem),

@@ -25,6 +25,8 @@ pub enum CombatData {
     SubstanceTable,
     /// Faction-scoped current and remembered spatial knowledge.
     SpatialKnowledge,
+    /// Stable names for session-local element ids.
+    ElementCatalog,
 }
 
 /// One per-unit fact required to apply a command.
@@ -205,6 +207,11 @@ pub enum CommandRefusal {
     NoTurn,
     /// The unit had already spent its action.
     ActionAlreadySpent,
+    /// A downed unit cannot spend a combat action.
+    ActingUnitDowned {
+        /// The downed acting unit.
+        unit: UnitId,
+    },
     /// A cast named no loaded spell.
     UnknownSpell {
         /// The stable spell name from the command.
@@ -263,8 +270,6 @@ pub enum CommandRefusal {
         /// The stable spell name from the command.
         spell: String,
     },
-    /// Channelling is part of the command vocabulary but has no applier yet.
-    ChannelUnavailable,
     /// Atomic party movement is contracted but its applier is not active yet.
     PartyMovementUnavailable,
     /// Restoration choice is contracted but its applier is not active yet.
@@ -500,6 +505,9 @@ mod tests {
             CommandRefusal::MissingCombatData {
                 data: CombatData::SpatialKnowledge,
             },
+            CommandRefusal::MissingCombatData {
+                data: CombatData::ElementCatalog,
+            },
             CommandRefusal::MissingUnitData {
                 unit: UnitId(1),
                 data: UnitData::EntityRecord,
@@ -536,6 +544,7 @@ mod tests {
             CommandRefusal::TargetOutOfMeleeReach { target: UnitId(2) },
             CommandRefusal::NoTurn,
             CommandRefusal::ActionAlreadySpent,
+            CommandRefusal::ActingUnitDowned { unit: UnitId(1) },
             CommandRefusal::UnknownSpell {
                 spell: "Unknown".to_owned(),
             },
@@ -578,7 +587,6 @@ mod tests {
             CommandRefusal::CastPlanStale {
                 spell: "Ember".to_owned(),
             },
-            CommandRefusal::ChannelUnavailable,
             CommandRefusal::PartyMovementUnavailable,
             CommandRefusal::RestorationUnavailable,
             CommandRefusal::RestUnavailable,

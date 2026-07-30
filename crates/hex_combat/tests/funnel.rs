@@ -18,16 +18,21 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use hex_assets::{
-    ArtPalette, FormationCatalog, PaletteSwatch, PlayerSettings, SrgbColor, Substance,
-    SubstanceFile, SubstanceTable, SwatchId,
+    ArtPalette, ElementCatalog, ElementFile, FormationCatalog, PaletteSwatch, PlayerSettings,
+    SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
 };
 use hex_combat::{
     CombatData, CombatEvent, CombatSummary, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
 };
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, FormationPreset, FormationSlot, GameCommand, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, Mode, PartyFormation, PartyPath, PlayerSeat, Screen,
-    SubstanceId, TilePos, TraversalBlockers, Turn, UnitId, MAX_HEADROOM,
+    Busy, CommandQueue, ControlOwner, ElementId, FormationPreset, FormationSlot, GameCommand,
+    Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, LatticeCoord, Mode, PartyFormation,
+    PartyPath, PlayerSeat, Screen, SpellId, SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
+    MAX_HEADROOM,
+};
+use hex_lattice::{
+    apply_cast, castable, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
+    Requirement, SpellTable,
 };
 use hex_units::{route, Body, Downed, Faction, Footing, Party, Standing, StandsOn, UnitRegistry};
 
@@ -43,6 +48,7 @@ fn test_app() -> App {
     app.insert_resource(hex_assets::CombatSettings::default());
     app.add_sub_state::<Mode>();
     app.insert_resource(substance_table());
+    app.insert_resource(shipped_elements());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
@@ -64,6 +70,36 @@ fn test_app() -> App {
         app.cleanup();
     }
     app
+}
+
+fn shipped_elements() -> ElementCatalog {
+    ElementCatalog::from_file(&ElementFile {
+        wheel: vec!["Fire".to_owned(), "Water".to_owned()],
+        fusions: bevy::platform::collections::HashMap::default(),
+    })
+}
+
+struct ChannelTables {
+    fire: ElementId,
+}
+
+impl FusionTable for ChannelTables {
+    fn recipe(&self, _output: ElementId) -> Option<Vec<Requirement>> {
+        None
+    }
+}
+
+impl SpellTable for ChannelTables {
+    fn requirements(&self, _spell: SpellId) -> Vec<Requirement> {
+        vec![Requirement {
+            element: self.fire,
+            mana: 2,
+        }]
+    }
+
+    fn casting(&self, _spell: SpellId) -> Casting {
+        Casting::Evocation
+    }
 }
 
 /// Flat, walkable ground with plenty of headroom.
@@ -239,6 +275,31 @@ fn pair_party_app() -> (App, Entity, Entity) {
     enter_gameplay(&mut app);
     assert_eq!(mode(&app), Mode::Exploring);
     (app, anchor, rear)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid deterministic fixture content should fail at construction"
+)]
+fn insert_depleted_channel_lattice(app: &mut App, entity: Entity) {
+    let fire = app
+        .world()
+        .resource::<ElementCatalog>()
+        .id("Fire")
+        .expect("the shipped catalog defines Fire");
+    let spell = LatticeCoord::ORIGIN;
+    let [gem, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SpellId(0) })
+        .with(gem, CellKind::Gem { element: fire });
+    let stats = LatticeStats::new(BTreeMap::from([(fire, 3)]), BTreeMap::from([(fire, 2)]));
+    let mut state = LatticeState::new(&spec, &stats);
+    let tables = ChannelTables { fire };
+    let plan = castable(&spec, &state, spell, &tables).expect("fixture spell can drain its gem");
+    assert!(apply_cast(&mut state, &plan, &tables));
+    app.world_mut()
+        .entity_mut(entity)
+        .insert((spec, state, stats));
 }
 
 fn party_command(anchor: UnitId, paths: Vec<(UnitId, &[HexCoord])>) -> GameCommand {
@@ -598,6 +659,82 @@ fn a_replayed_sequence_lands_identically() {
     };
 
     assert_eq!(run(), run(), "a replay must not diverge");
+}
+
+#[test]
+fn channel_restores_named_mana_and_spends_exactly_one_action() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    insert_depleted_channel_lattice(&mut app, player);
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+
+    let command = GameCommand::Channel { unit: UnitId(1) };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::Channelled {
+            unit: UnitId(1),
+            restored: BTreeMap::from([("Fire".to_owned(), 2)]),
+        }]
+    );
+    assert!(
+        app.world()
+            .get::<Turn>(player)
+            .is_some_and(|turn| turn.acted),
+        "Channel consumes the acting unit's one action"
+    );
+    let summary = app.world().resource::<CombatSummary>();
+    assert_eq!(summary.channels, 1);
+    assert_eq!(summary.channelled_mana.get("Fire"), Some(&2));
+
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::ActionAlreadySpent,
+        }],
+        "a repeated Channel cannot grant or spend another action"
+    );
+}
+
+#[test]
+fn a_downed_unit_receives_the_exact_channel_refusal() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    insert_depleted_channel_lattice(&mut app, player);
+    enter_gameplay(&mut app);
+    app.world_mut().entity_mut(player).insert(Downed);
+
+    let command = GameCommand::Channel { unit: UnitId(1) };
+    push(&mut app, command.clone());
+    app.update();
+    let events = take_events(&mut app);
+    assert_eq!(
+        events.first(),
+        Some(&CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::ActingUnitDowned { unit: UnitId(1) },
+        }),
+        "the refusal is emitted before the resulting terminal outcome"
+    );
 }
 
 /// A command from a unit that is not acting is refused, not deferred.

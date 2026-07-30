@@ -119,6 +119,13 @@ despawned. Renewal restores chosen cells, removes `Downed`, and returns the unit
 next round boundary; exploration Rest recovers the party immediately. A strike deals
 damage the same way, through the same decision.
 
+**Channel is live.** An active, non-downed combatant can spend its one action to
+restore each element by that unit's Channelling value, capped by Attunement capacity.
+The lattice engine skips disabled and enchantment-locked cells in deterministic
+element/coordinate order and reports only mana actually restored. Human input and
+baseline AI use the same command/refusal/event seam; the summary attributes Channel
+actions and restored mana under stable element names.
+
 **And casting has an interface.** A spell panel lists what the acting unit inscribes,
 each row carrying its live blocked reason from `castable` and, above the list, whichever
 of the applier's own refusals is standing in the way — not this unit's turn, action
@@ -358,8 +365,8 @@ The first implementation also ships with explicit limitations:
   ([boundary.md](boundary.md) ask I).
 - **Casting is provisionally combat-only.** Recovery between fights is intended to be
   a rest action, but real-time casting still needs an interaction and rest flow.
-  **Channelling and rituals are deferred** — `co_castable` parses and labels rituals
-  in the demo, but has no mechanical effect.
+  **Rituals remain deferred** — `co_castable` parses and labels rituals in the demo,
+  but has no mechanical effect.
 - **Paid-on-resistance is provisional.** The first wave charges mana and the action
   after a legal announcement even if every material resists.
 - **No-undermining is provisional.** The first wave rejects terrain creation through
