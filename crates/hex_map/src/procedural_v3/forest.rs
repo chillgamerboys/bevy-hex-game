@@ -5,6 +5,8 @@
 //! presentation-only.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hex_assets::{HexObjectRotation, RuntimeArtCatalog};
 use hex_core::{HexCoord, MapViewHint, TilePos};
@@ -53,6 +55,8 @@ const FOREST_CLEARING: &str = "forest_clearing";
 const PRAIRIE_OVERLOOK: &str = "prairie_overlook";
 const OLD_GROWTH_CAPACITY_DETAIL: &str =
     "Forest capacity plan cannot retain one exact Old-Growth instance";
+#[cfg(test)]
+static CAPACITY_PROJECTION_CACHE_PEAK: AtomicUsize = AtomicUsize::new(0);
 
 /// Recipe metrics retained by the V3 candidate selector and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2003,13 +2007,21 @@ fn augment_tree_capacity(
     object_stream: Option<SeedStream<'_>>,
     rotation_stream: Option<SeedStream<'_>>,
 ) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+    let mut projection_cache = BTreeMap::new();
     while features.len() < target {
+        let (all_blockers, all_structural, all_roots) = tree_occupancy(&features, objects)?;
+        let structural_by_feature = features
+            .iter()
+            .map(|feature| tree_feature_structural_cells(feature, objects))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut replacement = None;
         for removed_index in 0..features.len() {
-            if features
-                .get(removed_index)
-                .is_some_and(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
-            {
+            let Some(removed) = features.get(removed_index) else {
+                return Err(vec![recipe_issue(
+                    "Forest capacity removal left the feature collection",
+                )]);
+            };
+            if removed.object_id.as_str() == OLD_GROWTH_ID {
                 continue;
             }
             let remaining = features
@@ -2017,7 +2029,21 @@ fn augment_tree_capacity(
                 .enumerate()
                 .filter_map(|(index, feature)| (index != removed_index).then_some(feature.clone()))
                 .collect::<Vec<_>>();
-            let (base_blockers, base_structural, base_roots) = tree_occupancy(&remaining, objects)?;
+            let mut base_blockers = all_blockers.clone();
+            for blocker in &removed.blocker_footprint {
+                base_blockers.remove(blocker);
+            }
+            let mut base_structural = all_structural.clone();
+            let Some(removed_structural) = structural_by_feature.get(removed_index) else {
+                return Err(vec![recipe_issue(
+                    "Forest capacity removal left its structural projection",
+                )]);
+            };
+            for structural in removed_structural {
+                base_structural.remove(structural);
+            }
+            let mut base_roots = all_roots.clone();
+            base_roots.remove(&removed.root.coord);
             let mut candidates = root_candidates
                 .iter()
                 .copied()
@@ -2041,7 +2067,8 @@ fn augment_tree_capacity(
                 )
             });
             for (first_index, first_root) in candidates.iter().copied().enumerate() {
-                let Some((first, first_structural)) = plan_capacity_tree(
+                let Some(first) = cached_capacity_tree_options(
+                    &mut projection_cache,
                     first_root,
                     woodland,
                     exclusions,
@@ -2049,25 +2076,29 @@ fn augment_tree_capacity(
                     objects,
                     object_stream,
                     rotation_stream,
-                    &base_blockers,
-                    &base_structural,
                 )?
-                else {
+                .iter()
+                .find(|option| {
+                    option.feature.blocker_footprint.is_disjoint(&base_blockers)
+                        && option.structural_cells.is_disjoint(&base_structural)
+                })
+                .cloned() else {
                     continue;
                 };
                 let mut first_blockers = base_blockers.clone();
-                first_blockers.extend(first.blocker_footprint.iter().copied());
+                first_blockers.extend(first.feature.blocker_footprint.iter().copied());
                 let mut first_structure = base_structural.clone();
-                first_structure.extend(first_structural);
+                first_structure.extend(first.structural_cells.iter().copied());
                 for second_root in candidates
                     .iter()
                     .copied()
                     .skip(first_index.saturating_add(1))
                 {
-                    if first.root.coord.distance(second_root.coord) <= 1 {
+                    if first.feature.root.coord.distance(second_root.coord) <= 1 {
                         continue;
                     }
-                    let Some((second, _second_structural)) = plan_capacity_tree(
+                    let Some(second) = cached_capacity_tree_options(
+                        &mut projection_cache,
                         second_root,
                         woodland,
                         exclusions,
@@ -2075,14 +2106,20 @@ fn augment_tree_capacity(
                         objects,
                         object_stream,
                         rotation_stream,
-                        &first_blockers,
-                        &first_structure,
                     )?
-                    else {
+                    .iter()
+                    .find(|option| {
+                        option
+                            .feature
+                            .blocker_footprint
+                            .is_disjoint(&first_blockers)
+                            && option.structural_cells.is_disjoint(&first_structure)
+                    })
+                    .cloned() else {
                         continue;
                     };
                     let mut improved = remaining.clone();
-                    improved.extend([first, second]);
+                    improved.extend([first.feature.clone(), second.feature.clone()]);
                     replacement = Some(improved);
                     break;
                 }
@@ -2100,6 +2137,12 @@ fn augment_tree_capacity(
         features = improved;
     }
     Ok(features)
+}
+
+#[derive(Debug, Clone)]
+struct CapacityTreeOption {
+    feature: PlannedFeature,
+    structural_cells: BTreeSet<TilePos>,
 }
 
 fn tree_occupancy(
@@ -2129,11 +2172,33 @@ fn tree_occupancy(
     Ok((blockers, structural, roots))
 }
 
+fn tree_feature_structural_cells(
+    feature: &PlannedFeature,
+    objects: &TemperateVegetationSet,
+) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let Some(object) = objects.forest_object(feature.object_id.as_str()) else {
+        return Err(vec![recipe_issue(format!(
+            "Forest capacity trial found unsupported object '{}'",
+            feature.object_id
+        ))]);
+    };
+    object
+        .project_visual_volume(feature.root, feature.rotation)
+        .map(|volume| volume.structural_cells)
+        .ok_or_else(|| {
+            vec![recipe_issue(format!(
+                "Forest capacity trial cannot project object '{}' at {:?}",
+                feature.object_id, feature.root
+            ))]
+        })
+}
+
 #[expect(
     clippy::too_many_arguments,
-    reason = "capacity placement retains each authored spatial constraint explicitly"
+    reason = "the lazy cache retains every authored projection input explicitly"
 )]
-fn plan_capacity_tree(
+fn cached_capacity_tree_options<'a>(
+    cache: &'a mut BTreeMap<TilePos, Vec<CapacityTreeOption>>,
     root: TilePos,
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
@@ -2141,43 +2206,69 @@ fn plan_capacity_tree(
     objects: &TemperateVegetationSet,
     object_stream: Option<SeedStream<'_>>,
     rotation_stream: Option<SeedStream<'_>>,
-    occupied_blockers: &BTreeSet<TilePos>,
-    occupied_structural: &BTreeSet<TilePos>,
-) -> Result<Option<(PlannedFeature, BTreeSet<TilePos>)>, Vec<WorldValidationIssue>> {
+) -> Result<&'a [CapacityTreeOption], Vec<WorldValidationIssue>> {
+    #[cfg(test)]
+    CAPACITY_PROJECTION_CACHE_PEAK.fetch_max(
+        cache
+            .len()
+            .saturating_add(usize::from(!cache.contains_key(&root))),
+        Ordering::Relaxed,
+    );
+    match cache.entry(root) {
+        std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.into_mut().as_slice()),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            let options = capacity_tree_options(
+                root,
+                woodland,
+                exclusions,
+                surfaces,
+                objects,
+                object_stream,
+                rotation_stream,
+            )?;
+            Ok(entry.insert(options).as_slice())
+        }
+    }
+}
+
+fn capacity_tree_options(
+    root: TilePos,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<CapacityTreeOption>, Vec<WorldValidationIssue>> {
     let family = tree_family(feature_priority(object_stream, root.coord, 17));
     let choices = match family {
         TreeFamily::SmallBroadleaf => [&objects.small_broadleaf, &objects.tall_narrow],
         TreeFamily::TallNarrow => [&objects.tall_narrow, &objects.small_broadleaf],
     };
     let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+    let empty = BTreeSet::new();
+    let mut options = Vec::new();
     for object in choices {
         for offset in 0..6 {
             let rotation = offset_rotation(first_rotation, offset)?;
             let Some(projected) = project_tree(
-                object,
-                root,
-                rotation,
-                woodland,
-                exclusions,
-                surfaces,
-                occupied_blockers,
-                occupied_structural,
+                object, root, rotation, woodland, exclusions, surfaces, &empty, &empty,
             ) else {
                 continue;
             };
-            return Ok(Some((
-                PlannedFeature {
+            options.push(CapacityTreeOption {
+                feature: PlannedFeature {
                     root,
                     kind: FeatureKind::Tree,
                     object_id: object.id.clone(),
                     rotation,
                     blocker_footprint: projected.blockers,
                 },
-                projected.structural_cells,
-            )));
+                structural_cells: projected.structural_cells,
+            });
         }
     }
-    Ok(None)
+    Ok(options)
 }
 
 #[expect(
@@ -3939,6 +4030,7 @@ mod tests {
         };
         let palette = palette();
         for radius in [12, 20, 40] {
+            CAPACITY_PROJECTION_CACHE_PEAK.store(0, Ordering::Relaxed);
             let warmup = super::super::build(
                 radius,
                 0.4,
@@ -3977,9 +4069,12 @@ mod tests {
                 .last()
                 .copied()
                 .expect("the benchmark records twelve samples");
+            let cache_peak = CAPACITY_PROJECTION_CACHE_PEAK.load(Ordering::Relaxed);
             eprintln!(
                 "V3 Forest full build radius {radius}: median={median:?} p95={p95:?} \
-                 target={budget:?} (trend only)"
+                 target={budget:?} capacity_cache_peak={cache_peak} \
+                 max_cached_projections={} (trend only)",
+                cache_peak.saturating_mul(12)
             );
         }
     }
