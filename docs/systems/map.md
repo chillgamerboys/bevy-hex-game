@@ -142,13 +142,13 @@ hazards without recipe-specific storage exceptions. Validation rejects missing
 columns, invalid or overlapping intervals, incompatible materials, and malformed
 interior references before the plan becomes a `VoxelMap`.
 
-Hills is the first shipped V2 recipe. Its compatibility adapter evaluates the frozen
-V1 candidates unchanged, then losslessly lifts the selected map and its exact anchors,
-optional regions, and tactical metadata into `TerrainVolumePlan` for final
+V2 Hills remains a frozen reference recipe. Its compatibility adapter evaluates the
+frozen V1 candidates unchanged, then losslessly lifts the selected map and its exact
+anchors, optional regions, and tactical metadata into `TerrainVolumePlan` for final
 materialization. Equivalent V1 and V2 Hills settings therefore select the same
-candidate and retain the same map fingerprint. New recipes build the volume directly;
-V1 remains loadable only as a frozen development oracle while V3 replacements are
-reviewed. It is not a production save contract.
+candidate and retain the same map fingerprint. The shipped Hills, Frozen, Volcanic,
+Sky Islands, and Mountains scenarios now use native V3 recipes; V1 and V2 remain
+loadable development oracles rather than production save contracts.
 
 Layered Sky Islands consumes that finalized Hills selection before it samples any
 `sky.*` stream. Eight native upper-layer candidates append floating solid masses and

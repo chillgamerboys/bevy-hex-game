@@ -46,7 +46,7 @@ than agreed, the fallback the gameplay side ships without it is in
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
 | `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
-| `GameplayLight` + derived `LightDomain` — consumer live; generated cave sources pending | world | perception | **partial** | [systems/perception.md](systems/perception.md) |
+| `GameplayLight` + derived `LightDomain` — fixed V3 cave sources published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
 | `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
 | `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |

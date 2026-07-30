@@ -23,18 +23,22 @@ pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
 
-V3 now has its first two complete recipe lanes. Waterfall authors deterministic
+V3 now has three complete recipe lanes. Waterfall authors deterministic
 directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
 basin, outlet, and redundant land routes; an opaque animated renderer consumes the
 same exact flow facts. Forest plans rolling terrain and clearings, places its denser
-woodland, then bends a mostly two-wide road around those exact roots with short
-one-wide constraints and a three-cell prairie taper. Most prairie surfaces carry tall
-grass, while a few renderer-private tall exemplars vary the shared low-poly tree
-silhouette without claiming future multi-voxel occupancy. Tree roots are exact map
-blockers and tall grass is presentation-only. Map validation, movement previews,
-click routing, command validation, spawning, review relocation, and enemy pathfinding
-all consume the same exact blocker projection through the gameplay-owned adapter that
-has now passed review and is live on `dev`.
+woodland, then bends a mostly two-wide road around exact authored tree footprints with
+short one-wide constraints and a three-cell prairie taper. Small broadleaf, tall
+narrow, and seven-root old-growth trees vary the canopy and height profile; most
+prairie surfaces carry nonblocking authored grass tufts. Object ids, exact rotations,
+and rotated blocker footprints are fingerprinted before routing. Map validation,
+movement previews, click routing, command validation, spawning, review relocation,
+enemy pathfinding, terrain-edit protection, and the object renderer consume the same
+world-owned projection.
+Native V3 Caves plans the rocky exterior and stacked underground network together:
+six through twelve chambers, two-wide corridors and entrance ramp, varied floor and
+clearance levels, exact cutaway roofs, and deterministic Bright gameplay lights that
+cover the required network while leaving optional branches dark.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -44,12 +48,20 @@ surfaces. Unknown, Remembered, and Observed terrain snapshots do not leak hidden
 edits, unseen units disappear immediately, and the faction-generic traversal
 projection is rebuilt from the same knowledge. Downed units can remain visible but
 cannot provide sight, and changing `Downed` republishes observation in the same frame.
-Three validated hot-reloadable sight profiles live in `perception.ron`. World
-observation gates the gameplay-owned hostile lattice view, every cast anchor, and AI
-identities, effects, turn order, traversal, and legal commands. AI can traverse only
-Observed or Remembered terrain and cannot use Unknown truth. Fog/picking presentation,
-generated cave lamps/crystals, unknown-frontier routing, engagement, ordinary-attack
-targeting, and lost-contact search are not wired yet.
+Three validated hot-reloadable sight profiles live in `perception.ron`. V3 cave
+sources publish fixed local gameplay lights directly into this headless pipeline.
+World observation gates the gameplay-owned hostile lattice view, every cast anchor,
+and AI identities, effects, turn order, traversal, and legal commands. AI can traverse
+only Observed or Remembered terrain and cannot use Unknown truth. Fog/picking
+presentation, visible cave crystals and physical lights, unknown-frontier routing,
+engagement, ordinary-attack targeting, and lost-contact search are not wired yet.
+
+Fort adds the first complete V3 structure recipe and the canonical worked-stone
+substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
+keep, with six stepped towers, two lintelled gates, two broad stair terraces, and
+alternating outer battlements. Exact graph validation proves that closing both gates
+seals the courtyard, either gate independently reconnects it, and every usable wall
+or tower surface remains ordinary-walker accessible.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
@@ -189,12 +201,13 @@ review pack, contact sheet, and semantic report under `.context/asset-workshop/`
 
 The runtime resolves that complete art graph atomically and retains its last valid
 revision across a bad hot reload. `hex_objects` renders static instances from cached
-mesh chunks using the game prism and exact palette-backed material modes. The first
-production exemplar is the six-level `plant/small-broadleaf`. Terrain substances,
-liquids, construction metal, and unit presentation also resolve exact palette
-swatches. Forest still presents its generated temporary vegetation directly; adapting
-those placements to authored object instances and procedural plant synthesis have not
-landed yet.
+mesh chunks using the game prism and exact palette-backed material modes. Production
+review exemplars cover six-, twelve-, and eighteen-level trees, a nonblocking grass
+tuft, and three nonblocking emissive crystal silhouettes. Terrain substances, liquids,
+construction metal, and unit presentation resolve exact palette swatches. Forest
+publishes its generated vegetation as shared `ObjectInstance`s while retaining exact
+rotated blockers and composable canopy cutaway. Cave-light placement and procedural
+plant synthesis have not landed yet.
 
 ## What is provisional
 

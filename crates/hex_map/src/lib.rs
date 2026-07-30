@@ -36,6 +36,7 @@
 
 use bevy::prelude::*;
 
+mod crystal_render;
 mod feature_render;
 /// Terrain height generation.
 pub mod generator;
@@ -56,7 +57,8 @@ pub mod voxel;
 pub use generator::{FlatGenerator, HeightGenerator, HeightMap, PerlinGenerator, PerlinStep};
 pub use liquid_render::LiquidVisualTime;
 pub use procedural::{
-    ForestMetrics as ForestReportMetrics, GenerationReport, ProceduralRecipeMetrics,
+    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, ProceduralRecipeMetrics, Ring7Metrics,
     TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 pub use settings::{

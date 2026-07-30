@@ -24,7 +24,7 @@ use hex_assets::{
     GameAssets, HexObjectRotation, LocalVoxelCoord, ObjectAssetId, ObjectBlueprint, ObjectInstance,
     ResolvedVoxelStyle, RuntimeArtCatalog, VoxelStyleId, VoxelSurfaceMode,
 };
-use hex_core::HexCoord;
+use hex_core::{CanopyOccluder, HexCoord, PresentationOcclusion};
 
 /// Marks a generated render child belonging to one authored object instance.
 ///
@@ -162,6 +162,7 @@ fn reconcile_objects(
         Ref<ObjectInstance>,
         Option<&RenderedObject>,
         Option<&Visibility>,
+        Option<&CanopyOccluder>,
     )>,
     stale_rendered: Query<&RenderedObject, Without<ObjectInstance>>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -208,7 +209,7 @@ fn reconcile_objects(
     let force_rebuild = catalog_changed || source_changed;
     let mut source_mesh = None;
 
-    for (entity, instance, rendered, visibility) in &instances {
+    for (entity, instance, rendered, visibility, canopy) in &instances {
         if let Err(error) = instance.validate() {
             let already_reported = rendered.is_some_and(|rendered| {
                 rendered.failed
@@ -274,7 +275,13 @@ fn reconcile_objects(
             &mut materials,
         ) {
             Ok(cached) => {
-                let children = spawn_chunks(&mut commands, entity, instance.object_id(), &cached);
+                let children = spawn_chunks(
+                    &mut commands,
+                    entity,
+                    instance.object_id(),
+                    &cached,
+                    canopy.copied(),
+                );
                 commands.entity(entity).insert(RenderedObject {
                     object_id: instance.object_id().clone(),
                     catalog_fingerprint,
@@ -319,6 +326,7 @@ fn spawn_chunks(
     root: Entity,
     object_id: &ObjectAssetId,
     cached: &CachedObject,
+    canopy: Option<CanopyOccluder>,
 ) -> Vec<Entity> {
     let mut children = Vec::with_capacity(cached.chunks.len());
     for chunk in &cached.chunks {
@@ -339,6 +347,9 @@ fn spawn_chunks(
         ));
         if chunk.key.canopy {
             entity.insert(ObjectCanopyChunk);
+            if let Some(canopy) = canopy {
+                entity.insert((canopy, PresentationOcclusion::default()));
+            }
         }
         if !chunk.casts_shadows {
             entity.insert(NotShadowCaster);
@@ -1343,9 +1354,13 @@ mod tests {
     #[test]
     fn chunk_materials_shadow_policy_picking_and_canopy_are_exact() {
         let mut app = test_app(fixture_catalog(0.18));
+        let canopy_root = TilePos::new(HexCoord::ORIGIN, -1);
         let plant = app
             .world_mut()
-            .spawn(instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0))
+            .spawn((
+                instance("plant/test", HexCoord::ORIGIN, 0, 0.4, 0),
+                CanopyOccluder(canopy_root),
+            ))
             .id();
         let effect = app
             .world_mut()
@@ -1362,7 +1377,20 @@ mod tests {
         let plant_handles = chunk_handles(&app, plant);
         let canopy_count = plant_handles
             .values()
-            .filter(|(_, _, entity)| app.world().get::<ObjectCanopyChunk>(*entity).is_some())
+            .filter(|(_, _, entity)| {
+                let is_canopy = app.world().get::<ObjectCanopyChunk>(*entity).is_some();
+                assert_eq!(
+                    app.world()
+                        .get::<CanopyOccluder>(*entity)
+                        .map(|marker| marker.0),
+                    is_canopy.then_some(canopy_root)
+                );
+                assert_eq!(
+                    app.world().get::<PresentationOcclusion>(*entity).is_some(),
+                    is_canopy
+                );
+                is_canopy
+            })
             .count();
         assert_eq!(canopy_count, 1);
 

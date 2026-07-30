@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectCategory};
 use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
 use super::layout::{ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidPort};
@@ -25,10 +26,13 @@ pub(crate) enum FeatureKind {
 }
 
 /// One exact surface feature placement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PlannedFeature {
     pub(crate) root: TilePos,
     pub(crate) kind: FeatureKind,
+    pub(crate) object_id: ObjectAssetId,
+    pub(crate) rotation: HexObjectRotation,
+    pub(crate) blocker_footprint: BTreeSet<TilePos>,
 }
 
 /// Exact ordinary surfaces reserved for one named critical route.
@@ -88,12 +92,67 @@ pub(crate) struct StructurePlan {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct LightId(pub(crate) u32);
 
+/// Authored cave-crystal silhouette reserved above one gameplay-light floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CaveCrystalKind {
+    LowCluster,
+    Branched,
+    Spire,
+}
+
+impl CaveCrystalKind {
+    /// Number of authored object levels in this silhouette.
+    #[must_use]
+    pub(crate) const fn height_u8(self) -> u8 {
+        match self {
+            Self::LowCluster => 2,
+            Self::Branched => 3,
+            Self::Spire => 4,
+        }
+    }
+
+    /// Number of visual voxel levels reserved above the authoritative floor.
+    #[must_use]
+    pub(crate) const fn height(self) -> i32 {
+        match self {
+            Self::LowCluster => 2,
+            Self::Branched => 3,
+            Self::Spire => 4,
+        }
+    }
+}
+
+/// Geometry contract used to reserve a crystal's radius-one presentation footprint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CaveCrystalSiteKind {
+    /// A roofed niche carved beside the underground route.
+    InteriorAlcove,
+    /// An open landing connected beside the upper entrance ramp.
+    EntranceLanding,
+}
+
+/// Deterministic presentation intent retained without depending on authored assets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct CaveCrystalPresentation {
+    pub(crate) kind: CaveCrystalKind,
+    pub(crate) site: CaveCrystalSiteKind,
+    /// Preferred clockwise 60-degree turn count in `0..6`.
+    pub(crate) rotation: u8,
+}
+
+/// Optional map-owned presentation intent attached to a semantic gameplay light.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlannedLightPresentation {
+    CaveCrystal(CaveCrystalPresentation),
+}
+
 /// Exact logical source used later to spawn a public `GameplayLight`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PlannedGameplayLight {
     pub(crate) origin: TilePos,
     pub(crate) level: IlluminationLevel,
     pub(crate) radius: u32,
+    pub(crate) presentation: Option<PlannedLightPresentation>,
 }
 
 /// One generated interior network.
@@ -151,6 +210,7 @@ impl GeneratedWorldPlan {
 
         append_liquid_issues(&mut issues, &self.liquids.validate(&self.volume));
         self.validate_liquid_seams(&mut issues);
+        super::seam::validate_world_walker_seams(self, &mut issues);
         self.validate_features_and_blockers(&mut issues);
         self.validate_structures(&mut issues);
         self.validate_biomes(&mut issues);
@@ -336,6 +396,7 @@ impl GeneratedWorldPlan {
         }
 
         let mut expected_blockers = BTreeSet::new();
+        let mut blocker_owners = BTreeMap::new();
         let mut roots = BTreeMap::new();
         for (id, feature) in &self.features.by_id {
             if let Some(previous) = roots.insert(feature.root, *id) {
@@ -368,14 +429,73 @@ impl GeneratedWorldPlan {
                     ),
                 ));
             }
-            if feature.kind == FeatureKind::Tree {
-                expected_blockers.insert(feature.root);
+            if let Err(error) = feature.rotation.validate() {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!("feature {id:?} has invalid authored-object rotation: {error}"),
+                ));
+            }
+            let expected_category = match feature.kind {
+                FeatureKind::Tree => ObjectCategory::Plant,
+                FeatureKind::TallGrass => ObjectCategory::Prop,
+            };
+            if let Err(error) = feature.object_id.validate_for_category(expected_category) {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Feature,
+                    format!(
+                        "feature {id:?} has incompatible authored object '{}': {error}",
+                        feature.object_id
+                    ),
+                ));
+            }
+            match feature.kind {
+                FeatureKind::Tree => {
+                    if feature.blocker_footprint.is_empty()
+                        || !feature.blocker_footprint.contains(&feature.root)
+                    {
+                        issues.push(WorldValidationIssue::new(
+                            WorldIssueCode::Blocker,
+                            format!(
+                                "tree feature {id:?} must block a non-empty footprint containing \
+                                 its exact root"
+                            ),
+                        ));
+                    }
+                }
+                FeatureKind::TallGrass if !feature.blocker_footprint.is_empty() => {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!("tall-grass feature {id:?} must remain presentation-only"),
+                    ));
+                }
+                FeatureKind::TallGrass => {}
+            }
+            for blocker in &feature.blocker_footprint {
+                if let Some(previous) = blocker_owners.insert(*blocker, *id) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "features {previous:?} and {id:?} overlap blocker footprint at \
+                             {blocker:?}"
+                        ),
+                    ));
+                }
+                if reserved_surfaces.contains(blocker) {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Blocker,
+                        format!(
+                            "feature {id:?} blocker {blocker:?} occupies a protected route or \
+                             clearing"
+                        ),
+                    ));
+                }
+                expected_blockers.insert(*blocker);
             }
         }
         if self.blockers != expected_blockers {
             issues.push(WorldValidationIssue::new(
                 WorldIssueCode::Blocker,
-                "traversal blockers do not exactly match blocking feature roots",
+                "traversal blockers do not exactly match authored feature footprints",
             ));
         }
         for position in &self.blockers {
@@ -829,7 +949,7 @@ fn validate_feature_membership(
     }
 }
 
-fn valid_stable_name(name: &str) -> bool {
+pub(super) fn valid_stable_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .bytes()
@@ -842,6 +962,7 @@ pub(crate) enum WorldIssueCode {
     Layout,
     Volume,
     Liquid,
+    Traversal,
     Feature,
     Structure,
     Blocker,
@@ -974,6 +1095,7 @@ mod tests {
                     origin: floor,
                     level: IlluminationLevel::Bright,
                     radius: 4,
+                    presentation: None,
                 },
             )]),
             biome_regions: BTreeMap::from([
@@ -1032,6 +1154,10 @@ mod tests {
                 PlannedFeature {
                     root: tree_root,
                     kind: FeatureKind::Tree,
+                    object_id: hex_assets::ObjectAssetId::new("plant/small-broadleaf")
+                        .expect("fixture id should be valid"),
+                    rotation: hex_assets::HexObjectRotation::ZERO,
+                    blocker_footprint: BTreeSet::from([tree_root]),
                 },
             )]),
             protected_routes: BTreeMap::from([(
@@ -1177,6 +1303,10 @@ mod tests {
             PlannedFeature {
                 root: TilePos::new(hex_core::HexCoord::ORIGIN, 0),
                 kind: FeatureKind::TallGrass,
+                object_id: hex_assets::ObjectAssetId::new("prop/grass-tuft")
+                    .expect("fixture id should be valid"),
+                rotation: hex_assets::HexObjectRotation::ZERO,
+                blocker_footprint: BTreeSet::new(),
             },
         );
         assert!(duplicate.validate().iter().any(|issue| {
@@ -1217,14 +1347,14 @@ mod tests {
     }
 
     #[test]
-    fn blockers_exactly_equal_unique_tree_roots() {
+    fn blockers_exactly_equal_unique_authored_feature_footprints() {
         let mut missing = complete_feature_plan();
         missing.blockers.clear();
         assert!(missing.validate().iter().any(|issue| {
             issue.code == WorldIssueCode::Blocker
                 && issue
                     .detail
-                    .contains("do not exactly match blocking feature roots")
+                    .contains("do not exactly match authored feature footprints")
         }));
 
         let mut extra = complete_feature_plan();
@@ -1235,7 +1365,7 @@ mod tests {
             issue.code == WorldIssueCode::Blocker
                 && issue
                     .detail
-                    .contains("do not exactly match blocking feature roots")
+                    .contains("do not exactly match authored feature footprints")
         }));
     }
 

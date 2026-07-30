@@ -6,6 +6,7 @@
 //! Each cutaway owns only its [`PresentationOcclusionReason`]; one adapter applies the
 //! combined result to visibility, picking, and shadows without changing map semantics.
 
+use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::light::NotShadowCaster;
 use bevy::picking::Pickable;
@@ -129,6 +130,7 @@ fn reconcile_canopy_cutaway(
     mut canopies: Query<(
         &CanopyOccluder,
         &GlobalTransform,
+        Option<&Aabb>,
         &mut PresentationOcclusion,
     )>,
     mut reported_invalid_cardinality: Local<Option<(usize, usize)>>,
@@ -154,14 +156,15 @@ fn reconcile_canopy_cutaway(
         }
     };
 
-    for (canopy, transform, occlusion) in &mut canopies {
+    for (canopy, transform, bounds, occlusion) in &mut canopies {
         let should_hide = active.is_some_and(|(target, (camera, camera_transform))| {
+            let (centre, radius) = canopy_world_sphere(transform, bounds);
             canopy.0.coord.distance(target.surface.coord) <= CANOPY_CUTAWAY_RADIUS_HEXES
                 && canopy_intersects_focus_segment(
                     camera_transform.translation(),
                     camera.focus,
-                    transform.translation(),
-                    transform.scale().abs().max_element() + CANOPY_INTERSECTION_PADDING,
+                    centre,
+                    radius,
                 )
         });
         set_reason(
@@ -170,6 +173,23 @@ fn reconcile_canopy_cutaway(
             should_hide,
         );
     }
+}
+
+fn canopy_world_sphere(transform: &GlobalTransform, bounds: Option<&Aabb>) -> (Vec3, f32) {
+    bounds.map_or_else(
+        || {
+            (
+                transform.translation(),
+                transform.scale().abs().max_element() + CANOPY_INTERSECTION_PADDING,
+            )
+        },
+        |bounds| {
+            let centre = transform.transform_point(bounds.center.into());
+            let radius = bounds.half_extents.length() * transform.scale().abs().max_element()
+                + CANOPY_INTERSECTION_PADDING;
+            (centre, radius)
+        },
+    )
 }
 
 fn active_cutaway(
@@ -573,6 +593,26 @@ mod tests {
         app.update();
 
         assert_canopy_ordinary(&app, obstructing);
+    }
+
+    #[test]
+    fn character_camera_uses_the_complete_authored_canopy_bounds() {
+        let target = position(0, 0, 7);
+        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        let eye = Vec3::new(0.0, 4.0, 7.0);
+        let focus = target.coord.to_world(0.4);
+        let on_segment = eye.lerp(focus, 0.5);
+        let translation = on_segment + Vec3::X * 4.0;
+        let canopy = spawn_canopy(&mut app, position(1, 0, 7), translation, 1.0);
+        app.world_mut().entity_mut(canopy).insert(Aabb {
+            center: (-Vec3::X * 4.0).into(),
+            half_extents: Vec3A::splat(0.5),
+        });
+
+        app.update();
+
+        assert_hidden(&app, canopy);
     }
 
     #[test]

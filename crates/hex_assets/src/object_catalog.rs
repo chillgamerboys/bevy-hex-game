@@ -1464,7 +1464,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_manifest_tree_and_art_catalog_resolve_together() {
+    fn shipped_manifest_objects_and_art_catalog_resolve_together() {
         let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
             .expect("shipped palette should parse");
         let styles: VoxelStyleCatalog =
@@ -1473,23 +1473,114 @@ mod tests {
         let manifest: ObjectCatalogFile =
             ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
                 .expect("shipped object manifest should parse");
-        let tree: ObjectBlueprint = ron::from_str(include_str!(
-            "../../../assets/art/objects/plant/small-broadleaf.ron"
-        ))
-        .expect("shipped small broadleaf should parse");
-        assert_eq!(tree.placements.len(), 20);
-        assert_eq!(manifest.ids(), [id("plant/small-broadleaf")].as_slice());
+        let objects = [
+            include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+            include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+            include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+            include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+            include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
+            include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
+            include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+        ]
+        .into_iter()
+        .map(|source| {
+            let object: ObjectBlueprint =
+                ron::from_str(source).expect("shipped object should parse");
+            (object.id.clone(), object)
+        })
+        .collect::<BTreeMap<_, _>>();
+        let expected_ids = [
+            "plant/old-growth",
+            "plant/small-broadleaf",
+            "plant/tall-narrow",
+            "prop/crystal-branched",
+            "prop/crystal-low-cluster",
+            "prop/crystal-spire",
+            "prop/grass-tuft",
+        ]
+        .map(id);
+        assert_eq!(manifest.ids(), expected_ids.as_slice());
 
-        let resolved = RuntimeArtCatalog::from_sources(
-            &palette,
-            &styles,
-            &manifest,
-            BTreeMap::from([(tree.id.clone(), tree)]),
-        )
-        .expect("shipped authored object graph should resolve");
-        assert!(resolved.object(&id("plant/small-broadleaf")).is_some());
-        assert_eq!(resolved.objects().len(), 1);
-        assert_eq!(resolved.styles().styles().len(), 4);
+        let resolved = RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+            .expect("shipped authored object graph should resolve");
+        assert_eq!(resolved.objects().len(), 7);
+        assert_eq!(resolved.styles().styles().len(), 7);
+
+        let tall = resolved
+            .object(&id("plant/tall-narrow"))
+            .expect("tall tree should resolve");
+        assert_eq!(tall.bounds.height, 12);
+        assert_eq!(tall.blocker_footprint, [LocalAxialCoord::new(0, 0)]);
+        assert_eq!(
+            tall.placements
+                .iter()
+                .map(|placement| placement.position.level)
+                .max(),
+            Some(11)
+        );
+
+        let old_growth = resolved
+            .object(&id("plant/old-growth"))
+            .expect("old-growth tree should resolve");
+        assert_eq!(old_growth.bounds.height, 18);
+        assert_eq!(old_growth.blocker_footprint.len(), 7);
+        assert_eq!(
+            old_growth
+                .blocker_footprint
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                LocalAxialCoord::new(-1, 0),
+                LocalAxialCoord::new(-1, 1),
+                LocalAxialCoord::new(0, -1),
+                LocalAxialCoord::new(0, 0),
+                LocalAxialCoord::new(0, 1),
+                LocalAxialCoord::new(1, -1),
+                LocalAxialCoord::new(1, 0),
+            ])
+        );
+        assert_eq!(
+            old_growth
+                .placements
+                .iter()
+                .map(|placement| placement.position.level)
+                .max(),
+            Some(17)
+        );
+
+        let grass = resolved
+            .object(&id("prop/grass-tuft"))
+            .expect("grass tuft should resolve");
+        assert_eq!(grass.category, ObjectCategory::Prop);
+        assert!(grass.blocker_footprint.is_empty());
+        assert_eq!(grass.bounds.height, 1);
+
+        for crystal_id in [
+            "prop/crystal-low-cluster",
+            "prop/crystal-branched",
+            "prop/crystal-spire",
+        ] {
+            let crystal = resolved
+                .object(&id(crystal_id))
+                .expect("crystal should resolve");
+            assert_eq!(crystal.category, ObjectCategory::Prop);
+            assert!(crystal.blocker_footprint.is_empty());
+            assert!(crystal.canopy_occluders.is_empty());
+        }
+        let body_style = resolved
+            .styles()
+            .get(&style_id("crystal/cyan-body"))
+            .expect("crystal body style should resolve");
+        assert_eq!(body_style.surface_mode(), VoxelSurfaceMode::Opaque);
+        assert!(body_style.emission().is_some());
+        let glow_style = resolved
+            .styles()
+            .get(&style_id("crystal/cyan-glow"))
+            .expect("crystal glow style should resolve");
+        assert_eq!(glow_style.surface_mode(), VoxelSurfaceMode::Additive);
+        assert!(glow_style.emission().is_some());
+
         assert_eq!(
             (
                 manifest.semantic_fingerprint(),
@@ -1497,10 +1588,29 @@ mod tests {
                 resolved.combined_fingerprint(),
             ),
             (
-                11_860_881_160_560_869_361,
-                3_057_228_134_774_009_721,
-                8_142_483_046_191_607_199,
+                11_296_322_867_963_087_424,
+                11_614_891_655_779_057_070,
+                10_698_065_650_290_374_298,
             )
         );
+        let object_fingerprints = BTreeMap::from([
+            (id("plant/old-growth"), 8_472_572_437_239_582_479),
+            (id("plant/small-broadleaf"), 8_757_163_157_510_762_779),
+            (id("plant/tall-narrow"), 14_950_083_940_216_167_308),
+            (id("prop/crystal-branched"), 632_179_240_403_471_067),
+            (id("prop/crystal-low-cluster"), 1_307_286_824_627_267_907),
+            (id("prop/crystal-spire"), 1_248_030_652_803_885_799),
+            (id("prop/grass-tuft"), 8_128_471_665_006_116_358),
+        ]);
+        for (id, expected) in object_fingerprints {
+            assert_eq!(
+                resolved
+                    .object(&id)
+                    .expect("fingerprinted object should resolve")
+                    .semantic_fingerprint(),
+                Ok(expected),
+                "semantic fingerprint changed for '{id}'"
+            );
+        }
     }
 }

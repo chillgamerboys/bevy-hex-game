@@ -30,6 +30,8 @@ tagged build.
   with Close Quarters as the combat showcase and Lattice Demo as the rules sandbox.
 - Add the deterministic V3 Waterfall showcase with directed water stages, an upstream
   bridge, and two independent high-to-low land routes.
+- Move the shipped Hills, Frozen, Volcanic, Sky Islands, and Mountains maps to native
+  V3 recipes with exact crossing, stacked-volume, route, and environment contracts.
 - Export serde-capable combat outcomes and refusals using stable replay vocabulary.
 - Integrate the canonical runtime art palette and the Asset Workshop recovery and
   deterministic review workflow from `dev`.

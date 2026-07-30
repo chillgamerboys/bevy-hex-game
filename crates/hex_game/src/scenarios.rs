@@ -418,6 +418,7 @@ fn sim_seeds_for(name: &str, resolved: Option<ResolvedMapSeed>) -> SimSeeds {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -432,8 +433,9 @@ mod tests {
         AiProfileCatalog, ArtPalette, CombatSettings, ContentIndex, CubeCoord, ElementCatalog,
         ElementFile, Encounter, EncounterFaction, EncounterPlacement, FormationCatalog,
         FormationCenter, GameAssets, LatticeFile, LatticeLibrary, LightingSettings,
-        PerceptionSettings, PlayerSettings, Roster, RosterEntry, ScenarioLibrary, SettingsRegistry,
-        SpellBook, SpellFile, SubstanceFile, SubstanceTable,
+        ObjectBlueprint, ObjectCatalogFile, ObjectInstance, PerceptionSettings, PlayerSettings,
+        Roster, RosterEntry, RuntimeArtCatalog, ScenarioLibrary, SettingsRegistry, SpellBook,
+        SpellFile, SubstanceFile, SubstanceTable, VoxelStyleCatalog,
     };
     use hex_combat::{
         AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution, TurnOrder,
@@ -441,8 +443,8 @@ mod tests {
     };
     use hex_core::{
         AppSystems, Busy, CommandQueue, ControlOwner, ExteriorIllumination, GameCommand,
-        GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile,
-        IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
+        GameplayLight, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan,
+        HexTile, IlluminationLevel, InteriorRegions, IssuedCommand, KnowledgeState, LatticeCoord,
         LocalMapKnowledge, MapAnchorId, MapAnchors, MapViewHint, Mode, PartyFormation,
         PausableSystems, Pause, PendingDecision, PerceptionSystems, PlayerSeat, ResolvedMapSeed,
         Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId, TerrainReady, TilePos,
@@ -450,7 +452,7 @@ mod tests {
     };
     use hex_lattice::{LatticeSpec, LatticeState};
     use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
-    use hex_perception::FactionMapKnowledge;
+    use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{
         either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
         FormationMember, Player, Reach, StandsOn,
@@ -470,6 +472,42 @@ mod tests {
 
     fn assets_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets")
+    }
+
+    fn runtime_art_catalog(palette: &ArtPalette) -> RuntimeArtCatalog {
+        let styles: VoxelStyleCatalog =
+            ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))
+                .expect("the shipped voxel styles should deserialize");
+        let manifest: ObjectCatalogFile =
+            ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+                .expect("the shipped object catalog should deserialize");
+        let mut objects = BTreeMap::new();
+        for id in manifest.ids() {
+            let path = assets_dir()
+                .join("art/objects")
+                .join(format!("{}.ron", id.as_str()));
+            let source = fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "object catalog entry '{}' could not be read from {}: {error}",
+                    id.as_str(),
+                    path.display()
+                )
+            });
+            let blueprint: ObjectBlueprint = ron::from_str(&source).unwrap_or_else(|error| {
+                panic!(
+                    "object catalog entry '{}' does not deserialize: {error}",
+                    id.as_str()
+                )
+            });
+            let previous = objects.insert(blueprint.id.clone(), blueprint);
+            assert!(
+                previous.is_none(),
+                "object catalog resolved duplicate blueprint '{}'",
+                id.as_str()
+            );
+        }
+        RuntimeArtCatalog::from_sources(palette, &styles, &manifest, objects)
+            .expect("the shipped runtime art graph should resolve")
     }
 
     /// The encounter a scenario names, read off disk.
@@ -1656,6 +1694,7 @@ mod tests {
                 .expect("the shipped player settings should deserialize");
         let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
             .expect("the shipped art palette should deserialize");
+        let art_catalog = runtime_art_catalog(&palette);
         let seed = entry.generation_seed.map(ResolvedMapSeed);
 
         let mut app = App::new();
@@ -1726,6 +1765,7 @@ mod tests {
         app.insert_resource(PerceptionSettings::default());
         app.insert_resource(ExteriorIllumination::new(IlluminationLevel::Bright));
         app.insert_resource(player);
+        app.insert_resource(art_catalog);
         app.insert_resource(palette);
         app.insert_resource(encounter_of(&entry));
         app.insert_resource(world);
@@ -2275,6 +2315,73 @@ mod tests {
     }
 
     #[test]
+    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
+        let mut app = procedural_gameplay_app("Forest");
+        let art_fingerprint = app
+            .world()
+            .resource::<RuntimeArtCatalog>()
+            .combined_fingerprint();
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let first_map_fingerprint = app.world().resource::<GenerationReport>().map_fingerprint;
+        let first_party = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("party_start"))
+            .expect("Forest should publish party_start");
+        let first_hostile = app
+            .world()
+            .resource::<MapAnchors>()
+            .get(&MapAnchorId::from("hostile_start"))
+            .expect("Forest should publish hostile_start");
+        let first_features = app
+            .world_mut()
+            .query_filtered::<Entity, With<ObjectInstance>>()
+            .iter(app.world())
+            .count();
+        assert!(
+            first_features > 0,
+            "Forest should publish authored object instances"
+        );
+
+        enter_screen(&mut app, Screen::Title);
+        assert!(!app.world().contains_resource::<VoxelMap>());
+        assert_eq!(
+            app.world()
+                .resource::<RuntimeArtCatalog>()
+                .combined_fingerprint(),
+            art_fingerprint,
+            "gameplay teardown should retain the accepted global art graph"
+        );
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<ObjectInstance>>()
+                .iter(app.world())
+                .count(),
+            0,
+            "Forest teardown left authored feature instances alive"
+        );
+
+        enter_screen(&mut app, Screen::Gameplay);
+        assert!(app.world().contains_resource::<TerrainReady>());
+        assert_eq!(
+            app.world().resource::<GenerationReport>().map_fingerprint,
+            first_map_fingerprint
+        );
+        assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
+        assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
+        assert_eq!(
+            app.world_mut()
+                .query_filtered::<Entity, With<ObjectInstance>>()
+                .iter(app.world())
+                .count(),
+            first_features,
+            "Forest re-entry changed its authored feature instance count"
+        );
+    }
+
+    #[test]
     fn missing_generated_enemy_anchor_fails_setup_and_cleans_partial_world() {
         let mut app = procedural_gameplay_app("Procedural Hills");
         // Point the hostile roster at an anchor the generator does not publish. The
@@ -2425,6 +2532,55 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    #[test]
+    fn shipped_v3_cave_lights_resolve_inside_the_exact_generated_domain() {
+        let mut app = procedural_gameplay_app("Caves");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        let entrance = anchors
+            .get(&MapAnchorId::from("cave_entrance"))
+            .expect("Caves should publish cave_entrance");
+        let deep_chamber = anchors
+            .get(&MapAnchorId::from("deep_chamber"))
+            .expect("Caves should publish deep_chamber");
+        let interiors = app.world().resource::<InteriorRegions>().clone();
+        let illumination = app.world().resource::<ResolvedIllumination>().clone();
+        let generated_lights = {
+            let world = app.world_mut();
+            let mut query = world.query::<(&TilePos, &GameplayLight)>();
+            query
+                .iter(world)
+                .map(|(position, light)| (*position, *light))
+                .collect::<Vec<_>>()
+        };
+
+        assert!(!generated_lights.is_empty());
+        assert!(generated_lights.iter().all(|(position, light)| {
+            interiors.get(*position).is_some()
+                && light.level == IlluminationLevel::Bright
+                && (4..=7).contains(&light.radius)
+        }));
+        for required in [entrance, deep_chamber] {
+            let resolved = illumination
+                .get(required)
+                .expect("required cave floor should be in the resolved perception frame");
+            assert_eq!(resolved.level, IlluminationLevel::Bright);
+            assert_eq!(
+                Some(resolved.domain),
+                interiors.get(required).map(hex_core::LightDomain::Interior)
+            );
+        }
+        assert!(
+            interiors.surfaces().any(|(position, _region)| {
+                illumination
+                    .get(position)
+                    .is_some_and(|resolved| resolved.level == IlluminationLevel::Dark)
+            }),
+            "the generated cave should preserve at least one dark optional floor"
+        );
     }
 
     /// The shipped cave is only playable if the ECS terrain, command funnel, and
