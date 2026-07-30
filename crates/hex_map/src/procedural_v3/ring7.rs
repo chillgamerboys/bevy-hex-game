@@ -438,6 +438,12 @@ fn construct_fragment(
         V3RecipeSettings::SkyIslands(settings) => {
             sky::construct_patch(patch, settings, spec.environment, level_height, mode)
         }
+        V3RecipeSettings::Volcano(_)
+        | V3RecipeSettings::DeepForest(_)
+        | V3RecipeSettings::Prairie(_) => Err(vec![recipe_issue(format!(
+            "Ring7 does not admit the {} recipe",
+            recipe_name(&spec.recipe)
+        ))]),
     }
 }
 
@@ -475,6 +481,12 @@ fn validate_fragment(
         V3RecipeSettings::SkyIslands(settings) => {
             validate_canonical(patch, fragment, |plan| sky::validate_sky(plan, settings))
         }
+        V3RecipeSettings::Volcano(_)
+        | V3RecipeSettings::DeepForest(_)
+        | V3RecipeSettings::Prairie(_) => WorldValidation::Invalid(vec![recipe_issue(format!(
+            "Ring7 does not admit the {} recipe",
+            recipe_name(&spec.recipe)
+        ))]),
     };
     match validation {
         WorldValidation::Valid(()) => Ok(()),
@@ -860,6 +872,9 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
