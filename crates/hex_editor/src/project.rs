@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use atomicwrites::{AllowOverwrite, AtomicFile, DisallowOverwrite, OverwriteBehavior};
 use hex_assets::{
-    ArtPalette, ObjectAssetId, ObjectBlueprint, ObjectCategory, PaletteSwatch, SwatchId,
-    VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
+    ArtPalette, ObjectAssetId, ObjectBlueprint, ObjectCatalogFile, ObjectCategory, PaletteSwatch,
+    SwatchId, VoxelStyle, VoxelStyleCatalog, VoxelStyleId,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,7 @@ use xxhash_rust::xxh3::xxh3_64;
 const ART_PATH: &str = "assets/art";
 const PALETTE_FILE: &str = "palette.ron";
 const STYLE_FILE: &str = "voxel_styles.ron";
+const OBJECT_CATALOG_FILE: &str = "object_catalog.ron";
 const OBJECT_DIRECTORY: &str = "objects";
 const OBJECT_CATEGORIES: [ObjectCategory; 3] = [
     ObjectCategory::Plant,
@@ -150,6 +151,7 @@ pub struct AssetProject {
     art_root: PathBuf,
     palette: ArtPalette,
     styles: VoxelStyleCatalog,
+    object_catalog: ObjectCatalogFile,
     objects: BTreeMap<ObjectAssetId, ObjectBlueprint>,
     loaded_sources: BTreeMap<PathBuf, Vec<u8>>,
 }
@@ -164,8 +166,10 @@ impl AssetProject {
         let art_root = repository_root.join(ART_PATH);
         let palette_path = art_root.join(PALETTE_FILE);
         let style_path = art_root.join(STYLE_FILE);
+        let object_catalog_path = art_root.join(OBJECT_CATALOG_FILE);
         let palette = read_ron::<ArtPalette>(&palette_path)?;
         let styles = read_ron::<VoxelStyleCatalog>(&style_path)?;
+        let object_catalog = read_ron::<ObjectCatalogFile>(&object_catalog_path)?;
         let objects = load_objects(&art_root)?;
         let loaded_sources = scan_art_sources(&art_root)?;
 
@@ -174,6 +178,7 @@ impl AssetProject {
             art_root,
             palette,
             styles,
+            object_catalog,
             objects,
             loaded_sources,
         };
@@ -203,6 +208,12 @@ impl AssetProject {
     #[must_use]
     pub const fn styles(&self) -> &VoxelStyleCatalog {
         &self.styles
+    }
+
+    /// Saved object ids in the exact order published to the runtime catalog.
+    #[must_use]
+    pub const fn object_catalog(&self) -> &ObjectCatalogFile {
+        &self.object_catalog
     }
 
     /// Saved objects in stable id order.
@@ -430,8 +441,14 @@ impl AssetProject {
         let mut objects = refreshed.objects.clone();
         drop(objects.insert(new_id, blueprint.clone()));
         validate_graph(&refreshed.palette, &refreshed.styles, &objects)?;
+        let object_catalog = catalog_for_objects(&objects)?;
+        let catalog_path = refreshed.art_root.join(OBJECT_CATALOG_FILE);
         let source = write_ron_atomically(&path, &blueprint, DisallowOverwrite)?;
+        let catalog_source = write_ron_atomically(&catalog_path, &object_catalog, AllowOverwrite)
+            .map_err(|error| with_created_file_rollback(error, &path))?;
         refreshed.record_written_source(&path, source)?;
+        refreshed.record_written_source(&catalog_path, catalog_source)?;
+        refreshed.object_catalog = object_catalog;
         refreshed.objects = objects;
         *self = refreshed;
         Ok(())
@@ -469,9 +486,25 @@ impl AssetProject {
             )
         })?;
         let path = object_path(&self.art_root, &blueprint)?;
-        fs::remove_file(&path).map_err(|error| ProjectError::at("delete object", &path, error))?;
+        let catalog_path = self.art_root.join(OBJECT_CATALOG_FILE);
+        let old_catalog_source = self.loaded_source(&catalog_path)?.to_vec();
+        let mut objects = self.objects.clone();
+        drop(objects.remove(id));
+        let object_catalog = catalog_for_objects(&objects)?;
+        let catalog_source = write_ron_atomically(&catalog_path, &object_catalog, AllowOverwrite)?;
+        fs::remove_file(&path)
+            .map_err(|error| ProjectError::at("delete object", &path, error))
+            .map_err(|error| {
+                with_rollback(
+                    error,
+                    write_bytes_atomically(&catalog_path, &old_catalog_source, AllowOverwrite),
+                    "object catalog",
+                )
+            })?;
+        self.record_written_source(&catalog_path, catalog_source)?;
         self.remove_written_source(&path)?;
-        drop(self.objects.remove(id));
+        self.object_catalog = object_catalog;
+        self.objects = objects;
         Ok(blueprint)
     }
 
@@ -544,6 +577,7 @@ impl AssetProject {
     }
 
     fn validate_graph(&self) -> Result<(), ProjectError> {
+        validate_object_catalog(&self.object_catalog, &self.objects)?;
         validate_graph(&self.palette, &self.styles, &self.objects)
     }
 
@@ -602,9 +636,7 @@ impl AssetProject {
 fn load_objects(art_root: &Path) -> Result<BTreeMap<ObjectAssetId, ObjectBlueprint>, ProjectError> {
     let mut objects = BTreeMap::new();
     for category in OBJECT_CATEGORIES {
-        let directory = art_root
-            .join(OBJECT_DIRECTORY)
-            .join(category_directory(category));
+        let directory = art_root.join(OBJECT_DIRECTORY).join(category.directory());
         if !directory
             .try_exists()
             .map_err(|error| ProjectError::at("inspect object directory", &directory, error))?
@@ -680,7 +712,12 @@ fn validate_graph(
                 ),
             ));
         }
-        validate_object_identity(blueprint)?;
+        blueprint
+            .id
+            .validate_for_category(blueprint.category)
+            .map_err(|error| {
+                ProjectError::new("validate object identity", None, error.to_string())
+            })?;
         blueprint.validate(styles).map_err(|error| {
             ProjectError::new(
                 "validate art graph",
@@ -692,26 +729,49 @@ fn validate_graph(
     Ok(())
 }
 
-fn validate_object_identity(blueprint: &ObjectBlueprint) -> Result<&str, ProjectError> {
-    let expected_category = category_directory(blueprint.category);
-    let id = blueprint.id.as_str();
-    let Some((category, filename)) = id.split_once('/') else {
-        return Err(ProjectError::new(
-            "validate object identity",
-            None,
-            format!("object id '{id}' must be '<category>/<filename>' for its tracked path"),
-        ));
-    };
-    if category != expected_category || filename.is_empty() || filename.contains('/') {
-        return Err(ProjectError::new(
-            "validate object identity",
-            None,
-            format!(
-                "object id '{id}' must be '{expected_category}/<filename>' with one filename segment"
-            ),
+fn catalog_for_objects(
+    objects: &BTreeMap<ObjectAssetId, ObjectBlueprint>,
+) -> Result<ObjectCatalogFile, ProjectError> {
+    ObjectCatalogFile::new(objects.keys().cloned())
+        .map_err(|error| ProjectError::new("build object catalog", None, error.to_string()))
+}
+
+fn validate_object_catalog(
+    catalog: &ObjectCatalogFile,
+    objects: &BTreeMap<ObjectAssetId, ObjectBlueprint>,
+) -> Result<(), ProjectError> {
+    let discovered = objects.keys().cloned().collect::<BTreeSet<_>>();
+    let published = catalog.ids().iter().cloned().collect::<BTreeSet<_>>();
+    if discovered == published {
+        return Ok(());
+    }
+
+    let unlisted = discovered
+        .difference(&published)
+        .map(ObjectAssetId::as_str)
+        .collect::<Vec<_>>();
+    let missing = published
+        .difference(&discovered)
+        .map(ObjectAssetId::as_str)
+        .collect::<Vec<_>>();
+    let mut details = Vec::new();
+    if !unlisted.is_empty() {
+        details.push(format!(
+            "object files absent from the catalog: {}",
+            unlisted.join(", ")
         ));
     }
-    Ok(filename)
+    if !missing.is_empty() {
+        details.push(format!(
+            "catalog entries without object files: {}",
+            missing.join(", ")
+        ));
+    }
+    Err(ProjectError::new(
+        "validate object catalog",
+        None,
+        details.join("; "),
+    ))
 }
 
 fn validate_loaded_object_path(
@@ -726,8 +786,8 @@ fn validate_loaded_object_path(
             actual,
             format!(
                 "file is in '{}' but blueprint category is '{}'",
-                category_directory(scanned_category),
-                category_directory(blueprint.category)
+                scanned_category.directory(),
+                blueprint.category.directory()
             ),
         ));
     }
@@ -743,19 +803,22 @@ fn validate_loaded_object_path(
 }
 
 fn object_path(art_root: &Path, blueprint: &ObjectBlueprint) -> Result<PathBuf, ProjectError> {
-    let filename = validate_object_identity(blueprint)?;
-    Ok(art_root
-        .join(OBJECT_DIRECTORY)
-        .join(category_directory(blueprint.category))
-        .join(format!("{filename}.ron")))
-}
-
-const fn category_directory(category: ObjectCategory) -> &'static str {
-    match category {
-        ObjectCategory::Plant => "plant",
-        ObjectCategory::Effect => "effect",
-        ObjectCategory::Prop => "prop",
-    }
+    blueprint
+        .id
+        .validate_for_category(blueprint.category)
+        .map_err(|error| ProjectError::new("validate object identity", None, error.to_string()))?;
+    let relative = blueprint
+        .id
+        .asset_path()
+        .map_err(|error| ProjectError::new("resolve object path", None, error.to_string()))?;
+    let assets_root = art_root.parent().ok_or_else(|| {
+        ProjectError::at(
+            "resolve object path",
+            art_root,
+            "art root has no assets parent",
+        )
+    })?;
+    Ok(assets_root.join(relative))
 }
 
 fn object_usage_for_styles<'a>(
@@ -815,6 +878,27 @@ fn with_rollback(
     }
 }
 
+fn with_created_file_rollback(original: ProjectError, created_path: &Path) -> ProjectError {
+    match fs::remove_file(created_path) {
+        Ok(()) => ProjectError::new(
+            original.operation(),
+            original.path().map(Path::to_path_buf),
+            format!(
+                "{}; the newly created object file was removed",
+                original.detail()
+            ),
+        ),
+        Err(rollback_error) => ProjectError::new(
+            "restore object catalog transaction",
+            Some(created_path.to_path_buf()),
+            format!(
+                "{}; removing the newly created object file also failed: {rollback_error}",
+                original
+            ),
+        ),
+    }
+}
+
 fn write_ron_atomically<T>(
     path: &Path,
     value: &T,
@@ -861,7 +945,7 @@ fn pretty_ron<T: Serialize>(value: &T) -> Result<String, ProjectError> {
 
 fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, ProjectError> {
     let mut sources = BTreeMap::new();
-    for filename in [PALETTE_FILE, STYLE_FILE] {
+    for filename in [PALETTE_FILE, STYLE_FILE, OBJECT_CATALOG_FILE] {
         let path = art_root.join(filename);
         if path
             .try_exists()
@@ -874,7 +958,7 @@ fn scan_art_sources(art_root: &Path) -> Result<BTreeMap<PathBuf, Vec<u8>>, Proje
     }
 
     for category in OBJECT_CATEGORIES {
-        let relative_directory = PathBuf::from(OBJECT_DIRECTORY).join(category_directory(category));
+        let relative_directory = PathBuf::from(OBJECT_DIRECTORY).join(category.directory());
         let directory = art_root.join(&relative_directory);
         if !directory
             .try_exists()
@@ -1266,10 +1350,42 @@ pub(crate) mod tests {
             pretty_ron(&fixture_catalog()).expect("fixture catalog should serialize"),
         )
         .expect("fixture style catalog should be written");
+        fs::write(
+            art_root.join(OBJECT_CATALOG_FILE),
+            pretty_ron(
+                &ObjectCatalogFile::new(Vec::new())
+                    .expect("an empty object catalog should be valid"),
+            )
+            .expect("fixture object catalog should serialize"),
+        )
+        .expect("fixture object catalog should be written");
         directory
     }
 
     fn write_object_fixture(directory: &TestDirectory, blueprint: &ObjectBlueprint) -> PathBuf {
+        let path = write_unlisted_object_fixture(directory, blueprint);
+        let catalog_path = directory.art_root().join(OBJECT_CATALOG_FILE);
+        let mut ids = read_ron::<ObjectCatalogFile>(&catalog_path)
+            .expect("fixture object catalog should parse")
+            .ids()
+            .to_vec();
+        if !ids.contains(&blueprint.id) {
+            ids.push(blueprint.id.clone());
+        }
+        let catalog =
+            ObjectCatalogFile::new(ids).expect("fixture object catalog should be canonical");
+        fs::write(
+            catalog_path,
+            pretty_ron(&catalog).expect("fixture object catalog should serialize"),
+        )
+        .expect("fixture object catalog should be written");
+        path
+    }
+
+    fn write_unlisted_object_fixture(
+        directory: &TestDirectory,
+        blueprint: &ObjectBlueprint,
+    ) -> PathBuf {
         let path =
             object_path(&directory.art_root(), blueprint).expect("fixture id should map to a path");
         let parent = path.parent().expect("fixture object path has a parent");
@@ -1287,6 +1403,7 @@ pub(crate) mod tests {
         let directory = prepare_project();
         let empty = AssetProject::load(&directory.path).expect("empty project should load");
         assert!(empty.objects().is_empty());
+        assert!(empty.object_catalog().ids().is_empty());
 
         write_object_fixture(&directory, &tree("plant/zinnia", "Zinnia"));
         write_object_fixture(&directory, &tree("plant/ash", "Ash"));
@@ -1299,6 +1416,38 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             ["plant/ash", "plant/zinnia"]
         );
+        assert_eq!(
+            loaded
+                .object_catalog()
+                .ids()
+                .iter()
+                .map(ObjectAssetId::as_str)
+                .collect::<Vec<_>>(),
+            ["plant/ash", "plant/zinnia"]
+        );
+    }
+
+    #[test]
+    fn load_rejects_unlisted_objects_and_catalog_entries_without_files() {
+        let directory = prepare_project();
+        write_unlisted_object_fixture(&directory, &tree("plant/oak", "Oak"));
+        let error =
+            AssetProject::load(&directory.path).expect_err("unlisted object file must fail");
+        assert_eq!(error.operation(), "validate object catalog");
+        assert!(error.detail().contains("plant/oak"));
+
+        fs::remove_file(directory.art_root().join("objects/plant/oak.ron"))
+            .expect("fixture object should be removed");
+        let catalog = ObjectCatalogFile::new([object_id("plant/ash")])
+            .expect("fixture catalog should be valid");
+        fs::write(
+            directory.art_root().join(OBJECT_CATALOG_FILE),
+            pretty_ron(&catalog).expect("fixture catalog should serialize"),
+        )
+        .expect("fixture catalog should be written");
+        let error = AssetProject::load(&directory.path).expect_err("missing object file must fail");
+        assert_eq!(error.operation(), "validate object catalog");
+        assert!(error.detail().contains("plant/ash"));
     }
 
     #[test]
@@ -1375,6 +1524,15 @@ pub(crate) mod tests {
 
         let reloaded = AssetProject::load(&directory.path).expect("saved project should reload");
         assert_eq!(reloaded.objects().len(), 2);
+        assert_eq!(
+            reloaded
+                .object_catalog()
+                .ids()
+                .iter()
+                .map(ObjectAssetId::as_str)
+                .collect::<Vec<_>>(),
+            ["plant/oak", "plant/young-oak"]
+        );
         assert_eq!(
             reloaded
                 .object(&object_id("plant/oak"))
@@ -1617,6 +1775,11 @@ pub(crate) mod tests {
         project
             .delete_object(&object_id("plant/oak"))
             .expect("object deletion should succeed");
+        assert!(project.object_catalog().ids().is_empty());
+        let persisted_catalog =
+            read_ron::<ObjectCatalogFile>(&directory.art_root().join(OBJECT_CATALOG_FILE))
+                .expect("deleted object catalog should remain valid");
+        assert!(persisted_catalog.ids().is_empty());
         project
             .delete_style(&style_id("plant/trunk"))
             .expect("unreferenced style deletion should succeed");
@@ -1690,6 +1853,7 @@ pub(crate) mod tests {
         let directory = prepare_project();
         let project = AssetProject::load(&directory.path).expect("project should load");
         let loaded = project.revision_snapshot();
+        assert!(loaded.files.contains_key(OBJECT_CATALOG_FILE));
         assert_eq!(
             current_project_revisions(&directory.path)
                 .expect("unchanged tracked sources should scan"),
@@ -1758,7 +1922,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn same_length_external_object_edit_blocks_save_but_save_as_preserves_both() {
+    fn save_as_merges_external_object_edits_additions_and_manifest_changes() {
         let directory = prepare_project();
         let oak_path = write_object_fixture(&directory, &tree("plant/oak", "Oak"));
         let mut project = AssetProject::load(&directory.path).expect("project should load");
@@ -1779,6 +1943,7 @@ pub(crate) mod tests {
             loaded_len
         );
         fs::write(&oak_path, &external).expect("external object edit should be written");
+        let ash_path = write_object_fixture(&directory, &tree("plant/ash", "Ash"));
 
         let error = project
             .save_object(&object_id("plant/oak"), local.clone())
@@ -1796,6 +1961,7 @@ pub(crate) mod tests {
             .art_root()
             .join("objects/plant/local-oak.ron")
             .is_file());
+        assert!(ash_path.is_file());
         assert_eq!(
             project
                 .object(&object_id("plant/oak"))
@@ -1803,7 +1969,17 @@ pub(crate) mod tests {
                 .display_name,
             "Elm"
         );
+        assert!(project.object(&object_id("plant/ash")).is_some());
         assert!(project.object(&object_id("plant/local-oak")).is_some());
+        assert_eq!(
+            project
+                .object_catalog()
+                .ids()
+                .iter()
+                .map(ObjectAssetId::as_str)
+                .collect::<Vec<_>>(),
+            ["plant/ash", "plant/local-oak", "plant/oak"]
+        );
         assert!(project
             .external_changes()
             .expect("successful Save As should refresh object sources")
@@ -1820,15 +1996,21 @@ pub(crate) mod tests {
             .expect("added file should be detected");
         assert_eq!(
             changes,
-            vec![ExternalAssetChange {
-                path: PathBuf::from("objects/plant/ash.ron"),
-                kind: ExternalChangeKind::Added,
-            }]
+            vec![
+                ExternalAssetChange {
+                    path: PathBuf::from(OBJECT_CATALOG_FILE),
+                    kind: ExternalChangeKind::Modified,
+                },
+                ExternalAssetChange {
+                    path: PathBuf::from("objects/plant/ash.ron"),
+                    kind: ExternalChangeKind::Added,
+                },
+            ]
         );
         let error = project
             .save_catalogs(project.palette().clone(), project.styles().clone())
             .expect_err("catalog writes must account for every saved object");
-        assert!(error.detail().contains("objects/plant/ash.ron (added)"));
+        assert!(error.detail().contains("object_catalog.ron (modified)"));
 
         project
             .reload_from_disk()

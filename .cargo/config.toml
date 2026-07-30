@@ -15,3 +15,6 @@ BEVY_ASSET_ROOT = { value = ".", relative = true }
 dev = "run -p hex_game --features dev"
 # Standalone art authoring. It is intentionally not a screen inside `hex_game`.
 editor = "run -p hex_editor"
+# Runtime acceptance scene for Workshop-authored objects. It is an example rather
+# than a game screen, so production scenario flow remains unchanged.
+object-gallery = "run -p hex_objects --example object_gallery"

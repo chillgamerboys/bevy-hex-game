@@ -36,12 +36,30 @@ error instead — fix the file and save it again.
 **It returned to the title screen with a notice.** Terrain generation or actor
 spawning failed after loading succeeded — the reason is on screen and in the log.
 
+**Continue is unavailable.** The title screen explains whether no `resume.ron`
+exists or whether the current build rejected it. A resume is deliberately disposable
+pre-alpha state: it must match this build, its scenario/content digest, and the
+scenario's generator version. Save again from the pause overlay during exploration;
+combat cannot be saved. Set `HEX_GAME_DATA_DIR` to an isolated directory when testing
+this flow.
+
+**Settings reported that defaults were restored.** `preferences.ron` was corrupt or
+from an incompatible version. The game keeps running with safe defaults and reports
+the problem instead of partially applying the file. The exact platform directories
+and override are in [config.md](config.md#local-settings-are-not-authored-config).
+
+**The log says an open combat decision was dropped after leaving a scenario.** This is
+intentional teardown when `BACKSPACE` or another state change exits combat while a
+defender-choice prompt is open. The decision names session-local units and must not
+survive into the next scenario. The same warning without an explicit screen/combat
+exit is a bug.
+
 ## Editing settings
 
 **A change had no effect.** Check that you saved the file, and that you are running
 `cargo dev` rather than `cargo run --release`: only the dev build watches files.
-Some values are only read when the world is built — press `BACKSPACE` and pick the
-scenario again. Which values those are is the hot-reload table in
+Some values are only read when the world is built — press `BACKSPACE` and use New
+Game or relaunch the development fixture. Which values those are is the hot-reload table in
 [config.md](config.md).
 
 **You want to undo everything.** These files are tracked in git:
@@ -57,8 +75,8 @@ The complete authoring workflow and controls are in
 
 **The editor cannot find a project.** Run `cargo editor` from inside a checkout, or
 pass its root explicitly with `cargo editor -- --project-root /path/to/repository`.
-The root must contain both `assets/art/palette.ron` and
-`assets/art/voxel_styles.ron`.
+The root must contain `assets/art/palette.ron`, `assets/art/voxel_styles.ron`, and
+`assets/art/object_catalog.ron`.
 
 **Save is disabled for an object.** Calibration and newly created objects need Save As
 before ordinary Save has a tracked destination. A saved object must also satisfy its
@@ -68,7 +86,9 @@ object inspector reports the current intrinsic validation error.
 **Every tracked write is blocked.** The toolbar distinguishes an external-file change
 from a recovery conflict. Reload accepts the current disk files as the new baseline
 and discards local drafts. Save As can preserve an object under a new id, but it does
-not silently resolve dirty shared palette or style catalogs.
+not silently resolve dirty shared palette or style catalogs. External object and
+manifest additions are reloaded and merged when Save As can prove their graph is
+coherent.
 
 **A recovery prompt will not go away.** The Workshop deliberately leaves an invalid
 or unknown-version recovery file untouched and pauses autosave. Discard it explicitly

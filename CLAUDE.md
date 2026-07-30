@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as an eleven-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a fourteen-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -75,6 +75,9 @@ capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected ac
 an exact generated anchor before framing and requires a capture.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
 while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+`HEX_REVIEW_ILLUMINATION=overlay` adds exact Dark, Dim, and Bright cave-interior
+gameplay-tier caps to a capture without changing physical lighting, perception, fog,
+or picking.
 The process exits after persisting the PNG. A frame that fails the visual-coverage
 check still leaves its PNG at the requested path and exits with an error, so the
 rejected output can be inspected.
@@ -95,18 +98,22 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
-covers both scenario families and the pause overlay. The capture goes through an
-offscreen render target (the window surface is not readable on macOS/Metal), with
-every UI root pointed at the redirected camera.
+run. `walks/menus.ron` covers the title, Settings, both Creators, Combat Lab, and
+return routing;
+`walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
+Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
+through an offscreen render target (the window surface is not readable on
+macOS/Metal), with every UI root pointed at the redirected camera.
 
 ## Workspace
 
 ```
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
+hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
-hex_core → hex_units → hex_perception → hex_combat  (planned)
-hex_core → hex_lattice   (the pure rules engine; gameplay consumes it as content lands)
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
+hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
+hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
 {Bevy, inspector} → hex_dev ────────────────────────────────────────→ hex_game
 ```
@@ -114,27 +121,33 @@ hex_core → hex_anim ───────────────────�
 **`hex_lattice` is the game's pure rules engine** — the lattice: gems, fusions,
 spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates only, no
 `App`, no plugin, no renderer), it depends only on `hex_core` and settles none of the
-design's open questions. Its designed seat is `hex_core → hex_lattice → hex_assets`;
-`hex_assets` and the combat wiring consume it as the content and spawning land.
+design's open questions. `hex_assets` resolves authored content into it, `hex_units`
+carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.
 
-The planned **`hex_perception`** crate owns authoritative illumination, faction sight,
-and map knowledge. It may depend on `hex_units` to observe unit positions.
-`hex_units` consumes only the compact `LocalMapKnowledge` projection in `hex_core`,
-while `hex_combat` may consume the richer perception API. Neither gameplay crate may
-import map-generator internals.
+`hex_objects` is the renderer for static Workshop-authored objects. Producers publish
+the shared `hex_assets::ObjectInstance` contract; they do not depend on the renderer,
+and the renderer does not project gameplay blockers.
+
+**`hex_perception`** owns authoritative illumination, faction sight, and map
+knowledge. It depends on `hex_units` to observe unit positions.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`
+for player movement, while `hex_combat` consumes faction-generic projections and the
+richer current-observation API to gate gameplay-owned lattice knowledge, cast anchors,
+and AI. Neither gameplay crate may import map-generator internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
-content (world files, `substances.ron`, lighting profiles, future `perception.ron`).
+content (world files, `substances.ron`, lighting profiles, `perception.ron`).
 The **gameplay owner** has `hex_core`, `hex_units`, `hex_combat`, `hex_lattice`,
 `hex_anim`, generic `hex_assets` loader infrastructure, and gameplay schema/settings
-modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is
-shared. Every fact that crosses between them, and whether it is live, agreed, reserved,
-or still an ask, is `docs/contracts.md`; the open asks are
+modules and content (`combat.ron`, `spells.ron`, `elements.ron`). `hex_game` is shared;
+`hex_objects` and `hex_editor` are shared presentation/tooling with no gameplay
+authority. Every fact that crosses between the owners, and whether it is live, agreed,
+reserved, or still an ask, is `docs/contracts.md`; the open asks are
 `docs/planning/boundary.md`.
 
 `hex_assets` ownership follows the concern, not the directory. Generic loader traits,
@@ -168,17 +181,22 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors → Perception → View → Finalize`)
-  orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a
-  shared set — `.chain()` cannot express it, and a local chain that looks correct
-  will race. The set boundary also supplies a sync point: `Commands`-spawned entities
-  are not queryable until the queue is applied, so `Actors` sees the tiles `Terrain`
-  made, `Perception` sees the actors, `View` sees the completed projection, and
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Restore → Perception → View
+  → Finalize`) orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary
+  *must* use a shared set — `.chain()` cannot express it, and a local chain that
+  looks correct will race. The set boundary also supplies a sync point:
+  `Commands`-spawned entities are not queryable until the queue is applied, so
+  `Actors` sees the tiles `Terrain` made, `Restore` sees the scenario roster,
+  `Perception` sees restored actors, `View` sees the completed projection, and
   `Finalize` sees the required actors.
 - **`PerceptionSystems`** (`PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
+  knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
+  Casting and AI must use that publication; neither preview nor a legal-action request
+  authorizes a later command by itself.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.
@@ -199,6 +217,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
+  Elements, substances, spells, and lattices additionally require one matching
+  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
+  admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 
@@ -259,12 +280,13 @@ feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
-cleaned up. Standalone work PRs straight onto it; **grouped gameplay-ticket work
-goes through a short-lived `wave/N-*` branch** — ticket PRs merge into the wave on
-green audits, a human walks the integrated build once, and the whole wave lands on
-`dev` in one merge, after which the wave branch is deleted (never `dev`). Partially
-delivered epics stay In Review across waves; see CONTRIBUTING.md's wave section
-for the full rules.
+cleaned up. Standalone work PRs straight onto it; **related work with shared contracts,
+hot files, or one meaningful runtime checkpoint goes through a short-lived
+`wave/*` branch**. Source branches are work lanes and need leaf PRs only when focused
+review is useful. The combined wave gets the full audit and human walk, then lands on
+`dev` in one merge and is deleted (never `dev`). See
+[parallel development](docs/development/parallel-development.md) for the topology
+decision table and reconciliation rules.
 
 ```sh
 gh pr create --base dev          # standalone work
@@ -288,6 +310,11 @@ allowed to be wrong.
 
 ### Skill pipeline
 
+Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
+skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
+outcome across lanes, and `$land-development-wave` to reconcile and land an existing
+batch without multiplying release gates.
+
 The PR lifecycle is driven by skills in `.claude/skills/`:
 `/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;
 `/promote` for the deliberate dev→main hop, which gates on a human having
@@ -308,7 +335,9 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 1,100 tests. macOS is the primary
+terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
+not frozen here; the current foundation gate and its exact count are recorded in
+[foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

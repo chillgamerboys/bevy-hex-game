@@ -20,7 +20,7 @@ use crate::recovery::{
     sanitized_selection, EditorRecoveryDraft, RawObjectDraft, RecoveryError, RecoverySanitization,
 };
 
-pub(crate) const CALIBRATION_OBJECT_ID: &str = "calibration/scene";
+pub(crate) const CALIBRATION_OBJECT_ID: &str = "plant/calibration-scene";
 
 /// The two authoring workspaces sharing one editor window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1987,7 +1987,7 @@ mod tests {
 
     #[test]
     fn prop_blocker_moves_with_a_fully_selected_column() {
-        let id = ObjectAssetId::new("calibration/prop");
+        let id = ObjectAssetId::new("prop/calibration-prop");
         let Ok(id) = id else {
             unreachable!("test object id should be valid")
         };
@@ -2022,7 +2022,7 @@ mod tests {
 
     #[test]
     fn prop_clipboard_carries_a_blocker_only_for_a_fully_selected_column() {
-        let Ok(id) = ObjectAssetId::new("calibration/prop") else {
+        let Ok(id) = ObjectAssetId::new("prop/calibration-prop") else {
             unreachable!("test object id should be valid")
         };
         let origin = LocalVoxelCoord::new(0, 0, 0);

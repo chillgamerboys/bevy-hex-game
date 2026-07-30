@@ -1,0 +1,22 @@
+// A worked-stone fort with two gates, accessible wall walks, towers, and a keep.
+(
+    grid_radius: 12,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Single((
+            environment: TemperateGrassland,
+            recipe: Fort(()),
+            overlays: [],
+            mask: WholeWorld,
+            edges: (
+                east: WorldBoundary,
+                south_east: WorldBoundary,
+                south_west: WorldBoundary,
+                west: WorldBoundary,
+                north_west: WorldBoundary,
+                north_east: WorldBoundary,
+            ),
+        )),
+    )),
+)

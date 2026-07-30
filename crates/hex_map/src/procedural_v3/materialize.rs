@@ -15,7 +15,9 @@ use hex_core::{
     SpecialMovementRegions, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
 };
 
-use super::fingerprint::{semantic_plan_fingerprint, FingerprintEncoder};
+use super::fingerprint::{
+    encode_light_presentation, semantic_plan_fingerprint, FingerprintEncoder,
+};
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::selection::ValidatedWorldPlan;
 use super::volume::{
@@ -62,6 +64,26 @@ impl MapPresentationProjection {
         &self.liquids
     }
 
+    /// Returns exact surface features in stable map-local identity order.
+    #[must_use]
+    pub(crate) const fn features(&self) -> &BTreeMap<FeatureId, PlannedFeature> {
+        &self.features
+    }
+
+    /// Returns generated gameplay-light descriptors in stable map-local order.
+    #[must_use]
+    pub(crate) const fn lights(&self) -> &BTreeMap<LightId, PlannedGameplayLight> {
+        &self.lights
+    }
+
+    /// Retains feature presentations whose exact authored support remains valid.
+    ///
+    /// Terrain edits may remove presentation-only features such as tall grass.
+    /// Blocking structures use the separate conservative edit guard instead.
+    pub(crate) fn retain_features(&mut self, mut retain: impl FnMut(&PlannedFeature) -> bool) {
+        self.features.retain(|_id, feature| retain(feature));
+    }
+
     /// Iterates exact liquid voxels in deterministic [`TilePos`] order.
     #[cfg(test)]
     pub(crate) fn iter_liquids(
@@ -97,6 +119,44 @@ impl MapPresentationProjection {
     #[must_use]
     pub(crate) fn contains_liquid(&self, position: TilePos) -> bool {
         self.liquids.contains_key(&position)
+    }
+
+    /// Reports whether an edit would intersect an authored surface feature.
+    ///
+    /// V3 features are static projections until feature impacts and semantic
+    /// reprojection exist. Rejecting edits at or above a root prevents a voxel
+    /// from replacing the feature's support or being built through its visual
+    /// volume. Edits below the exact root remain ordinary terrain edits.
+    #[must_use]
+    pub(crate) fn protects_feature_edit(&self, position: TilePos) -> bool {
+        self.features.values().any(|feature| {
+            feature.kind == FeatureKind::Tree
+                && feature.blocker_footprint.iter().any(|blocker| {
+                    blocker.coord == position.coord && position.level >= blocker.level
+                })
+        })
+    }
+
+    /// Reports whether an edit would invalidate a generated static light source.
+    ///
+    /// Until light-bearing objects can be reprojected after terrain edits, the
+    /// complete source column is conservative map-owned geometry. This prevents
+    /// digging out its footing as well as building through its future crystal mesh.
+    #[must_use]
+    pub(crate) fn protects_light_edit(&self, position: TilePos) -> bool {
+        self.lights
+            .values()
+            .any(|light| light.origin.coord == position.coord)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_features(
+        features: impl IntoIterator<Item = (FeatureId, PlannedFeature)>,
+    ) -> Self {
+        Self {
+            features: features.into_iter().collect(),
+            ..Self::default()
+        }
     }
 }
 
@@ -770,6 +830,7 @@ fn encode_lights(
             IlluminationLevel::Bright => 2,
         });
         encoder.u32(light.radius);
+        encode_light_presentation(encoder, light.presentation);
     }
     Ok(())
 }
@@ -796,6 +857,7 @@ mod tests {
             gravel: SubstanceId(5),
             water: SubstanceId(6),
             metal: SubstanceId(7),
+            worked_stone: SubstanceId(12),
             snow: SubstanceId(8),
             ice: SubstanceId(9),
             basalt: SubstanceId(10),
@@ -1185,6 +1247,10 @@ mod tests {
                         PlannedFeature {
                             root: tree,
                             kind: FeatureKind::Tree,
+                            object_id: hex_assets::ObjectAssetId::new("plant/small-broadleaf")
+                                .expect("fixture id should be valid"),
+                            rotation: hex_assets::HexObjectRotation::ZERO,
+                            blocker_footprint: BTreeSet::from([tree]),
                         },
                     ),
                     (
@@ -1192,9 +1258,14 @@ mod tests {
                         PlannedFeature {
                             root: light,
                             kind: FeatureKind::TallGrass,
+                            object_id: hex_assets::ObjectAssetId::new("prop/grass-tuft")
+                                .expect("fixture id should be valid"),
+                            rotation: hex_assets::HexObjectRotation::ZERO,
+                            blocker_footprint: BTreeSet::new(),
                         },
                     ),
                 ]),
+                ..FeaturePlan::default()
             },
             structures: StructurePlan {
                 by_id: BTreeMap::from([(
@@ -1212,6 +1283,7 @@ mod tests {
                     origin: light,
                     level: IlluminationLevel::Dim,
                     radius: light_radius,
+                    presentation: None,
                 },
             )]),
             biome_regions,
@@ -1269,6 +1341,78 @@ mod tests {
     }
 
     #[test]
+    fn feature_projection_is_ordered_and_protects_the_authored_root_volume() {
+        let output = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the valid world materializes");
+        let projected: Vec<_> = output
+            .presentation
+            .features()
+            .iter()
+            .map(|(id, feature)| (*id, feature.clone()))
+            .collect();
+        assert_eq!(
+            projected
+                .iter()
+                .map(|(id, _feature)| id.0)
+                .collect::<Vec<_>>(),
+            vec![0, 1]
+        );
+
+        let tree = projected
+            .iter()
+            .find_map(|(_id, feature)| (feature.kind == FeatureKind::Tree).then_some(feature.root))
+            .expect("the fixture contains a tree");
+        assert!(output.presentation.protects_feature_edit(tree));
+        assert!(output
+            .presentation
+            .protects_feature_edit(TilePos::new(tree.coord, tree.level.saturating_add(12))));
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(tree.coord, tree.level.saturating_sub(1))));
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(HexCoord::from_axial(12, -12), tree.level)));
+
+        let grass = projected
+            .iter()
+            .find_map(|(_id, feature)| {
+                (feature.kind == FeatureKind::TallGrass).then_some(feature.root)
+            })
+            .expect("the fixture contains tall grass");
+        assert!(
+            !output.presentation.protects_feature_edit(grass),
+            "presentation-only grass must not make its supporting terrain immutable"
+        );
+        assert!(!output
+            .presentation
+            .protects_feature_edit(TilePos::new(grass.coord, grass.level.saturating_add(12))));
+    }
+
+    #[test]
+    fn gameplay_light_projection_is_ordered_and_protects_its_source_column() {
+        let output = materialize(validated(valid_plan(5)), &palette(), &is_solid)
+            .expect("the valid world materializes");
+        let projected: Vec<_> = output
+            .presentation
+            .lights()
+            .iter()
+            .map(|(id, light)| (*id, *light))
+            .collect();
+        assert_eq!(projected.len(), 1);
+        let source = projected
+            .first()
+            .map(|(_id, light)| light.origin)
+            .expect("the fixture contains a gameplay light");
+        assert!(output.presentation.protects_light_edit(source));
+        assert!(output
+            .presentation
+            .protects_light_edit(TilePos::new(source.coord, source.level.saturating_add(20))));
+        assert!(!output
+            .presentation
+            .protects_light_edit(TilePos::new(HexCoord::from_axial(12, -12), source.level)));
+    }
+
+    #[test]
     fn materialized_fingerprint_is_deterministic_and_covers_presented_lights() {
         let first = materialize(validated(valid_plan(5)), &palette(), &is_solid)
             .expect("the first world materializes");
@@ -1282,7 +1426,7 @@ mod tests {
             repeated.materialized_fingerprint
         );
         assert_eq!(
-            first.materialized_fingerprint, 8_365_186_683_002_973_576,
+            first.materialized_fingerprint, 15_501_428_346_321_951_035,
             "update only with an explicit materialized V3 fingerprint decision"
         );
         assert_ne!(

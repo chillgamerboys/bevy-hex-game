@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use bevy::prelude::{Asset, TypePath};
 use serde::{Deserialize, Serialize};
 
 use crate::art_palette::{ObjectAssetId, VoxelStyleCatalog, VoxelStyleId};
@@ -286,7 +287,7 @@ pub struct ObjectPlacement {
 /// Intrinsic invariants are checked while deserializing. Call [`Self::validate`] as
 /// well once the shared style catalog is available, so every style dependency is
 /// proven to exist before the object is used or saved.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Asset, TypePath, Debug, Clone, PartialEq, Eq)]
 pub struct ObjectBlueprint {
     /// On-disk schema version.
     pub schema_version: u16,
@@ -424,6 +425,9 @@ impl ObjectBlueprint {
                 self.id.as_str()
             ));
         }
+        self.id
+            .validate_for_category(self.category)
+            .map_err(|error| error.to_string())?;
         self.bounds.validate()?;
         if self.placements.is_empty() {
             return Err(format!(
@@ -899,7 +903,7 @@ mod tests {
     fn plant() -> ObjectBlueprint {
         ObjectBlueprint {
             schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
-            id: object_id("plants/test-tree"),
+            id: object_id("plant/test-tree"),
             display_name: "Test Tree".to_owned(),
             category: ObjectCategory::Plant,
             bounds: ObjectBounds {
@@ -923,7 +927,7 @@ mod tests {
     fn effect() -> ObjectBlueprint {
         ObjectBlueprint {
             schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
-            id: object_id("effects/test-burst"),
+            id: object_id("effect/test-burst"),
             display_name: "Test Burst".to_owned(),
             category: ObjectCategory::Effect,
             bounds: ObjectBounds {
@@ -1002,6 +1006,12 @@ mod tests {
 
     #[test]
     fn category_mismatches_and_malformed_origins_are_rejected() {
+        let mut wrong_id_category = plant();
+        wrong_id_category.id = object_id("effect/test-tree");
+        assert!(wrong_id_category
+            .validate_intrinsic()
+            .is_err_and(|error| error.contains("Plant object id")));
+
         let mut wrong_part = plant();
         if let Some(first) = wrong_part.placements.first_mut() {
             first.part = ObjectPart::Prop(PropPart::Structure);
@@ -1098,7 +1108,7 @@ mod tests {
         };
         let mut prop = ObjectBlueprint {
             schema_version: OBJECT_BLUEPRINT_SCHEMA_VERSION,
-            id: object_id("props/test"),
+            id: object_id("prop/test"),
             display_name: "Test Prop".to_owned(),
             category: ObjectCategory::Prop,
             bounds: ObjectBounds {
@@ -1154,7 +1164,7 @@ mod tests {
     #[test]
     fn fingerprint_ignores_collection_order_but_covers_semantics() {
         let first = plant();
-        assert_eq!(first.semantic_fingerprint(), Ok(1_424_557_119_057_464_755));
+        assert_eq!(first.semantic_fingerprint(), Ok(14_749_991_378_758_111_085));
         let mut reordered = first.clone();
         reordered.placements.reverse();
         reordered.blocker_footprint.reverse();
@@ -1184,6 +1194,8 @@ mod tests {
 
         let invalid = encoded.replace("schema_version:1", "schema_version:99");
         assert!(ron::from_str::<ObjectBlueprint>(&invalid).is_err());
+        let wrong_path = encoded.replace("plant/test-tree", "effect/test-tree");
+        assert!(ron::from_str::<ObjectBlueprint>(&wrong_path).is_err());
     }
 
     #[test]

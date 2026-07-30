@@ -12,18 +12,21 @@
 //! it does not change what a tile *is* to anyone else.
 
 use std::collections::BTreeSet;
+use std::fmt;
 
-use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 
-use hex_assets::{to_color, GameAssets, SubstanceTable};
+use hex_assets::{to_color, GameAssets, RuntimeArtCatalog, SubstanceTable};
 use hex_core::{
-    BiomeRegions, CutawayOccluder, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
-    HexGrid, HexSpan, HexTile, InteriorRegionId, InteriorRegions, MapAnchorId, MapAnchors,
-    MapViewHint, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId, TerrainEdit,
-    TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
+    BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
+    GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
+    InteriorRegions, MapAnchorId, MapAnchors, MapViewHint, PerceptionSystems,
+    PresentationOcclusion, ResolvedMapSeed, Screen, SpecialMovementRegions, SubstanceId,
+    TerrainEdit, TerrainReady, TilePos, TraversalBlockers, TraversalProfile,
 };
 
+use crate::crystal_render::{self, CrystalPresentationError};
+use crate::feature_render::{self, FeaturePresentationError};
 use crate::liquid_render::{self, LiquidMaterial, LiquidPresentationError, LiquidVisualTime};
 use crate::procedural;
 use crate::procedural_v2;
@@ -32,7 +35,10 @@ use crate::procedural_v3::MapPresentationProjection;
 use crate::settings::{MapSettings, TerrainSettings};
 use crate::terrain::{build_non_procedural_map, TerrainPalette};
 use crate::voxel::{runs, Column, SubstanceRun, VoxelMap};
-use crate::{GenerationReport, ProceduralRecipeMetrics, WaterfallReportMetrics};
+use crate::{
+    CavesReportMetrics, ForestReportMetrics, FortReportMetrics, GenerationReport,
+    ProceduralRecipeMetrics, Ring7Metrics, WaterfallReportMetrics,
+};
 
 /// Registers world construction and tile spawning.
 pub fn plugin(app: &mut App) {
@@ -46,10 +52,17 @@ pub fn plugin(app: &mut App) {
         .register_type::<Headroom>()
         .register_type::<InteriorRegionId>()
         .register_type::<CutawayOccluder>()
+        .register_type::<CanopyOccluder>()
+        .register_type::<PresentationOcclusion>()
+        .register_type::<GameplayLight>()
         .register_type::<TerrainReady>()
         .register_type::<GenerationReport>()
         .register_type::<ProceduralRecipeMetrics>()
         .register_type::<WaterfallReportMetrics>()
+        .register_type::<ForestReportMetrics>()
+        .register_type::<FortReportMetrics>()
+        .register_type::<CavesReportMetrics>()
+        .register_type::<Ring7Metrics>()
         .add_message::<TerrainEdit>()
         // Split across two sets rather than chained locally: `hex_units` spawns
         // the player into `Actors`, which must come after the tiles here, and a
@@ -68,7 +81,8 @@ pub fn plugin(app: &mut App) {
             Update,
             apply_terrain_edits
                 .run_if(in_state(Screen::Gameplay))
-                .run_if(resource_exists::<TerrainReady>),
+                .run_if(resource_exists::<TerrainReady>)
+                .before(PerceptionSystems::ResolveIllumination),
         )
         .add_systems(OnExit(Screen::Gameplay), teardown_map);
 }
@@ -77,6 +91,7 @@ fn generate_world(
     mut commands: Commands,
     settings: Res<MapSettings>,
     table: Res<SubstanceTable>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
     resolved_seed: Option<Res<ResolvedMapSeed>>,
 ) {
     commands.remove_resource::<GameplaySetupFailure>();
@@ -205,6 +220,7 @@ fn generate_world(
                 seed.0,
                 &palette,
                 &|substance| table.is_solid(substance),
+                art_catalog.as_deref(),
             ) {
                 Ok(generated) => generated,
                 Err(error) => {
@@ -262,28 +278,28 @@ fn teardown_map(mut commands: Commands, grids: Query<Entity, With<HexGrid>>) {
 fn spawn_grid(
     mut commands: Commands,
     assets: Res<GameAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut liquid_materials: ResMut<Assets<LiquidMaterial>>,
+    mut presentation_assets: MapPresentationAssets,
     map: Res<VoxelMap>,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
     liquid_visual_time: Res<LiquidVisualTime>,
     interiors: Option<Res<InteriorRegions>>,
     presentation: Option<Res<MapPresentationProjection>>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
 ) {
     if let Err(error) = build_grid(
         &mut commands,
         &assets,
-        &mut materials,
-        &mut meshes,
-        &mut liquid_materials,
+        &mut presentation_assets.materials,
+        &mut presentation_assets.meshes,
+        &mut presentation_assets.liquid_materials,
         &map,
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
+        art_catalog.as_deref(),
     ) {
         fail_presentation_setup(&mut commands, &error);
     }
@@ -303,9 +319,15 @@ fn build_grid(
     liquid_phase_seconds: f32,
     interiors: Option<&InteriorRegions>,
     presentation: Option<&MapPresentationProjection>,
-) -> Result<(), LiquidPresentationError> {
+    art_catalog: Option<&RuntimeArtCatalog>,
+) -> Result<(), MapPresentationError> {
     let mesh = assets.hex_tile.clone();
     let mut palette_materials = MaterialCache::default();
+    // Crystal asset resolution happens before any presentation entities are
+    // queued, so a missing or incompatible dependency cannot leave a partial map.
+    let prepared_crystals =
+        crystal_render::prepare_presentations(settings.level_height, presentation, art_catalog)
+            .map_err(MapPresentationError::Crystal)?;
     let mut children = liquid_render::spawn_presentations(
         commands,
         meshes,
@@ -315,7 +337,14 @@ fn build_grid(
         settings.level_height,
         liquid_phase_seconds,
         presentation,
-    )?;
+    )
+    .map_err(MapPresentationError::Liquid)?;
+    children.extend(
+        feature_render::spawn_presentations(commands, settings.level_height, presentation)
+            .map_err(MapPresentationError::Feature)?,
+    );
+    children.extend(crystal_render::spawn_prepared(commands, prepared_crystals));
+    children.extend(spawn_gameplay_lights(commands, presentation));
 
     for (coord, column) in map.columns() {
         for projected in projected_runs(coord, column, interiors) {
@@ -350,7 +379,7 @@ fn build_grid(
                 headroom,
             ));
             if let Some(region) = projected.cutaway {
-                tile.insert(CutawayOccluder(region));
+                tile.insert((CutawayOccluder(region), PresentationOcclusion::default()));
             }
             children.push(tile.id());
         }
@@ -367,13 +396,68 @@ fn build_grid(
     Ok(())
 }
 
-fn fail_presentation_setup(commands: &mut Commands, error: &LiquidPresentationError) {
-    error!("cannot build liquid presentation: {error}");
+fn spawn_gameplay_lights(
+    commands: &mut Commands,
+    presentation: Option<&MapPresentationProjection>,
+) -> Vec<Entity> {
+    presentation.map_or_else(Vec::new, |presentation| {
+        presentation
+            .lights()
+            .values()
+            .map(|light| {
+                commands
+                    .spawn((
+                        Name::new("GeneratedGameplayLight"),
+                        light.origin,
+                        GameplayLight::new(light.level, light.radius),
+                    ))
+                    .id()
+            })
+            .collect()
+    })
+}
+
+fn fail_presentation_setup(commands: &mut Commands, error: &MapPresentationError) {
+    error!("cannot build map presentation: {error}");
     commands.remove_resource::<TerrainReady>();
     commands.insert_resource(GameplaySetupFailure::new(format!(
         "The selected terrain cannot be presented: {error}."
     )));
     liquid_render::clear_material_cache(commands);
+}
+
+#[derive(Debug)]
+enum MapPresentationError {
+    Liquid(LiquidPresentationError),
+    Feature(FeaturePresentationError),
+    Crystal(CrystalPresentationError),
+}
+
+#[derive(SystemParam)]
+struct MapPresentationAssets<'w> {
+    materials: ResMut<'w, Assets<StandardMaterial>>,
+    meshes: ResMut<'w, Assets<Mesh>>,
+    liquid_materials: ResMut<'w, Assets<LiquidMaterial>>,
+}
+
+impl fmt::Display for MapPresentationError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Liquid(error) => write!(formatter, "liquid presentation failed: {error}"),
+            Self::Feature(error) => write!(formatter, "feature presentation failed: {error}"),
+            Self::Crystal(error) => write!(formatter, "crystal presentation failed: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for MapPresentationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Liquid(error) => Some(error),
+            Self::Feature(error) => Some(error),
+            Self::Crystal(error) => Some(error),
+        }
+    }
 }
 
 /// One material run split further wherever exact cutaway membership changes.
@@ -488,25 +572,26 @@ fn apply_terrain_edits(
     mut map: ResMut<VoxelMap>,
     grids: Query<Entity, With<HexGrid>>,
     assets: Res<GameAssets>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut liquid_materials: ResMut<Assets<LiquidMaterial>>,
+    mut presentation_assets: MapPresentationAssets,
     table: Res<SubstanceTable>,
     settings: Res<MapSettings>,
     liquid_visual_time: Res<LiquidVisualTime>,
+    art_catalog: Option<Res<RuntimeArtCatalog>>,
     mut special_regions: ResMut<SpecialMovementRegions>,
     mut interiors: Option<ResMut<InteriorRegions>>,
     mut spatial: EditableSpatialConsequences,
-    presentation: Option<Res<MapPresentationProjection>>,
+    mut presentation: Option<ResMut<MapPresentationProjection>>,
     mut next_screen: ResMut<NextState<Screen>>,
 ) {
     let mut changed = false;
     let mut changed_coords = BTreeSet::new();
     for edit in edits.read() {
-        let liquid_protected = presentation
-            .as_deref()
-            .is_some_and(|projection| projection.protects_liquid_edit(edit.pos()));
-        if apply_terrain_edit(&mut map, &table, edit, liquid_protected) {
+        let semantic_projection_protected = presentation.as_deref().is_some_and(|projection| {
+            projection.protects_liquid_edit(edit.pos())
+                || projection.protects_feature_edit(edit.pos())
+                || projection.protects_light_edit(edit.pos())
+        });
+        if apply_terrain_edit(&mut map, &table, edit, semantic_projection_protected) {
             changed = true;
             changed_coords.insert(edit.pos().coord);
             if let Some(interiors) = interiors.as_deref_mut() {
@@ -519,6 +604,23 @@ fn apply_terrain_edits(
     }
     if !changed {
         return;
+    }
+
+    if let Some(presentation) = presentation.as_deref_mut() {
+        presentation.retain_features(|feature| {
+            if feature.kind != procedural_v3::FeatureKind::TallGrass
+                || !changed_coords.contains(&feature.root.coord)
+            {
+                return true;
+            }
+            let Some(column) = map.column(feature.root.coord) else {
+                return false;
+            };
+            TraversalProfile::WALKER.admits_surface(
+                table.is_solid(column.get(feature.root.level)),
+                column.headroom_above(feature.root.level.saturating_add(1)),
+            )
+        });
     }
 
     special_regions.retain(|position, _| {
@@ -558,15 +660,16 @@ fn apply_terrain_edits(
     let rebuilt = build_grid(
         &mut commands,
         &assets,
-        &mut materials,
-        &mut meshes,
-        &mut liquid_materials,
+        &mut presentation_assets.materials,
+        &mut presentation_assets.meshes,
+        &mut presentation_assets.liquid_materials,
         &map,
         &table,
         &settings,
         liquid_visual_time.phase_seconds(),
         interiors.as_deref(),
         presentation.as_deref(),
+        art_catalog.as_deref(),
     );
     match rebuilt {
         Ok(()) => {

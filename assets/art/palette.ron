@@ -1,6 +1,16 @@
 (
     schema_version: 1,
     swatches: {
+        "crystal/cyan-body": (
+            display_name: "Cyan Crystal",
+            color: (red: 0.12, green: 0.62, blue: 0.76),
+            tags: ["crystal", "emissive", "prop"],
+        ),
+        "crystal/cyan-glow": (
+            display_name: "Cyan Crystal Glow",
+            color: (red: 0.62, green: 0.96, blue: 1.00),
+            tags: ["accent", "crystal", "emissive", "prop"],
+        ),
         "liquid/foam": (
             display_name: "Water Foam",
             color: (red: 0.8962438, green: 0.9593466, blue: 0.9911564),
@@ -19,37 +29,42 @@
         "plant/foliage-dark": (
             display_name: "Dark Foliage",
             color: (red: 0.12, green: 0.34, blue: 0.12),
-            tags: ["foliage", "legacy", "plant", "temporary"],
+            tags: ["foliage", "plant", "tree"],
         ),
         "plant/foliage-light": (
             display_name: "Light Foliage",
             color: (red: 0.25, green: 0.48, blue: 0.16),
-            tags: ["foliage", "legacy", "plant", "temporary"],
+            tags: ["foliage", "plant", "tree"],
         ),
         "plant/foliage-mid": (
             display_name: "Mid Foliage",
             color: (red: 0.18, green: 0.42, blue: 0.14),
-            tags: ["foliage", "legacy", "plant", "temporary"],
+            tags: ["foliage", "plant", "tree"],
         ),
         "plant/grass-dark": (
             display_name: "Dark Grass Blade",
             color: (red: 0.34, green: 0.52, blue: 0.14),
-            tags: ["grass", "legacy", "plant", "temporary"],
+            tags: ["grass", "plant", "prairie"],
         ),
         "plant/grass-light": (
             display_name: "Light Grass Blade",
             color: (red: 0.45, green: 0.62, blue: 0.18),
-            tags: ["grass", "legacy", "plant", "temporary"],
+            tags: ["grass", "plant", "prairie"],
         ),
         "plant/trunk": (
             display_name: "Tree Trunk",
             color: (red: 0.28, green: 0.15, blue: 0.07),
-            tags: ["legacy", "plant", "temporary", "wood"],
+            tags: ["plant", "tree", "wood"],
         ),
         "structure/metal": (
             display_name: "Metal",
             color: (red: 0.30, green: 0.34, blue: 0.40),
             tags: ["construction", "metal", "world"],
+        ),
+        "structure/worked-stone": (
+            display_name: "Worked Stone",
+            color: (red: 0.46, green: 0.48, blue: 0.52),
+            tags: ["construction", "stone", "world"],
         ),
         "terrain/basalt": (
             display_name: "Basalt",

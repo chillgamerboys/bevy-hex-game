@@ -8,10 +8,10 @@
 //! # Why it is a command rather than a function call
 //!
 //! The applier could pick for the defender and be done in one frame. It must not,
-//! because **the choice has to be in the replay log**. A fight replays by re-running its
-//! commands; a choice made inside the applier and never written down would be re-derived
-//! on replay, and any change to the policy — or a human answering in co-op — would make
-//! the same log produce a different fight.
+//! because **a future recorded command stream must contain the choice**. A choice made
+//! inside the applier and never written down would be re-derived on replay, and any
+//! change to the policy — or a human answering in co-op — would make the same recording
+//! produce a different fight. The live queue is consumed and is not persisted yet.
 //!
 //! So the applier parks a [`PendingDecision`], something answers it by pushing a
 //! `ChooseDisables`, and this handler applies that answer. The lattice UI answers for

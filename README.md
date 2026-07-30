@@ -20,11 +20,9 @@ keep its important relationships intact.
 
 <!--
 Regenerate readme_assets/procedural-hills.png with:
-HEX_WALK_SCRIPT=walks/gameplay.ron \
-HEX_WALK_OUT=.context/readme-captures/gameplay \
-cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/gameplay/11-hills.png \
-  readme_assets/procedural-hills.png
+HEX_REVIEW_SCENARIO="Procedural Hills" \
+HEX_REVIEW_CAPTURE="readme_assets/procedural-hills.png" \
+cargo run --release -p hex_game --features map-review
 -->
 ![The current Procedural Hills scenario: an elevated hex-prism landscape divided by a river and bridge, with player and enemy pieces visible](readme_assets/procedural-hills.png)
 
@@ -60,9 +58,9 @@ chooses which cells to surrender, so taking damage is a sequence of tactical
 decisions about what the character can still afford to be.
 
 This also makes a character's build their body. Tight, powerful lattices are brittle;
-roomy lattices endure. Variable-power rituals remain useful after binary spells have
-lost a required link, giving a battered character meaningful options instead of
-merely smaller numbers.
+roomy lattices endure. The design intends variable-power rituals to remain useful
+after binary spells have lost a required link, giving a battered character meaningful
+options instead of merely smaller numbers.
 
 ## Knowledge replaces dice
 
@@ -71,39 +69,92 @@ Uncertainty comes from incomplete information instead. Enemy lattices and intent
 begin hidden, while sight and Light-based divination reveal what is worth attacking
 or defending.
 
-The game does not protect a player from the consequences of positioning. Area
-effects can touch allies, enemies, and their caster. Magic can also persistently
-reshape terrain: a spell describes the energy and volume it applies, while the world
-decides how dirt, stone, water, or another material responds. Winning should come
-from understanding the board, not rerolling it.
+The design does not protect a player from the consequences of positioning. Future
+area effects may touch allies, enemies, and their caster. Planned terrain magic lets a
+spell describe the energy and volume it applies while the world decides how dirt,
+stone, water, or another material responds. Winning should come from understanding
+the board, not rerolling it.
 
-## The 0.3 playable slice
+## The current playable slice
 
-Version 0.3 is the first build in which the lattice idea is playable end to end. It is
-still an early skeleton, not the complete game described above: deterministic
+The current pre-alpha build makes the lattice idea playable end to end. It is still
+an early skeleton, not the complete game described above: deterministic
 procedural terrain, stacked-surface movement and path preview lead into combat on the
 same map, where live lattices power spells and absorb wounds.
 
-The combat HUD shows both the stable initiative order and the acting unit, keeps the
-player's lattice in view, retains a valid hostile target, and records a bounded
-knowledge-safe event log. A hostile starts as only a known presence—its formation and
-capacity stay hidden. Scrying Eye reveals the complete live lattice for a bounded
-number of rounds, including current mana and disabled cells, without exposing earlier
-hidden choices retroactively.
+The combat HUD shows the stable initiative order, acting unit, selected ally, aimed or
+retained hostile, and decision owner without conflating those roles. It keeps the
+relevant lattices visible and records a bounded, knowledge-safe event log. A hostile
+starts as only a known presence—its formation and capacity stay hidden. Scrying Eye
+reveals the complete live lattice for a bounded number of rounds, including current
+mana and disabled cells, without exposing earlier hidden choices retroactively.
 
 Ember deals direct damage and applies Burn for two of the target's actual turns.
 Incoming damage is command-modal: movement, casting, and ending the turn wait while
 the player chooses and confirms which live cells to disable. A unit with no live cells
-is downed and retained for future restoration rather than erased. Terrain-changing
-spells, obstruction, rout and surrender, party control, saves, and much of the larger
-design remain ahead. The exact, regularly updated boundary is recorded in the
+is downed and retained for restoration rather than erased. Complete-party controls
+provide a stable ally rail, Group/Solo exploration, formation editing and bottleneck
+compression, recovery, deterministic AI, retained outcomes, and the integrated 3v3
+Party Trial.
+
+<!--
+Regenerate readme_assets/party-trial-combat.png with:
+HEX_WALK_SCRIPT=walks/readme_party_trial.ron \
+HEX_WALK_OUT=.context/readme-captures/party-trial \
+HEX_WALK_SIZE=1280x720 \
+HEX_GAME_DATA_DIR=.context/readme-captures/party-trial-data \
+cargo run --release -p hex_game --features visual-walk
+cp .context/readme-captures/party-trial/party-trial-combat.png \
+  readme_assets/party-trial-combat.png
+-->
+![Party Trial entering three-versus-three combat on the Crossing, with the full party rail, initiative order, active lattice, combat history, and action bar visible](readme_assets/party-trial-combat.png)
+
+*New Game's Party Trial entering combat. Exploration, formation traversal, and the
+turn-based fight share one battlefield.*
+
+The surrounding application is still deliberately pre-alpha, but it now has a real
+shell: New Game, one disposable exploration resume, persistent display and volume
+preferences, fixed centralized input actions, normalized unsigned release artifacts,
+separate character and spell creation, and a Combat Lab for deterministic deployment
+and fixture testing. Terrain-changing spells, unit obstruction, rout and surrender,
+durable saves, audio content, input rebinding, signing, storefront integration, and
+much of the larger design remain ahead. The exact boundary is recorded in the
 [project status](docs/planning/status.md).
 
 ### Play the current build
 
-The title screen groups playable setups into Maps, Combat, and Demos. Nine map
-showcases exercise authored and procedural terrain, **Close Quarters** begins inside
-the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox.
+The title screen separates development **Maps** and focused **Demos** from application
+**Actions**. **New Game** launches Party Trial as the one integrated default scenario;
+the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**.
+Combat Lab provides a transient roster/deployment Sandbox across all thirteen shipped
+environments and a searchable fixed-fixture selector for Ability Lab, Raider Mirror,
+and creator-format matrices.
+**Continue** restores one explicitly saved exploration slot through the ordinary
+loading flow. Saving is available only while paused in a safe exploration state;
+combat, movement, and open decisions refuse it. The slot is bound to its build,
+scenario content, generator contract, roster, and terrain, so incompatible or corrupt
+data is reported instead of partially loaded. New Game never overwrites it.
+
+<!--
+Regenerate the Creator and deployment screenshots with:
+HEX_WALK_SCRIPT=walks/readme_creator_lab.ron \
+HEX_WALK_OUT=.context/readme-captures/creator-lab \
+HEX_WALK_SIZE=1280x720 \
+HEX_GAME_DATA_DIR=.context/readme-captures/creator-lab-data \
+cargo run --release -p hex_game --features visual-walk
+cp .context/readme-captures/creator-lab/character-creator.png \
+  readme_assets/character-creator.png
+cp .context/readme-captures/creator-lab/combat-lab-deployment.png \
+  readme_assets/combat-lab-deployment.png
+-->
+![The Character Creator workspace, with an element-coloured tool palette, a true hexagonal lattice canvas, and the selected cell's stats and channelling controls](readme_assets/character-creator.png)
+
+*Characters are built as the same true-colour lattice used by combat, then saved
+before they can enter a map.*
+
+**Settings** persists fullscreen/window size, presentation mode, and master,
+music, effects, and UI volume values. The volume buses and fixed action map are seams
+for later audio and rebinding work; Wave 5 does not pretend those products exist yet.
 
 | Input | Action |
 |---|---|
@@ -114,22 +165,24 @@ the complete 0.3 combat slice, and **Lattice Demo** is the focused rules sandbox
 | Click a spell row, then a lit target | Aim a cast |
 | `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
 | `SPACE` | End the current player turn; hostile turns cannot be skipped |
+| `1`–`6` | Select a party member while exploring |
+| Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
+| `R` | Recover the whole party while exploring |
+| `F5` while paused in exploration | Atomically replace the one resume slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the title screen |
+| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
 
-<!--
-Regenerate readme_assets/lattice-demo-disabled-gem.png with:
-HEX_WALK_SCRIPT=walks/menus.ron \
-HEX_WALK_OUT=.context/readme-captures/lattice \
-cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/lattice/06-demo-shield-broken.png \
-  readme_assets/lattice-demo-disabled-gem.png
--->
-![The interactive lattice demo after a metal gem has been disabled, leaving Metal Shield blocked and showing the broken enchantment in the event log](readme_assets/lattice-demo-disabled-gem.png)
+The Creator's local mechanics test remains the focused place to cast, channel,
+disable, restore, and break enchantments without constructing a map combat. See the
+[Creator and Combat Lab contract](docs/systems/creator-and-combat-lab.md) for saved
+content, readiness, fixtures, deployment, and frozen Retry behavior.
 
-*The interactive rules demo: disabling one funding gem has broken Metal Shield.*
+![Combat Lab deployment on the Fort map, with exact player and hostile placement regions highlighted directly on the terrain](readme_assets/combat-lab-deployment.png)
+
+*Combat Lab loads the real terrain before combat and records exact elevated surfaces
+for every deployed unit.*
 
 ## Read more
 
@@ -142,7 +195,8 @@ cp .context/readme-captures/lattice/06-demo-shield-broken.png \
 
 ## Build or contribute
 
-Hex is written in Rust with [Bevy](https://bevy.org/) 0.19. Start with the
+Hex is written in Rust with [Bevy](https://bevy.org/) 0.19. Packaged pre-alpha builds
+use the **Hex Game** application identity while Hex remains the working title. Start with the
 [setup guide](docs/development/setup.md), read [CONTRIBUTING.md](CONTRIBUTING.md)
 before changing code, or use the [documentation index](docs/README.md) to find the
 design, system, and development reference for a specific area.

@@ -7,6 +7,129 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 23 — chore(release): v0.4.0 (2026-07-30)
+
+- **PR**: #141 — `chore/release-v0.4.0`
+- **Outcome**: green
+- **Lenses triggered**: none
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: D1 confirmed the changelog heading matches the version consumed by the
+release workflow. D2 had no changed links or fragments. D3 confirmed
+`[workspace.package]` is 0.4.0 and all fourteen inherited workspace crate entries in
+`Cargo.lock` resolve to the same version without dependency drift. D4 confirmed the
+root workspace version remains the single authored source. Fresh-eyes review found no
+additional class, and `cargo check --workspace` resolved every crate as v0.4.0.
+
+## Wave 22 — docs: prepare next release and Wave 7 (2026-07-30)
+
+- **PR**: #140 — `wave/5-prealpha-continuity`
+- **Outcome**: green
+- **Lenses triggered**: none
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: D1 confirmed the Upcoming roadmap retains one parseable
+`Epic | Scope | Owner` table and the new Wave 7 row carries no hand-written ticket
+marker. D2 found every relative link and changed fragment valid. D3 spot-checked the
+thirteen-map catalog, seven V3 recipe variants, Ring7 composition, Forest and cave
+`ObjectInstance` publishers, cave crystal point lights, four release targets, current
+deployment controls, and Creator/Combat Lab return routing against shipped content
+and code. D4 found no new competing source of truth: current implementation remains
+in status/contracts, while the Wave 7 plan remains in the roadmap. Fresh-eyes review
+found no additional class. The reproducible README visual walk captured and passed
+the Character Creator workspace and Fort deployment frames, and both were manually
+inspected.
+
+## Wave 21 — docs: reconcile boundaries, roadmap, and design (2026-07-29)
+
+- **PR**: #121 — `shrav-k/audit-alberto-draft-prs`
+- **Outcome**: green — 9 documentation blockers fixed
+- **Lenses triggered**: 7, D1, D3, D4, silent-failures, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 7 | `crates/hex_combat/src/commands/mod.rs`:114 | NON-BLOCKER | fixed — completed a dangling persistent-effect doc comment |
+| D1, D4 | `docs/planning/roadmap.md`:1 | SHIP-BLOCKER | fixed — removed the second Markdown table and delivered-status ledger so `/seed-tickets` sees exactly one Upcoming table and `status.md` remains the implementation source |
+| D4 | `docs/design/game.md`, `docs/planning/boundary.md`, `docs/systems/world-generation-v3.md` | SHIP-BLOCKER | fixed — removed duplicate current-state ledgers and linked the contracts/status authorities |
+| D3, fresh-eyes | `docs/contracts.md`, `docs/planning/boundary.md`, `docs/systems/asset-workshop.md` | SHIP-BLOCKER | fixed — current Forest cutaway is root-keyed; exact authored canopy chunks still need a separate adapter |
+| D3, fresh-eyes | `docs/design/game.md`, `docs/planning/status.md`, `docs/systems/casting.md`, downing Rust docs | SHIP-BLOCKER | fixed — downing retains the lattice for a future restoration flow, but no path reactivates a downed unit |
+| D3, fresh-eyes | `docs/planning/status.md`, `docs/systems/casting.md`, command-funnel Rust docs | SHIP-BLOCKER | fixed — the live queue is consumed, passive consequences run outside the applier, and replay persistence remains future work |
+| D3, fresh-eyes | `docs/planning/status.md`, `crates/hex_assets/src/settings.rs` | SHIP-BLOCKER | fixed — lattice-derived initiative remains one candidate, and the runtime refusal no longer claims completed HEX-12 wiring is pending |
+| D3, fresh-eyes | `docs/design/game.md`:380 | SHIP-BLOCKER | fixed — proposed negative-spiral brakes are no longer described as already implemented |
+| D4, fresh-eyes | `docs/planning/boundary.md`:221 | NON-BLOCKER | fixed — G/H are labeled accepted contracts consistently with the registry, while implementation remains deferred |
+
+**Notes**: PR #100's top-level description did not carry the policy decisions; its
+constituent PRs did. The audit confirmed that downing, initiative/action economy, and
+paid-on-resistance remain provisional; cave-breach daylight remains explicitly open;
+and feature damage must use a separate world-owned response contract rather than
+inferring gameplay from rendered object parts. The silent-failure sweep found no new
+investigate candidates in this documentation-focused diff. No runtime surface changed,
+so the automated visual walk does not apply; the prior manual dev run covered Close
+Quarters, Waterfall, and Forest.
+
+## Wave 20 — feat(art): render authored voxel objects at runtime (2026-07-28)
+
+- **PR**: #106 — `feat/runtime-object-renderer`
+- **Outcome**: green — 1 post-`dev` integration blocker fixed
+- **Lenses triggered**: 2, 4, 7, 8, D3, D4, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, 7, fresh-eyes | `crates/hex_assets/src/object_catalog.rs`:1493 | SHIP-BLOCKER | fixed during `dev` reconciliation — Forest and the authored object catalog now share the promoted tree palette semantics, and the shipped complete-graph regression pins the resulting combined fingerprint |
+| 2, 8 | `assets/art/palette.ron`:19 | NON-BLOCKER | fixed during conflict resolution — authored foliage and trunk swatches keep #106's production `tree` tags, while Forest-only grass remains explicitly `temporary`; colours and stable ids stay shared instead of creating a second palette vocabulary |
+| D3, D4 | `CLAUDE.md`:1 | NON-BLOCKER | fixed during reconciliation — active architecture, ownership guidance, onboarding, and test/release skills now describe the twelve-crate workspace and live perception/object-renderer edges |
+
+**Notes**: `hex_objects` remains presentation-only: it consumes the shared
+`ObjectInstance` request and publishes neither traversal blockers nor cutaway policy.
+Forest continues to present its generated temporary vegetation directly; adapting
+world-owned placements to authored objects is separate follow-up work. The full local
+gate passes with 1,236 tests, and 28 wired-game frames plus neutral and dark object
+gallery captures passed mechanical and review inspection.
+
+## Wave 19 — feat(perception): add headless illumination and faction knowledge (2026-07-28)
+
+- **PR**: #93 — `feat/headless-perception`
+- **Outcome**: green — 1 shared-authority ship blocker fixed during Wave 3 reconciliation
+- **Lenses triggered**: 2, 4, 7, 8, D3, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 4, fresh-eyes | `crates/hex_combat/src/knowledge.rs`:461 | SHIP-BLOCKER | fixed during `dev` reconciliation — PR #100's gameplay lattice publisher granted every faction knowledge of every lattice-bearing unit, bypassing PR #93's world-owned observation authority; `FactionMapKnowledge` now gates lattice views through a gameplay-owned adapter |
+| 2, 4 | `crates/hex_combat/src/knowledge.rs`:230 | NON-BLOCKER | fixed during reconciliation — gameplay's ambiguous `FactionKnowledge` was renamed `FactionLatticeKnowledge`, keeping it distinct from perception's spatial `FactionKnowledge` without changing the world-owned API |
+| 7 | `crates/hex_combat/tests/knowledge.rs`:207 | NON-BLOCKER | fixed during reconciliation — an integration regression now pins observed, divined, subsequently hidden, and re-observed behavior; hidden subjects disclose no lattice view while unexpired divination remains independently stored |
+| 8, D3 | `docs/architecture.md`:10 | NON-BLOCKER | fixed during reconciliation — the crate graph, dependency table, contracts ledger, combat documentation, and status now describe the live perception-to-combat adapter instead of a future or pending edge |
+
+**Notes**: six textual conflicts from the stacked Wave 3 base were resolved by
+retaining both domains: perception settings and knowledge types remain alongside
+the promoted encounter, roster, faction, casting, and terrain-response schema.
+`hex_perception` remains the sole authority for current spatial observation;
+`hex_combat` owns only the consumer adapter and expiring lattice facts. Focused
+perception, assets, core, game, and combat suites pass, including the hidden-unit
+integration lifecycle.
+
+## Wave 18 — feat: add procedural V3 Forest biome (2026-07-28)
+
+- **PR**: #92 — `feat/v3-forest`
+- **Outcome**: green — 2 post-Wave-3 integration blockers fixed
+- **Lenses triggered**: 4, 7, 8, plus the fresh-eyes pass
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| 8, fresh-eyes | `assets/config/scenarios.ron`:113 | SHIP-BLOCKER | fixed during `dev` reconciliation — Forest now supplies PR #100's required `Map` category and shared anchored encounter instead of the removed inline `units` field |
+| 7 | `crates/hex_game/src/screens/title.rs`:842 | SHIP-BLOCKER | fixed during `dev` reconciliation — the shipped-lane assertion now includes Forest as the tenth Map scenario and eleventh entry |
+| 7, 8 | `crates/hex_game/src/walk.rs`:642 | NON-BLOCKER | fixed during merge-conflict resolution — both Forest's pinned hero-seed regression and Wave 3's cross-walk scenario-name validation are retained |
+
+**Notes**: the blocker projection introduced by Forest is consumed by the reconciled
+movement adapter in PR #102. Targeted map, spawning, unit, and game suites pass,
+including exact feature lifecycle, palette, blocker, protected-route, anchor,
+fingerprint, teardown, and deterministic rebuild coverage.
+
 ## Wave 17 — feat: adapt movement to generated blockers (2026-07-28)
 
 - **PR**: #102 — `feat/traversal-blocker-adapter`
@@ -134,7 +257,7 @@ the human release gate.
 | 1 | `crates/hex_editor/src/workshop.rs`:151 | NON-BLOCKER | fixed in `56ad5bb` — history labels are validated before the edit closure can mutate the object |
 | 2 | `crates/hex_editor/src/workshop.rs`:13 | NON-BLOCKER | fixed in the Wave 10 follow-up — global and object snapshot histories now share `DEFAULT_HISTORY_LIMIT` |
 | D3 | `docs/systems/asset-workshop.md`:157 | NON-BLOCKER | fixed in `56ad5bb` — persistence actions include confirmed Delete, and the document now distinguishes active external-change detection from future recovery drafts |
-| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | deferred — root discovery deliberately checks the two canonical catalog sentinels while persistence owns the broader `assets/art` root; both paths are contract-tested, and consolidating them would couple separate responsibilities without removing a mutable value |
+| 2 | `crates/hex_editor/src/launch.rs`:9 | NON-BLOCKER | resolved by the runtime object catalog — root discovery now requires palette, style, and object-catalog sentinels because all three are mandatory project inputs |
 
 **Notes**: all eight lenses and a silent-failure sweep found no remaining real
 candidate. The full gate passes with 792 tests, including the tracked-material App

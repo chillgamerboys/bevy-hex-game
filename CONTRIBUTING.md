@@ -61,9 +61,11 @@ the above. Several failure modes here produce a clean log and a wrong window: mi
 assets render as a plain blue screen, a sky shader that fails to load renders a black
 sky, and a speed-unit mistake just looks slightly off. Every one of those passes CI.
 
-If your change touches rendering, movement, or state transitions, walk it: splash
-→ title → click a scenario → gameplay, orbit, click a tile, **ESC** to pause,
-**BACKSPACE** to return to the title, then click a scenario again to rebuild the world.
+If your change touches rendering, movement, persistence, or state transitions, walk
+it: splash → title → New Game → Party Trial, orbit, move the party, **ESC** to pause,
+save with **F5**, return to the title, and Continue. Open Settings, persist one change,
+restart, and confirm it survived. Launch an affected Map or focused Demo separately
+when the change touches one.
 
 If it touches the Asset Workshop, run `cargo editor` and complete the relevant
 [authoring workflow](docs/systems/asset-workshop.md#authoring-workflow). Persistence
@@ -84,7 +86,8 @@ version:
 | Generic asset loading; domain schema/settings modules | `hex_assets` | loader infra gameplay; each schema and its content follow the domain owner |
 | Sky, camera, presentation cutaways | `hex_world` | world |
 | Rules: input, movement, interaction | `hex_units` | gameplay |
-| Authoritative illumination, sight, and faction map knowledge (planned) | `hex_perception` | world |
+| Authoritative illumination, sight, and faction map knowledge | `hex_perception` | world |
+| Runtime rendering of authored static voxel objects | `hex_objects` | shared presentation |
 | A debug tool | `hex_dev` | gameplay |
 | Palette, voxel-style, and object authoring workflow | `hex_editor` | shared tooling |
 | A screen or menu | `hex_game` | shared |
@@ -160,26 +163,30 @@ gh pr create --base dev
 tidied up afterwards — never delete it. Feature branches are deleted once merged;
 `dev` is not.
 
-### Waves: how grouped gameplay work reaches `dev`
+### Waves: how grouped work reaches `dev`
 
-Gameplay tickets are delivered in **waves**: a short-lived `wave/N-<name>` branch
-off `dev` collects the wave's ticket PRs in dependency order, the integrated
-result gets a manual walk, fixes land on the wave, and **one** walked merge takes
-the whole wave to `dev` — then the wave branch is deleted. This keeps
-half-verified gameplay work off `dev` while map work churns there.
+Related work is delivered in **waves** when its branches share contracts or hot files,
+form a deep dependency stack, or only make sense as one runtime candidate. A
+short-lived `wave/<name>` branch off `dev` collects source lanes in semantic order,
+the integrated result gets a combined audit and manual walk, and **one** merge takes
+the whole wave to `dev`. This keeps provisional composition off `dev` without forcing
+every work lane to become a release unit.
 
 ```
 feat/ticket-a ─PR─► wave/2-command-flow ─one walked PR─► dev ─promotion─► main
 feat/ticket-b ─PR─►        │
 ```
 
-Rules that came from running wave 1: ticket PRs into a wave merge on a green
-audit (the walk happens at the wave level, not per PR); a wave lands only after
-a human has walked its build; tickets whose epic is only partially delivered
-stay **In Review** across waves (watch Linear's GitHub integration — it
-auto-closes tickets when their PR merges and must be reverted by hand); retarget
-any stacked child PR *before* deleting its parent branch; wave branches die
-after their one merge — `dev` never does.
+Choose independent, stacked, or wave topology **before** opening PRs. Source branches
+inside a wave are work lanes, not automatically separate PRs. Open a leaf PR only
+when focused review or ownership approval is useful; otherwise integrate its
+identifiable commits directly. Full CI, the automated visual walk, and the human walk
+gate the combined wave. Retarget any stacked child PR *before* deleting its parent
+branch; wave branches die after their one merge — `dev` never does.
+
+The complete decision table, manifest, review budget, stale-parent reconciliation,
+and cleanup rules are in
+[parallel development and integration waves](docs/development/parallel-development.md).
 
 `main` moves only by merging `dev` into it, as a deliberate promotion after someone
 has actually played the game. That gap exists for a specific reason: **CI cannot see
@@ -224,5 +231,8 @@ After the contract lands:
 - a necessary shared-type change lands in its own commit or PR before code on both
   sides depends on it.
 
-Rebase each implementation branch onto updated `dev` after a contract change. Do not
-resolve ownership conflicts by folding both sides into one large feature PR.
+Merge updated `dev` or the wave base into a published implementation branch after a
+contract change; do not rebase or force-push shared history. A wave may integrate both
+owners' lanes, but it does not erase their ownership: preserve identifiable commits
+and resolve cross-owner behavior through the published contract rather than one
+side's private implementation.

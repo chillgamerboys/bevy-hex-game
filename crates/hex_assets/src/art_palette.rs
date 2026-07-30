@@ -731,7 +731,7 @@ impl<'de> Deserialize<'de> for VoxelStyle {
 }
 
 /// Versioned catalog of reusable voxel styles.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Asset, Resource, TypePath, Debug, Clone, PartialEq, Serialize)]
 pub struct VoxelStyleCatalog {
     schema_version: u32,
     styles: BTreeMap<VoxelStyleId, VoxelStyle>,
@@ -1212,8 +1212,22 @@ mod tests {
         let palette = shipped_palette();
         let styles = shipped_style_catalog();
 
-        assert_eq!(palette.swatches().len(), 20);
-        assert!(styles.styles().is_empty());
+        assert_eq!(palette.swatches().len(), 23);
+        assert_eq!(styles.styles().len(), 7);
+        for style_name in [
+            "crystal/cyan-body",
+            "crystal/cyan-glow",
+            "plant/foliage-dark",
+            "plant/foliage-light",
+            "plant/foliage-mid",
+            "plant/grass-tuft",
+            "plant/trunk",
+        ] {
+            assert!(
+                styles.get(&id(style_name)).is_some(),
+                "shipped voxel style '{style_name}' should exist"
+            );
+        }
         assert!(styles.validate(&palette).is_ok());
     }
 

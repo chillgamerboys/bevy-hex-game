@@ -55,8 +55,14 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 
 ## First-run smoke test
 
-The title screen should list several scenarios. Choose **The Crossing**. You should
-see a hex-prism map, a red player piece, a blue enemy piece, and the sky.
+The title screen should have three lanes: **Maps**, **Demos**, and **Actions**.
+Party Trial must not appear in either development lane. On a fresh data directory,
+Continue should clearly report that no exploration resume exists. Demos should contain
+only **Character Creator**, **Spell Creator**, and **Combat Lab**.
+
+Choose **New Game**. It resolves the hidden Party Trial default through the loading
+screen. You should see the Crossing's hex-prism terrain, sky, a three-member player
+party, and a matching hostile party approaching from the opposite bank.
 
 | Input | Action |
 |---|---|
@@ -68,16 +74,26 @@ see a hex-prism map, a red player piece, a blue enemy piece, and the sky.
 | Click a spell row, then a lit target | Aim a cast |
 | `TAB` / `ENTER` / `Q` | Cycle aimed units / confirm the cast / cancel aiming |
 | `SPACE` | End the current player turn; hostile turns cannot be skipped |
+| `1`–`6` | Select a party member while exploring |
+| Party rail controls | Switch Group/Solo movement, select a formation, and edit assignments |
+| `R` | Recover the party while exploring |
+| `F5` while paused in exploration | Atomically replace the one pre-alpha resume slot |
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the title screen |
-| Click a scenario | Start that scenario |
+| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
+| New Game | Start the hidden Party Trial default without changing the resume slot |
+| Continue | Restore the compatible exploration slot through Loading |
 
-Walk the piece, orbit the camera, pause, return to the title screen, and launch the
-scenario again. This checks asset loading, terrain and actor spawning, input, screen
-teardown, and world reconstruction. Automated tests cannot tell whether the rendered
-window actually looks right.
+Select different allies, move the group, orbit the camera, pause, press `F5`, return
+to the title screen, and use Continue. Confirm the party positions, selected ally, and
+formation return. Then open Settings, change one volume, return to the title, restart
+the application, and confirm it persisted. A representative Wave 5 walk should also
+enter combat and verify that `F5` refuses a mid-combat save.
+
+This checks asset loading, terrain and actor spawning, input, screen teardown, atomic
+storage, and world reconstruction. Automated tests cannot tell whether the rendered
+window actually looks or feels right.
 
 ## Diagnostics
 

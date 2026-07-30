@@ -24,12 +24,20 @@ pub enum Screen {
     Splash,
     /// Main menu.
     Title,
+    /// Persistent pre-alpha display and volume preferences.
+    Settings,
     /// Interactive sandbox for the lattice ruleset, reached from the title menu.
     ///
-    /// Exists so the magic rules — casting, fusions, mana, disables,
-    /// enchantments — have a manual-verification surface before they are wired
-    /// into real combat (HEX-12). Slated for gating or removal before release.
+    /// Exists as an isolated manual-verification surface for magic rules — casting,
+    /// fusions, mana, disables, and enchantments. Slated for gating or removal
+    /// before release.
     LatticeDemo,
+    /// Saved character authoring, reached only from the Demos lane.
+    CharacterCreator,
+    /// Saved spell authoring, reached only from the Demos lane.
+    SpellCreator,
+    /// Human sandbox setup and deterministic fixture selection.
+    CombatLab,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.
@@ -43,6 +51,21 @@ pub enum Screen {
 #[derive(SubStates, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 #[source(Screen = Screen::Gameplay)]
 pub struct Pause(pub bool);
+
+/// Runtime boundary between terrain preparation, human deployment, and live combat.
+///
+/// Ordinary scenarios move directly from `Preparing` to `Active`. Combat Lab
+/// sandboxes pause at `Deployment` while the already-loaded terrain remains visible.
+#[derive(Resource, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub enum GameplayPhase {
+    /// Resources and terrain are being prepared.
+    Preparing,
+    /// The tester is assigning exact terrain surfaces to the frozen roster.
+    Deployment,
+    /// Actors, combat, AI, casting, and ordinary gameplay are live.
+    #[default]
+    Active,
+}
 
 /// Whether the world is running in real time or taking turns.
 ///
@@ -112,8 +135,8 @@ pub struct PausableSystems;
 /// Building a world has a dependency chain — resources, terrain, the things standing
 /// on the terrain, presentation derived from that complete geometry, then final
 /// contract checks — and each step lives in a different crate. `hex_map` validates and
-/// builds the map, `hex_units` spawns the player onto it, future perception derives
-/// what those actors can observe, and `hex_world` frames the result. Systems added to
+/// builds the map, `hex_units` spawns the player onto it, `hex_perception` derives what
+/// those actors can observe, and `hex_world` frames the result. Systems added to
 /// the same `OnEnter` schedule otherwise run in **unspecified order**, and `.chain()`
 /// cannot express ordering across a crate boundary because no leaf crate can see all
 /// the others' systems.
@@ -134,11 +157,15 @@ pub enum GameplaySetup {
     /// Systems here can query tiles and read their
     /// [`HexSpan`](crate::HexSpan)s. Systems in [`Self::Terrain`] cannot.
     Actors,
+    /// Apply a validated exploration resume after default actors spawn.
+    ///
+    /// This phase is intentionally before perception: restored positions must be the
+    /// positions observed on the first gameplay frame.
+    Restore,
     /// Derive illumination and initial faction knowledge from terrain and actors.
     ///
-    /// This phase is reserved for the future perception owner. Keeping it in the
-    /// setup contract now lets presentation depend on published knowledge without
-    /// changing cross-crate ordering later.
+    /// This phase lets later presentation depend on published knowledge without
+    /// creating direct crate dependencies.
     Perception,
     /// Apply presentation that depends on the completed terrain and its actors.
     ///
@@ -169,4 +196,18 @@ pub enum AppSystems {
     RecordInput,
     /// Everything else. Split this further as the game grows.
     Update,
+}
+
+/// Shared gameplay reconciliation boundaries used across crate ownership.
+///
+/// These are narrower than [`AppSystems`]: they name completed projections that a
+/// presentation consumer may safely read after deferred component commands flush.
+#[derive(SystemSet, Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum GameplaySystems {
+    /// Selected unit, camera focus, rings, and movement overlays agree.
+    Selection,
+    /// Casting controls are projected from the reconciled actor and selection.
+    Casting,
+    /// The explicit gameplay UI role context is ready for panels to consume.
+    UiContext,
 }

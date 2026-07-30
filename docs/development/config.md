@@ -8,18 +8,22 @@ you do not need to recompile the game.
 |---|---|
 | `world.ron` | Map size, terrain preset and shape, how tall a voxel is |
 | `substances.ron` | What the world is made of — including water and metal — plus exact art-palette references and gameplay properties |
-| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and future objects |
+| `art/palette.ron` | Canonical authored colours for terrain, liquids, structures, units, and authored objects |
+| `art/voxel_styles.ron` | Palette-backed opaque, cutout, translucent, additive, and emissive object surfaces |
+| `art/object_catalog.ron` + `art/objects/*.ron` | The validated authored plant, effect, and prop catalog; normally edited through `cargo editor` |
 | `elements.ron` | The six-element wheel, opposition, higher-order elements and fusion recipes |
 | `spells.ron` | Spells: what each requires, how it is cast, and what it does |
 | `camera.ron` | Initial map and close-character frames, pan speed, zoom and tilt |
 | `combat.ron` | Engagement thresholds, movement budget, height bonus, what a strike costs, and the open design questions as policy knobs that reject unbuilt variants with a reason |
+| `perception.ron` | Active sight profile, Bright/Dim/Dark ranges, and the downhill sight bonus |
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
-| `scenarios.ron` | What the title screen offers: a map, a sky and an encounter |
+| `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
+| `combat_lab_maps.ron` | Stable Combat Lab map IDs, scenario and fixed seed, plus Player/Hostile deployment-region centers and radii |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
-| `display.ron` | Vsync / frame rate behaviour |
+| `display.ron` | Authored Vsync / frame-rate default; the local Settings screen owns the persisted player choice |
 
 ## Seeing your changes
 
@@ -37,12 +41,14 @@ How quickly you *see* the change depends on which file:
 | File | When it takes effect |
 |---|---|
 | `camera.ron` | Movement/follow values straight away; close preset on the next `C`; initial map frame on the next rebuild |
-| `display.ron` | Straight away |
+| `display.ron` | Straight away until the player saves a local presentation choice in Settings |
 | `world.ron` | On the next world rebuild |
 | `substances.ron` | On the next world rebuild |
-| `art/palette.ron` | Substance and unit colours on the next world rebuild |
+| `art/palette.ron` | Authored objects after one coherent art-graph reload; substance and unit colours on the next world rebuild |
+| `art/voxel_styles.ron`, `art/object_catalog.ron`, `art/objects/*.ron` | Rendered object instances after the complete palette → style → object graph validates; a broken revision keeps the last valid graph |
 | `elements.ron` | On the next world rebuild (re-parsed and validated on save) |
 | `spells.ron` | On the next world rebuild (re-parsed and validated on save) |
+| `perception.ron` | Straight away; observation and knowledge use the new profile on the next frame |
 | `lighting.ron` | Straight away, all of it — sun, ambient, sky and clouds |
 | `player.ron` | Speed on the next movement started; scale on the next rebuild |
 | `scenarios.ron` | On the next world rebuild |
@@ -50,12 +56,22 @@ How quickly you *see* the change depends on which file:
 | `lattices.ron` | On the next world rebuild (re-parsed and re-resolved on save) |
 | `menu.ron` | Straight away |
 
-**To rebuild the world**, press `BACKSPACE` to return to the title screen, then click
-the scenario you want to start again. It takes under a second and picks up your edit.
+**To rebuild the world**, press `BACKSPACE` to return to the title screen, then use
+New Game for Party Trial or relaunch the visible development fixture you are tuning.
+It takes under a second and picks up your edit.
 
 The split exists because some values are read continuously while the game runs and
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
+
+Elements, substances, spells, and lattices form one semantic revision at the Loading
+boundary. A bad cross-file edit may leave the last valid resolved catalogs available
+for inspection, but Loading does not treat their presence as readiness. It waits
+until canonical source fingerprints prove that every raw file, direct catalog,
+`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
+or reverting the edit publishes a new `AcceptedContentRevision` and allows the
+rebuild; leaving an invalid edit settled for several frames never admits a mixed
+revision.
 
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
@@ -83,15 +99,18 @@ The optional review overrides are:
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
+| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
-`HEX_REVIEW_CUTAWAY` require `HEX_REVIEW_CAPTURE`. The focus override resolves the
-anchor's full `TilePos`, not just its horizontal coordinate, so it can target an
-underground floor beneath a surface. It also applies the selected actor's normal
-solidity and headroom rules. An unknown anchor or one the actor cannot stand on fails
-the review process instead of silently capturing the wrong place. The full cutaway
-still requires the selected actor to occupy an exact interior surface and affects
-only that interior; ordinary gameplay retains the local cutaway.
+`HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+The focus override resolves the anchor's full `TilePos`, not just its horizontal
+coordinate, so it can target an underground floor beneath a surface. It also applies
+the selected actor's normal solidity and headroom rules. An unknown anchor or one the
+actor cannot stand on fails the review process instead of silently capturing the
+wrong place. The full cutaway still requires the selected actor to occupy an exact
+interior surface and affects only that interior; ordinary gameplay retains the local
+cutaway. The illumination overlay reads `ResolvedIllumination` and never changes
+gameplay light, physical lights, faction knowledge, fog, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 
@@ -101,12 +120,14 @@ HEX_REVIEW_CAPTURE=".context/caves/full-overview.png" \
 HEX_REVIEW_FOCUS_ANCHOR="conflict_center" \
 HEX_REVIEW_VIEW="top-down" \
 HEX_REVIEW_CUTAWAY="full" \
+HEX_REVIEW_ILLUMINATION="overlay" \
 cargo run -p hex_game --release --features map-review
 ```
 
 Use the unoccupied `conflict_center` anchor for a neutral cave overview.
 `deep_chamber` is also the configured enemy position, so relocating the player there
-can start combat before capture.
+can start combat before capture. Omit `HEX_REVIEW_ILLUMINATION` for the ordinary
+untinted cave overview.
 
 ## The format
 
@@ -195,33 +216,46 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-**Use current procedural terrain.** Generator version 2 uses one geometry recipe plus
-a separate material environment. Hills is the first shipped V2 recipe:
+**Use current procedural terrain.** Generator version 3 places each typed recipe
+inside a patch. A `Single` layout owns the complete map footprint:
 
 ```ron
 terrain: Procedural((
-    generator_version: 2,
-    environment: TemperateGrassland,
-    recipe: Hills((
-        valley_level: 15,
-        max_relief: 8,
-        hills_per_bank: 3,
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Hills((
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        )),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
     )),
 )),
 ```
 
-V2 Hills preserves the approved V1 maps for equivalent Hills settings and seeds while
-publishing them through the V2 volume pipeline. It derives its three-wide hazard,
-two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`; those
-invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
-this recipe in the shipped scenario library.
+Native V3 Hills derives its edge-to-edge three-wide hazard, direct two-wide metal
+bridge, separated two-wide alternate crossing, bed, fill bounds, and bridge level
+from `valley_level`; those invariants are intentionally not editable. Temperate,
+Frozen, and Volcanic Hills use this recipe in the shipped scenario library. V2 keeps
+its frozen external shape and implementation only as a development reference while
+the V3 review corpus is approved.
 
-`LayeredSkyIslands` finalizes the same Hills ground before sampling any independent
+`SkyIslands` finalizes the same Hills ground before sampling any independent
 `sky.*` stream, then adds three primary islands, one or two satellites, and a two-wide
 upper bridge network:
 
 ```ron
-recipe: LayeredSkyIslands((
+recipe: SkyIslands((
     ground: (
         valley_level: 15,
         max_relief: 8,
@@ -324,6 +358,20 @@ terrain: Procedural((
 As with earlier procedural scenarios, the reproducible seed belongs in
 `scenarios.ron`, not in the world recipe. V3 rejects unsupported
 recipe/environment pairs and incomplete edge contracts while deserializing.
+
+**Compare gameplay sight ranges.** `perception.ron` contains three fixed review
+profiles without coupling them to renderer brightness:
+
+```ron
+active: Expansive,
+```
+
+`Expansive` uses Bright/Dim/Dark horizontal and vertical limits of `36/12/1`,
+`Focused` uses `24/8/1`, and `Tight` uses `18/6/1`. Each axis remains independently
+authored, so vertical visibility can be tuned for caves and sky layers without
+widening the ground footprint. Every profile must keep Bright at least Dim, Dim at
+least Dark, and Dark exactly one in both axes. Invalid edits and unknown fields are
+reported while the last valid settings remain active.
 
 **Use the retained Perlin preset.** Perlin remains a separate, optional terrain
 preset; it is not one of the versioned procedural recipes:
@@ -510,10 +558,34 @@ has somewhere obvious to go.
 
 ## Configuring a scenario
 
-A scenario names a world, a sky, and an encounter, and makes one required menu
-placement decision. The title screen has independently scrollable `Map`, `Combat`,
-and `Demo` columns; `category` chooses one. Scenario-backed demos share the Demo
-column with the static **Lattice Demo** card.
+A scenario names a world, a sky, and an encounter. The library's `default_game`
+names the entry launched by New Game; that entry is hidden from the development lanes.
+Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
+`category`. Wave 6 does not expose scenario-backed demos as title cards: the Demos
+lane contains only **Character Creator**, **Spell Creator**, and **Combat Lab**. Focused combat
+scenarios are selected by stable fixture ID inside Combat Lab.
+
+Immutable creator-format templates and automation records live in
+`creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
+`AutomationFixture` records are isolated behind fixed fixtures. Local saved creations
+belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
+
+`combat_lab_maps.ron` owns the deployable Sandbox map list independently from the
+title-screen scenario lanes. Its `schema_version` is checked on load. Every distinct
+supported shipped environment appears once. Each entry has a stable ID, display name,
+tactical description and tags, renderer-generated preview asset, scenario, optional
+fixed generation seed, and one deployment region per side. A region center is either
+`Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated exact
+surface, with a bounded path-cost `radius`.
+
+```ron
+(
+    default_game: "Party Trial",
+    scenarios: [
+        // entries...
+    ],
+)
+```
 
 ```ron
 (
@@ -545,7 +617,7 @@ reproducible seed here:
 ),
 ```
 
-The title screen shows the resolved seed beside every generated scenario. Its
+The title screen shows the resolved seed beside every visible generated scenario. Its
 `reroll` button changes only the current session, and the exact replacement seed is
 shown and logged so a useful or broken map can be reproduced. It never edits
 `scenarios.ron`; restarting returns to the configured seed.
@@ -569,7 +641,8 @@ a warm horizon colour fills the screen with terracotta and reads as clay, not ev
 
 `world`, `lighting` and `encounter` are all paths, and none of them is checked by the
 compiler. A typo fails `cargo test` rather than at the loading screen, but only because
-tests open every file the scenarios name — keep it that way.
+tests open every file the scenarios name — keep it that way. `default_game` must also
+resolve to one uniquely named entry; it is validated independently from lane contents.
 
 ## Writing an encounter
 
@@ -691,7 +764,11 @@ waiting for a playtest.
 ```
 
 Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
-matters, not where it sits.
+matters, not where it sits. Every authored archetype must form one contiguous
+hex arrangement. A disconnected island is rejected while resolving
+`LatticeLibrary`, and the error names the offending archetype; it cannot survive as a
+valid-but-unreachable part of a character. Cell order in the RON file does not affect
+that check or the semantic content fingerprint.
 
 `attunement` is how much mana one gem of that element holds when full. `channelling` is
 how much a channel action puts back per turn. An element with no attunement entry resolves
@@ -831,13 +908,30 @@ the game logs exactly which one and keeps the last content that was valid — th
 way a broken `lighting.ron` keeps the last good sky. A test also opens every shipped
 file and fails if any reference dangles, so the shipped game never carries a broken one.
 
-## One thing that will not do anything on a Mac
+## Local Settings are not authored config
 
-`display.ron` controls vsync. On macOS it has no visible effect: the system
-composites every window and syncs it to the display regardless of what the game
-asks for, so the frame rate stays pinned to your screen's refresh rate either way.
-On a MacBook with a ProMotion display that means it moves between 60 and 120 on
-its own, depending on whether anything is animating.
+The in-game Settings screen writes `preferences.ron` beside the disposable
+`resume.ron`; it never edits `assets/config/display.ron`. Set `HEX_GAME_DATA_DIR` to
+an explicit directory when a test or review needs isolated local state. Otherwise the
+files live under:
+
+- macOS: `~/Library/Application Support/Hex Game/`
+- Windows: `%APPDATA%/Hex Game/`
+- Linux: `$XDG_DATA_HOME/hex-game/`, or `~/.local/share/hex-game/`
+
+A missing preferences file uses the authored display default and built-in volume
+defaults. A corrupt or incompatible file is reported on the Settings screen and those
+defaults are restored. The file is version-bound pre-alpha state, not a durable
+configuration format.
+
+## Frame presentation on macOS
+
+`display.ron` provides the authored presentation default until Settings saves a local
+choice. On macOS neither path has a visible effect: the system composites every
+window and syncs it to the display regardless of what the game asks for, so the frame
+rate stays pinned to your screen's refresh rate either way. On a MacBook with a
+ProMotion display that means it moves between 60 and 120 on its own, depending on
+whether anything is animating.
 
 This was measured rather than assumed. The setting does work on Windows and Linux,
 which is why it is still there.

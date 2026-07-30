@@ -30,8 +30,8 @@ use bevy::prelude::*;
 use hex_assets::{ContentIndex, ContentTables, ElementCatalog, SpellBook};
 use hex_core::{ElementId, LatticeCoord, Screen};
 use hex_lattice::{
-    apply_cast, apply_disables, castable, channel, Casting, CellKind, LatticeSpec, LatticeState,
-    LatticeStats, SpellTable,
+    apply_cast, apply_disables, castable, channel, restore, Casting, CellKind, LatticeSpec,
+    LatticeState, LatticeStats, SpellTable,
 };
 
 use crate::casting::blocked_reason;
@@ -61,6 +61,7 @@ const ANCHORS: [(i32, i32); 4] = [(0, 0), (4, 0), (0, 4), (4, 4)];
 const LOG_LINES: usize = 6;
 
 pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<hex_core::InputBindings>();
     app.add_systems(OnEnter(Screen::LatticeDemo), spawn_demo_screen);
     app.add_systems(
         Update,
@@ -91,7 +92,19 @@ struct DemoLattice {
     spec: LatticeSpec,
     stats: LatticeStats,
     state: LatticeState,
+    spells: SpellBook,
+    index: ContentIndex,
     log: Vec<String>,
+}
+
+/// Frozen unsaved character snapshot supplied by the Creator's Local Test action.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct LocalDemoRequest {
+    pub(crate) spec: LatticeSpec,
+    pub(crate) stats: LatticeStats,
+    pub(crate) spells: SpellBook,
+    pub(crate) index: ContentIndex,
+    pub(crate) return_to: Screen,
 }
 
 /// The stable container the whole readout is rebuilt under.
@@ -142,6 +155,7 @@ fn spawn_demo_screen(mut commands: Commands, assets: Res<UiAssets>) {
 
 fn remove_demo_state(mut commands: Commands) {
     commands.remove_resource::<DemoLattice>();
+    commands.remove_resource::<LocalDemoRequest>();
 }
 
 /// Builds the demo lattice once the content tables exist, and rebuilds it if
@@ -160,17 +174,32 @@ fn init_demo(
     elements: Option<Res<ElementCatalog>>,
     spells: Option<Res<SpellBook>>,
     index: Option<Res<ContentIndex>>,
+    request: Option<Res<LocalDemoRequest>>,
 ) {
     let (Some(elements), Some(spells), Some(index)) = (elements, spells, index) else {
         return;
     };
-    let content_moved = elements.is_changed() || spells.is_changed() || index.is_changed();
+    let content_moved = elements.is_changed()
+        || spells.is_changed()
+        || index.is_changed()
+        || request.as_ref().is_some_and(|request| request.is_changed());
     if demo.is_some() && !content_moved {
         return;
     }
 
-    let (spec, notes) = build_demo_spec(&elements, &spells, &index);
-    let stats = build_demo_stats(&spec, &spells, &index, &elements);
+    let (spec, stats, local_spells, local_index, notes) = if let Some(request) = request {
+        (
+            request.spec.clone(),
+            request.stats.clone(),
+            request.spells.clone(),
+            request.index.clone(),
+            vec!["unsaved Creator draft snapshot".to_owned()],
+        )
+    } else {
+        let (spec, notes) = build_demo_spec(&elements, &spells, &index);
+        let stats = build_demo_stats(&spec, &spells, &index, &elements);
+        (spec, stats, spells.clone(), index.clone(), notes)
+    };
     let state = LatticeState::new(&spec, &stats);
     let first_line = if demo.is_some() {
         "content changed - rebuilt the lattice from the new tables".to_owned()
@@ -183,6 +212,8 @@ fn init_demo(
         spec,
         stats,
         state,
+        spells: local_spells,
+        index: local_index,
         log,
     });
 }
@@ -244,12 +275,12 @@ fn free_neighbor(
         .find(|slot| !cells.contains_key(slot))
 }
 
-/// Fabricates the character stats the content pipeline does not yet supply.
+/// Fabricates generous stats for the isolated lattice demonstration.
 ///
 /// Capacity is the largest single cost the content ever asks of that element
 /// (floor 3); channelling is capacity plus two, generous enough that one end
-/// of turn refills what one cast drained. When real attunement stats land
-/// (HEX-12 and beyond), this function is what they replace.
+/// of turn refills what one cast drained. Gameplay uses authored archetype stats;
+/// this screen intentionally remains a rules sandbox.
 fn build_demo_stats(
     spec: &LatticeSpec,
     spells: &SpellBook,
@@ -288,14 +319,11 @@ fn build_demo_stats(
 fn handle_cell_clicks(
     demo: Option<ResMut<DemoLattice>>,
     clicked: Query<(&Interaction, &DemoCell), Changed<Interaction>>,
-    index: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
-    spells: Option<Res<SpellBook>>,
 ) {
     let Some(mut demo) = demo else { return };
-    let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
-        return;
-    };
+    let Some(elements) = elements else { return };
+    let index = demo.index.clone();
     let tables = index.tables(&elements);
     for (interaction, cell) in &clicked {
         if *interaction != Interaction::Pressed {
@@ -303,9 +331,13 @@ fn handle_cell_clicks(
         }
         match demo.spec.get(cell.0) {
             Some(CellKind::Gem { .. } | CellKind::Fusion { .. }) => {
+                let spells = demo.spells.clone();
                 strike(&mut demo, cell.0, &spells);
             }
-            Some(CellKind::Spell { .. }) => try_cast(&mut demo, cell.0, &tables, &spells),
+            Some(CellKind::Spell { .. }) => {
+                let spells = demo.spells.clone();
+                try_cast(&mut demo, cell.0, &tables, &spells);
+            }
             _ => {}
         }
     }
@@ -314,17 +346,15 @@ fn handle_cell_clicks(
 fn handle_cast_buttons(
     demo: Option<ResMut<DemoLattice>>,
     clicked: Query<(&Interaction, &CastsSpell), Changed<Interaction>>,
-    index: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
-    spells: Option<Res<SpellBook>>,
 ) {
     let Some(mut demo) = demo else { return };
-    let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
-        return;
-    };
+    let Some(elements) = elements else { return };
+    let index = demo.index.clone();
     let tables = index.tables(&elements);
     for (interaction, cast) in &clicked {
         if *interaction == Interaction::Pressed {
+            let spells = demo.spells.clone();
             try_cast(&mut demo, cast.0, &tables, &spells);
         }
     }
@@ -340,20 +370,19 @@ fn handle_action_buttons(
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed)
     {
-        let DemoLattice {
-            spec,
-            stats,
-            state,
-            log,
-        } = &mut *demo;
-        channel(state, spec, stats);
+        {
+            let DemoLattice {
+                spec, stats, state, ..
+            } = &mut *demo;
+            channel(state, spec, stats);
+        }
         // No burn tick here any more. Burn stopped being something a lattice carries —
         // it lives in `hex_combat`'s effect ledger, which this screen deliberately
         // cannot see, because the demo is a sandbox for the *rules engine* rather than
         // for the fight. A burn needs a turn order to tick against, and there is not one
         // here.
         push_log(
-            log,
+            &mut demo.log,
             "end of turn: channelled mana back toward capacity".to_owned(),
         );
     }
@@ -361,15 +390,14 @@ fn handle_action_buttons(
         .iter()
         .any(|interaction| *interaction == Interaction::Pressed)
     {
-        let DemoLattice {
-            spec,
-            stats,
-            state,
-            log,
-        } = &mut *demo;
-        *state = LatticeState::new(spec, stats);
+        {
+            let DemoLattice {
+                spec, stats, state, ..
+            } = &mut *demo;
+            *state = LatticeState::new(spec, stats);
+        }
         push_log(
-            log,
+            &mut demo.log,
             "reset: fresh battle state from the inscription".to_owned(),
         );
     }
@@ -421,7 +449,11 @@ fn try_cast(
 fn strike(demo: &mut DemoLattice, coord: LatticeCoord, spells: &SpellBook) {
     let (q, r) = (coord.q(), coord.r());
     if demo.state.is_disabled(coord) {
-        push_log(&mut demo.log, format!("({q}, {r}) is already disabled"));
+        let restored = restore(&mut demo.state, &[coord]);
+        push_log(
+            &mut demo.log,
+            format!("restored ({q}, {r}): {restored} cell re-enabled"),
+        );
         return;
     }
     let broken = apply_disables(&mut demo.state, &[coord]);
@@ -456,9 +488,7 @@ fn push_log(log: &mut Vec<String>, line: String) {
 fn rebuild_readout(
     mut commands: Commands,
     demo: Option<Res<DemoLattice>>,
-    index: Option<Res<ContentIndex>>,
     elements: Option<Res<ElementCatalog>>,
-    spells: Option<Res<SpellBook>>,
     bodies: Query<Entity, With<DemoBody>>,
     assets: Res<UiAssets>,
 ) {
@@ -466,16 +496,14 @@ fn rebuild_readout(
     if !demo.is_changed() {
         return;
     }
-    let (Some(index), Some(elements), Some(spells)) = (index, elements, spells) else {
-        return;
-    };
+    let Some(elements) = elements else { return };
     let Ok(body) = bodies.single() else { return };
-    let tables = index.tables(&elements);
+    let tables = demo.index.tables(&elements);
 
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|panels| {
-        spawn_lattice_panel(panels, &demo, &elements, &spells, &assets);
-        spawn_control_panel(panels, &demo, &tables, &spells, &assets);
+        spawn_lattice_panel(panels, &demo, &elements, &demo.spells, &assets);
+        spawn_control_panel(panels, &demo, &tables, &demo.spells, &assets);
     });
 }
 
@@ -650,9 +678,20 @@ fn spawn_control_panel(
         });
 }
 
-fn handle_input(keys: Res<ButtonInput<KeyCode>>, mut next: ResMut<NextState<Screen>>) {
-    if keys.just_pressed(KeyCode::Backspace) || keys.just_pressed(KeyCode::Escape) {
-        next.set(Screen::Title);
+fn handle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<hex_core::InputBindings>,
+    mut next: ResMut<NextState<Screen>>,
+    request: Option<Res<LocalDemoRequest>>,
+) {
+    if bindings.just_pressed(&keys, hex_core::InputAction::ReturnTitle)
+        || bindings.just_pressed(&keys, hex_core::InputAction::Cancel)
+    {
+        next.set(
+            request
+                .as_deref()
+                .map_or(Screen::Title, |request| request.return_to),
+        );
     }
 }
 

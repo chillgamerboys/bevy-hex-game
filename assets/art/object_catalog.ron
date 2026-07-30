@@ -1,0 +1,12 @@
+(
+    schema_version: 1,
+    objects: [
+        "plant/old-growth",
+        "plant/small-broadleaf",
+        "plant/tall-narrow",
+        "prop/crystal-branched",
+        "prop/crystal-low-cluster",
+        "prop/crystal-spire",
+        "prop/grass-tuft",
+    ],
+)

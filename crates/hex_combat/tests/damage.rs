@@ -15,14 +15,21 @@ use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_combat::{CombatEvent, CommandRefusal, FactionKnowledge, Initiative, KnownCell, TurnOrder};
-use hex_core::{
-    CommandQueue, ControlOwner, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand,
-    KnowledgeExpiry, KnowledgeSource, LatticeCoord, Mode, PendingDecision, PlayerSeat, Screen,
-    TilePos, UnitId,
+use hex_combat::{
+    CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, KnownCell,
+    RestorationRefusal, TurnOrder,
 };
-use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
-use hex_units::{Downed, Faction, Player, Standing, StandsOn, UnitRegistry};
+use hex_core::{
+    CommandQueue, ControlOwner, ElementId, GameCommand, Headroom, HexCoord, HexSpan, IssuedCommand,
+    KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat,
+    Screen, SubstanceId, TilePos, UnitId,
+};
+use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    SurfaceSnapshot, SurfaceSnapshots,
+};
+use hex_units::{Downed, Faction, Party, Player, Standing, StandsOn, UnitRegistry};
 
 fn test_app() -> App {
     let mut app = App::new();
@@ -86,11 +93,339 @@ fn spawn(app: &mut App, id: UnitId, faction: Faction, coord: HexCoord) -> Entity
     entity
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "duplicate test identities or surfaces invalidate the fixture"
+)]
+fn publish_spatial_knowledge(app: &mut App) {
+    let rows: Vec<(UnitId, Faction, TilePos, HexSpan)> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .map(|(id, faction, standing)| (*id, *faction, standing.0.pos, standing.0.span))
+            .collect()
+    };
+    let current =
+        SurfaceSnapshots::try_from_iter(rows.iter().map(|&(_, _, pos, span)| SurfaceSnapshot {
+            pos,
+            span,
+            substance: SubstanceId(0),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }))
+        .expect("test units occupy unique surfaces");
+    let observe_all = || {
+        let mut observation = FactionObservation::new();
+        for &(id, faction, pos, _) in &rows {
+            observation.insert_surface(pos);
+            observation
+                .try_insert_unit(ObservedUnit {
+                    id,
+                    faction,
+                    pos,
+                    provides_sight: true,
+                })
+                .expect("test unit ids are unique");
+        }
+        observation
+    };
+    let observations = FactionObservations::from_factions(observe_all(), observe_all());
+    let mut spatial = FactionMapKnowledge::new();
+    apply_observations(&mut spatial, &current, &observations);
+    app.insert_resource(spatial);
+}
+
 fn take_events(app: &mut App) -> Vec<CombatEvent> {
     app.world_mut()
         .resource_mut::<Messages<CombatEvent>>()
         .drain()
         .collect()
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "a missing lattice means the test fixture itself is invalid"
+)]
+fn disable(app: &mut App, entity: Entity, cells: &[LatticeCoord]) {
+    let mut entity = app.world_mut().entity_mut(entity);
+    let mut state = entity
+        .get_mut::<LatticeState>()
+        .expect("fixture unit has a lattice");
+    apply_disables(&mut state, cells);
+}
+
+#[test]
+fn restoration_validates_and_revives_through_the_command_funnel() {
+    let mut app = test_app();
+    let caster = spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    app.world_mut()
+        .entity_mut(caster)
+        .insert((Player, ControlOwner::default()));
+    let target = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    disable(
+        &mut app,
+        target,
+        &[LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
+    );
+    app.world_mut().entity_mut(target).insert(Downed);
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
+        decider: UnitId(0),
+        target: UnitId(1),
+        count: 1,
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseRestores {
+                unit: UnitId(0),
+                target: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        });
+    app.update();
+
+    let state = app
+        .world()
+        .entity(target)
+        .get::<LatticeState>()
+        .expect("target keeps its lattice");
+    assert!(!state.is_disabled(LatticeCoord::ORIGIN));
+    assert!(state.is_disabled(LatticeCoord::new(1, 0)));
+    assert!(!app.world().entity(target).contains::<Downed>());
+    assert!(!app.world().resource::<PendingDecision>().is_open());
+    assert_eq!(
+        take_events(&mut app),
+        vec![
+            CombatEvent::HexesRestored {
+                caster: UnitId(0),
+                target: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+            CombatEvent::Revived {
+                unit: UnitId(1),
+                reenters_round: 1,
+            },
+        ]
+    );
+}
+
+#[test]
+fn restoration_rejects_the_wrong_target_quota_and_cells_without_mutating() {
+    let mut app = test_app();
+    spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    let target = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    spawn(
+        &mut app,
+        UnitId(2),
+        Faction::Player,
+        HexCoord::new_cubic(2, -2, 0),
+    );
+    disable(&mut app, target, &[LatticeCoord::ORIGIN]);
+
+    let cases = [
+        (
+            UnitId(2),
+            vec![LatticeCoord::ORIGIN],
+            CommandRefusal::Restoration {
+                reason: RestorationRefusal::WrongTarget {
+                    expected: UnitId(1),
+                },
+            },
+        ),
+        (
+            UnitId(1),
+            Vec::new(),
+            CommandRefusal::Restoration {
+                reason: RestorationRefusal::WrongCount {
+                    expected: 1,
+                    actual: 0,
+                },
+            },
+        ),
+        (
+            UnitId(1),
+            vec![LatticeCoord::new(1, 0)],
+            CommandRefusal::Restoration {
+                reason: RestorationRefusal::CellNotDisabled {
+                    cell: LatticeCoord::new(1, 0),
+                },
+            },
+        ),
+    ];
+    for (named_target, cells, refusal) in cases {
+        *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
+            decider: UnitId(0),
+            target: UnitId(1),
+            count: 1,
+        };
+        let command = GameCommand::ChooseRestores {
+            unit: UnitId(0),
+            target: named_target,
+            cells,
+        };
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(IssuedCommand {
+                seat: PlayerSeat::default(),
+                command: command.clone(),
+            });
+        app.update();
+        assert_eq!(
+            take_events(&mut app),
+            vec![CombatEvent::CommandRefused { command, refusal }]
+        );
+        assert!(
+            app.world()
+                .entity(target)
+                .get::<LatticeState>()
+                .is_some_and(|state| state.is_disabled(LatticeCoord::ORIGIN)),
+            "a refused restoration mutated the target"
+        );
+    }
+}
+
+#[test]
+fn exploring_rest_recovers_only_the_party() {
+    let mut app = test_app();
+    let first = spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    let second = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    let hostile = spawn(
+        &mut app,
+        UnitId(2),
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+    );
+    for entity in [first, second, hostile] {
+        disable(&mut app, entity, &[LatticeCoord::ORIGIN]);
+        app.world_mut().entity_mut(entity).insert(Downed);
+    }
+    app.world_mut().resource_mut::<Party>().members = vec![UnitId(0), UnitId(1)];
+
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::Rest { unit: UnitId(0) },
+        });
+    app.update();
+
+    for entity in [first, second] {
+        assert!(!app.world().entity(entity).contains::<Downed>());
+        assert!(app
+            .world()
+            .entity(entity)
+            .get::<LatticeState>()
+            .is_some_and(|state| !state.is_disabled(LatticeCoord::ORIGIN)));
+    }
+    assert!(app.world().entity(hostile).contains::<Downed>());
+    assert!(app
+        .world()
+        .entity(hostile)
+        .get::<LatticeState>()
+        .is_some_and(|state| state.is_disabled(LatticeCoord::ORIGIN)));
+    assert_eq!(
+        take_events(&mut app)
+            .into_iter()
+            .filter(|event| matches!(event, CombatEvent::Rested { .. }))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn a_revived_unit_rejoins_only_when_the_round_wraps() {
+    let mut app = test_app();
+    let caster = spawn(&mut app, UnitId(0), Faction::Player, HexCoord::ORIGIN);
+    app.world_mut()
+        .entity_mut(caster)
+        .insert((Player, ControlOwner::default(), Initiative(20)));
+    let revived = spawn(
+        &mut app,
+        UnitId(1),
+        Faction::Player,
+        HexCoord::new_cubic(1, -1, 0),
+    );
+    app.world_mut()
+        .entity_mut(revived)
+        .insert((Player, Downed, Initiative(15)));
+    disable(
+        &mut app,
+        revived,
+        &[LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
+    );
+    spawn(
+        &mut app,
+        UnitId(2),
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+    );
+    app.world_mut()
+        .resource_mut::<NextState<Mode>>()
+        .set(Mode::Combat);
+    app.update();
+    app.update();
+    assert_eq!(
+        app.world().resource::<TurnOrder>().order(),
+        &[UnitId(0), UnitId(2)]
+    );
+
+    *app.world_mut().resource_mut::<PendingDecision>() = PendingDecision::ChooseRestores {
+        decider: UnitId(0),
+        target: UnitId(1),
+        count: 1,
+    };
+    app.world_mut()
+        .resource_mut::<CommandQueue>()
+        .push(IssuedCommand {
+            seat: PlayerSeat::default(),
+            command: GameCommand::ChooseRestores {
+                unit: UnitId(0),
+                target: UnitId(1),
+                cells: vec![LatticeCoord::ORIGIN],
+            },
+        });
+    app.update();
+    assert_eq!(
+        app.world().resource::<TurnOrder>().position_of(UnitId(1)),
+        None,
+        "revival must not splice into the current round"
+    );
+
+    for unit in [UnitId(0), UnitId(2)] {
+        app.world_mut()
+            .resource_mut::<CommandQueue>()
+            .push(IssuedCommand {
+                seat: PlayerSeat::default(),
+                command: GameCommand::EndTurn { unit },
+            });
+        app.update();
+    }
+    assert_eq!(app.world().resource::<TurnOrder>().round, 1);
+    assert_eq!(
+        app.world().resource::<TurnOrder>().order(),
+        &[UnitId(0), UnitId(1), UnitId(2)],
+        "the revived unit should rejoin sorted initiative at the boundary"
+    );
 }
 
 /// The defender's answer arrives as a command, and applying it disables exactly the
@@ -411,6 +746,7 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
         Faction::Hostile,
         HexCoord::new_cubic(1, -1, 0),
     );
+    publish_spatial_knowledge(&mut app);
 
     app.world_mut()
         .resource_mut::<NextState<Mode>>()
@@ -423,20 +759,23 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
             .is_some(),
         "the defender should start in the order"
     );
-    let learned = app.world_mut().resource_mut::<FactionKnowledge>().learn(
-        Faction::Player,
-        UnitId(1),
-        LatticeCoord::ORIGIN,
-        KnownCell {
-            kind: CellKind::Gem {
-                element: ElementId(0),
+    let learned = app
+        .world_mut()
+        .resource_mut::<FactionLatticeKnowledge>()
+        .learn(
+            Faction::Player,
+            UnitId(1),
+            LatticeCoord::ORIGIN,
+            KnownCell {
+                kind: CellKind::Gem {
+                    element: ElementId(0),
+                },
+                mana: Some(3),
+                disabled: false,
+                source: KnowledgeSource::Divination,
+                expiry: KnowledgeExpiry::Sustained,
             },
-            mana: Some(3),
-            disabled: false,
-            source: KnowledgeSource::Divination,
-            expiry: KnowledgeExpiry::Sustained,
-        },
-    );
+        );
     assert!(learned, "precondition: the hostile lattice is known");
 
     // Take both hexes down through the real path: park a decision, answer it.
@@ -475,11 +814,11 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
     );
     assert!(
         app.world()
-            .resource::<FactionKnowledge>()
+            .resource::<FactionLatticeKnowledge>()
             .view(Faction::Player, UnitId(1))
             .and_then(|known| known.cell(LatticeCoord::ORIGIN))
             .is_some(),
-        "knowledge of a revivable downed unit must survive until actual despawn"
+        "knowledge of a retained downed unit must survive until actual despawn"
     );
     assert_eq!(
         take_events(&mut app),
@@ -490,6 +829,9 @@ fn a_unit_with_every_hex_disabled_goes_down_and_leaves_the_order() {
                 cells: vec![LatticeCoord::ORIGIN, LatticeCoord::new(1, 0)],
             },
             CombatEvent::Downed { unit: UnitId(1) },
+            CombatEvent::EncounterResolved {
+                outcome: hex_combat::EncounterOutcome::Victory,
+            },
         ],
         "exact disables precede the downing they caused"
     );
@@ -556,7 +898,7 @@ fn a_short_answer_is_accepted_when_the_lattice_has_no_more_to_give() {
     );
 }
 
-/// A downed unit's lattice is still reachable, or nothing could ever revive it.
+/// A downed unit's lattice remains reachable for the restoration flow.
 ///
 /// Filtering the applier's lattice query by `Downed` would have been the obvious thing
 /// and would have quietly made the design's stated recovery impossible: downed exists
@@ -581,7 +923,8 @@ fn a_downed_units_lattice_can_still_be_restored() {
         "a spent lattice should put its unit down"
     );
 
-    // The engine's restore reaches it, which is what a revival spell will do.
+    // The engine primitive reaches the retained lattice. Command-level tests cover
+    // removing Downed and scheduling the unit's initiative re-entry.
     let mut entity = app.world_mut().entity_mut(defender);
     let mut state = entity
         .get_mut::<LatticeState>()

@@ -6,8 +6,9 @@ facts the rest of the game needs. V1 and V2 remain in the tree temporarily as
 visual and behavioral oracles while their recipes are rebuilt. They are removed
 after the V3 migration corpus is approved.
 
-This document fixes the boundaries and delivery order before implementation starts.
-Recipe algorithms and tuning remain private to `hex_map`.
+This document fixes the boundaries and delivery order. Current implementation status
+is maintained in [planning/status.md](../planning/status.md). Recipe algorithms and
+tuning remain private to `hex_map`.
 
 ## The boundary
 
@@ -51,9 +52,9 @@ operation, it requires rejection of an edit to an authored V3 liquid voxel and a
 edit to every lower voxel in that column while a retained authored liquid run remains
 above it.
 The private liquid plan classifies the exact `TilePos` and identifies every stacked
-run affected. The classifier lands before a runtime hook because no runnable V3
-recipe exists yet; the first runnable recipe must enforce it at the existing
-`TerrainEdit` admission point.
+run affected. Waterfall now enforces that classification at the existing
+`TerrainEdit` admission point, atomically rejecting edits that would leave stale
+occupancy or flow metadata.
 
 This rule does not change `Substance::diggable`. Legacy and non-topological liquids
 continue to use their existing material policy. A rejected V3 edit changes neither
@@ -134,6 +135,13 @@ Reports record generator version, resolved seed, candidate, repair actions, fall
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
 before reporting or hashing.
 
+The public `Ring7` recipe metrics summarize the admitted whole world rather than
+concatenating seven recipe reports. They record ordinary and reachable surfaces,
+reachable elevation diversity and relief, the critical route, macro edges and
+redundant regions, directed liquid seams, and exact counts of feature instances,
+structures, gameplay lights, and interiors. These fields are deterministic semantic
+measurements; timing and presentation-only entity counts remain outside them.
+
 After an admitted map is edited, `hex_map` keeps its published exact consequences
 honest. Edited columns discard buried `BiomeRegions` entries and classify every
 newly exposed solid run from the closest prior exact surface in that column.
@@ -174,25 +182,95 @@ views of the same deterministic scenario for liquid-motion and cliff-scale revie
 
 ### Forest
 
-Plan the walkable surface and protected routes before placing features. Deterministic
-Poisson-style spacing and environmental suitability produce one substantial wooded
-side, one prairie side, and irregular clearings without filling route approaches.
+Plan the walkable surface and clearings first, then place the blocking woodland before
+routing the road through it. Each planned feature carries an exact authored object id,
+one of six rotations, and its rotated blocker footprint. A deterministic weighted path
+bends between separated non-overlapping clearings and around the complete footprint,
+not merely the object origin. Validation requires the four stable clearing names and
+rejects any shared surface membership. Its mostly two-wide gravel footprint admits
+short one-wide constraints where the existing trees pinch it, then tapers for three
+cells into the prairie and stops. Tall grass can therefore reclaim the meadow instead
+of preserving a bare feature-free line across it.
 
-Trees are shared stylized low-poly features. Their root `TilePos` is a traversal
-blocker; their canopy is presentation only. Tall grass is non-blocking and has no
-concealment rule. Character-camera canopy cutaway composes with fog and cave cutaway.
-Trees cannot be chopped in this milestone.
+Small broadleaf and tall narrow trees have one-cell blockers. Old-growth trees require
+seven same-level grounded supports and publish that exact rotated footprint as
+traversal blockers; connectivity validation may deterministically substitute a
+one-cell tree where a large footprint would sever ordinary terrain. Grass tufts are
+visual-only. All features publish renderer-neutral `ObjectInstance`s, and only
+authored canopy chunks receive the composable canopy-cutaway reason. Tree roots cover
+roughly 20-24% of the woodland, while non-blocking tall grass covers 65-75% of the
+prairie. Tall grass has no concealment rule. Trees cannot be chopped in this milestone.
+
+Forest likewise uses candidate rejection rather than semantic repair: its bounded
+repair hook returns `NoChange`, selection advances to the next deterministic
+candidate, and the canonical fallback remains the final hard-valid result.
+Recipe-specific repair actions will be added only when they can preserve the
+validated topology instead of disguising regeneration as repair.
+
+The recipe requires `party_start`, `hostile_start`, `forest_clearing`, and
+`prairie_overlook` while preserving the open generated-anchor vocabulary. The two
+review anchors are bound to the primary clearing and the recipe's exact prairie
+overlook surface. `walks/forest.ron` pins the shipped hero seed and captures map and
+character-camera presentation. The current walk DSL cannot address map-space tiles,
+so that script is not a route traversal: exact graph validation and recorded manual
+traversal cover topology until the tooling gains that capability.
+
+### Caves
+
+Plan one varied rocky exterior and one rooted underground network in the same stacked
+volume. The native V3 recipe creates six through twelve chambers at floor levels six
+through eight, connects the critical network with two-wide corridors, and descends
+through an open two-wide one-level entrance ramp. Corridors preserve at least three
+clear levels, chambers at least four, and every covered cell retains at least three
+solid cutaway roof levels. Exact interior floors and roof voxels remain the source of
+truth for perception domains and presentation.
+
+Generated cave lights are deterministic gameplay semantics. Bright sources with
+radii from four through seven cover the entrance, required actor route, and critical
+chambers, while at least one optional branch floor remains dark. `hex_map` publishes
+each source as an entity carrying its floor `TilePos` and `GameplayLight`;
+`hex_perception` derives the interior domain from `InteriorRegions`. Static sources
+make their supporting columns map-owned until terrain edits can replan light-bearing
+objects.
+
+Every source reserves a flat radius-one presentation footprint. Underground sources
+carve a roofed alcove with the required three-level roof thickness; the upper source
+uses an open landing beside the entrance rather than flattening its one-level ramp.
+The reservation records a deterministic two-, three-, or four-level crystal kind and
+one of six rotations in semantic and materialized fingerprints. Exact floor,
+clearance, roof, interior, and unoccupied visual-volume checks reject an invalid
+candidate.
+
+Before candidate construction, Caves preflights all three possible authored assets:
+`prop/crystal-low-cluster`, `prop/crystal-branched`, and `prop/crystal-spire`. Their
+radius, height, origin, style modes, and empty blocker/canopy masks must match the
+reserved geometry. A missing or incompatible dependency fails setup before any map
+entities are published.
+
+The authoritative `GameplayLight` and `TilePos` remain together on the exact cave
+floor. A separate renderer-neutral `ObjectInstance` starts one voxel above it with
+the planned six-way rotation, and owns a restrained non-shadow-casting point light.
+The authored emission and physical light are presentation only; neither carries
+`GameplayLight` nor determines gameplay illumination.
 
 ### Fort
 
-Plan the defensive footprint and circulation before decorative details. Worked-stone
-volumes form walls, towers, gates, a courtyard, a small keep, two-wide wall walks,
-and two-wide one-level stair terraces. Edge-mounted battlements do not consume
-walkable surfaces.
+Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and
+keeps every shared-edge approach outside the structure footprint. Worked-stone
+volumes form a five-level, two-column-thick curtain, six stepped corner towers, two
+opposite two-wide gates, two independent two-wide stair terraces, a gravel
+courtyard, and an offset keep. Three-level gate apertures preserve the normal
+two-level-tall walker contract. Alternating battlement columns sit outside the usable
+wall walk and are tagged as non-ordinary review geometry.
 
-Validation requires closed defenses, an accessible wall top, at least two ordinary
-routes, two levels of headroom, and no accidental shortcut through a decorative
-feature. The fort is generated static geometry, not a player construction system.
+Validation closes both gates to prove the defenses have no accidental shortcut,
+then admits each gate separately to prove two independent ordinary routes. It also
+checks exact worked-stone structure membership, gate headroom, one-level stairs,
+wall-walk and tower access, anchor placement, and whole-network connectivity.
+Candidates vary orientation and keep placement through independent named streams;
+major structural failures reject the candidate rather than carving the topology,
+and a separately authored orientation-zero fallback passes the same checks. The
+fort remains generated static geometry, not a player construction system.
 
 ### Composite
 
@@ -201,6 +279,14 @@ protected seam approaches. It then runs each recipe against its resolved mask an
 contracts, validates patch-local invariants, and finally validates the exact combined
 `TilePos` graph. Materials and decorative boundaries are classified only after the
 geometry and semantics are accepted.
+
+Directed liquid ports are realized during checked composition, not by a later blend
+pass. Every declared lane must resolve to exactly one terminal source node and one
+sink node in the shared elevation band. The endpoints must use the same material, the
+source may not already flow, and the crossing may be level or descend by one level.
+Composition deterministically unifies the two liquid bodies and installs the exact
+cross-patch downstream edge. Missing, ambiguous, uphill, mismatched, duplicate, or
+undeclared crossings reject the complete world candidate.
 
 No post-generation blend pass may erase anchors, water direction, traversal blockers,
 interior/domain metadata, or protected approaches.
@@ -216,20 +302,22 @@ updated `dev`:
   `hex_perception` crate, then fog presentation and owner-reviewed adapters. It does
   not import map internals.
 
-The intended PR order is:
+The normative delivery order is:
 
-1. contracts and shared vocabulary, with no behavior change;
+1. contracts and shared vocabulary;
 2. V3 foundation;
-3. directed steady-state liquid topology, in parallel with headless perception;
+3. directed steady-state liquid topology and headless perception;
 4. the opaque animated flow renderer;
-5. the Waterfall recipe;
-6. fog presentation, cave lighting, and isolated gameplay adapters;
+5. Waterfall;
+6. isolated perception and gameplay adapters;
 7. Forest;
 8. Fort;
 9. `Ring7`;
 10. V3 rebuilds of Hills, Frozen, Volcanic, Sky Islands, Mountains, and Caves;
-11. scenario and review-tool migration;
+11. complete scenario and review-tool migration;
 12. V1/V2 removal.
+
+See [planning/status.md](../planning/status.md) for progress through this sequence.
 
 An adapter that changes movement, AI, targeting, engagement, or command validation is
 a separate PR reviewed by that crate's owner. A map PR may add shared vocabulary in
@@ -246,12 +334,14 @@ they remain:
 - V3 reports and captures compare behavior and visual intent, not identical hashes.
 
 Each active recipe migrates only after its V3 fixed corpus, stress corpus, captures,
-and critical-route walk pass. Once every shipped scenario and review tool uses V3,
-archive one migration report and remove V1/V2 parsing, dispatch, generator code,
-assets, and runtime tests together. Do not leave a permanent three-version matrix.
-Migration is not a literal geometry port: once the supporting V3 layers exist, each
-recipe also receives the appropriate liquid, vegetation, structure, and gameplay
-lighting semantics.
+and critical-route traversal pass. Where review tooling cannot yet address map-space
+tiles, exact graph validation plus a recorded manual traversal supplies that gate;
+capture-only scripts must not be described as route walks. Once every shipped scenario
+and review tool uses V3, archive one migration report and remove V1/V2 parsing,
+dispatch, generator code, assets, and runtime tests together. Do not leave a permanent
+three-version matrix. Migration is not a literal geometry port: once the supporting V3
+layers exist, each recipe also receives the appropriate liquid, vegetation, structure,
+and gameplay lighting semantics.
 
 ## Verification
 
@@ -259,17 +349,16 @@ V3 foundation tests cover connected masks, exact coverage, six-way edge agreemen
 volume overlap rejection, named-stream independence, ordered fingerprints, bounded
 repair, forced fallback, setup failure, teardown, and re-entry.
 
-Recipe tests enforce directed Waterfall flow and its bypass, Forest clearings and
-protected routes, Fort circulation and headroom, and `Ring7` seam, hydrology, and
-macro-route contracts. A fast fixed corpus runs in CI; ignored 10,000-seed corpora
-must produce 100% valid final maps including fallback and target less than 1% fallback
-use.
+Recipe tests must enforce each runnable recipe's topology and protected routes.
+Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
+valid final maps including fallback and target less than 1% fallback use.
 
-Benchmarks cover radius 12, 20, and 40 single patches plus the radius-33 composite,
-including generation time, entity count, and terrain-edit projection. Perception
-benchmarks separately cover fog recomputation. Review packs include deterministic
-reports and default, rotated, top-down, and character-camera captures. Manual review
-traverses every critical recipe route and every open composite seam.
+Recipe-level benchmarks cover runnable patches at radii 12, 20, and 40. Before
+`Ring7` lands, add radius-33 composite coverage for generation time, entity count,
+terrain-edit projection, and seam traversal. Perception benchmarks separately cover
+fog recomputation. Review packs must include deterministic reports and default,
+rotated, top-down, and character-camera captures. Manual review must traverse every
+critical recipe route and every open composite seam before that surface ships.
 
 ## Primary precedents
 

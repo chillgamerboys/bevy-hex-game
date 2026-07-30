@@ -33,7 +33,7 @@ The catalogs are machine-written documents. Workshop saves replace their complet
 serialized contents, so comments inside the RON files are not durable; visual policy
 and migration notes belong in this document. A `legacy` tag means the live renderer
 still owns that colour literal and is removed when the renderer resolves the swatch
-directly. The initially empty style catalog does not promote runtime substances or
+directly. Cataloged object styles do not implicitly promote runtime substances or
 temporary-feature materials into reviewed Workshop styles.
 
 ## Strict for new work, staged for old work
@@ -44,15 +44,15 @@ The palette has two adoption rules on purpose:
    id. Object files never embed an arbitrary base colour, and procedural object
    generation may choose between swatches but may not invent per-instance tints.
 2. **Staged:** existing renderers retain their current colour sources until their own
-   migration. Terrain substances, liquid bodies and foam, construction metal, and
-   unit presentation now resolve palette swatches directly. Temporary Forest
-   vegetation remains the outstanding legacy renderer until its feature branch is
-   reconciled.
+   migration. Terrain substances, liquid bodies and foam, construction metal, unit
+   presentation, and Forest's authored object instances now resolve palette swatches
+   directly.
 
 This keeps the palette useful immediately without turning its introduction into a
 cross-cutting visual rewrite. During the staged period, a palette entry can be an
 inventory of a live literal rather than its authority. Its tag includes `legacy` until
-the corresponding renderer resolves the swatch directly.
+the corresponding renderer resolves the swatch directly. The current catalog has no
+remaining legacy-tagged live literals.
 
 `liquid/foam` stores the nearest f32-representable sRGB encoding of the liquid
 shader's former linear blend target (within two ULP per channel after conversion).
@@ -112,7 +112,8 @@ The initial catalog records the currently rendered content vocabulary:
 |---|---|---|
 | Terrain | grass, dirt, stone, gravel, snow, ice, basalt, bedrock | `palette.ron`, referenced by `substances.ron` |
 | Liquids and construction | water, lava, water foam, metal | `palette.ron`; bodies and metal are referenced by `substances.ron`, while the liquid shader resolves foam directly |
-| Temporary vegetation | trunk, three foliage values, two grass-blade values | Forest feature renderer |
+| Authored vegetation | trunk, three foliage values, and two grass values | `palette.ron`, referenced by the small broadleaf, tall narrow, old-growth, and nonblocking grass-tuft objects rendered by Forest |
+| Emissive props | cyan crystal body and glow | `palette.ron`, referenced by the low, branched, and spire crystal objects |
 | Units | player red, hostile blue | `palette.ron`, resolved during actor setup |
 
 Air is absent because it is never drawn. Sky, celestial light, atmosphere, fog,

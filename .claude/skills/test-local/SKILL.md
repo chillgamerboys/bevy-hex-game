@@ -23,7 +23,7 @@ cargo clippy --workspace --all-targets --all-features --profile ci -- -D warning
 cargo test --workspace --all-features --profile ci
 ```
 
-Sum all `test result:` lines across the eleven workspace crates plus
+Sum all `test result:` lines across the twelve workspace crates plus
 doctests. The count drifts, and `/update-docs` owns the exact number
 in CLAUDE.md.
 

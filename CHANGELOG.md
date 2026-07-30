@@ -1,8 +1,24 @@
 # Changelog
 
 Release sections are prepended here and dated when their promoted `main` commit is
-tagged. The repository has no earlier release tags; `v0.3.0` is planned as its first
-tagged build.
+tagged. `v0.3.0` is the first tagged build.
+
+## v0.4.0 — 2026-07-30
+
+### Features
+
+- Replace Lattice Demo with separate Character Creator and Spell Creator screens,
+  saved draft/ready lifecycles, immutable templates, and local lattice testing.
+- Add Combat Lab Sandbox roster composition, terrain-backed exact-surface deployment,
+  frozen retry snapshots, and four isolated deterministic fixture families.
+- Offer every shipped map through thirteen described renderer previews, including the
+  V3 Fort and connected Seven Regions world.
+- Replace the Combat scenario lane with Maps, focused Demos, and Actions; New Game now
+  launches Party Trial as the hidden integrated default.
+- Add one atomic, build-bound exploration resume slot, persistent display/volume
+  settings, centralized fixed input actions, and empty audio-bus seams.
+- Normalize release artifacts under the Hex Game identity, retain symbol material,
+  and document future signing, Steam, and crash-reporting credential boundaries.
 
 ## v0.3.0 — 2026-07-28
 
@@ -19,6 +35,8 @@ tagged build.
   with Close Quarters as the combat showcase and Lattice Demo as the rules sandbox.
 - Add the deterministic V3 Waterfall showcase with directed water stages, an upstream
   bridge, and two independent high-to-low land routes.
+- Move the shipped Hills, Frozen, Volcanic, Sky Islands, and Mountains maps to native
+  V3 recipes with exact crossing, stacked-volume, route, and environment contracts.
 - Export serde-capable combat outcomes and refusals using stable replay vocabulary.
 - Integrate the canonical runtime art palette and the Asset Workshop recovery and
   deterministic review workflow from `dev`.

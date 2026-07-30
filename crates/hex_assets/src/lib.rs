@@ -15,32 +15,57 @@ use bevy::asset::{LoadState, UntypedAssetId};
 use bevy::gltf::GltfAssetLabel;
 use bevy::prelude::*;
 
+/// Data-authored algorithm dispatch for AI controllers.
+pub mod ai_profiles;
 pub mod art_palette;
+pub mod combat_lab;
 pub mod content_index;
+pub mod creation;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
+mod fingerprint;
+/// Selectable exploration formation presets.
+pub mod formations;
 /// Who each of them is: archetype lattices, resolved from content.
 pub mod lattices;
 pub mod loader;
 pub mod object_blueprint;
+pub mod object_catalog;
+/// Validated gameplay sight settings.
+pub mod perception;
 /// The scenarios offered on the title screen.
 pub mod scenario;
 pub mod settings;
 pub mod spells;
 pub mod substances;
 
+pub use ai_profiles::AiProfileCatalog;
 pub use art_palette::{
     ArtContractError, ArtPalette, ObjectAssetId, PaletteSwatch, SrgbColor, SwatchId, SwatchMatch,
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
-pub use content_index::{ContentError, ContentIndex, ContentTables};
+pub use combat_lab::{
+    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
+    COMBAT_LAB_MAP_SCHEMA_VERSION,
+};
+pub use content_index::{
+    AcceptedContentRevision, ContentError, ContentIndex, ContentReadinessSystems, ContentTables,
+};
+pub use creation::{
+    character_lattice_file, character_runtime_key, combined_spell_file, creator_character_issues,
+    creator_spell_issues, normalized_name, validate_name, CreationCell, CreationCellKind,
+    CreationLibraryFile, CreationPresetCatalog, CustomCharacterId, CustomSpellId,
+    PackagedCharacter, PackagedSpell, PresetAudience, SavedCharacter, SavedSpell, SpellReference,
+    CREATION_SCHEMA_VERSION, MAX_CREATION_CELLS, MAX_CREATION_NAME_CHARS, MAX_CREATION_RADIUS,
+};
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
     Encounter, EncounterFaction, EncounterPlacement, FormationCenter, Roster, RosterEntry,
     RosteredUnit,
 };
+pub use formations::FormationCatalog;
 pub use lattices::{
     Archetype, AxialPair, LatticeError, LatticeFile, LatticeLibrary, UnvalidatedArchetype,
     UnvalidatedCell, UnvalidatedEntry,
@@ -53,6 +78,11 @@ pub use object_blueprint::{
     ObjectBounds, ObjectCategory, ObjectPart, ObjectPlacement, PlantPart, PropPart,
     MAX_OBJECT_HEIGHT, MAX_OBJECT_RADIUS, MAX_OBJECT_VOXELS, OBJECT_BLUEPRINT_SCHEMA_VERSION,
 };
+pub use object_catalog::{
+    HexObjectRotation, ObjectCatalogError, ObjectCatalogFile, ObjectInstance, ObjectInstanceError,
+    ResolvedVoxelStyle, RuntimeArtCatalog, RuntimeArtCatalogStatus, OBJECT_CATALOG_SCHEMA_VERSION,
+};
+pub use perception::{PerceptionSettings, SightBandSettings, SightPreset, SightRanges};
 pub use scenario::{Scenario, ScenarioCategory, ScenarioLibrary};
 pub use settings::{
     to_color, ActionEconomy, CameraSettings, CelestialBody, CelestialCycleSettings,
@@ -83,6 +113,11 @@ pub fn plugin(app: &mut App) {
         .register_type::<CelestialCycleSettings>()
         .register_type::<LightingKeyframe>()
         .register_type::<CelestialBody>()
+        .register_type::<ResolvedLighting>()
+        .register_type::<PerceptionSettings>()
+        .register_type::<SightPreset>()
+        .register_type::<SightRanges>()
+        .register_type::<SightBandSettings>()
         .register_type::<PlayerSettings>()
         .register_type::<DisplaySettings>()
         .register_type::<MenuSettings>()
@@ -91,10 +126,14 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(combat_lab::plugin);
+    app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
+    app.add_plugins(creation::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
     app.add_plugins(lattices::plugin);
+    app.add_plugins(formations::plugin);
 
     // Two types are deliberately **not** loaded from a fixed file here.
     //
@@ -108,11 +147,13 @@ pub fn plugin(app: &mut App) {
     // for a file nobody asked for.
     app.load_settings::<CameraSettings>("config/camera.ron", CONFIG_EXTENSIONS)
         .load_settings::<CombatSettings>("config/combat.ron", CONFIG_EXTENSIONS)
+        .load_settings::<PerceptionSettings>("config/perception.ron", CONFIG_EXTENSIONS)
         .load_settings::<PlayerSettings>("config/player.ron", CONFIG_EXTENSIONS)
         .load_settings::<DisplaySettings>("config/display.ron", CONFIG_EXTENSIONS)
         .load_settings::<MenuSettings>("config/menu.ron", CONFIG_EXTENSIONS)
         .load_settings::<ScenarioLibrary>("config/scenarios.ron", CONFIG_EXTENSIONS)
         .load_settings::<ArtPalette>("art/palette.ron", CONFIG_EXTENSIONS);
+    app.add_plugins(object_catalog::plugin);
 }
 
 /// Handles to everything the game loads from disk.

@@ -3,7 +3,7 @@
 //! The store's own rules are unit-tested beside it. What these prove is the
 //! wiring: that the publishing systems actually run, that decay is ordered
 //! against the round rollover rather than left to luck, and that the dev toggle
-//! reaches [`FactionKnowledge::view`].
+//! reaches [`FactionLatticeKnowledge::view`].
 //!
 //! **These tests attach `LatticeSpec` and `LatticeState` to units by hand.**
 //! Shipped units receive those components from content, but these fixtures stay
@@ -16,12 +16,17 @@ use bevy::app::PluginsState;
 use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
-use hex_combat::{FactionKnowledge, Initiative, KnownCell, RevealAll, TurnOrder};
+use hex_combat::{FactionLatticeKnowledge, Initiative, KnownCell, RevealAll, TurnOrder};
 use hex_core::{
-    CommandQueue, ElementId, GameCommand, HexCoord, HexSpan, IssuedCommand, KnowledgeExpiry,
-    KnowledgeSource, LatticeCoord, Mode, PlayerSeat, Screen, TilePos, UnitId,
+    CommandQueue, ElementId, GameCommand, Headroom, HexCoord, HexSpan, IssuedCommand,
+    KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, Mode, PlayerSeat, Screen,
+    SubstanceId, TilePos, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
+use hex_perception::{
+    apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
+    SurfaceSnapshot, SurfaceSnapshots,
+};
 use hex_units::{Faction, Standing, StandsOn};
 
 fn test_app() -> App {
@@ -92,6 +97,62 @@ fn enter_gameplay(app: &mut App) {
         .set(Screen::Gameplay);
     app.update();
     app.update();
+    publish_spatial_knowledge(app, None);
+    app.update();
+}
+
+/// Publishes an explicit world-owned observation snapshot for the combat adapter.
+///
+/// `player_visible = None` means every unit is visible; `Some(ids)` narrows only
+/// the player's view. The hostile fixture continues to observe every unit because
+/// these tests exercise player-facing lattice knowledge.
+#[expect(
+    clippy::expect_used,
+    reason = "duplicate test identities or surfaces invalidate the fixture"
+)]
+fn publish_spatial_knowledge(app: &mut App, player_visible: Option<&[UnitId]>) {
+    let rows: Vec<(UnitId, Faction, TilePos, HexSpan)> = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&UnitId, &Faction, &StandsOn)>();
+        query
+            .iter(world)
+            .map(|(id, faction, standing)| (*id, *faction, standing.0.pos, standing.0.span))
+            .collect()
+    };
+    let current =
+        SurfaceSnapshots::try_from_iter(rows.iter().map(|&(_, _, pos, span)| SurfaceSnapshot {
+            pos,
+            span,
+            substance: SubstanceId(0),
+            headroom: Headroom(2),
+            is_solid: true,
+            blocked: false,
+            domain: LightDomain::Exterior,
+        }))
+        .expect("test units occupy unique surfaces");
+
+    let observation = |visible: Option<&[UnitId]>| {
+        let mut observation = FactionObservation::new();
+        for &(id, faction, pos, _) in &rows {
+            if visible.is_none_or(|ids| ids.contains(&id)) {
+                observation.insert_surface(pos);
+                observation
+                    .try_insert_unit(ObservedUnit {
+                        id,
+                        faction,
+                        pos,
+                        provides_sight: true,
+                    })
+                    .expect("test unit ids are unique");
+            }
+        }
+        observation
+    };
+    let observations =
+        FactionObservations::from_factions(observation(player_visible), observation(None));
+    let mut spatial = FactionMapKnowledge::new();
+    apply_observations(&mut spatial, &current, &observations);
+    app.insert_resource(spatial);
 }
 
 #[expect(
@@ -141,7 +202,7 @@ fn base_visibility_reaches_a_faction_that_owns_no_lattice() {
     app.update();
 
     let enemy_id = unit_id(&app, enemy);
-    let knowledge = app.world().resource::<FactionKnowledge>();
+    let knowledge = app.world().resource::<FactionLatticeKnowledge>();
     let view = knowledge
         .view(Faction::Player, enemy_id)
         .expect("the player should know a hostile lattice exists");
@@ -174,7 +235,7 @@ fn observation_alone_reveals_no_cell_contents() {
     }
 
     let enemy_id = unit_id(&app, enemy);
-    let knowledge = app.world().resource::<FactionKnowledge>();
+    let knowledge = app.world().resource::<FactionLatticeKnowledge>();
     let view = knowledge.view(Faction::Player, enemy_id).expect("a view");
     assert_eq!(
         view.revealed_count(),
@@ -182,6 +243,81 @@ fn observation_alone_reveals_no_cell_contents() {
         "no amount of looking should reveal a gem"
     );
     assert!(view.cell(LatticeCoord::ORIGIN).is_none());
+}
+
+/// Spatial perception owns whether the subject exists to the viewer. Divination
+/// facts retain their own lifetime while hidden, but cannot disclose the unit.
+#[test]
+fn losing_spatial_observation_hides_and_then_restores_unexpired_divination() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, true);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        true,
+    );
+    enter_gameplay(&mut app);
+    let enemy_id = unit_id(&app, enemy);
+
+    assert!(
+        app.world_mut()
+            .resource_mut::<FactionLatticeKnowledge>()
+            .learn(
+                Faction::Player,
+                enemy_id,
+                LatticeCoord::ORIGIN,
+                KnownCell {
+                    kind: CellKind::Gem {
+                        element: ElementId(0),
+                    },
+                    mana: Some(5),
+                    disabled: false,
+                    source: KnowledgeSource::Divination,
+                    expiry: KnowledgeExpiry::Sustained,
+                },
+            ),
+        "an observed subject accepts divination"
+    );
+
+    publish_spatial_knowledge(&mut app, Some(&[]));
+    app.update();
+    assert!(
+        app.world()
+            .resource::<FactionLatticeKnowledge>()
+            .view(Faction::Player, enemy_id)
+            .is_none(),
+        "stored lattice facts must not disclose a hidden unit"
+    );
+    assert!(
+        !app.world_mut()
+            .resource_mut::<FactionLatticeKnowledge>()
+            .learn(
+                Faction::Player,
+                enemy_id,
+                LatticeCoord::new(0, 1),
+                KnownCell {
+                    kind: CellKind::Blank,
+                    mana: None,
+                    disabled: false,
+                    source: KnowledgeSource::Divination,
+                    expiry: KnowledgeExpiry::Sustained,
+                },
+            ),
+        "a hidden subject cannot receive a new targeted reveal"
+    );
+
+    publish_spatial_knowledge(&mut app, None);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<FactionLatticeKnowledge>()
+            .view(Faction::Player, enemy_id)
+            .and_then(|known| known.cell(LatticeCoord::ORIGIN))
+            .is_some(),
+        "unexpired divination becomes readable again after re-observation"
+    );
 }
 
 #[test]
@@ -199,18 +335,21 @@ fn divined_cells_refresh_from_live_truth_without_resetting_expiry() {
     app.update();
     let enemy_id = unit_id(&app, enemy);
 
-    let accepted = app.world_mut().resource_mut::<FactionKnowledge>().learn(
-        Faction::Player,
-        enemy_id,
-        LatticeCoord::ORIGIN,
-        KnownCell {
-            kind: CellKind::Blank,
-            mana: Some(99),
-            disabled: false,
-            source: KnowledgeSource::Divination,
-            expiry: KnowledgeExpiry::Rounds(1),
-        },
-    );
+    let accepted = app
+        .world_mut()
+        .resource_mut::<FactionLatticeKnowledge>()
+        .learn(
+            Faction::Player,
+            enemy_id,
+            LatticeCoord::ORIGIN,
+            KnownCell {
+                kind: CellKind::Blank,
+                mana: Some(99),
+                disabled: false,
+                source: KnowledgeSource::Divination,
+                expiry: KnowledgeExpiry::Rounds(1),
+            },
+        );
     assert!(accepted, "precondition: base visibility exists");
     {
         let mut entity = app.world_mut().entity_mut(enemy);
@@ -223,7 +362,7 @@ fn divined_cells_refresh_from_live_truth_without_resetting_expiry() {
 
     let refreshed = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, enemy_id)
         .and_then(|known| known.cell(LatticeCoord::ORIGIN))
         .expect("the divined cell remains known");
@@ -266,20 +405,23 @@ fn a_one_time_reveal_lapses_at_the_round_rollover() {
     );
 
     // A divination lands mid-round.
-    let accepted = app.world_mut().resource_mut::<FactionKnowledge>().learn(
-        Faction::Player,
-        enemy_id,
-        LatticeCoord::ORIGIN,
-        KnownCell {
-            kind: CellKind::Gem {
-                element: ElementId(0),
+    let accepted = app
+        .world_mut()
+        .resource_mut::<FactionLatticeKnowledge>()
+        .learn(
+            Faction::Player,
+            enemy_id,
+            LatticeCoord::ORIGIN,
+            KnownCell {
+                kind: CellKind::Gem {
+                    element: ElementId(0),
+                },
+                mana: Some(5),
+                disabled: false,
+                source: KnowledgeSource::Divination,
+                expiry: KnowledgeExpiry::Rounds(0),
             },
-            mana: Some(5),
-            disabled: false,
-            source: KnowledgeSource::Divination,
-            expiry: KnowledgeExpiry::Rounds(0),
-        },
-    );
+        );
     assert!(
         accepted,
         "base visibility should already have been published"
@@ -290,7 +432,7 @@ fn a_one_time_reveal_lapses_at_the_round_rollover() {
     assert_eq!(app.world().resource::<TurnOrder>().round, 0);
     assert_eq!(
         app.world()
-            .resource::<FactionKnowledge>()
+            .resource::<FactionLatticeKnowledge>()
             .view(Faction::Player, enemy_id)
             .expect("a view")
             .revealed_count(),
@@ -303,7 +445,7 @@ fn a_one_time_reveal_lapses_at_the_round_rollover() {
     assert_eq!(app.world().resource::<TurnOrder>().round, 1);
     let view = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, enemy_id)
         .expect("a view");
     assert!(view.is_opaque(), "the one-time reveal should have lapsed");
@@ -330,7 +472,7 @@ fn reveal_all_shows_the_truth_through_the_accessor() {
 
     assert!(app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, enemy_id)
         .expect("a view")
         .is_opaque());
@@ -340,7 +482,7 @@ fn reveal_all_shows_the_truth_through_the_accessor() {
 
     let view = app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, enemy_id)
         .expect("a view");
     assert_eq!(view.revealed_count(), 3, "every cell should be exposed");
@@ -364,7 +506,7 @@ fn reveal_all_shows_the_truth_through_the_accessor() {
     app.update();
     assert!(app
         .world()
-        .resource::<FactionKnowledge>()
+        .resource::<FactionLatticeKnowledge>()
         .view(Faction::Player, enemy_id)
         .expect("a view")
         .is_opaque());
@@ -384,7 +526,7 @@ fn leaving_gameplay_forgets_everything() {
     );
     enter_gameplay(&mut app);
     app.update();
-    assert!(!app.world().resource::<FactionKnowledge>().is_empty());
+    assert!(!app.world().resource::<FactionLatticeKnowledge>().is_empty());
 
     *app.world_mut().resource_mut::<RevealAll>() = RevealAll(true);
     app.world_mut()
@@ -393,7 +535,7 @@ fn leaving_gameplay_forgets_everything() {
     app.update();
 
     assert!(
-        app.world().resource::<FactionKnowledge>().is_empty(),
+        app.world().resource::<FactionLatticeKnowledge>().is_empty(),
         "knowledge should not survive leaving gameplay"
     );
     assert_eq!(

@@ -5,7 +5,9 @@ use bevy::transform::TransformSystems;
 use bevy::window::{CursorMoved, PrimaryWindow};
 
 use hex_assets::{to_color, CameraSettings, ResolvedLighting, Rgb};
-use hex_core::{AppSystems, CameraFocusTarget, GameplaySetup, MapViewHint, Screen};
+use hex_core::{
+    AppSystems, CameraFocusTarget, GameplaySetup, InputAction, InputBindings, MapViewHint, Screen,
+};
 
 use crate::{
     sky_material::{SkyMaterial, SkyParams},
@@ -29,6 +31,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<SkyDome>()
         .init_resource::<CameraMode>()
         .init_resource::<SavedMapCamera>()
+        .init_resource::<InputBindings>()
         // Spawned once at startup rather than per screen: it is the render target
         // the UI screens draw through, and the sky behind them.
         .add_systems(Startup, spawn_camera)
@@ -268,13 +271,14 @@ fn pitch_limits(mode: CameraMode, settings: &CameraSettings) -> (f32, f32) {
 /// Snaps between the current free-map pose and a close orbit around the selected unit.
 fn toggle_camera_mode(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     settings: Res<CameraSettings>,
     mut mode: ResMut<CameraMode>,
     mut saved: ResMut<SavedMapCamera>,
     targets: Query<&Transform, (With<CameraFocusTarget>, Without<PanOrbitCamera>)>,
     mut cameras: Query<(&mut Transform, &mut PanOrbitCamera), Without<CameraFocusTarget>>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyC) {
+    if !bindings.just_pressed(&keys, InputAction::ToggleCamera) {
         return;
     }
 
@@ -476,27 +480,46 @@ fn follow_camera(
 // Camera Pan using WASD
 fn pan_camera(
     keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<InputBindings>,
     time: Res<Time>,
     settings: Res<CameraSettings>,
     mut query: Query<(&mut Transform, &mut PanOrbitCamera)>,
 ) {
+    if ![
+        InputAction::CameraForward,
+        InputAction::CameraBackward,
+        InputAction::CameraLeft,
+        InputAction::CameraRight,
+    ]
+    .into_iter()
+    .any(|action| bindings.pressed(&keys, action))
+    {
+        return;
+    }
+
     for (mut transform, mut camera) in query.iter_mut() {
         let mut velocity = Vec3::ZERO;
         let local_z = transform.local_z();
         let forward = -Vec3::new(local_z.x, 0., local_z.z);
         let right = Vec3::new(local_z.z, 0., -local_z.x);
 
-        for key in keys.get_pressed() {
-            match key {
-                KeyCode::KeyW => velocity += forward,
-                KeyCode::KeyS => velocity -= forward,
-                KeyCode::KeyA => velocity -= right,
-                KeyCode::KeyD => velocity += right,
-                _ => (),
-            }
+        if bindings.pressed(&keys, InputAction::CameraForward) {
+            velocity += forward;
+        }
+        if bindings.pressed(&keys, InputAction::CameraBackward) {
+            velocity -= forward;
+        }
+        if bindings.pressed(&keys, InputAction::CameraLeft) {
+            velocity -= right;
+        }
+        if bindings.pressed(&keys, InputAction::CameraRight) {
+            velocity += right;
         }
 
         velocity = velocity.normalize_or_zero();
+        if velocity.length_squared() <= f32::EPSILON {
+            continue;
+        }
 
         let mut change = velocity * time.delta_secs() * settings.pan_speed;
         // scale velocity with zoom radius
@@ -638,6 +661,22 @@ mod tests {
 
     use super::*;
 
+    #[derive(Resource, Default)]
+    struct CameraChangeCounts {
+        transforms: usize,
+        controls: usize,
+    }
+
+    fn count_camera_changes(
+        cameras: Query<(Ref<Transform>, Ref<PanOrbitCamera>)>,
+        mut counts: ResMut<CameraChangeCounts>,
+    ) {
+        for (transform, controls) in &cameras {
+            counts.transforms += usize::from(transform.is_changed());
+            counts.controls += usize::from(controls.is_changed());
+        }
+    }
+
     fn camera_settings() -> CameraSettings {
         CameraSettings {
             gameplay_eye: (0.0, 48.0, 42.0),
@@ -728,6 +767,31 @@ mod tests {
             apply_pitch_delta(rotation_at_pitch(middle), 0.1, min_pitch, max_pitch),
             middle + 0.1,
         );
+    }
+
+    #[test]
+    fn one_hundred_idle_frames_do_not_republish_camera_components() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<InputBindings>()
+            .init_resource::<CameraChangeCounts>()
+            .insert_resource(camera_settings())
+            .add_systems(Update, (pan_camera, count_camera_changes).chain());
+        app.world_mut().spawn((
+            Transform::from_xyz(0.0, 20.0, 10.0),
+            PanOrbitCamera::default(),
+        ));
+
+        app.update();
+        *app.world_mut().resource_mut::<CameraChangeCounts>() = CameraChangeCounts::default();
+        for _ in 0..100 {
+            app.update();
+        }
+
+        let counts = app.world().resource::<CameraChangeCounts>();
+        assert_eq!(counts.transforms, 0);
+        assert_eq!(counts.controls, 0);
     }
 
     #[test]
@@ -918,6 +982,7 @@ mod tests {
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.init_resource::<CameraMode>();
         app.init_resource::<SavedMapCamera>();
+        app.init_resource::<InputBindings>();
         app.add_systems(Update, toggle_camera_mode);
         app.add_systems(PostUpdate, follow_character_camera);
 
@@ -1103,6 +1168,7 @@ mod tests {
         time.advance_by(Duration::from_secs(1));
         app.insert_resource(time);
         app.init_resource::<CameraMode>();
+        app.init_resource::<InputBindings>();
         app.add_systems(Update, pan_camera.run_if(map_camera_active));
         let camera = app
             .world_mut()

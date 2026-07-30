@@ -6,7 +6,7 @@ description: Audit documentation for stale test counts and status claims. Extrac
 When invoked, follow these steps:
 
 1. **Extract current test counts.** Run the workspace suite and sum
-   across all crates + doctests — an eleven-crate workspace prints one
+   across all crates + doctests — a twelve-crate workspace prints one
    `test result:` line per suite, so taking the first line
    undercounts badly:
 

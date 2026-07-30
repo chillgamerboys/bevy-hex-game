@@ -9,18 +9,25 @@ default-members = ["crates/hex_game"]
 hex_core = { path = "crates/hex_core" }
 hex_lattice = { path = "crates/hex_lattice" }
 hex_assets = { path = "crates/hex_assets" }
+hex_objects = { path = "crates/hex_objects" }
 hex_anim = { path = "crates/hex_anim" }
+hex_ai = { path = "crates/hex_ai" }
 hex_combat = { path = "crates/hex_combat" }
 hex_world = { path = "crates/hex_world" }
 hex_units = { path = "crates/hex_units" }
 hex_map = { path = "crates/hex_map" }
+hex_perception = { path = "crates/hex_perception" }
 hex_dev = { path = "crates/hex_dev" }
 
 bevy = "0.19"
+bevy_app = "0.19"
 bevy_ecs = "0.19"
+bevy_input = "0.19"
+bevy_log = "0.19"
 bevy_math = "0.19"
 bevy_platform = "0.19"
 bevy_reflect = "0.19"
+bevy_state = "0.19"
 bevy-inspector-egui = "0.37"
 bevy_egui = { version = "0.40.1", default-features = false, features = [
     "bevy_ui",
@@ -36,7 +43,7 @@ xxhash-rust = { version = "0.8.6", features = ["xxh3"] }
 serde = { version = "1.0.229", features = ["derive"] }
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 
 [workspace.lints.rust]
@@ -149,6 +156,9 @@ debug-assertions = false
 # so that trade is the right way round.
 codegen-units = 1
 lto = "thin"
+# Retain enough source locations for a future crash-reporting backend. Wave 5 does
+# not upload them anywhere; the release artifact keeps platform symbol companions.
+debug = "line-tables-only"
 
 # Fast to compile, since CI only needs to know the code builds and passes.
 [profile.ci]

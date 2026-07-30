@@ -7,13 +7,16 @@
 use std::fmt;
 use std::time::Instant;
 
+use hex_assets::RuntimeArtCatalog;
 use hex_core::{
     BiomeRegions, InteriorRegions, MapAnchors, MapViewHint, SpecialMovementRegions, SubstanceId,
     TraversalBlockers,
 };
 
 use crate::procedural::{
-    GenerationReport, ProceduralRecipeMetrics, TacticalMetrics,
+    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
+    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
     WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
@@ -23,12 +26,21 @@ use materialize::{MaterializationError, MaterializedV3World};
 use selection::{CandidateNote, ValidatedWorldSelection};
 use world::WorldValidationIssue;
 
+mod caves;
+pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod composition;
+#[cfg(test)]
+mod dry_patch_tests;
 mod fingerprint;
+mod forest;
+mod fort;
+mod hills;
 #[expect(
     dead_code,
     reason = "resolved layouts are consumed by sequential V3 recipe implementations"
 )]
 mod layout;
+mod local_frame;
 pub(crate) use layout::HexSide;
 #[expect(
     dead_code,
@@ -38,13 +50,10 @@ mod liquid;
 pub(crate) use liquid::LiquidFlowState;
 mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the seed API is consumed by sequential V3 recipe implementations"
-    )
-)]
+mod mountains;
+mod patch;
+mod ring7;
+mod seam;
 mod seed;
 #[cfg_attr(
     not(test),
@@ -54,6 +63,7 @@ mod seed;
     )
 )]
 mod selection;
+mod sky;
 mod traversal;
 #[expect(
     dead_code,
@@ -62,11 +72,12 @@ mod traversal;
 mod volume;
 pub(crate) use volume::FillMaterialRole;
 mod waterfall;
-#[expect(
-    dead_code,
-    reason = "the complete semantic plan is consumed by the V3 selection runner"
-)]
 mod world;
+#[cfg(test)]
+pub(crate) use world::PlannedFeature;
+pub(crate) use world::{
+    CaveCrystalKind, FeatureId, FeatureKind, LightId, PlannedLightPresentation,
+};
 
 /// Failure to construct or validate one V3 world.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,14 +176,23 @@ pub(crate) fn ensure_recipe_available(
 ) -> Result<(), V3GenerationError> {
     match &settings.layout {
         V3LayoutSettings::Single(patch)
-            if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
+            if matches!(
+                patch.recipe,
+                V3RecipeSettings::Hills(_)
+                    | V3RecipeSettings::SkyIslands(_)
+                    | V3RecipeSettings::Mountains(_)
+                    | V3RecipeSettings::Waterfall(_)
+                    | V3RecipeSettings::Forest(_)
+                    | V3RecipeSettings::Fort(_)
+                    | V3RecipeSettings::Caves(_)
+            ) =>
         {
             Ok(())
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
             &patch.recipe,
         ))),
-        V3LayoutSettings::Ring7(_) => Err(V3GenerationError::RecipeUnavailable("Ring7")),
+        V3LayoutSettings::Ring7(_) => Ok(()),
     }
 }
 
@@ -198,41 +218,245 @@ pub(crate) fn build(
     seed: u64,
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
+    art_catalog: Option<&RuntimeArtCatalog>,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let started = Instant::now();
-    let selection = match &settings.layout {
+    match &settings.layout {
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Hills(_)) => {
+            finish_build(
+                hills::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                hills_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Hills(hills_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::SkyIslands(_)) =>
+        {
+            finish_build(
+                sky::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                sky_report_metrics,
+                |metrics| ProceduralRecipeMetrics::SkyIslands(sky_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::Mountains(_)) =>
+        {
+            finish_build(
+                mountains::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                mountains_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Mountains(mountains_recipe_metrics(metrics)),
+            )
+        }
         V3LayoutSettings::Single(patch)
             if matches!(patch.recipe, V3RecipeSettings::Waterfall(_)) =>
         {
-            waterfall::generate(grid_radius, level_height, settings, seed)?
+            finish_build(
+                waterfall::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                waterfall_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Waterfall(waterfall_recipe_metrics(metrics)),
+            )
         }
-        V3LayoutSettings::Single(patch) => {
-            return Err(V3GenerationError::RecipeUnavailable(recipe_name(
-                &patch.recipe,
-            )));
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Forest(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Forest requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                forest::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                forest_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Forest(forest_recipe_metrics(metrics)),
+            )
         }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Fort(_)) => {
+            finish_build(
+                fort::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                fort_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Fort(fort_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Caves(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Caves requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            CaveCrystalObjectSet::resolve(art_catalog)
+                .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
+            finish_build(
+                caves::generate(grid_radius, level_height, settings, seed)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                caves_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Caves(caves_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
+            &patch.recipe,
+        ))),
         V3LayoutSettings::Ring7(_) => {
-            return Err(V3GenerationError::RecipeUnavailable("Ring7"));
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Ring7 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                ring7::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                ring7_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Ring7(ring7_recipe_metrics(metrics)),
+            )
         }
-    };
-    finish_waterfall_build(
-        selection,
-        grid_radius,
-        level_height,
-        settings,
-        seed,
-        palette,
-        is_solid,
-        started,
-    )
+    }
+}
+
+fn ring7_report_metrics(metrics: &ring7::Ring7Metrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn ring7_recipe_metrics(metrics: &ring7::Ring7Metrics) -> crate::procedural::Ring7Metrics {
+    metrics.report
+}
+
+fn hills_report_metrics(metrics: &hills::HillsMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: 100,
+        ..Default::default()
+    }
+}
+
+fn hills_recipe_metrics(metrics: &hills::HillsMetrics) -> HillsReportMetrics {
+    HillsReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        hill_centres: metrics.hill_centres,
+        barrier_cells: metrics.barrier_cells,
+        bridge_surfaces: metrics.bridge_surfaces,
+        alternate_crossing_surfaces: metrics.alternate_crossing_surfaces,
+    }
+}
+
+fn sky_report_metrics(metrics: &sky::SkyMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.vertical_clearance,
+        reachable_surfaces: metrics.ground_surfaces,
+        environment_signature_percent: metrics.upper_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn sky_recipe_metrics(metrics: &sky::SkyMetrics) -> crate::procedural::SkyIslandsMetrics {
+    crate::procedural::SkyIslandsMetrics {
+        ground_surfaces: metrics.ground_surfaces,
+        upper_surfaces: metrics.upper_surfaces,
+        upper_coverage_percent: metrics.upper_coverage_percent,
+        primary_islands: metrics.primary_islands,
+        satellites: metrics.satellites,
+        bridge_surfaces: metrics.bridge_surfaces,
+        vertical_clearance: metrics.vertical_clearance,
+    }
+}
+
+fn mountains_report_metrics(metrics: &mountains::MountainsMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.lower_bypass_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.mountain_coverage_percent,
+        ..Default::default()
+    }
+}
+
+fn mountains_recipe_metrics(metrics: &mountains::MountainsMetrics) -> MountainsReportMetrics {
+    MountainsReportMetrics {
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        special_surfaces: metrics.special_surfaces,
+        mountain_surfaces: metrics.mountain_surfaces,
+        mountain_coverage_percent: metrics.mountain_coverage_percent,
+        accessible_mountain_surfaces: metrics.accessible_mountain_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: metrics.relief,
+        peak_count: metrics.peak_count,
+        cliff_edges: metrics.cliff_edges,
+        high_pass_steps: metrics.high_pass_steps,
+        lower_bypass_steps: metrics.lower_bypass_steps,
+    }
 }
 
 #[expect(
     clippy::too_many_arguments,
     reason = "the V3 report boundary explicitly records every generation input"
 )]
-fn finish_waterfall_build(
-    selection: ValidatedWorldSelection<waterfall::WaterfallMetrics>,
+fn finish_build<M>(
+    selection: ValidatedWorldSelection<M>,
     grid_radius: u32,
     level_height: f32,
     settings: &ProceduralV3Settings,
@@ -240,6 +464,8 @@ fn finish_waterfall_build(
     palette: &TerrainPalette,
     is_solid: &dyn Fn(SubstanceId) -> bool,
     started: Instant,
+    tactical_metrics: fn(&M) -> TacticalMetrics,
+    recipe_metrics: fn(&M) -> ProceduralRecipeMetrics,
 ) -> Result<ProceduralBuild, V3GenerationError> {
     let ValidatedWorldSelection {
         validated,
@@ -290,10 +516,8 @@ fn finish_waterfall_build(
         settings_fingerprint,
         semantic_plan_fingerprint: Some(semantic_fingerprint),
         map_fingerprint: materialized_fingerprint,
-        metrics: waterfall_report_metrics(&metrics),
-        recipe_metrics: Some(ProceduralRecipeMetrics::Waterfall(
-            waterfall_recipe_metrics(&metrics),
-        )),
+        metrics: tactical_metrics(&metrics),
+        recipe_metrics: Some(recipe_metrics(&metrics)),
         elapsed_micros,
         notes: candidate_notes(notes),
     };
@@ -346,6 +570,128 @@ fn waterfall_recipe_metrics(metrics: &waterfall::WaterfallMetrics) -> WaterfallR
         bypass_steps: metrics.bypass_steps,
         alternate_bypass_steps: metrics.alternate_bypass_steps,
         raised_terrain: metrics.raised_terrain,
+    }
+}
+
+fn forest_report_metrics(metrics: &forest::ForestMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        barrier_cells: 0,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
+        bank_high_ground_difference: 0,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics
+            .tree_roots
+            .saturating_add(metrics.tall_grass_roots)
+            .saturating_mul(100)
+            .checked_div(
+                metrics
+                    .woodland_surfaces
+                    .saturating_add(metrics.prairie_surfaces),
+            )
+            .unwrap_or_default(),
+    }
+}
+
+fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics {
+    ForestReportMetrics {
+        tree_roots: metrics.tree_roots,
+        tree_blocker_surfaces: metrics.tree_blocker_surfaces,
+        old_growth_roots: metrics.old_growth_roots,
+        old_growth_blocker_surfaces: metrics.old_growth_blocker_surfaces,
+        tall_grass_roots: metrics.tall_grass_roots,
+        woodland_surfaces: metrics.woodland_surfaces,
+        prairie_surfaces: metrics.prairie_surfaces,
+        clearing_count: metrics.clearing_count,
+        clearing_surfaces: metrics.clearing_surfaces,
+        protected_route_surfaces: metrics.protected_route_surfaces,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: i32::try_from(metrics.spawn_height_difference).unwrap_or(i32::MAX),
+        woodland_prairie_high_ground_difference: i32::try_from(
+            metrics.woodland_prairie_high_ground_difference,
+        )
+        .unwrap_or(i32::MAX),
+    }
+}
+
+fn fort_report_metrics(metrics: &fort::FortMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        barrier_cells: 0,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: 0,
+        bank_high_ground_difference: 0,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics
+            .worked_stone_surfaces
+            .saturating_mul(100)
+            .checked_div(metrics.ordinary_surfaces)
+            .unwrap_or_default(),
+    }
+}
+
+fn fort_recipe_metrics(metrics: &fort::FortMetrics) -> FortReportMetrics {
+    FortReportMetrics {
+        wall_voxels: metrics.wall_voxels,
+        wall_walk_surfaces: metrics.wall_walk_surfaces,
+        battlement_columns: metrics.battlement_columns,
+        tower_count: metrics.tower_count,
+        gate_count: metrics.gate_count,
+        stair_count: metrics.stair_count,
+        courtyard_surfaces: metrics.courtyard_surfaces,
+        ordinary_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        relief: i32::try_from(metrics.relief).unwrap_or(i32::MAX),
+        curtain_height: i32::try_from(metrics.curtain_height).unwrap_or(i32::MAX),
+        keep_height: i32::try_from(metrics.keep_height).unwrap_or(i32::MAX),
+        critical_route_steps: metrics.critical_route_steps,
+        independent_gate_routes: metrics.independent_gate_routes,
+        worked_stone_surfaces: metrics.worked_stone_surfaces,
+    }
+}
+
+fn caves_report_metrics(metrics: &caves::CavesMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: i32::try_from(metrics.surface_relief).unwrap_or(i32::MAX),
+        barrier_cells: 0,
+        critical_route_steps: metrics.critical_route_steps,
+        spawn_height_difference: 0,
+        bank_high_ground_difference: 0,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        alternate_detour_percent: 0,
+        river_sinuosity_percent: 0,
+        environment_signature_percent: metrics.gravel_surface_percent,
+    }
+}
+
+fn caves_recipe_metrics(metrics: &caves::CavesMetrics) -> CavesReportMetrics {
+    CavesReportMetrics {
+        chamber_count: metrics.chamber_count,
+        covered_floors: metrics.covered_floors,
+        critical_floors: metrics.critical_floors,
+        optional_dark_floors: metrics.optional_dark_floors,
+        gameplay_lights: metrics.gameplay_lights,
+        minimum_roof_thickness: metrics.minimum_roof_thickness,
+        minimum_clearance: metrics.minimum_clearance,
+        maximum_clearance: metrics.maximum_clearance,
+        surface_relief: i32::try_from(metrics.surface_relief).unwrap_or(i32::MAX),
+        floor_relief: i32::try_from(metrics.floor_relief).unwrap_or(i32::MAX),
+        entrance_steps: metrics.entrance_steps,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.reachable_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        gravel_surface_percent: metrics.gravel_surface_percent,
     }
 }
 
@@ -422,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn unfinished_recipe_fails_instead_of_fabricating_a_plan() {
+    fn implemented_native_hills_is_reported_available() {
         let settings = ProceduralV3Settings {
             layout: V3LayoutSettings::Single(PatchSpec {
                 environment: V3EnvironmentSettings::TemperateGrassland,
@@ -437,9 +783,38 @@ mod tests {
             }),
         };
 
-        assert_eq!(
-            ensure_recipe_available(&settings),
-            Err(V3GenerationError::RecipeUnavailable("Hills"))
-        );
+        assert_eq!(ensure_recipe_available(&settings), Ok(()));
+    }
+
+    #[test]
+    fn forest_reports_only_recipe_appropriate_legacy_metrics() {
+        let metrics = forest::ForestMetrics {
+            tree_roots: 20,
+            tree_blocker_surfaces: 32,
+            old_growth_roots: 2,
+            old_growth_blocker_surfaces: 14,
+            tall_grass_roots: 40,
+            woodland_surfaces: 120,
+            prairie_surfaces: 180,
+            clearing_count: 4,
+            clearing_surfaces: 40,
+            protected_route_surfaces: 30,
+            ordinary_surfaces: 280,
+            reachable_elevation_levels: 4,
+            relief: 4,
+            spawn_height_difference: 0,
+            woodland_prairie_high_ground_difference: 1,
+            critical_route_steps: 24,
+        };
+
+        let reported = forest_report_metrics(&metrics);
+        let recipe = forest_recipe_metrics(&metrics);
+
+        assert_eq!(reported.environment_signature_percent, 20);
+        assert_eq!(reported.barrier_cells, 0);
+        assert_eq!(reported.bank_high_ground_difference, 0);
+        assert_eq!(recipe.critical_route_steps, 24);
+        assert_eq!(recipe.spawn_height_difference, 0);
+        assert_eq!(recipe.woodland_prairie_high_ground_difference, 1);
     }
 }

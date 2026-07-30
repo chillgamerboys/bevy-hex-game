@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 const PROJECT_ROOT_FLAG: &str = "--project-root";
 const PALETTE_PATH: &str = "assets/art/palette.ron";
 const STYLES_PATH: &str = "assets/art/voxel_styles.ron";
+const OBJECT_CATALOG_PATH: &str = "assets/art/object_catalog.ron";
 
 /// A startup failure that can be shown in the editor window.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,7 +85,7 @@ pub fn resolve_repository_root(
         Some(path) => current_directory.join(path),
         None => discover_upward(current_directory).ok_or_else(|| {
             LaunchError::new(format!(
-                "could not find {PALETTE_PATH} and {STYLES_PATH} above '{}'; pass --project-root",
+                "could not find {PALETTE_PATH}, {STYLES_PATH}, and {OBJECT_CATALOG_PATH} above '{}'; pass --project-root",
                 current_directory.display()
             ))
         })?,
@@ -110,13 +111,15 @@ fn validate_repository_root(root: &Path) -> Result<(), LaunchError> {
         return Ok(());
     }
     Err(LaunchError::new(format!(
-        "'{}' is not an Asset Workshop project: expected {PALETTE_PATH} and {STYLES_PATH}",
+        "'{}' is not an Asset Workshop project: expected {PALETTE_PATH}, {STYLES_PATH}, and {OBJECT_CATALOG_PATH}",
         root.display()
     )))
 }
 
 fn is_repository_root(root: &Path) -> bool {
-    root.join(PALETTE_PATH).is_file() && root.join(STYLES_PATH).is_file()
+    root.join(PALETTE_PATH).is_file()
+        && root.join(STYLES_PATH).is_file()
+        && root.join(OBJECT_CATALOG_PATH).is_file()
 }
 
 #[cfg(test)]
@@ -143,6 +146,8 @@ mod tests {
             fs::write(root.join(PALETTE_PATH), "()")
                 .expect("test palette marker should be written");
             fs::write(root.join(STYLES_PATH), "()").expect("test style marker should be written");
+            fs::write(root.join(OBJECT_CATALOG_PATH), "()")
+                .expect("test object catalog marker should be written");
             Self { root }
         }
     }
@@ -216,5 +221,22 @@ mod tests {
         )
         .expect_err("non-project must fail");
         assert!(invalid.detail().contains("not an Asset Workshop project"));
+    }
+
+    #[test]
+    fn repository_discovery_requires_the_object_catalog() {
+        let tree = TestTree::new();
+        fs::remove_file(tree.root.join(OBJECT_CATALOG_PATH))
+            .expect("object catalog marker should be removable");
+        let error = resolve_repository_root(
+            [
+                OsString::from("hex_editor"),
+                OsString::from("--project-root"),
+                tree.root.clone().into_os_string(),
+            ],
+            &tree.root,
+        )
+        .expect_err("a project without its object catalog must fail");
+        assert!(error.detail().contains(OBJECT_CATALOG_PATH));
     }
 }
