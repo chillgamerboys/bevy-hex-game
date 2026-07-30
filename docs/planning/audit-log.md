@@ -7,6 +7,23 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 23 — chore(release): v0.4.0 (2026-07-30)
+
+- **PR**: #141 — `chore/release-v0.4.0`
+- **Outcome**: green
+- **Lenses triggered**: none
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: D1 confirmed the changelog heading matches the version consumed by the
+release workflow. D2 had no changed links or fragments. D3 confirmed
+`[workspace.package]` is 0.4.0 and all fourteen inherited workspace crate entries in
+`Cargo.lock` resolve to the same version without dependency drift. D4 confirmed the
+root workspace version remains the single authored source. Fresh-eyes review found no
+additional class, and `cargo check --workspace` resolved every crate as v0.4.0.
+
 ## Wave 22 — docs: prepare next release and Wave 7 (2026-07-30)
 
 - **PR**: #140 — `wave/5-prealpha-continuity`
