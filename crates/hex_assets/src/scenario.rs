@@ -318,8 +318,9 @@ mod tests {
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
-    /// Procedural Hills and the additive vegetation biomes deliberately share the
-    /// canonical review seed so their visual differences are directly comparable.
+    /// Procedural Hills, the additive vegetation biomes, and the composite wave map
+    /// deliberately share the canonical review seed so their visual differences are
+    /// directly comparable.
     #[test]
     fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
@@ -333,8 +334,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            12,
-            "the scenario library should include all twelve generated maps"
+            13,
+            "the scenario library should include all thirteen generated maps"
         );
         let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
@@ -354,7 +355,7 @@ mod tests {
             duplicate_seeds,
             BTreeMap::from([(
                 1_592_598_566,
-                BTreeSet::from(["Deep Forest", "Prairie", "Procedural Hills"]),
+                BTreeSet::from(["Deep Forest", "Prairie", "Procedural Hills", "Two Rings"]),
             )]),
             "only the approved directly comparable maps may share a configured seed"
         );

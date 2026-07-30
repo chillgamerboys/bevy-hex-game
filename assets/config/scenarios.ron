@@ -152,6 +152,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Two Rings",
+            category: Map,
+            blurb: "Nineteen connected regions join mountain-fed rivers, waterfalls, forests, prairies, a volcano, caves, and a fort.",
+            world: "config/worlds/procedural-two-rings.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Party Trial",
             category: Demo,
             blurb: "A full 3v3 party approaches the Crossing, compresses through its bridge, and fights archetype-for-archetype.",

@@ -183,7 +183,13 @@ mod tests {
         assert_eq!(deep_forest.preview, "ui/combat-lab/deep-forest.png");
         assert!(catalog.get("fort").is_some());
         assert!(catalog.get("seven-regions").is_some());
-        assert_eq!(catalog.maps.len(), 15);
+        let two_rings = catalog
+            .get("two-rings")
+            .expect("Two Rings should be selectable in Combat Lab");
+        assert_eq!(two_rings.scenario, "Two Rings");
+        assert_eq!(two_rings.fixed_seed, Some(1_592_598_566));
+        assert_eq!(two_rings.preview, "ui/combat-lab/two-rings.png");
+        assert_eq!(catalog.maps.len(), 16);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

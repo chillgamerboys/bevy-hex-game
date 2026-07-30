@@ -2459,6 +2459,7 @@ mod tests {
             "Forest",
             "Deep Forest",
             "Prairie",
+            "Two Rings",
         ] {
             let scenario = library()
                 .scenarios
@@ -2473,7 +2474,10 @@ mod tests {
 
             assert!(
                 app.world().contains_resource::<TerrainReady>(),
-                "{scenario_name} did not finish terrain generation"
+                "{scenario_name} did not finish terrain generation: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
             );
             let report = app.world().resource::<GenerationReport>();
             assert_eq!(report.seed, configured_seed);
@@ -2508,7 +2512,13 @@ mod tests {
                         metrics.grass_coverage_percent
                     );
                 }
-                ("Deep Forest" | "Prairie", metrics) => {
+                ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
+                    assert_eq!(metrics.world_columns, 9_241);
+                    assert_eq!(metrics.biome_regions, 19);
+                    assert_eq!(metrics.reciprocal_seams, 42);
+                    assert_eq!(metrics.redundant_regions, 19);
+                }
+                ("Deep Forest" | "Prairie" | "Two Rings", metrics) => {
                     panic!("{scenario_name} published unexpected metrics: {metrics:?}");
                 }
                 _ => {}
@@ -2532,6 +2542,15 @@ mod tests {
                 "Forest" => &["forest_clearing", "prairie_overlook"],
                 "Deep Forest" => &["deep_forest_clearing"],
                 "Prairie" => &["prairie_overlook"],
+                "Two Rings" => &[
+                    "center_conflict_center",
+                    "mountains_a_stream_source_overlook",
+                    "caves_deep_chamber",
+                    "mountain_waterfall_overlook",
+                    "confluence_overlook",
+                    "vegetation_gradient_overlook",
+                    "fort_outlet_overlook",
+                ],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -2542,9 +2561,9 @@ mod tests {
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();
             match scenario_name {
-                "Sky Islands" => assert!(
+                "Sky Islands" | "Two Rings" => assert!(
                     !special_regions.is_empty(),
-                    "Sky Islands dropped its flight-gated upper layer"
+                    "{scenario_name} dropped its flight-gated upper layer"
                 ),
                 "Mountains" => {}
                 "Waterfall" => {
@@ -2566,14 +2585,14 @@ mod tests {
                 ),
             }
             let interiors = app.world().resource::<InteriorRegions>();
-            if scenario_name == "Caves" {
+            if matches!(scenario_name, "Caves" | "Two Rings") {
                 assert!(
                     interiors.surfaces().next().is_some(),
-                    "Caves dropped its exact interior floors"
+                    "{scenario_name} dropped its exact interior floors"
                 );
                 assert!(
                     interiors.roof_voxels().next().is_some(),
-                    "Caves dropped its exact cutaway roofs"
+                    "{scenario_name} dropped its exact cutaway roofs"
                 );
             } else {
                 assert!(
