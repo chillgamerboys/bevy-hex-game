@@ -2324,9 +2324,10 @@ impl V3CavesSettings {
         let Some(vertical_space) = self.surface_level.checked_sub(self.cave_floor_level) else {
             return Err("V3 Caves cave_floor_level must be below the surface".to_owned());
         };
-        if vertical_space < 7 {
+        if vertical_space < 11 {
             return Err(
-                "V3 Caves need four clear chamber levels below at least three roof levels"
+                "V3 Caves need +0/+2/+4 floor tiers, four clear chamber levels, and at least \
+                 three roof levels"
                     .to_owned(),
             );
         }
@@ -3073,8 +3074,8 @@ mod tests {
             caves: generated_patch(
                 V3EnvironmentSettings::Rocky,
                 V3RecipeSettings::Caves(V3CavesSettings {
-                    surface_level: 16,
-                    cave_floor_level: 7,
+                    surface_level: 17,
+                    cave_floor_level: 6,
                     chamber_count: 9,
                 }),
             ),
@@ -3807,7 +3808,7 @@ mod tests {
                 "requires the Frozen",
             ),
             (
-                "Caves((surface_level: 16, cave_floor_level: 7, chamber_count: 9))",
+                "Caves((surface_level: 17, cave_floor_level: 6, chamber_count: 9))",
                 "Frozen",
                 "requires the Rocky",
             ),
@@ -4203,6 +4204,30 @@ mod tests {
                 "cave bounds should reject {chamber_count} chambers"
             );
         }
+    }
+
+    #[test]
+    fn v3_caves_reserve_vertical_space_for_all_three_floor_tiers() {
+        let valid = V3CavesSettings {
+            surface_level: 17,
+            cave_floor_level: 6,
+            chamber_count: 9,
+        };
+        valid
+            .validate(12)
+            .expect("eleven levels should fit +0/+2/+4 floors, clearance, and roof");
+
+        let shallow = V3CavesSettings {
+            surface_level: 16,
+            ..valid
+        };
+        let error = shallow
+            .validate(12)
+            .expect_err("ten levels cannot fit the complete tier contract");
+        assert!(
+            error.contains("+0/+2/+4 floor tiers"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
