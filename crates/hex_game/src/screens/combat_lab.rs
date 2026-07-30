@@ -296,10 +296,53 @@ impl DeploymentSession {
     }
 
     fn complete(&self) -> bool {
-        placements_complete_exact(&self.player_placements, self.players.len())
+        self.capacity_notice().is_none()
+            && placements_complete_exact(&self.player_placements, self.players.len())
             && placements_complete_exact(&self.hostile_placements, self.hostiles.len())
+            && placements_belong_to_region(&self.player_placements, &self.player_surfaces)
+            && placements_belong_to_region(&self.hostile_placements, &self.hostile_surfaces)
             && !deployment_occupancy(self).has_overlaps()
     }
+
+    fn capacity_notice(&self) -> Option<String> {
+        let player_shortfall = self
+            .players
+            .len()
+            .saturating_sub(self.player_surfaces.len());
+        let hostile_shortfall = self
+            .hostiles
+            .len()
+            .saturating_sub(self.hostile_surfaces.len());
+        if player_shortfall == 0 && hostile_shortfall == 0 {
+            return None;
+        }
+
+        let mut sides = Vec::new();
+        if player_shortfall > 0 {
+            sides.push(format!(
+                "Player region provides {} of {} required surfaces",
+                self.player_surfaces.len(),
+                self.players.len()
+            ));
+        }
+        if hostile_shortfall > 0 {
+            sides.push(format!(
+                "Hostile region provides {} of {} required surfaces",
+                self.hostile_surfaces.len(),
+                self.hostiles.len()
+            ));
+        }
+        Some(format!(
+            "{}. Go Back and reduce that roster or choose another map.",
+            sides.join("; ")
+        ))
+    }
+}
+
+fn placements_belong_to_region(placements: &[Option<TilePos>], surfaces: &[TilePos]) -> bool {
+    placements
+        .iter()
+        .all(|placement| placement.is_some_and(|position| surfaces.contains(&position)))
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -375,6 +418,13 @@ struct SavedReportComparison;
 
 #[derive(Component)]
 struct FixtureFilter;
+
+#[derive(Component)]
+struct FixtureCard {
+    #[cfg(feature = "test-support")]
+    id: &'static str,
+    searchable: String,
+}
 
 #[derive(Debug, Clone, Copy)]
 struct FixtureDefinition {
@@ -1814,58 +1864,65 @@ fn spawn_fixture_selector(
                             fixture.roster
                         )
                         .to_lowercase();
-                        if !filter.is_empty() && !searchable.contains(&filter) {
-                            continue;
-                        }
-                        list.spawn(panel())
-                            .insert(Node {
-                                width: Val::Percent(100.0),
-                                ..panel_node()
-                            })
-                            .with_children(|card| {
-                                card.spawn(heading(assets, fixture.name));
-                                card.spawn(fine(
-                                    assets,
-                                    format!("{} · {}", fixture.id, fixture.tags),
-                                ));
-                                card.spawn(fine(
-                                    assets,
-                                    format!("{} · {}", fixture.map_seed, fixture.roster),
-                                ));
-                                card.spawn(blurb(assets, fixture.description));
-                                if fixture.profile_matrix {
-                                    for (variant, label) in [
-                                        (FixtureRulesVariant::Shipped, "Run Shipped"),
-                                        (
-                                            FixtureRulesVariant::TacticalTwoStep,
-                                            "Run Tactical two-step",
-                                        ),
-                                        (
-                                            FixtureRulesVariant::CustomThreeStep,
-                                            "Run Custom three-step",
-                                        ),
-                                    ] {
-                                        lab_button(
-                                            card,
-                                            assets,
-                                            label,
-                                            LabAction::StartFixture(fixture.id.to_owned(), variant),
-                                            210.0,
-                                        );
-                                    }
-                                } else {
+                        let visible = filter.is_empty() || searchable.contains(&filter);
+                        list.spawn((
+                            panel(),
+                            FixtureCard {
+                                #[cfg(feature = "test-support")]
+                                id: fixture.id,
+                                searchable,
+                            },
+                        ))
+                        .insert(Node {
+                            width: Val::Percent(100.0),
+                            display: if visible {
+                                Display::Flex
+                            } else {
+                                Display::None
+                            },
+                            ..panel_node()
+                        })
+                        .with_children(|card| {
+                            card.spawn(heading(assets, fixture.name));
+                            card.spawn(fine(assets, format!("{} · {}", fixture.id, fixture.tags)));
+                            card.spawn(fine(
+                                assets,
+                                format!("{} · {}", fixture.map_seed, fixture.roster),
+                            ));
+                            card.spawn(blurb(assets, fixture.description));
+                            if fixture.profile_matrix {
+                                for (variant, label) in [
+                                    (FixtureRulesVariant::Shipped, "Run Shipped"),
+                                    (
+                                        FixtureRulesVariant::TacticalTwoStep,
+                                        "Run Tactical two-step",
+                                    ),
+                                    (
+                                        FixtureRulesVariant::CustomThreeStep,
+                                        "Run Custom three-step",
+                                    ),
+                                ] {
                                     lab_button(
                                         card,
                                         assets,
-                                        "Run Fixture",
-                                        LabAction::StartFixture(
-                                            fixture.id.to_owned(),
-                                            FixtureRulesVariant::Shipped,
-                                        ),
-                                        150.0,
+                                        label,
+                                        LabAction::StartFixture(fixture.id.to_owned(), variant),
+                                        210.0,
                                     );
                                 }
-                            });
+                            } else {
+                                lab_button(
+                                    card,
+                                    assets,
+                                    "Run Fixture",
+                                    LabAction::StartFixture(
+                                        fixture.id.to_owned(),
+                                        FixtureRulesVariant::Shipped,
+                                    ),
+                                    150.0,
+                                );
+                            }
+                        });
                     }
                 });
         });
@@ -2134,14 +2191,73 @@ fn signed_delta(right: u32, left: u32) -> i64 {
 fn sync_fixture_filter(
     inputs: Query<&EditableText, (Changed<EditableText>, With<FixtureFilter>)>,
     mut state: ResMut<CombatLabState>,
+    mut cards: Query<(&FixtureCard, &mut Node)>,
 ) {
     for input in &inputs {
         let value = input.value().to_string();
+        let filter = value.to_lowercase();
         if state.fixture_filter != value {
             state.fixture_filter = value;
-            // Do not rebuild while typing; focus and composition must survive.
+        }
+        for (card, mut node) in &mut cards {
+            node.display = if filter.is_empty() || card.searchable.contains(&filter) {
+                Display::Flex
+            } else {
+                Display::None
+            };
         }
     }
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn observe_fixture_filter(query: &str) -> (Vec<String>, Vec<String>, bool) {
+    let mut app = App::new();
+    app.init_resource::<CombatLabState>()
+        .add_systems(Update, sync_fixture_filter);
+    let input = app
+        .world_mut()
+        .spawn((EditableText::new(query), FixtureFilter))
+        .id();
+    for fixture in FIXTURES {
+        app.world_mut().spawn((
+            Node::default(),
+            FixtureCard {
+                id: fixture.id,
+                searchable: format!(
+                    "{} {} {} {} {} {}",
+                    fixture.id,
+                    fixture.name,
+                    fixture.tags,
+                    fixture.description,
+                    fixture.map_seed,
+                    fixture.roster
+                )
+                .to_lowercase(),
+            },
+        ));
+    }
+    app.update();
+    let visible = visible_fixture_ids(app.world_mut());
+
+    app.world_mut()
+        .entity_mut(input)
+        .insert(EditableText::new(""));
+    app.update();
+    let after_clear = visible_fixture_ids(app.world_mut());
+    let input_survived = app.world().get_entity(input).is_ok();
+    (visible, after_clear, input_survived)
+}
+
+#[cfg(feature = "test-support")]
+fn visible_fixture_ids(world: &mut World) -> Vec<String> {
+    let mut cards = world.query::<(&FixtureCard, &Node)>();
+    let mut visible = cards
+        .iter(world)
+        .filter(|(_, node)| node.display != Display::None)
+        .map(|(card, _)| card.id.to_owned())
+        .collect::<Vec<_>>();
+    visible.sort();
+    visible
 }
 
 #[expect(
@@ -2894,6 +3010,10 @@ fn enter_deployment(
         );
         advance_deployment_cursor(session);
     }
+    if let Some(notice) = session.capacity_notice() {
+        // Capacity is the hard start gate, so it outranks retained-placement cleanup.
+        session.notice = notice;
+    }
 
     let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
     let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
@@ -3505,6 +3625,10 @@ fn handle_deployment_actions(
                     session.notice = "Terrain rules are still loading.".to_owned();
                     continue;
                 };
+                if let Some(notice) = session.capacity_notice() {
+                    session.notice = notice;
+                    continue;
+                }
                 if !session.complete() {
                     session.notice = "Every roster entry needs one unique surface.".to_owned();
                     continue;
@@ -3916,6 +4040,37 @@ mod tests {
             },
             initial_state: None,
         }
+    }
+
+    #[test]
+    fn fixture_selector_keeps_every_card_mounted_for_in_place_filtering() {
+        let mut world = World::new();
+        let assets = UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        };
+        let state = CombatLabState {
+            tab: LabTab::Fixtures,
+            fixture_filter: "tempo".to_owned(),
+            ..default()
+        };
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        commands.spawn(Node::default()).with_children(|root| {
+            spawn_fixture_selector(root, &assets, &state);
+        });
+        queue.apply(&mut world);
+
+        let mut cards = world.query::<(&FixtureCard, &Node)>();
+        let mounted = cards.iter(&world).count();
+        let visible = cards
+            .iter(&world)
+            .filter(|(_, node)| node.display != Display::None)
+            .map(|(card, _)| card.id)
+            .collect::<Vec<_>>();
+        assert_eq!(mounted, FIXTURES.len());
+        assert_eq!(visible, vec!["tempo-matrix"]);
     }
 
     #[test]
@@ -4380,6 +4535,49 @@ mod tests {
     }
 
     #[test]
+    fn deployment_capacity_shortfall_is_actionable_data() {
+        let region = CombatLabDeploymentRegion {
+            center: CombatLabRegionCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 0, z: 0 }),
+            radius: 1,
+        };
+        let map_definition = CombatLabMapDefinition {
+            id: "capacity-test".to_owned(),
+            display_name: "Capacity Test".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+            preview: String::new(),
+            scenario: "Flat Arena".to_owned(),
+            fixed_seed: Some(1),
+            player_region: region.clone(),
+            hostile_region: region,
+        };
+        let roster = || {
+            vec![
+                RosterChoice::Template("wolf".to_owned()),
+                RosterChoice::Template("raider".to_owned()),
+            ]
+        };
+        let mut session = DeploymentSession::new(map_definition, roster(), roster(), None);
+        session.player_surfaces = vec![TilePos::new(HexCoord::ORIGIN, 1)];
+        session.hostile_surfaces = vec![
+            TilePos::new(HexCoord::ORIGIN, 2),
+            TilePos::new(HexCoord::from_axial(1, 0), 2),
+        ];
+
+        assert_eq!(
+            session.capacity_notice().as_deref(),
+            Some(
+                "Player region provides 1 of 2 required surfaces. Go Back and reduce that roster \
+                 or choose another map."
+            )
+        );
+        session
+            .player_surfaces
+            .push(TilePos::new(HexCoord::from_axial(-1, 0), 1));
+        assert_eq!(session.capacity_notice(), None);
+    }
+
+    #[test]
     fn placement_markers_keep_faction_roster_number_and_exact_elevation() {
         let map_definition = CombatLabMapDefinition {
             id: "marker-test".to_owned(),
@@ -4418,13 +4616,16 @@ mod tests {
         );
 
         let second_player = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        let stacked_hostile = TilePos::new(player.coord, player.level + 1);
         session.player_placements = vec![Some(player), Some(second_player)];
         session.hostile_placements = vec![Some(player)];
+        session.player_surfaces = vec![player, second_player];
+        session.hostile_surfaces = vec![player, stacked_hostile];
         assert!(
             !session.complete(),
             "deployment uses the shared exact-surface overlap rule"
         );
-        session.hostile_placements = vec![Some(TilePos::new(player.coord, player.level + 1))];
+        session.hostile_placements = vec![Some(stacked_hostile)];
         assert!(
             session.complete(),
             "stacked surfaces at distinct elevations remain distinct"
@@ -4433,7 +4634,7 @@ mod tests {
             deployment_snapshot(&session),
             Some(CombatLabReportDeployment {
                 players: vec![player, second_player],
-                hostiles: vec![TilePos::new(player.coord, player.level + 1)],
+                hostiles: vec![stacked_hostile],
             }),
             "leaving deployment must preserve the tester's latest exact surfaces"
         );

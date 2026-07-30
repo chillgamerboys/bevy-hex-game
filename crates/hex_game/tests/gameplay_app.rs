@@ -16,8 +16,8 @@ use hex_game::combat_reports::{
     SavedCombatLabReport,
 };
 use hex_game::test_support::{
-    live_statistics_text, live_statistics_visible, report_text, sandbox_reentry_snapshot,
-    tempo_movement_matrix, wave_seven_fixtures, ReportMode,
+    fixture_filter_snapshot, live_statistics_text, live_statistics_visible, report_text,
+    sandbox_reentry_snapshot, tempo_movement_matrix, wave_seven_fixtures, ReportMode,
 };
 
 fn position(q: i32, r: i32, level: i32) -> TilePos {
@@ -83,6 +83,17 @@ fn sample_report(rounds: u32, player_id: u64, hostile_id: u64) -> CombatLabRepor
         EncounterOutcome::Victory,
         summary,
     )
+}
+
+#[test]
+fn fixture_search_filters_in_place_and_clear_restores_every_card() {
+    let snapshot = fixture_filter_snapshot("tempo");
+    assert_eq!(snapshot.visible, vec!["tempo-matrix"]);
+    assert_eq!(snapshot.visible_after_clear.len(), 7);
+    assert!(
+        snapshot.input_survived,
+        "filtering must not rebuild and replace the focused editable entity"
+    );
 }
 
 #[test]
