@@ -17,6 +17,12 @@ pub(super) const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
 pub(super) const TALL_NARROW_ID: &str = "plant/tall-narrow";
 pub(super) const OLD_GROWTH_ID: &str = "plant/old-growth";
 pub(super) const GRASS_TUFT_ID: &str = "prop/grass-tuft";
+pub(super) const SNOWY_SMALL_BROADLEAF_ID: &str = "plant/snowy-small-broadleaf";
+pub(super) const SNOWY_TALL_NARROW_ID: &str = "plant/snowy-tall-narrow";
+pub(super) const SNOWY_OLD_GROWTH_ID: &str = "plant/snowy-old-growth";
+pub(super) const SNOWY_GRASS_TUFT_ID: &str = "prop/snowy-grass-tuft";
+pub(super) const CAVE_MOSS_ID: &str = "prop/cave-moss";
+pub(super) const CAVE_LICHEN_ID: &str = "prop/cave-lichen";
 
 #[derive(Debug, Clone)]
 pub(super) struct TemperateVegetationSet {
@@ -28,6 +34,7 @@ pub(super) struct TemperateVegetationSet {
 
 impl TemperateVegetationSet {
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
+        validate_shared_environment_sets(catalog, recipe)?;
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
                 catalog,
@@ -59,6 +66,95 @@ impl TemperateVegetationSet {
             )?,
         })
     }
+}
+
+/// Snow-covered counterparts resolved through the same exact authored contract.
+#[derive(Debug, Clone)]
+pub(super) struct SnowyVegetationSet {
+    pub(super) small_broadleaf: VegetationObjectSpec,
+    pub(super) tall_narrow: VegetationObjectSpec,
+    pub(super) old_growth: VegetationObjectSpec,
+    pub(super) grass_tuft: VegetationObjectSpec,
+}
+
+impl SnowyVegetationSet {
+    pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
+        Ok(Self {
+            small_broadleaf: VegetationObjectSpec::resolve(
+                catalog,
+                SNOWY_SMALL_BROADLEAF_ID,
+                ObjectCategory::Plant,
+                1,
+                recipe,
+            )?,
+            tall_narrow: VegetationObjectSpec::resolve(
+                catalog,
+                SNOWY_TALL_NARROW_ID,
+                ObjectCategory::Plant,
+                1,
+                recipe,
+            )?,
+            old_growth: VegetationObjectSpec::resolve(
+                catalog,
+                SNOWY_OLD_GROWTH_ID,
+                ObjectCategory::Plant,
+                7,
+                recipe,
+            )?,
+            grass_tuft: VegetationObjectSpec::resolve(
+                catalog,
+                SNOWY_GRASS_TUFT_ID,
+                ObjectCategory::Prop,
+                0,
+                recipe,
+            )?,
+        })
+    }
+}
+
+/// Nonblocking cave vegetation resolved as an exact pair of authored props.
+#[derive(Debug, Clone)]
+pub(super) struct CaveVegetationSet {
+    pub(super) moss: VegetationObjectSpec,
+    pub(super) lichen: VegetationObjectSpec,
+}
+
+impl CaveVegetationSet {
+    pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
+        Ok(Self {
+            moss: VegetationObjectSpec::resolve(
+                catalog,
+                CAVE_MOSS_ID,
+                ObjectCategory::Prop,
+                0,
+                recipe,
+            )?,
+            lichen: VegetationObjectSpec::resolve(
+                catalog,
+                CAVE_LICHEN_ID,
+                ObjectCategory::Prop,
+                0,
+                recipe,
+            )?,
+        })
+    }
+}
+
+fn validate_shared_environment_sets(
+    catalog: &RuntimeArtCatalog,
+    recipe: &str,
+) -> Result<(), String> {
+    let snowy = SnowyVegetationSet::resolve(catalog, recipe)?;
+    let cave = CaveVegetationSet::resolve(catalog, recipe)?;
+    let _validated_objects = (
+        snowy.small_broadleaf.id.as_str(),
+        snowy.tall_narrow.id.as_str(),
+        snowy.old_growth.id.as_str(),
+        snowy.grass_tuft.id.as_str(),
+        cave.moss.id.as_str(),
+        cave.lichen.id.as_str(),
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -219,7 +315,113 @@ fn validate_object(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use super::*;
+    use hex_assets::{ArtPalette, ObjectCatalogFile, VoxelStyleCatalog};
+
+    fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
+        static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
+        CATALOG.get_or_init(|| {
+            let palette: ArtPalette = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/palette.ron"
+            )))
+            .expect("tracked art palette should parse");
+            let styles: VoxelStyleCatalog = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/voxel_styles.ron"
+            )))
+            .expect("tracked voxel styles should parse");
+            let manifest: ObjectCatalogFile = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/object_catalog.ron"
+            )))
+            .expect("tracked object catalog should parse");
+            let mut objects = BTreeMap::new();
+            for source in [
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/old-growth.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-old-growth.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-lichen.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-moss.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/grass-tuft.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/snowy-grass-tuft.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-low-cluster.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-branched.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/crystal-spire.ron"
+                )),
+            ] {
+                let blueprint: ObjectBlueprint =
+                    ron::from_str(source).expect("tracked object blueprint should parse");
+                objects.insert(blueprint.id.clone(), blueprint);
+            }
+            RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+                .expect("tracked runtime art graph should resolve")
+        })
+    }
+
+    #[test]
+    fn shared_environment_sets_resolve_exact_categories_and_blockers() {
+        let snowy = SnowyVegetationSet::resolve(runtime_art_catalog(), "Frozen Hills")
+            .expect("tracked snowy vegetation should resolve");
+        assert_eq!(snowy.small_broadleaf.id.as_str(), SNOWY_SMALL_BROADLEAF_ID);
+        assert_eq!(snowy.tall_narrow.id.as_str(), SNOWY_TALL_NARROW_ID);
+        assert_eq!(snowy.old_growth.id.as_str(), SNOWY_OLD_GROWTH_ID);
+        assert_eq!(snowy.grass_tuft.id.as_str(), SNOWY_GRASS_TUFT_ID);
+        assert_eq!(snowy.small_broadleaf.blocker_footprint.len(), 1);
+        assert_eq!(snowy.tall_narrow.blocker_footprint.len(), 1);
+        assert_eq!(snowy.old_growth.blocker_footprint.len(), 7);
+        assert!(snowy.grass_tuft.blocker_footprint.is_empty());
+
+        let cave = CaveVegetationSet::resolve(runtime_art_catalog(), "Caves")
+            .expect("tracked cave vegetation should resolve");
+        assert_eq!(cave.moss.id.as_str(), CAVE_MOSS_ID);
+        assert_eq!(cave.lichen.id.as_str(), CAVE_LICHEN_ID);
+        assert!(cave.moss.blocker_footprint.is_empty());
+        assert!(cave.lichen.blocker_footprint.is_empty());
+    }
 
     #[test]
     fn woody_plant_support_and_complete_props_are_structural() {
