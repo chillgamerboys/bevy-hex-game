@@ -116,7 +116,9 @@ pub(crate) fn validate_fragment(
         V3RecipeSettings::Waterfall(_) => {
             discard_metrics(waterfall::validate_patch(patch, fragment, art_catalog))
         }
-        V3RecipeSettings::Forest(_) => discard_metrics(forest::validate_patch(patch, fragment)),
+        V3RecipeSettings::Forest(_) => {
+            discard_metrics(forest::validate_patch(patch, fragment, art_catalog))
+        }
         V3RecipeSettings::Hills(settings) => discard_metrics(hills::validate_patch(
             patch,
             fragment,
