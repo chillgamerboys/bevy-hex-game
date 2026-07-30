@@ -49,6 +49,13 @@
             opacity: 1.0,
             emission: None,
         ),
+        "plant/snow-cover": (
+            display_name: "Snow-Covered Vegetation",
+            base_swatch: "terrain/snow",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
         "plant/trunk": (
             display_name: "Tree Trunk",
             base_swatch: "plant/trunk",
