@@ -97,6 +97,26 @@ impl TemperateVegetationSet {
     }
 }
 
+/// Narrow authored authority for recipes that consume only the grass tuft.
+#[derive(Debug, Clone)]
+pub(super) struct GrassVegetationSpec {
+    pub(super) grass_tuft: VegetationObjectSpec,
+}
+
+impl GrassVegetationSpec {
+    pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
+        Ok(Self {
+            grass_tuft: VegetationObjectSpec::resolve(
+                catalog,
+                GRASS_TUFT_ID,
+                ObjectCategory::Prop,
+                0,
+                recipe,
+            )?,
+        })
+    }
+}
+
 /// Snow-covered counterparts resolved through the same exact authored contract.
 #[derive(Debug, Clone)]
 #[allow(
@@ -346,13 +366,13 @@ fn validate_object(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::OnceLock;
 
     use super::*;
     use hex_assets::{ArtPalette, ObjectCatalogFile, VoxelStyleCatalog};
 
-    fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
+    pub(crate) fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
         static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
         CATALOG.get_or_init(|| {
             let palette: ArtPalette = ron::from_str(include_str!(concat!(
@@ -431,6 +451,36 @@ mod tests {
             }
             RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
                 .expect("tracked runtime art graph should resolve")
+        })
+    }
+
+    pub(crate) fn grass_only_runtime_art_catalog() -> &'static RuntimeArtCatalog {
+        static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
+        CATALOG.get_or_init(|| {
+            let palette: ArtPalette = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/palette.ron"
+            )))
+            .expect("tracked art palette should parse");
+            let styles: VoxelStyleCatalog = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/voxel_styles.ron"
+            )))
+            .expect("tracked voxel styles should parse");
+            let grass: ObjectBlueprint = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/grass-tuft.ron"
+            )))
+            .expect("tracked grass blueprint should parse");
+            let manifest = ObjectCatalogFile::new([grass.id.clone()])
+                .expect("grass-only object manifest should validate");
+            RuntimeArtCatalog::from_sources(
+                &palette,
+                &styles,
+                &manifest,
+                BTreeMap::from([(grass.id.clone(), grass)]),
+            )
+            .expect("grass-only runtime art graph should resolve")
         })
     }
 

@@ -51,6 +51,8 @@ const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const FOREST_CLEARING: &str = "forest_clearing";
 const PRAIRIE_OVERLOOK: &str = "prairie_overlook";
+const OLD_GROWTH_CAPACITY_DETAIL: &str =
+    "Forest capacity plan cannot retain one exact Old-Growth instance";
 
 /// Recipe metrics retained by the V3 candidate selector and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -865,6 +867,11 @@ fn validate_forest_inner(
         .values()
         .filter(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
         .collect();
+    if old_growth.is_empty() {
+        issues.push(recipe_issue(
+            "Forest must retain at least one exact authored Old-Growth instance",
+        ));
+    }
     let old_growth_blocker_surfaces: BTreeSet<_> = old_growth
         .iter()
         .flat_map(|feature| feature.blocker_footprint.iter().copied())
@@ -1804,16 +1811,7 @@ fn select_tree_root_candidates(
     surfaces: &BTreeMap<HexCoord, TilePos>,
     stream: Option<SeedStream<'_>>,
 ) -> Vec<TilePos> {
-    let mut eligible: Vec<_> = woodland
-        .difference(exclusions)
-        .copied()
-        .filter(|coord| {
-            coord
-                .within_radius(1)
-                .into_iter()
-                .all(|nearby| surfaces.contains_key(&nearby))
-        })
-        .collect();
+    let mut eligible: Vec<_> = woodland.difference(exclusions).copied().collect();
     eligible.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 0), *coord));
     let mut color_counts = [0_usize; 3];
     for coord in &eligible {
@@ -1859,12 +1857,372 @@ fn plan_tree_features(
     object_stream: Option<SeedStream<'_>>,
     rotation_stream: Option<SeedStream<'_>>,
 ) -> Result<(Vec<PlannedFeature>, BTreeSet<TilePos>), Vec<WorldValidationIssue>> {
+    let mut best = select_capacity_plan(
+        &root_candidates,
+        target,
+        minimum,
+        object_stream.is_none(),
+        woodland,
+        exclusions,
+        surfaces,
+        objects,
+        object_stream,
+        rotation_stream,
+    )?;
+    if best.len() < minimum {
+        return Err(capacity_issue(best.len(), minimum, target));
+    }
+    match upgrade_old_growth(
+        &mut best,
+        woodland,
+        exclusions,
+        surfaces,
+        objects,
+        object_stream,
+        rotation_stream,
+    ) {
+        Ok(()) => {}
+        Err(issues) if old_growth_capacity_failed(&issues) => {
+            let mut reserved = select_capacity_plan(
+                &root_candidates,
+                target,
+                minimum,
+                true,
+                woodland,
+                exclusions,
+                surfaces,
+                objects,
+                object_stream,
+                rotation_stream,
+            )?;
+            if reserved.len() < minimum {
+                return Err(capacity_issue(reserved.len(), minimum, target));
+            }
+            upgrade_old_growth(
+                &mut reserved,
+                woodland,
+                exclusions,
+                surfaces,
+                objects,
+                object_stream,
+                rotation_stream,
+            )?;
+            best = reserved;
+        }
+        Err(issues) => return Err(issues),
+    }
+    best.sort_unstable_by_key(|feature| feature.root);
+    let final_visual_cells = collect_tree_visual_cells(&best, objects)?;
+    Ok((best, final_visual_cells))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capacity selection retains each authored spatial constraint explicitly"
+)]
+fn select_capacity_plan(
+    root_candidates: &[TilePos],
+    target: usize,
+    minimum: usize,
+    reserve_old_growth: bool,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+    let mut best = Vec::new();
+    let capacity_trials = [(0_i32, 4_u64), (0, 0), (1, 0), (2, 0)];
+    for (phase, schedule) in capacity_trials {
+        let features = plan_tree_phase(
+            root_candidates,
+            target,
+            phase,
+            schedule,
+            reserve_old_growth,
+            woodland,
+            exclusions,
+            surfaces,
+            objects,
+            object_stream,
+            rotation_stream,
+        )?;
+        let missing = minimum.saturating_sub(features.len());
+        let features = if (1..=3).contains(&missing) {
+            augment_tree_capacity(
+                features,
+                root_candidates,
+                minimum,
+                woodland,
+                exclusions,
+                surfaces,
+                objects,
+                object_stream,
+                rotation_stream,
+            )?
+        } else {
+            features
+        };
+        if features.len() > best.len() {
+            best = features;
+        }
+        if best.len() >= minimum {
+            break;
+        }
+    }
+    Ok(best)
+}
+
+fn old_growth_capacity_failed(issues: &[WorldValidationIssue]) -> bool {
+    issues.len() == 1
+        && issues
+            .first()
+            .is_some_and(|issue| issue.detail == OLD_GROWTH_CAPACITY_DETAIL)
+}
+
+fn capacity_issue(placed: usize, minimum: usize, target: usize) -> Vec<WorldValidationIssue> {
+    vec![recipe_issue(format!(
+        "Forest structural vegetation can place only {placed} trees across its bounded legal \
+         capacity trials; at least {minimum} of the target {target} are required"
+    ))]
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capacity augmentation retains each authored spatial constraint explicitly"
+)]
+fn augment_tree_capacity(
+    mut features: Vec<PlannedFeature>,
+    root_candidates: &[TilePos],
+    target: usize,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+    while features.len() < target {
+        let mut replacement = None;
+        for removed_index in 0..features.len() {
+            if features
+                .get(removed_index)
+                .is_some_and(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
+            {
+                continue;
+            }
+            let remaining = features
+                .iter()
+                .enumerate()
+                .filter_map(|(index, feature)| (index != removed_index).then_some(feature.clone()))
+                .collect::<Vec<_>>();
+            let (base_blockers, base_structural, base_roots) = tree_occupancy(&remaining, objects)?;
+            let mut candidates = root_candidates
+                .iter()
+                .copied()
+                .filter(|root| {
+                    !base_roots.contains(&root.coord)
+                        && !root
+                            .coord
+                            .neighbors()
+                            .into_iter()
+                            .any(|neighbor| base_roots.contains(&neighbor))
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_unstable_by_key(|root| {
+                (
+                    feature_priority(
+                        object_stream,
+                        root.coord,
+                        811_u64.saturating_add(u64::try_from(features.len()).unwrap_or(u64::MAX)),
+                    ),
+                    *root,
+                )
+            });
+            for (first_index, first_root) in candidates.iter().copied().enumerate() {
+                let Some((first, first_structural)) = plan_capacity_tree(
+                    first_root,
+                    woodland,
+                    exclusions,
+                    surfaces,
+                    objects,
+                    object_stream,
+                    rotation_stream,
+                    &base_blockers,
+                    &base_structural,
+                )?
+                else {
+                    continue;
+                };
+                let mut first_blockers = base_blockers.clone();
+                first_blockers.extend(first.blocker_footprint.iter().copied());
+                let mut first_structure = base_structural.clone();
+                first_structure.extend(first_structural);
+                for second_root in candidates
+                    .iter()
+                    .copied()
+                    .skip(first_index.saturating_add(1))
+                {
+                    if first.root.coord.distance(second_root.coord) <= 1 {
+                        continue;
+                    }
+                    let Some((second, _second_structural)) = plan_capacity_tree(
+                        second_root,
+                        woodland,
+                        exclusions,
+                        surfaces,
+                        objects,
+                        object_stream,
+                        rotation_stream,
+                        &first_blockers,
+                        &first_structure,
+                    )?
+                    else {
+                        continue;
+                    };
+                    let mut improved = remaining.clone();
+                    improved.extend([first, second]);
+                    replacement = Some(improved);
+                    break;
+                }
+                if replacement.is_some() {
+                    break;
+                }
+            }
+            if replacement.is_some() {
+                break;
+            }
+        }
+        let Some(improved) = replacement else {
+            break;
+        };
+        features = improved;
+    }
+    Ok(features)
+}
+
+fn tree_occupancy(
+    features: &[PlannedFeature],
+    objects: &TemperateVegetationSet,
+) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>, BTreeSet<HexCoord>), Vec<WorldValidationIssue>> {
+    let mut blockers = BTreeSet::new();
+    let mut structural = BTreeSet::new();
+    let mut roots = BTreeSet::new();
+    for feature in features {
+        let Some(object) = objects.forest_object(feature.object_id.as_str()) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest capacity trial found unsupported object '{}'",
+                feature.object_id
+            ))]);
+        };
+        let Some(volume) = object.project_visual_volume(feature.root, feature.rotation) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest capacity trial cannot project object '{}' at {:?}",
+                feature.object_id, feature.root
+            ))]);
+        };
+        blockers.extend(feature.blocker_footprint.iter().copied());
+        structural.extend(volume.structural_cells);
+        roots.insert(feature.root.coord);
+    }
+    Ok((blockers, structural, roots))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capacity placement retains each authored spatial constraint explicitly"
+)]
+fn plan_capacity_tree(
+    root: TilePos,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+    occupied_blockers: &BTreeSet<TilePos>,
+    occupied_structural: &BTreeSet<TilePos>,
+) -> Result<Option<(PlannedFeature, BTreeSet<TilePos>)>, Vec<WorldValidationIssue>> {
+    let family = tree_family(feature_priority(object_stream, root.coord, 17));
+    let choices = match family {
+        TreeFamily::SmallBroadleaf => [&objects.small_broadleaf, &objects.tall_narrow],
+        TreeFamily::TallNarrow => [&objects.tall_narrow, &objects.small_broadleaf],
+    };
+    let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+    for object in choices {
+        for offset in 0..6 {
+            let rotation = offset_rotation(first_rotation, offset)?;
+            let Some(projected) = project_tree(
+                object,
+                root,
+                rotation,
+                woodland,
+                exclusions,
+                surfaces,
+                occupied_blockers,
+                occupied_structural,
+            ) else {
+                continue;
+            };
+            return Ok(Some((
+                PlannedFeature {
+                    root,
+                    kind: FeatureKind::Tree,
+                    object_id: object.id.clone(),
+                    rotation,
+                    blocker_footprint: projected.blockers,
+                },
+                projected.structural_cells,
+            )));
+        }
+    }
+    Ok(None)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "capacity trials retain each authored spatial constraint explicitly"
+)]
+fn plan_tree_phase(
+    root_candidates: &[TilePos],
+    target: usize,
+    phase: i32,
+    schedule: u64,
+    reserve_old_growth: bool,
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
     let mut occupied_blockers = BTreeSet::new();
     let mut occupied_structural_cells = BTreeSet::new();
     let mut occupied_roots = BTreeSet::new();
     let mut features = Vec::with_capacity(target);
-    if object_stream.is_some() {
-        for root in root_candidates.iter().copied() {
+    let mut ordered = root_candidates.to_vec();
+    let candidate_coords = root_candidates
+        .iter()
+        .map(|root| root.coord)
+        .collect::<BTreeSet<_>>();
+    ordered.sort_unstable_by_key(|root| {
+        let phased = schedule < 4;
+        let degree = root
+            .coord
+            .neighbors()
+            .into_iter()
+            .filter(|neighbor| candidate_coords.contains(neighbor))
+            .count();
+        (
+            phased && tree_root_phase(root.coord) != phase,
+            if schedule == 4 { degree } else { 0 },
+            feature_priority(object_stream, root.coord, 703_u64.saturating_add(schedule)),
+            *root,
+        )
+    });
+    if reserve_old_growth {
+        for root in ordered.iter().copied() {
             let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
             let mut selected = None;
             for offset in 0..6 {
@@ -1899,7 +2257,7 @@ fn plan_tree_features(
             break;
         }
     }
-    for root in root_candidates {
+    for root in ordered {
         if features.len() >= target {
             break;
         }
@@ -1917,10 +2275,11 @@ fn plan_tree_features(
         let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
         let preferred = objects.forest_tree(family);
         let secondary = match family {
-            TreeFamily::SmallBroadleaf | TreeFamily::TallNarrow => &objects.small_broadleaf,
+            TreeFamily::SmallBroadleaf => &objects.tall_narrow,
+            TreeFamily::TallNarrow => &objects.small_broadleaf,
         };
         let mut selected = None;
-        for object in [preferred, secondary, &objects.small_broadleaf] {
+        for object in [preferred, secondary] {
             for offset in 0..6 {
                 let rotation = offset_rotation(first_rotation, offset)?;
                 if let Some(projected) = project_tree(
@@ -1955,25 +2314,11 @@ fn plan_tree_features(
             blocker_footprint: projected.blockers,
         });
     }
-    if features.len() < minimum {
-        return Err(vec![recipe_issue(format!(
-            "Forest structural vegetation can place only {} trees; at least {minimum} of the \
-             target {target} are required",
-            features.len(),
-        ))]);
-    }
-    upgrade_old_growth(
-        &mut features,
-        woodland,
-        exclusions,
-        surfaces,
-        objects,
-        object_stream,
-        rotation_stream,
-    )?;
-    features.sort_unstable_by_key(|feature| feature.root);
-    let final_visual_cells = collect_tree_visual_cells(&features, objects)?;
-    Ok((features, final_visual_cells))
+    Ok(features)
+}
+
+fn tree_root_phase(coord: HexCoord) -> i32 {
+    coord.x().saturating_sub(coord.y()).rem_euclid(3)
 }
 
 fn upgrade_old_growth(
@@ -1985,14 +2330,18 @@ fn upgrade_old_growth(
     object_stream: Option<SeedStream<'_>>,
     rotation_stream: Option<SeedStream<'_>>,
 ) -> Result<(), Vec<WorldValidationIssue>> {
-    let Some(object_stream) = object_stream else {
-        return Ok(());
-    };
-    let target = features.len().saturating_mul(12).div_ceil(100).max(1);
     let mut upgraded = features
         .iter()
         .filter(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
         .count();
+    let Some(object_stream) = object_stream else {
+        return if upgraded > 0 {
+            Ok(())
+        } else {
+            Err(vec![recipe_issue(OLD_GROWTH_CAPACITY_DETAIL)])
+        };
+    };
+    let target = features.len().saturating_mul(12).div_ceil(100).max(1);
     let mut ranked_indices = features
         .iter()
         .enumerate()
@@ -2108,7 +2457,109 @@ fn upgrade_old_growth(
             break;
         }
     }
+    if upgraded == 0
+        && relocate_one_old_growth(
+            features,
+            woodland,
+            exclusions,
+            surfaces,
+            objects,
+            Some(object_stream),
+            rotation_stream,
+        )?
+    {
+        upgraded = 1;
+    }
+    if upgraded == 0 {
+        return Err(vec![recipe_issue(OLD_GROWTH_CAPACITY_DETAIL)]);
+    }
     Ok(())
+}
+
+fn relocate_one_old_growth(
+    features: &mut [PlannedFeature],
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<bool, Vec<WorldValidationIssue>> {
+    let mut removal_order = features
+        .iter()
+        .enumerate()
+        .map(|(index, feature)| {
+            (
+                feature_priority(object_stream, feature.root.coord, 827),
+                feature.root,
+                index,
+            )
+        })
+        .collect::<Vec<_>>();
+    removal_order.sort_unstable();
+    for (_, _, index) in removal_order {
+        let remaining = features
+            .iter()
+            .enumerate()
+            .filter_map(|(candidate, feature)| (candidate != index).then_some(feature.clone()))
+            .collect::<Vec<_>>();
+        let (occupied_blockers, occupied_structural, occupied_roots) =
+            tree_occupancy(&remaining, objects)?;
+        let mut roots = woodland
+            .iter()
+            .copied()
+            .filter(|coord| !exclusions.contains(coord))
+            .filter_map(|coord| surfaces.get(&coord).copied())
+            .filter(|root| {
+                !occupied_roots.contains(&root.coord)
+                    && !root
+                        .coord
+                        .neighbors()
+                        .into_iter()
+                        .any(|neighbor| occupied_roots.contains(&neighbor))
+            })
+            .collect::<Vec<_>>();
+        roots
+            .sort_unstable_by_key(|root| (feature_priority(object_stream, root.coord, 829), *root));
+        for root in roots {
+            let first_rotation = feature_rotation(rotation_stream, root.coord, 31)?;
+            for offset in 0..6 {
+                let rotation = offset_rotation(first_rotation, offset)?;
+                let Some(projected) = project_tree(
+                    &objects.old_growth,
+                    root,
+                    rotation,
+                    woodland,
+                    exclusions,
+                    surfaces,
+                    &occupied_blockers,
+                    &occupied_structural,
+                ) else {
+                    continue;
+                };
+                let replacement = PlannedFeature {
+                    root,
+                    kind: FeatureKind::Tree,
+                    object_id: objects.old_growth.id.clone(),
+                    rotation,
+                    blocker_footprint: projected.blockers,
+                };
+                let mut candidate = remaining.clone();
+                candidate.push(replacement.clone());
+                if !feature_blockers_preserve_connectivity(&candidate, surfaces) {
+                    continue;
+                }
+                let Some(slot) = features.get_mut(index) else {
+                    return Err(vec![recipe_issue(
+                        "Forest Old-Growth relocation left the feature collection",
+                    )]);
+                };
+                *slot = replacement;
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn feature_blockers_preserve_connectivity(
@@ -2169,7 +2620,7 @@ fn plan_grass_features(
 }
 
 fn tree_family(hash: u64) -> TreeFamily {
-    if hash.is_multiple_of(4) {
+    if hash.is_multiple_of(2) {
         TreeFamily::TallNarrow
     } else {
         TreeFamily::SmallBroadleaf
@@ -3026,7 +3477,7 @@ mod tests {
         let selected =
             generate(12, 0.4, &settings(), 381_654_729).expect("hero Forest should generate");
 
-        assert_eq!(selected.metrics.tree_roots, 52);
+        assert_eq!(selected.metrics.tree_roots, 53);
         assert!(selected.metrics.old_growth_roots > 0);
         assert_eq!(
             selected.metrics.old_growth_blocker_surfaces,
@@ -3064,6 +3515,46 @@ mod tests {
                 GRASS_TUFT_ID,
             ])
         );
+        let build = super::super::build(
+            12,
+            0.4,
+            &settings(),
+            381_654_729,
+            &palette(),
+            &is_solid,
+            Some(runtime_art_catalog()),
+        )
+        .expect("hero Forest should materialize");
+        assert_eq!(
+            selected.validated.semantic_fingerprint,
+            16_803_101_637_412_033_592
+        );
+        assert_eq!(build.report.map_fingerprint, 6_133_044_767_666_166_856);
+    }
+
+    #[test]
+    fn validator_rejects_a_forest_without_exact_old_growth() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let mut plan = selected.validated.plan;
+        let replacement = hex_assets::ObjectAssetId::new(SMALL_BROADLEAF_ID)
+            .expect("the stable small broadleaf id should remain valid");
+        let mut replaced = 0_usize;
+        for feature in plan.features.by_id.values_mut() {
+            if feature.object_id.as_str() == OLD_GROWTH_ID {
+                feature.object_id = replacement.clone();
+                replaced = replaced.saturating_add(1);
+            }
+        }
+        assert!(replaced > 0, "the valid fixture must start with Old-Growth");
+
+        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+            panic!("removing every exact Old-Growth instance must fail");
+        };
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("must retain at least one exact authored Old-Growth")
+        }));
     }
 
     #[test]
