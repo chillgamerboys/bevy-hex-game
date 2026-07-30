@@ -106,12 +106,7 @@ impl VegetationObjectSpec {
             rigid: blueprint
                 .placements
                 .iter()
-                .filter(|placement| {
-                    matches!(
-                        placement.part,
-                        ObjectPart::Plant(PlantPart::Root | PlantPart::Trunk)
-                    ) || blueprint.category == ObjectCategory::Prop
-                })
+                .filter(|placement| is_structural_part(blueprint.category, &placement.part))
                 .map(|placement| placement.position)
                 .collect(),
         })
@@ -160,6 +155,14 @@ impl VegetationObjectSpec {
         }
         (projected.len() == self.blocker_footprint.len()).then_some(projected)
     }
+}
+
+fn is_structural_part(category: ObjectCategory, part: &ObjectPart) -> bool {
+    category == ObjectCategory::Prop
+        || matches!(
+            part,
+            ObjectPart::Plant(PlantPart::Root | PlantPart::Trunk | PlantPart::Branch)
+        )
 }
 
 fn project_coord(
@@ -217,6 +220,24 @@ fn validate_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn woody_plant_support_and_complete_props_are_structural() {
+        for part in [PlantPart::Root, PlantPart::Trunk, PlantPart::Branch] {
+            assert!(is_structural_part(
+                ObjectCategory::Plant,
+                &ObjectPart::Plant(part)
+            ));
+        }
+        assert!(!is_structural_part(
+            ObjectCategory::Plant,
+            &ObjectPart::Plant(PlantPart::Foliage)
+        ));
+        assert!(is_structural_part(
+            ObjectCategory::Prop,
+            &ObjectPart::Plant(PlantPart::Foliage)
+        ));
+    }
 
     #[test]
     fn exact_visual_projection_preserves_stack_levels_and_six_rotations() {

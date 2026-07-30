@@ -519,14 +519,18 @@ fn construct_patch_with_objects(
             .into_iter()
             .filter(|coord| mask.contains(coord)),
     );
-    let tree_roots = select_tree_roots(
+    let tree_root_candidates = select_tree_root_candidates(
         &woodland,
         &tree_exclusions,
         &ordinary_surface_by_coord,
         streams.map(|streams| streams.trees),
     );
+    let tree_target = woodland.len().saturating_mul(TREE_DENSITY_PERCENT) / 100;
+    let minimum_tree_count = woodland.len().saturating_mul(20).div_ceil(100);
     let (tree_features, tree_visual_cells) = plan_tree_features(
-        tree_roots,
+        tree_root_candidates,
+        tree_target,
+        minimum_tree_count,
         &woodland,
         &tree_exclusions,
         &ordinary_surface_by_coord,
@@ -1794,12 +1798,12 @@ fn clearing_footprint(
     (interior.len() >= 10).then_some(interior)
 }
 
-fn select_tree_roots(
+fn select_tree_root_candidates(
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
     stream: Option<SeedStream<'_>>,
-) -> BTreeSet<TilePos> {
+) -> Vec<TilePos> {
     let mut eligible: Vec<_> = woodland
         .difference(exclusions)
         .copied()
@@ -1811,24 +1815,20 @@ fn select_tree_roots(
         })
         .collect();
     eligible.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 0), *coord));
-    let target = woodland.len().saturating_mul(TREE_DENSITY_PERCENT) / 100;
-    let mut color_classes: [Vec<HexCoord>; 3] = std::array::from_fn(|_| Vec::new());
+    let mut color_counts = [0_usize; 3];
     for coord in &eligible {
         let color =
             usize::try_from(coord.x().saturating_sub(coord.y()).rem_euclid(3)).unwrap_or_default();
-        if let Some(class) = color_classes.get_mut(color) {
-            class.push(*coord);
+        if let Some(count) = color_counts.get_mut(color) {
+            *count = count.saturating_add(1);
         }
     }
-    for class in &mut color_classes {
-        class.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 1), *coord));
-    }
-    let phase = color_classes
-        .iter()
+    let phase = color_counts
+        .into_iter()
         .enumerate()
-        .min_by_key(|(phase, class)| {
+        .min_by_key(|(phase, count)| {
             (
-                std::cmp::Reverse(class.len()),
+                std::cmp::Reverse(*count),
                 stream.map_or(u64::try_from(*phase).unwrap_or_default(), |stream| {
                     stream.sample(700_u64.saturating_add(u64::try_from(*phase).unwrap_or_default()))
                 }),
@@ -1837,33 +1837,21 @@ fn select_tree_roots(
         })
         .map(|(phase, _)| phase)
         .unwrap_or_default();
-    let mut selected = color_classes
-        .get(phase)
-        .into_iter()
-        .flatten()
-        .take(target)
-        .copied()
-        .collect::<BTreeSet<_>>();
-    for coord in eligible {
-        if selected.len() >= target {
-            break;
-        }
-        if coord
-            .neighbors()
-            .into_iter()
-            .all(|neighbor| !selected.contains(&neighbor))
-        {
-            selected.insert(coord);
-        }
-    }
-    selected
+    eligible.sort_by_key(|coord| {
+        let color =
+            usize::try_from(coord.x().saturating_sub(coord.y()).rem_euclid(3)).unwrap_or_default();
+        (color != phase, feature_priority(stream, *coord, 1), *coord)
+    });
+    eligible
         .into_iter()
         .filter_map(|coord| surfaces.get(&coord).copied())
         .collect()
 }
 
 fn plan_tree_features(
-    roots: BTreeSet<TilePos>,
+    root_candidates: Vec<TilePos>,
+    target: usize,
+    minimum: usize,
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
@@ -1873,18 +1861,10 @@ fn plan_tree_features(
 ) -> Result<(Vec<PlannedFeature>, BTreeSet<TilePos>), Vec<WorldValidationIssue>> {
     let mut occupied_blockers = BTreeSet::new();
     let mut occupied_structural_cells = BTreeSet::new();
-    let mut features = Vec::with_capacity(roots.len());
-    let mut old_growth_by_root = BTreeMap::new();
+    let mut occupied_roots = BTreeSet::new();
+    let mut features = Vec::with_capacity(target);
     if object_stream.is_some() {
-        let mut ranked_roots = roots.iter().copied().collect::<Vec<_>>();
-        ranked_roots.sort_unstable_by_key(|root| {
-            (feature_priority(object_stream, root.coord, 17), root.coord)
-        });
-        let target = roots.len().saturating_mul(12).div_ceil(100).max(1);
-        for root in ranked_roots {
-            if old_growth_by_root.len() >= target {
-                break;
-            }
+        for root in root_candidates.iter().copied() {
             let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
             let mut selected = None;
             for offset in 0..6 {
@@ -1908,19 +1888,28 @@ fn plan_tree_features(
             };
             occupied_blockers.extend(projected.blockers.iter().copied());
             occupied_structural_cells.extend(projected.structural_cells.iter().copied());
-            old_growth_by_root.insert(root, (rotation, projected.blockers));
-        }
-    }
-
-    for root in roots {
-        if let Some((rotation, blockers)) = old_growth_by_root.remove(&root) {
+            occupied_roots.insert(root.coord);
             features.push(PlannedFeature {
                 root,
                 kind: FeatureKind::Tree,
                 object_id: objects.old_growth.id.clone(),
                 rotation,
-                blocker_footprint: blockers,
+                blocker_footprint: projected.blockers,
             });
+            break;
+        }
+    }
+    for root in root_candidates {
+        if features.len() >= target {
+            break;
+        }
+        if occupied_roots.contains(&root.coord)
+            || root
+                .coord
+                .neighbors()
+                .into_iter()
+                .any(|neighbor| occupied_roots.contains(&neighbor))
+        {
             continue;
         }
         let family_hash = feature_priority(object_stream, root.coord, 17);
@@ -1953,12 +1942,11 @@ fn plan_tree_features(
             }
         }
         let Some((object, rotation, projected)) = selected else {
-            return Err(vec![recipe_issue(format!(
-                "Forest tree root {root:?} cannot support any accepted authored tree"
-            ))]);
+            continue;
         };
         occupied_blockers.extend(projected.blockers.iter().copied());
         occupied_structural_cells.extend(projected.structural_cells.iter().copied());
+        occupied_roots.insert(root.coord);
         features.push(PlannedFeature {
             root,
             kind: FeatureKind::Tree,
@@ -1967,21 +1955,160 @@ fn plan_tree_features(
             blocker_footprint: projected.blockers,
         });
     }
-    while !feature_blockers_preserve_connectivity(&features, surfaces) {
-        let Some(feature) = features
-            .iter_mut()
-            .rev()
-            .find(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
-        else {
-            return Err(vec![recipe_issue(
-                "Forest authored tree blockers disconnect otherwise ordinary terrain",
-            )]);
-        };
-        feature.object_id = objects.tall_narrow.id.clone();
-        feature.blocker_footprint = BTreeSet::from([feature.root]);
+    if features.len() < minimum {
+        return Err(vec![recipe_issue(format!(
+            "Forest structural vegetation can place only {} trees; at least {minimum} of the \
+             target {target} are required",
+            features.len(),
+        ))]);
     }
+    upgrade_old_growth(
+        &mut features,
+        woodland,
+        exclusions,
+        surfaces,
+        objects,
+        object_stream,
+        rotation_stream,
+    )?;
+    features.sort_unstable_by_key(|feature| feature.root);
     let final_visual_cells = collect_tree_visual_cells(&features, objects)?;
     Ok((features, final_visual_cells))
+}
+
+fn upgrade_old_growth(
+    features: &mut [PlannedFeature],
+    woodland: &BTreeSet<HexCoord>,
+    exclusions: &BTreeSet<HexCoord>,
+    surfaces: &BTreeMap<HexCoord, TilePos>,
+    objects: &TemperateVegetationSet,
+    object_stream: Option<SeedStream<'_>>,
+    rotation_stream: Option<SeedStream<'_>>,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    let Some(object_stream) = object_stream else {
+        return Ok(());
+    };
+    let target = features.len().saturating_mul(12).div_ceil(100).max(1);
+    let mut upgraded = features
+        .iter()
+        .filter(|feature| feature.object_id.as_str() == OLD_GROWTH_ID)
+        .count();
+    let mut ranked_indices = features
+        .iter()
+        .enumerate()
+        .map(|(index, feature)| {
+            (
+                feature_priority(Some(object_stream), feature.root.coord, 17),
+                feature.root,
+                index,
+            )
+        })
+        .collect::<Vec<_>>();
+    ranked_indices.sort_unstable();
+    let mut structural_by_feature = Vec::with_capacity(features.len());
+    let mut all_blockers = BTreeSet::new();
+    let mut all_structural_cells = BTreeSet::new();
+    for feature in features.iter() {
+        let Some(object) = objects.forest_object(feature.object_id.as_str()) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest feature at {:?} uses unsupported authored object '{}'",
+                feature.root, feature.object_id
+            ))]);
+        };
+        let Some(volume) = object.project_visual_volume(feature.root, feature.rotation) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest object '{}' cannot project its complete authored bounds at {:?}",
+                feature.object_id, feature.root
+            ))]);
+        };
+        all_blockers.extend(feature.blocker_footprint.iter().copied());
+        all_structural_cells.extend(volume.structural_cells.iter().copied());
+        structural_by_feature.push(volume.structural_cells);
+    }
+    for (_, _, index) in ranked_indices {
+        if upgraded >= target {
+            break;
+        }
+        let Some(current_feature) = features.get(index).cloned() else {
+            return Err(vec![recipe_issue(
+                "Forest old-growth ranking left the feature collection",
+            )]);
+        };
+        let Some(current_structural_cells) = structural_by_feature.get(index).cloned() else {
+            return Err(vec![recipe_issue(
+                "Forest old-growth structural projection left the feature collection",
+            )]);
+        };
+        if current_feature.object_id.as_str() == OLD_GROWTH_ID {
+            continue;
+        }
+        let root = current_feature.root;
+        let occupied_blockers = all_blockers
+            .difference(&current_feature.blocker_footprint)
+            .copied()
+            .collect();
+        let occupied_structural_cells = all_structural_cells
+            .difference(&current_structural_cells)
+            .copied()
+            .collect();
+
+        let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+        for offset in 0..6 {
+            let rotation = offset_rotation(first_rotation, offset)?;
+            let Some(projected) = project_tree(
+                &objects.old_growth,
+                root,
+                rotation,
+                woodland,
+                exclusions,
+                surfaces,
+                &occupied_blockers,
+                &occupied_structural_cells,
+            ) else {
+                continue;
+            };
+            let replacement = PlannedFeature {
+                root,
+                kind: FeatureKind::Tree,
+                object_id: objects.old_growth.id.clone(),
+                rotation,
+                blocker_footprint: projected.blockers,
+            };
+            let mut candidate = features.to_vec();
+            let Some(candidate_slot) = candidate.get_mut(index) else {
+                return Err(vec![recipe_issue(
+                    "Forest old-growth candidate left the feature collection",
+                )]);
+            };
+            *candidate_slot = replacement.clone();
+            if !feature_blockers_preserve_connectivity(&candidate, surfaces) {
+                continue;
+            }
+            for blocker in &current_feature.blocker_footprint {
+                all_blockers.remove(blocker);
+            }
+            for structural in &current_structural_cells {
+                all_structural_cells.remove(structural);
+            }
+            all_blockers.extend(replacement.blocker_footprint.iter().copied());
+            all_structural_cells.extend(projected.structural_cells.iter().copied());
+            let Some(structural_slot) = structural_by_feature.get_mut(index) else {
+                return Err(vec![recipe_issue(
+                    "Forest old-growth structural slot left the feature collection",
+                )]);
+            };
+            *structural_slot = projected.structural_cells;
+            let Some(feature_slot) = features.get_mut(index) else {
+                return Err(vec![recipe_issue(
+                    "Forest old-growth feature slot left the feature collection",
+                )]);
+            };
+            *feature_slot = replacement;
+            upgraded = upgraded.saturating_add(1);
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn feature_blockers_preserve_connectivity(
@@ -2712,7 +2839,7 @@ mod tests {
                 projected
                     .structural_cells
                     .is_disjoint(&claimed_structural_cells),
-                "Forest object '{}' overlaps a neighboring rigid root or trunk",
+                "Forest object '{}' overlaps neighboring structural vegetation",
                 feature.object_id
             );
             assert!(
@@ -2899,7 +3026,7 @@ mod tests {
         let selected =
             generate(12, 0.4, &settings(), 381_654_729).expect("hero Forest should generate");
 
-        assert_eq!(selected.metrics.tree_roots, 53);
+        assert_eq!(selected.metrics.tree_roots, 52);
         assert!(selected.metrics.old_growth_roots > 0);
         assert_eq!(
             selected.metrics.old_growth_blocker_surfaces,
