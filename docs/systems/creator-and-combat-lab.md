@@ -108,6 +108,13 @@ fully editable and ordered, with one to six units per side. Choices come from pa
 templates or saved Map-ready characters. Player units are human controlled; hostile
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.
 
+Sandbox setup is an explicit `Map → Rosters → Rules → Deploy` flow. The Rules step
+offers Shipped, Tactical two-step, and Custom profiles. Its six labelled steppers
+consume the profile contract's descriptions and inclusive bounds, and every numeric
+difference is also written as `CHANGED shipped → selected`; color is supplementary.
+Reset restores the exact shipped profile. Loading validates and freezes the selected
+profile without writing `combat.ron`.
+
 `Test on Map` is enabled only for the current saved, clean, Map-ready character. It
 opens this same Sandbox with that record in Player slot one. The tester still chooses
 the map and completes both rosters.
@@ -123,14 +130,22 @@ The map renders clickable world-space surface caps inside both authored regions.
 Candidates use the shared walker `Footing`, exact headroom and blockers, and the live
 terrain surface, so a click records the complete `TilePos`, including elevation.
 Occupied or invalid surfaces are rejected. Placement proceeds in roster order; the
-tester may Undo, Clear either side, or deterministically Auto-place nearest legal
-unused surfaces. Start Combat remains disabled until every unit has a unique valid
+tester may directly select any roster row to reposition an earlier unit, Undo, Clear
+either side, or deterministically Auto-place nearest legal unused surfaces. Direct
+placement, auto-place, and the Start gate all consume canonical exact-surface
+occupancy. Start Combat remains visibly disabled until every unit has a unique valid
 placement.
 
 Start Combat repositions the frozen roster onto those exact surfaces without
 regenerating terrain, then enters `Active`. Retry retains the content snapshot, map
 seed, roster order, and resolved surfaces. Fixed fixtures bypass Deployment because
 their encounter placements are immutable.
+
+During a Lab encounter, a collapsible statistics drawer supplements rather than
+replaces the ordinary HUD. It reads `CombatSummary` directly and labels rounds,
+outcome, successful/refused commands, AI choices, movement distance/budget, casts,
+Channel and mana restored by element, strikes, idle turns, disable flow,
+restorations, downings, and revivals.
 
 ### Fixed fixtures
 

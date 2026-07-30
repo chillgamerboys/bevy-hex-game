@@ -10,12 +10,12 @@ use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
     character_lattice_file, character_runtime_key, combined_spell_file, CombatLabDeploymentRegion,
-    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, CombatRulesProfile,
-    CombatSettings, ContentIndex, CreationCellKind, CreationPresetCatalog, CustomCharacterId,
-    ElementCatalog, Encounter, EncounterFaction, EncounterPlacement, FormationCenter, GameAssets,
-    LatticeFile, LatticeLibrary, PlayerSettings, PresetAudience, Roster, RosterEntry,
-    SavedCharacter, Scenario, ScenarioLibrary, SpellBook, SpellFile, SpellReference,
-    SubstanceTable,
+    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, CombatRuleField,
+    CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex, CreationCellKind,
+    CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter, EncounterFaction,
+    EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary, PlayerSettings,
+    PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary, SpellBook,
+    SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
     GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
@@ -44,6 +44,14 @@ enum LabTab {
     Fixtures,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum SandboxStep {
+    #[default]
+    Map,
+    Rosters,
+    Rules,
+}
+
 const DEFAULT_SANDBOX_MAP: &str = "flat-arena";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +63,7 @@ enum RosterChoice {
 #[derive(Resource, Debug)]
 struct CombatLabState {
     tab: LabTab,
+    sandbox_step: SandboxStep,
     map: String,
     players: Vec<RosterChoice>,
     hostiles: Vec<RosterChoice>,
@@ -69,6 +78,7 @@ impl Default for CombatLabState {
     fn default() -> Self {
         Self {
             tab: LabTab::Sandbox,
+            sandbox_step: SandboxStep::Map,
             map: DEFAULT_SANDBOX_MAP.to_owned(),
             players: vec![RosterChoice::Template("hedge-mage".to_owned())],
             hostiles: vec![RosterChoice::Template("raider".to_owned())],
@@ -251,6 +261,7 @@ struct DeploymentHud;
 
 #[derive(Component, Debug, Clone, Copy)]
 enum DeploymentAction {
+    Select { player: bool, index: usize },
     Undo,
     ClearPlayer,
     ClearHostile,
@@ -263,6 +274,7 @@ enum DeploymentAction {
 enum LabAction {
     Tab(LabTab),
     Back,
+    ShowSandboxStep(SandboxStep),
     SelectMap(String),
     AddPlayerTemplate(String),
     AddHostileTemplate(String),
@@ -273,6 +285,9 @@ enum LabAction {
     MovePlayer(usize, i8),
     MoveHostile(usize, i8),
     EditCustom(CustomCharacterId),
+    SelectRulesPreset(CombatRulesPreset),
+    AdjustRule(CombatRuleField, i8),
+    ResetRules,
     PrepareDeployment,
     StartFixture(String),
 }
@@ -443,6 +458,7 @@ fn initialize_lab(
     commands.insert_resource(GameplayPhase::Active);
     if let Some(request) = request {
         state.tab = LabTab::Sandbox;
+        state.sandbox_step = SandboxStep::Rosters;
         state.players = vec![RosterChoice::Custom(request.character)];
         state.notice = "Creator character prefilled; choose the rest of the test.".to_owned();
         state.creator_origin = true;
@@ -463,6 +479,7 @@ fn spawn_lab(
     spells: Option<Res<SpellBook>>,
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
 ) {
     spawn_lab_ui(
         &mut commands,
@@ -473,6 +490,7 @@ fn spawn_lab(
         spells.as_deref(),
         presets.as_deref(),
         maps.as_deref(),
+        combat.as_deref(),
         &asset_server,
     );
 }
@@ -488,6 +506,7 @@ fn rebuild_lab(
     spells: Option<Res<SpellBook>>,
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
     mut last_revision: Local<u64>,
 ) {
     if roots.is_empty() || *last_revision != state.revision {
@@ -503,6 +522,7 @@ fn rebuild_lab(
             spells.as_deref(),
             presets.as_deref(),
             maps.as_deref(),
+            combat.as_deref(),
             &asset_server,
         );
         *last_revision = state.revision;
@@ -518,6 +538,7 @@ fn spawn_lab_ui(
     spells: Option<&SpellBook>,
     presets: Option<&CreationPresetCatalog>,
     maps: Option<&CombatLabMapCatalog>,
+    combat: Option<&CombatSettings>,
     asset_server: &AssetServer,
 ) {
     commands
@@ -556,17 +577,26 @@ fn spawn_lab_ui(
             }
             match state.tab {
                 LabTab::Sandbox => {
-                    spawn_sandbox_setup(
-                        root,
-                        assets,
-                        state,
-                        store,
-                        elements,
-                        spells,
-                        presets,
-                        maps,
-                        asset_server,
-                    );
+                    spawn_sandbox_progress(root, assets, state.sandbox_step);
+                    match state.sandbox_step {
+                        SandboxStep::Map => {
+                            spawn_map_setup(root, assets, state, maps, asset_server);
+                        }
+                        SandboxStep::Rosters => spawn_sandbox_setup(
+                            root,
+                            assets,
+                            state,
+                            store,
+                            elements,
+                            spells,
+                            presets,
+                            maps,
+                            asset_server,
+                        ),
+                        SandboxStep::Rules => {
+                            spawn_rules_setup(root, assets, state, maps, combat);
+                        }
+                    }
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
             }
@@ -636,6 +666,327 @@ fn region_center_label(center: &CombatLabRegionCenter) -> String {
     }
 }
 
+fn spawn_sandbox_progress(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    current: SandboxStep,
+) {
+    root.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(10.0),
+        ..default()
+    })
+    .with_children(|progress| {
+        for (step, text) in [
+            (SandboxStep::Map, "1 · MAP"),
+            (SandboxStep::Rosters, "2 · ROSTERS"),
+            (SandboxStep::Rules, "3 · RULES"),
+        ] {
+            let status = if step == current { "ACTIVE" } else { "STEP" };
+            progress
+                .spawn(fine(assets, format!("{status} · {text}")))
+                .insert(TextColor(if step == current {
+                    Color::srgba(0.93, 0.79, 0.46, 1.0)
+                } else {
+                    Color::srgba(0.67, 0.71, 0.77, 1.0)
+                }));
+        }
+        progress.spawn(fine(assets, "4 · DEPLOY"));
+    });
+}
+
+fn spawn_map_setup(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    maps: Option<&CombatLabMapCatalog>,
+    asset_server: &AssetServer,
+) {
+    root.spawn(Node {
+        width: Val::Percent(96.0),
+        min_height: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(12.0),
+        ..default()
+    })
+    .with_children(|body| {
+        body.spawn(panel())
+            .insert(Node {
+                width: Val::Px(360.0),
+                min_height: Val::Px(0.0),
+                ..panel_node()
+            })
+            .with_children(|list| {
+                list.spawn(heading(assets, "1 · choose map"));
+                list.spawn(blurb(
+                    assets,
+                    "The selected map and resolved seed are frozen into every run and report.",
+                ));
+                list.spawn((
+                    ScrollArea,
+                    Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .with_children(|buttons| {
+                    if let Some(maps) = maps {
+                        for map in &maps.maps {
+                            map_button(buttons, assets, map, state.map == map.id);
+                        }
+                    }
+                });
+            });
+        body.spawn(panel())
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|preview| {
+                preview.spawn(heading(assets, "frozen map preview"));
+                if let Some(record) = maps.and_then(|catalog| catalog.get(&state.map)) {
+                    preview.spawn((
+                        Name::new(format!("Map Preview: {}", record.display_name)),
+                        ImageNode::new(asset_server.load(record.preview.clone())),
+                        Node {
+                            width: Val::Percent(100.0),
+                            max_width: Val::Px(720.0),
+                            height: Val::Px(360.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(0.49, 0.68, 0.86, 0.85)),
+                    ));
+                    preview.spawn(heading(assets, record.display_name.clone()));
+                    preview.spawn(fine(assets, record.tags.join("  ·  ")));
+                    preview.spawn(blurb(assets, record.description.clone()));
+                    preview.spawn(fine(
+                        assets,
+                        format!(
+                            "{}  ·  {}",
+                            map_seed_label(record),
+                            deployment_summary(record)
+                        ),
+                    ));
+                    lab_button(
+                        preview,
+                        assets,
+                        "Continue to Rosters",
+                        LabAction::ShowSandboxStep(SandboxStep::Rosters),
+                        220.0,
+                    );
+                } else {
+                    preview
+                        .spawn(blurb(assets, "The packaged map catalog is still loading."))
+                        .insert(TextColor(DANGER));
+                }
+            });
+    });
+}
+
+fn spawn_rules_setup(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    maps: Option<&CombatLabMapCatalog>,
+    shipped: Option<&CombatSettings>,
+) {
+    let Some(shipped) = shipped else {
+        root.spawn(blurb(assets, "Shipped combat rules are still loading."))
+            .insert(TextColor(DANGER));
+        return;
+    };
+    let profile = state
+        .rules
+        .clone()
+        .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+    let changes = profile.changed_from_shipped(shipped);
+    root.spawn(Node {
+        width: Val::Percent(96.0),
+        min_height: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(12.0),
+        ..default()
+    })
+    .with_children(|body| {
+        body.spawn(panel())
+            .insert(Node {
+                width: Val::Px(285.0),
+                ..panel_node()
+            })
+            .with_children(|summary| {
+                summary.spawn(heading(assets, "frozen run summary"));
+                let map = maps
+                    .and_then(|catalog| catalog.get(&state.map))
+                    .map_or("Loading map", |map| map.display_name.as_str());
+                summary.spawn(blurb(
+                    assets,
+                    format!(
+                        "{map}\nPlayer {} · Hostile {}\n{} field{} changed from shipped",
+                        state.players.len(),
+                        state.hostiles.len(),
+                        changes.len(),
+                        if changes.len() == 1 { "" } else { "s" }
+                    ),
+                ));
+                for change in &changes {
+                    summary.spawn(fine(
+                        assets,
+                        format!(
+                            "CHANGED · {} {} → {}",
+                            change.field.label(),
+                            change.shipped,
+                            change.selected
+                        ),
+                    ));
+                }
+                lab_button(
+                    summary,
+                    assets,
+                    "Back to Rosters",
+                    LabAction::ShowSandboxStep(SandboxStep::Rosters),
+                    190.0,
+                );
+            });
+        body.spawn(panel())
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|rules| {
+                rules.spawn(heading(assets, "3 · rules profile"));
+                rules
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(7.0),
+                        ..default()
+                    })
+                    .with_children(|presets| {
+                        for (preset, text) in [
+                            (CombatRulesPreset::Shipped, "Shipped"),
+                            (CombatRulesPreset::TacticalTwoStep, "Tactical two-step"),
+                            (CombatRulesPreset::Custom, "Custom"),
+                        ] {
+                            let selected = profile.preset == preset;
+                            lab_button(
+                                presets,
+                                assets,
+                                if selected {
+                                    format!("SELECTED · {text}")
+                                } else {
+                                    text.to_owned()
+                                },
+                                LabAction::SelectRulesPreset(preset),
+                                205.0,
+                            );
+                        }
+                    });
+                rules
+                    .spawn((
+                        ScrollArea,
+                        Node {
+                            min_height: Val::Px(0.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|fields| {
+                        for field in CombatRuleField::ALL {
+                            let bounds = field.bounds();
+                            let value = profile.value(field);
+                            let shipped_value = CombatRulesProfile::shipped(shipped).value(field);
+                            fields
+                                .spawn(panel())
+                                .insert(Node {
+                                    width: Val::Percent(100.0),
+                                    ..panel_node()
+                                })
+                                .with_children(|row| {
+                                    row.spawn(heading(assets, field.label()));
+                                    row.spawn(fine(assets, field.description()));
+                                    row.spawn(Node {
+                                        flex_direction: FlexDirection::Row,
+                                        align_items: AlignItems::Center,
+                                        column_gap: Val::Px(7.0),
+                                        ..default()
+                                    })
+                                    .with_children(
+                                        |stepper| {
+                                            lab_button(
+                                                stepper,
+                                                assets,
+                                                "−",
+                                                LabAction::AdjustRule(field, -1),
+                                                46.0,
+                                            );
+                                            stepper.spawn(label(assets, value.to_string()));
+                                            lab_button(
+                                                stepper,
+                                                assets,
+                                                "+",
+                                                LabAction::AdjustRule(field, 1),
+                                                46.0,
+                                            );
+                                            stepper.spawn(fine(
+                                                assets,
+                                                format!(
+                                                    "VALID {}–{} · {}",
+                                                    bounds.min,
+                                                    bounds.max,
+                                                    if value == shipped_value {
+                                                        "SHIPPED".to_owned()
+                                                    } else {
+                                                        format!(
+                                                            "CHANGED {} → {}",
+                                                            shipped_value, value
+                                                        )
+                                                    }
+                                                ),
+                                            ));
+                                        },
+                                    );
+                                });
+                        }
+                    });
+                rules
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(7.0),
+                        ..default()
+                    })
+                    .with_children(|actions| {
+                        lab_button(
+                            actions,
+                            assets,
+                            "Reset to Shipped",
+                            LabAction::ResetRules,
+                            180.0,
+                        );
+                        lab_button(
+                            actions,
+                            assets,
+                            "Load Map & Deploy",
+                            LabAction::PrepareDeployment,
+                            210.0,
+                        );
+                    });
+            });
+    });
+}
+
 fn spawn_sandbox_setup(
     root: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -693,27 +1044,13 @@ fn spawn_sandbox_setup(
                         .spawn(blurb(assets, "The packaged map catalog is still loading."))
                         .insert(TextColor(DANGER));
                 }
-                map_panel.spawn(heading(assets, "available maps"));
-                map_panel
-                    .spawn((
-                        ScrollArea,
-                        Node {
-                            width: Val::Percent(100.0),
-                            min_height: Val::Px(90.0),
-                            flex_grow: 1.0,
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(5.0),
-                            overflow: Overflow::scroll_y(),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|list| {
-                        if let Some(maps) = maps {
-                            for map in &maps.maps {
-                                map_button(list, assets, map, state.map == map.id);
-                            }
-                        }
-                    });
+                lab_button(
+                    map_panel,
+                    assets,
+                    "Back to Map",
+                    LabAction::ShowSandboxStep(SandboxStep::Map),
+                    170.0,
+                );
             });
 
         body.spawn(panel())
@@ -768,8 +1105,8 @@ fn spawn_sandbox_setup(
                     lab_button(
                         rosters,
                         assets,
-                        "Load Map & Deploy",
-                        LabAction::PrepareDeployment,
+                        "Continue to Rules",
+                        LabAction::ShowSandboxStep(SandboxStep::Rules),
                         230.0,
                     );
                 } else {
@@ -1257,6 +1594,10 @@ fn handle_lab_actions(
                 state.tab = *tab;
             }
             LabAction::Back => next.set(Screen::Title),
+            LabAction::ShowSandboxStep(step) => {
+                state.sandbox_step = *step;
+                state.notice.clear();
+            }
             LabAction::SelectMap(map) => {
                 state.map = map.clone();
             }
@@ -1291,6 +1632,66 @@ fn handle_lab_actions(
                     character: *character,
                 });
                 next.set(Screen::CharacterCreator);
+            }
+            LabAction::SelectRulesPreset(preset) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                let current = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+                state.rules = Some(match preset {
+                    CombatRulesPreset::Shipped => CombatRulesProfile::shipped(shipped),
+                    CombatRulesPreset::TacticalTwoStep => {
+                        CombatRulesProfile::tactical_two_step(shipped)
+                    }
+                    CombatRulesPreset::Custom => CombatRulesProfile::custom_from(&current),
+                });
+                state.notice.clear();
+            }
+            LabAction::AdjustRule(field, delta) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                let mut profile = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+                let amount = u32::from(delta.unsigned_abs());
+                let next = if *delta < 0 {
+                    profile.value(*field).checked_sub(amount)
+                } else {
+                    profile.value(*field).checked_add(amount)
+                };
+                match next.and_then(|value| profile.set_custom(*field, value).ok().map(|_| value)) {
+                    Some(_) => {
+                        state.rules = Some(profile);
+                        state.notice.clear();
+                    }
+                    None => {
+                        let bounds = field.bounds();
+                        state.notice = format!(
+                            "{} must remain in {}..={}.",
+                            field.label(),
+                            bounds.min,
+                            bounds.max
+                        );
+                    }
+                }
+            }
+            LabAction::ResetRules => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                state.rules = Some(CombatRulesProfile::shipped(shipped));
+                state.notice = "Rules reset to the shipped profile.".to_owned();
             }
             LabAction::PrepareDeployment => {
                 let Some(shipped_combat) = combat.as_deref() else {
@@ -1944,13 +2345,15 @@ fn spawn_deployment_hud(
                     "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
                 ));
             });
-            for (title, roster, placements) in [
+            for (player, title, roster, placements) in [
                 (
+                    true,
                     "PLAYER",
                     session.players.as_slice(),
                     session.player_placements.as_slice(),
                 ),
                 (
+                    false,
                     "HOSTILE",
                     session.hostiles.as_slice(),
                     session.hostile_placements.as_slice(),
@@ -1966,25 +2369,35 @@ fn spawn_deployment_hud(
                     side.spawn(fine(assets, title));
                     for (index, choice) in roster.iter().enumerate() {
                         let placement = placements.get(index).copied().flatten();
-                        side.spawn(fine(
-                            assets,
-                            format!(
-                                "[{}{}] {} · {}",
-                                if title == "PLAYER" { "P" } else { "H" },
-                                index + 1,
-                                choice_name(choice, store),
-                                placement.map_or_else(
-                                    || "choose surface".to_owned(),
-                                    |pos| format!(
-                                        "({}, {}, {}) · elevation {}",
-                                        pos.coord.x(),
-                                        pos.coord.y(),
-                                        pos.coord.z(),
-                                        pos.level
-                                    )
+                        let selected =
+                            session.active_player == player && session.active_index == index;
+                        let text = format!(
+                            "{} [{}{}] {} · {}",
+                            if selected { "SELECTED" } else { "SELECT" },
+                            if player { "P" } else { "H" },
+                            index + 1,
+                            choice_name(choice, store),
+                            placement.map_or_else(
+                                || "choose surface".to_owned(),
+                                |pos| format!(
+                                    "({}, {}, {}) · elevation {}",
+                                    pos.coord.x(),
+                                    pos.coord.y(),
+                                    pos.coord.z(),
+                                    pos.level
                                 )
-                            ),
-                        ));
+                            )
+                        );
+                        side.spawn((
+                            row_button(text.clone(), 235.0),
+                            DeploymentAction::Select { player, index },
+                        ))
+                        .insert(BorderColor::all(if selected {
+                            Color::srgba(0.93, 0.79, 0.46, 0.95)
+                        } else {
+                            Color::srgba(0.26, 0.29, 0.34, 0.9)
+                        }))
+                        .with_child(label(assets, text));
                     }
                 });
             }
@@ -2017,7 +2430,7 @@ fn spawn_deployment_hud(
                     "Deterministic Auto-place",
                     DeploymentAction::AutoPlace,
                 );
-                deployment_button(actions, assets, "Back to Setup", DeploymentAction::Back);
+                deployment_button(actions, assets, "Back to Rules", DeploymentAction::Back);
                 if session.complete() {
                     deployment_button(
                         actions,
@@ -2025,6 +2438,13 @@ fn spawn_deployment_hud(
                         "Start Combat",
                         DeploymentAction::StartCombat,
                     );
+                } else {
+                    actions
+                        .spawn(fine(
+                            assets,
+                            "START COMBAT · DISABLED — place every roster entry",
+                        ))
+                        .insert(TextColor(DANGER));
                 }
             });
         });
@@ -2285,6 +2705,23 @@ fn handle_deployment_actions(
             continue;
         }
         match action {
+            DeploymentAction::Select { player, index } => {
+                let valid = if *player {
+                    *index < session.players.len()
+                } else {
+                    *index < session.hostiles.len()
+                };
+                if valid {
+                    session.active_player = *player;
+                    session.active_index = *index;
+                    session.notice = format!(
+                        "{} {} selected · click a {} highlighted surface to place or reposition.",
+                        if *player { "PLAYER" } else { "HOSTILE" },
+                        index + 1,
+                        if *player { "BLUE" } else { "RED" }
+                    );
+                }
+            }
             DeploymentAction::Undo => {
                 if let Some((player, index, previous)) = session.undo.pop() {
                     let placements = if player {
@@ -2319,24 +2756,33 @@ fn handle_deployment_actions(
                 session.notice = "Hostile placements cleared.".to_owned();
             }
             DeploymentAction::AutoPlace => {
-                let mut used = std::collections::BTreeSet::new();
-                for (placement, surface) in session
+                session.player_placements.fill(None);
+                session.hostile_placements.fill(None);
+                let mut occupancy = UnitOccupancy::default();
+                for (index, (placement, surface)) in session
                     .player_placements
                     .iter_mut()
                     .zip(&session.player_surfaces)
+                    .enumerate()
                 {
                     *placement = Some(*surface);
-                    used.insert(*surface);
+                    occupancy.relocate(deployment_unit_id(true, index), *surface);
                 }
                 let hostile = session
                     .hostile_surfaces
                     .iter()
-                    .filter(|surface| !used.contains(surface))
+                    .filter(|surface| !occupancy.is_occupied(**surface, None))
                     .copied()
                     .take(session.hostile_placements.len())
                     .collect::<Vec<_>>();
-                for (placement, surface) in session.hostile_placements.iter_mut().zip(hostile) {
+                for (index, (placement, surface)) in session
+                    .hostile_placements
+                    .iter_mut()
+                    .zip(hostile)
+                    .enumerate()
+                {
                     *placement = Some(surface);
+                    occupancy.relocate(deployment_unit_id(false, index), surface);
                 }
                 session.undo.clear();
                 advance_deployment_cursor(session);
@@ -2555,6 +3001,7 @@ fn apply_creator_display_names(
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         AcceptedContentRevision, ArtPalette, ElementFile, SubstanceFile, SubstanceTable,
@@ -2569,6 +3016,47 @@ mod tests {
             profile,
             shipped_combat: shipped,
         }
+    }
+
+    #[test]
+    fn rules_step_exposes_presets_every_bounded_stepper_reset_and_forward_gate() {
+        let mut world = World::new();
+        let assets = UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        };
+        let state = CombatLabState {
+            sandbox_step: SandboxStep::Rules,
+            ..default()
+        };
+        let shipped = CombatSettings::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        commands.spawn(Node::default()).with_children(|root| {
+            spawn_rules_setup(root, &assets, &state, None, Some(&shipped));
+        });
+        queue.apply(&mut world);
+
+        let mut presets = 0;
+        let mut adjustments = 0;
+        let mut resets = 0;
+        let mut forwards = 0;
+        let mut backs = 0;
+        let mut actions = world.query::<&LabAction>();
+        for action in actions.iter(&world) {
+            match action {
+                LabAction::SelectRulesPreset(_) => presets += 1,
+                LabAction::AdjustRule(_, _) => adjustments += 1,
+                LabAction::ResetRules => resets += 1,
+                LabAction::PrepareDeployment => forwards += 1,
+                LabAction::ShowSandboxStep(SandboxStep::Rosters) => backs += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(presets, 3);
+        assert_eq!(adjustments, CombatRuleField::ALL.len() * 2);
+        assert_eq!((resets, forwards, backs), (1, 1, 1));
     }
 
     #[test]

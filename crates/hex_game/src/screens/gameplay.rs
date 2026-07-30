@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use hex_assets::FormationCatalog;
-use hex_combat::{EncounterOutcome, EncounterResolution, Turn, TurnOrder};
+use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder};
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, HexCoord, InputAction,
     InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
@@ -67,6 +67,13 @@ pub(super) fn plugin(app: &mut App) {
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
+    app.add_systems(
+        Update,
+        (toggle_lab_statistics, update_lab_statistics)
+            .chain()
+            .run_if(in_state(Screen::Gameplay))
+            .run_if(resource_equals(GameplayPhase::Active)),
+    );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
     // resource with nothing to carry it out — leaving the store holding a full reveal
@@ -86,6 +93,7 @@ pub(super) fn plugin(app: &mut App) {
             reset_mode,
             spawn_hud.in_set(HudSetup::Panels),
             spawn_party_strip.in_set(HudSetup::Panels),
+            spawn_lab_statistics.in_set(HudSetup::Panels),
         ),
     );
     app.add_systems(OnExit(Screen::Gameplay), despawn_screen(Screen::Gameplay));
@@ -122,11 +130,177 @@ struct PartyRestButton;
 #[derive(Component)]
 struct OutcomeModal;
 
+#[derive(Component)]
+struct LabStatisticsDrawer;
+
+#[derive(Component)]
+struct LabStatisticsPanel;
+
+#[derive(Component)]
+struct LabStatisticsText;
+
+#[derive(Component)]
+struct LabStatisticsToggle;
+
+#[derive(Component)]
+struct LabStatisticsToggleText;
+
 #[derive(Component, Clone, Copy)]
 enum OutcomeAction {
     Continue,
     Retry,
     ReturnTitle,
+}
+
+fn spawn_lab_statistics(
+    mut commands: Commands,
+    assets: Res<UiAssets>,
+    lab: Option<Res<CombatLabSession>>,
+) {
+    if lab.is_none() {
+        return;
+    }
+    commands
+        .spawn((
+            Name::new("Combat Lab Live Statistics Drawer"),
+            LabStatisticsDrawer,
+            DespawnOnExit(Screen::Gameplay),
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(18.0),
+                top: Val::Px(86.0),
+                width: Val::Px(480.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(7.0),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(7.0)),
+                ..default()
+            },
+            BorderColor::all(ACCENT_EDGE),
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.045, 0.96)),
+            GlobalZIndex(12),
+        ))
+        .with_children(|drawer| {
+            drawer
+                .spawn((
+                    row_button("Statistics · Collapse", 210.0),
+                    LabStatisticsToggle,
+                ))
+                .with_child((
+                    LabStatisticsToggleText,
+                    blurb(&assets, "Statistics · Collapse"),
+                ));
+            drawer
+                .spawn((
+                    LabStatisticsPanel,
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(5.0),
+                        ..default()
+                    },
+                ))
+                .with_children(|panel| {
+                    panel.spawn(heading(&assets, "LIVE COMBAT LAB STATISTICS"));
+                    panel.spawn((
+                        LabStatisticsText,
+                        Text::new("Waiting for canonical combat statistics…"),
+                        TextFont {
+                            font: assets.body.clone().into(),
+                            ..TextFont::from_font_size(13.0)
+                        },
+                        TextColor(LABEL),
+                    ));
+                    panel.spawn(blurb(
+                        &assets,
+                        "Totals are gameplay-owned · per-unit and timeline details open in the outcome report.",
+                    ));
+                });
+        });
+}
+
+fn toggle_lab_statistics(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<LabStatisticsToggle>)>,
+    mut panels: Query<&mut Visibility, With<LabStatisticsPanel>>,
+    mut labels: Query<&mut Text, With<LabStatisticsToggleText>>,
+) {
+    if !clicked
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        return;
+    }
+    let Ok(mut visibility) = panels.single_mut() else {
+        return;
+    };
+    let expanded = *visibility != Visibility::Hidden;
+    *visibility = if expanded {
+        Visibility::Hidden
+    } else {
+        Visibility::Inherited
+    };
+    if let Ok(mut text) = labels.single_mut() {
+        **text = if expanded {
+            "Statistics · Expand".to_owned()
+        } else {
+            "Statistics · Collapse".to_owned()
+        };
+    }
+}
+
+fn update_lab_statistics(
+    summary: Option<Res<CombatSummary>>,
+    mut text: Query<&mut Text, With<LabStatisticsText>>,
+) {
+    let (Some(summary), Ok(mut text)) = (summary.as_deref(), text.single_mut()) else {
+        return;
+    };
+    **text = live_statistics_label(summary);
+}
+
+fn live_statistics_label(summary: &CombatSummary) -> String {
+    let mana = if summary.channelled_mana.is_empty() {
+        "none".to_owned()
+    } else {
+        summary
+            .channelled_mana
+            .iter()
+            .map(|(element, amount)| format!("{element} {amount}"))
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    let outcome = summary
+        .outcome
+        .map_or("IN PROGRESS", |outcome| match outcome {
+            EncounterOutcome::Victory => "VICTORY",
+            EncounterOutcome::Defeat => "DEFEAT",
+        });
+    format!(
+        "Round {} · Outcome {outcome}\n\
+         Commands {} successful / {} refused · AI choices {}\n\
+         Move {} actions · {} distance / {} budget used\n\
+         Casts {} · Channel {} · Strikes {} · Idle turns {}\n\
+         Disables {} raw / {} prevented / {} applied\n\
+         Restored {} · Downed {} · Revived {}\n\
+         Mana restored · {mana}",
+        summary.rounds,
+        summary.successful_commands,
+        summary.refused_commands,
+        summary.ai_selection_count,
+        summary.moves,
+        summary.movement_distance,
+        summary.movement_budget_used,
+        summary.casts,
+        summary.channels,
+        summary.strikes,
+        summary.idle_turns,
+        summary.raw_disables,
+        summary.prevented_disables,
+        summary.applied_disables,
+        summary.restored_cells,
+        summary.downings,
+        summary.revivals,
+    )
 }
 
 #[expect(
@@ -1102,6 +1276,35 @@ mod tests {
         .expect("restoration is a decision");
         assert!(restore.contains("CASTER ALLY 1 · HEDGE-MAGE #1"));
         assert!(restore.contains("RESTORE TARGET ALLY 2 · RAIDER #2"));
+    }
+
+    #[test]
+    fn live_lab_statistics_are_labelled_from_the_canonical_summary() {
+        let mut summary = CombatSummary::default();
+        summary.rounds = 4;
+        summary.successful_commands = 31;
+        summary.refused_commands = 3;
+        summary.movement_distance = 17;
+        summary.movement_budget_used = 22;
+        summary.channels = 4;
+        summary.raw_disables = 19;
+        summary.prevented_disables = 7;
+        summary.applied_disables = 12;
+        summary.channelled_mana.insert("Ember".to_owned(), 3);
+        let label = live_statistics_label(&summary);
+        for expected in [
+            "Round 4",
+            "31 successful / 3 refused",
+            "17 distance / 22 budget used",
+            "Channel 4",
+            "19 raw / 7 prevented / 12 applied",
+            "Ember 3",
+        ] {
+            assert!(
+                label.contains(expected),
+                "missing labelled total {expected:?}"
+            );
+        }
     }
 
     #[test]
