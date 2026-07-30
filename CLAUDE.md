@@ -279,12 +279,13 @@ feat/ticket    ──PR──►  wave/N-name  ──one walked PR──►  dev
 ```
 
 `dev` is permanent — it is the integration branch, not a release branch that gets
-cleaned up. Standalone work PRs straight onto it; **grouped gameplay-ticket work
-goes through a short-lived `wave/N-*` branch** — ticket PRs merge into the wave on
-green audits, a human walks the integrated build once, and the whole wave lands on
-`dev` in one merge, after which the wave branch is deleted (never `dev`). Partially
-delivered epics stay In Review across waves; see CONTRIBUTING.md's wave section
-for the full rules.
+cleaned up. Standalone work PRs straight onto it; **related work with shared contracts,
+hot files, or one meaningful runtime checkpoint goes through a short-lived
+`wave/*` branch**. Source branches are work lanes and need leaf PRs only when focused
+review is useful. The combined wave gets the full audit and human walk, then lands on
+`dev` in one merge and is deleted (never `dev`). See
+[parallel development](docs/development/parallel-development.md) for the topology
+decision table and reconciliation rules.
 
 ```sh
 gh pr create --base dev          # standalone work
@@ -307,6 +308,11 @@ allowed to be wrong.
   the Rust jobs.
 
 ### Skill pipeline
+
+Codex reads root [`AGENTS.md`](AGENTS.md) automatically and discovers repository
+skills under `.agents/skills/`. Use `$plan-parallel-work` before dividing a related
+outcome across lanes, and `$land-development-wave` to reconcile and land an existing
+batch without multiplying release gates.
 
 The PR lifecycle is driven by skills in `.claude/skills/`:
 `/create-pr` → `/audit-pr` → `/merge-pr` for feature work into `dev`;

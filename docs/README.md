@@ -19,6 +19,7 @@ doc or the code, not drift.
 |---|---|
 | Seeing the game for the first time | The root [README](../README.md), then the full [game design](design/game.md) |
 | New to the codebase | [development/setup.md](development/setup.md), then [architecture.md](architecture.md) |
+| Dividing related work across branches or agents | [development/parallel-development.md](development/parallel-development.md) |
 | Taking ownership of the map | [development/onboarding.md](development/onboarding.md) |
 | Changing game values without writing Rust | [development/config.md](development/config.md) |
 | Deciding what a mechanic should do | [design/game.md](design/game.md) |
@@ -54,6 +55,7 @@ doc or the code, not drift.
 | [design/game.md](design/game.md) | Everyone | The game this is heading toward: lattices, elements, spells, damage, and the questions deliberately left open | The designer; open questions close only on purpose |
 | [design/visual-language.md](design/visual-language.md) | Artists, designers, rendering contributors | The canonical art palette, how it grows, and the boundary between colour, material, lighting, and UI | The designer; tooling is shared |
 | [development/setup.md](development/setup.md) | New contributors | Prerequisites, running the game, first-run verification, and platform setup | Whoever changes build or platform requirements |
+| [development/parallel-development.md](development/parallel-development.md) | Contributors, agents, integrators | Choosing independent, stacked, or wave topology; ownership lanes; combined review and cleanup | Both, jointly |
 | [development/onboarding.md](development/onboarding.md) | New map contributors | Map vocabulary, ownership boundaries, and first checks | World owner |
 | [development/config.md](development/config.md) | Designers, non-programmers | Changing the game through `assets/config/*.ron` without recompiling | Whoever adds or renames a setting |
 | [development/release.md](development/release.md) | Release contributors | Pre-alpha artifact shape, application identity, retained symbols, and reserved future credential boundaries | Whoever changes packaging |
@@ -66,7 +68,8 @@ doc or the code, not drift.
 | [planning/foundation-hardening.md](planning/foundation-hardening.md) | Reviewers and maintainers | July 2026 correctness, scalability, branch, stress, and handoff evidence for the foundation cleanup | Foundation hardening owner |
 
 Outside this directory: the root [`README.md`](../README.md) introduces the game,
-[`CLAUDE.md`](../CLAUDE.md) is the operational summary loaded into every agent
-session, [`CONTRIBUTING.md`](../CONTRIBUTING.md) is house style and the PR workflow,
+[`AGENTS.md`](../AGENTS.md) is Codex's repository instruction surface,
+[`CLAUDE.md`](../CLAUDE.md) is the operational summary loaded into Claude sessions,
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) is house style and the PR workflow,
 and [`crates/hex_map/CLAUDE.md`](../crates/hex_map/CLAUDE.md) is the map crate's own
 contract, read automatically when working in that directory.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Parallel Work"
+  short_description: "Choose safe branch topology before parallel coding"
+  default_prompt: "Use $plan-parallel-work to divide this work into owned lanes and choose independent, stacked, or wave integration."
