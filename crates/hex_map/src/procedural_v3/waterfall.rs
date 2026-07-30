@@ -321,8 +321,8 @@ pub(crate) fn construct_patch(
     let bypass = bypass_tiles(patch_radius, &mask)?;
     let secondary_bypass = secondary_bypass_tiles(patch_radius, &mask)?;
     let secondary_apron = secondary_slope_apron(patch_radius, &mask)?;
-    let ring_layout = patch.layout().kind == super::layout::LayoutKind::Ring7;
-    let ring_secondary_flank = if ring_layout {
+    let composite_layout = patch.layout().kind.is_composite();
+    let ring_secondary_flank = if composite_layout {
         ring_secondary_flank_apron(patch_radius, &mask)?
     } else {
         Vec::new()
@@ -370,7 +370,7 @@ pub(crate) fn construct_patch(
             protected_by_coord.insert(local, edge.preferred_level());
         }
     }
-    if ring_layout {
+    if composite_layout {
         if !mask.contains(&RING_BRIDGE_FLANK.coord) {
             return Err(vec![recipe_issue(
                 "Waterfall Ring7 patch cannot fit the bridge-flank landing",
@@ -599,7 +599,7 @@ pub(crate) fn construct_patch(
         .patch_to_world(&mut plan)
         .map_err(|error| vec![recipe_issue(error)])?;
     seam_shape.apply(&mut plan.volume)?;
-    if ring_layout {
+    if composite_layout {
         let critical_landing = bypass
             .first()
             .and_then(|lane| lane.first())

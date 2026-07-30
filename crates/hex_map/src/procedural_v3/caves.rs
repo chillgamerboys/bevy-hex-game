@@ -1635,7 +1635,7 @@ fn context_patch_frame(
     mask: &BTreeSet<HexCoord>,
 ) -> Result<PatchFrame, Vec<WorldValidationIssue>> {
     let mut frame = patch_frame(mask)?;
-    if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+    if patch.layout().kind.is_composite() {
         frame.max_entrance_inset = 4;
     }
     Ok(frame)

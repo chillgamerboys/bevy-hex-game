@@ -6,7 +6,7 @@ use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::hills;
-use super::layout::{resolve_layout, LayoutKind, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
 use super::seed::SeedStream;
@@ -318,7 +318,7 @@ pub(crate) fn construct_patch(
             },
         );
     }
-    let ring_layout = patch.layout().kind == LayoutKind::Ring7;
+    let composite_layout = patch.layout().kind.is_composite();
     let first_sky_bridge_id = plan
         .structures
         .by_id
@@ -336,7 +336,7 @@ pub(crate) fn construct_patch(
         let start_level = upper.get(&start).map_or(upper_base, |cell| cell.level);
         let end_level = upper.get(&end).map_or(start_level, |cell| cell.level);
         let denominator = row.len().saturating_sub(1).max(1);
-        let ring_route = ring_layout
+        let ring_route = composite_layout
             .then(|| ring_bridge_route(row, &upper_mask, &reserved_ring_bridge_surfaces))
             .transpose()?;
         if let Some(route) = &ring_route {
@@ -355,7 +355,7 @@ pub(crate) fn construct_patch(
                     region: primary_region,
                     bridge: true,
                 };
-                if ring_layout {
+                if composite_layout {
                     if ring_bridge_corridor_index(index, row.len()) {
                         upper.insert(lane_coord, bridge);
                     }
@@ -788,7 +788,7 @@ pub(crate) fn validate_sky(
             settings.min_clearance
         )));
     }
-    let bridge_surfaces = if plan.layout.kind == LayoutKind::Ring7 {
+    let bridge_surfaces = if plan.layout.kind.is_composite() {
         validate_ring_upper_bridges(plan, &primary, &metal_primary_surfaces, &mut issues)
     } else {
         let count = count_u32(metal_primary_surfaces.len());

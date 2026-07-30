@@ -445,7 +445,7 @@ fn construct_patch_with_objects(
     }
     let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
         .map_err(|error| vec![recipe_issue(error)])?;
-    let stitched_patch = patch.layout().kind == super::layout::LayoutKind::Ring7;
+    let stitched_patch = patch.layout().kind.is_composite();
     let mask = frame
         .local_mask(patch.mask())
         .map_err(|error| vec![recipe_issue(error)])?;

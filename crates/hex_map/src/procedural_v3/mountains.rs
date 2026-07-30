@@ -271,7 +271,7 @@ fn construct_patch_with_streams(
         &BTreeSet::new(),
     )
     .ok_or_else(|| vec![recipe_issue("Mountains could not route its high pass")])?;
-    let landing_overlap: usize = if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+    let landing_overlap: usize = if patch.layout().kind.is_composite() {
         1
     } else {
         2
@@ -286,7 +286,7 @@ fn construct_patch_with_streams(
                 .saturating_sub(landing_overlap.saturating_mul(2)),
         )
         .collect();
-    let bypass_controls = if patch.layout().kind == super::layout::LayoutKind::Ring7 {
+    let bypass_controls = if patch.layout().kind.is_composite() {
         ordered_bypass_controls(
             &route_mask,
             party_coord,

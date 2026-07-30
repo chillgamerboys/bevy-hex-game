@@ -26,6 +26,14 @@ pub(crate) enum LayoutKind {
     Ring7,
 }
 
+impl LayoutKind {
+    /// Whether this layout stitches multiple independently generated patches.
+    #[must_use]
+    pub(crate) const fn is_composite(self) -> bool {
+        matches!(self, Self::Ring7)
+    }
+}
+
 /// Stable semantic patch slot. IDs also namespace V3 seed streams.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct PatchId(pub(crate) u32);
