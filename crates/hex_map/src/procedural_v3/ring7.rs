@@ -412,15 +412,29 @@ fn construct_fragment(
     art_catalog: &RuntimeArtCatalog,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     match &spec.recipe {
-        V3RecipeSettings::Hills(settings) => {
-            hills::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
-        V3RecipeSettings::Mountains(settings) => {
-            mountains::construct_patch(patch, settings, level_height, mode)
-        }
-        V3RecipeSettings::Waterfall(settings) => {
-            waterfall::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
+        V3RecipeSettings::Hills(settings) => hills::construct_patch_with_catalog(
+            patch,
+            settings,
+            spec.environment,
+            level_height,
+            mode,
+            art_catalog,
+        ),
+        V3RecipeSettings::Mountains(settings) => mountains::construct_patch_with_catalog(
+            patch,
+            settings,
+            level_height,
+            mode,
+            art_catalog,
+        ),
+        V3RecipeSettings::Waterfall(settings) => waterfall::construct_patch_with_catalog(
+            patch,
+            settings,
+            spec.environment,
+            level_height,
+            mode,
+            art_catalog,
+        ),
         V3RecipeSettings::Forest(settings) => forest::construct_patch(
             patch,
             settings,
@@ -435,9 +449,14 @@ fn construct_fragment(
         V3RecipeSettings::Caves(settings) => {
             caves::construct_patch(patch, settings, level_height, mode)
         }
-        V3RecipeSettings::SkyIslands(settings) => {
-            sky::construct_patch(patch, settings, spec.environment, level_height, mode)
-        }
+        V3RecipeSettings::SkyIslands(settings) => sky::construct_patch_with_catalog(
+            patch,
+            settings,
+            spec.environment,
+            level_height,
+            mode,
+            art_catalog,
+        ),
         V3RecipeSettings::Volcano(_)
         | V3RecipeSettings::DeepForest(_)
         | V3RecipeSettings::Prairie(_) => Err(vec![recipe_issue(format!(
@@ -469,7 +488,7 @@ fn validate_fragment(
         V3RecipeSettings::Waterfall(_) => waterfall::validate_patch(patch, fragment).map(|_| ()),
         V3RecipeSettings::Forest(_) => forest::validate_patch(patch, fragment).map(|_| ()),
         V3RecipeSettings::Hills(settings) => {
-            hills::validate_patch(patch, fragment, settings).map(|_| ())
+            hills::validate_patch(patch, fragment, settings, spec.environment).map(|_| ())
         }
         V3RecipeSettings::Mountains(settings) => {
             mountains::validate_patch(patch, fragment, settings).map(|_| ())
@@ -479,7 +498,7 @@ fn validate_fragment(
             caves::validate_caves_with_surface_sink(patch, fragment, settings).map(|_| ())
         }
         V3RecipeSettings::SkyIslands(settings) => {
-            validate_canonical(patch, fragment, |plan| sky::validate_sky(plan, settings))
+            sky::validate_patch(patch, fragment, settings, spec.environment).map(|_| ())
         }
         V3RecipeSettings::Volcano(_)
         | V3RecipeSettings::DeepForest(_)
