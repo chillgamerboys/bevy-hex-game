@@ -78,7 +78,7 @@ impl MapPresentationProjection {
 
     /// Retains feature presentations whose exact authored support remains valid.
     ///
-    /// Terrain edits may remove presentation-only features such as tall grass.
+    /// Terrain edits may remove presentation-only features such as grass or cave flora.
     /// Blocking structures use the separate conservative edit guard instead.
     pub(crate) fn retain_features(&mut self, mut retain: impl FnMut(&PlannedFeature) -> bool) {
         self.features.retain(|_id, feature| retain(feature));
@@ -791,6 +791,7 @@ fn encode_features(
         encoder.tag(match feature.kind {
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
+            FeatureKind::CaveVegetation => 2,
         });
     }
     Ok(())

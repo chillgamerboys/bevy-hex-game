@@ -354,10 +354,8 @@ pub(crate) fn build(
                     "Caves requires the accepted runtime art catalog".to_owned(),
                 )
             })?;
-            CaveCrystalObjectSet::resolve(art_catalog)
-                .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
             finish_build(
-                caves::generate(grid_radius, level_height, settings, seed)?,
+                caves::generate(grid_radius, level_height, settings, seed, art_catalog)?,
                 grid_radius,
                 level_height,
                 settings,
@@ -748,6 +746,9 @@ fn caves_recipe_metrics(metrics: &caves::CavesMetrics) -> CavesReportMetrics {
         critical_floors: metrics.critical_floors,
         optional_dark_floors: metrics.optional_dark_floors,
         gameplay_lights: metrics.gameplay_lights,
+        moss_roots: metrics.moss_roots,
+        lichen_roots: metrics.lichen_roots,
+        vegetation_visual_voxels: metrics.vegetation_visual_voxels,
         minimum_roof_thickness: metrics.minimum_roof_thickness,
         minimum_clearance: metrics.minimum_clearance,
         maximum_clearance: metrics.maximum_clearance,

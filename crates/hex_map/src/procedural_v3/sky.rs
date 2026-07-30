@@ -1208,6 +1208,7 @@ fn validate_sky_inner(
     if ground_features.iter().any(|feature| match feature.kind {
         FeatureKind::Tree => !eligible_ground_dry.contains(&feature.root.coord),
         FeatureKind::TallGrass => !eligible_ground_valley.contains(&feature.root.coord),
+        FeatureKind::CaveVegetation => true,
     }) {
         issues.push(recipe_issue(
             "SkyIslands ground vegetation leaves eligible dry terrain, the revised Hills valley, or protected clearances",

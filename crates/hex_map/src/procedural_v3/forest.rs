@@ -898,6 +898,7 @@ fn validate_forest_inner(
                 SMALL_BROADLEAF_ID | TALL_NARROW_ID | OLD_GROWTH_ID
             ),
             FeatureKind::TallGrass => feature.object_id.as_str() == GRASS_TUFT_ID,
+            FeatureKind::CaveVegetation => false,
         };
         if !accepted {
             issues.push(recipe_issue(format!(

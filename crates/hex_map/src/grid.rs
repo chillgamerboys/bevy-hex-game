@@ -16,7 +16,9 @@ use std::fmt;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use hex_assets::{to_color, GameAssets, RuntimeArtCatalog, SubstanceTable};
+use hex_assets::{
+    to_color, GameAssets, HexObjectRotation, ObjectBlueprint, RuntimeArtCatalog, SubstanceTable,
+};
 use hex_core::{
     BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
@@ -566,6 +568,31 @@ struct EditableSpatialConsequences<'w> {
     blockers: Option<ResMut<'w, TraversalBlockers>>,
 }
 
+/// Reprojects an accepted cave prop using the feature renderer's exact origin convention.
+fn project_cave_vegetation_cells(
+    root: TilePos,
+    rotation: HexObjectRotation,
+    blueprint: &ObjectBlueprint,
+) -> Option<BTreeSet<TilePos>> {
+    let visual_origin_level = root.level.checked_add(1)?;
+    let mut cells = BTreeSet::new();
+    for placement in &blueprint.placements {
+        let rotated = rotation.rotate_voxel(placement.position, blueprint.origin)?;
+        let delta_q = rotated.q.checked_sub(blueprint.origin.q)?;
+        let delta_r = rotated.r.checked_sub(blueprint.origin.r)?;
+        let coord = HexCoord::from_axial(
+            root.coord.x().checked_add(delta_q)?,
+            root.coord.y().checked_add(delta_r)?,
+        );
+        let relative_level = rotated.level.checked_sub(blueprint.origin.level)?;
+        let level = visual_origin_level.checked_add(relative_level)?;
+        if !cells.insert(TilePos::new(coord, level)) {
+            return None;
+        }
+    }
+    (cells.len() == blueprint.placements.len()).then_some(cells)
+}
+
 /// Applies terrain edits requested by gameplay, then rebuilds what changed.
 ///
 /// Naive on purpose: any edit respawns the whole grid. Correct, obviously so, and
@@ -612,19 +639,49 @@ fn apply_terrain_edits(
     }
 
     if let Some(presentation) = presentation.as_deref_mut() {
-        presentation.retain_features(|feature| {
-            if feature.kind != procedural_v3::FeatureKind::TallGrass
-                || !changed_coords.contains(&feature.root.coord)
-            {
-                return true;
+        presentation.retain_features(|feature| match feature.kind {
+            procedural_v3::FeatureKind::Tree => true,
+            procedural_v3::FeatureKind::TallGrass => {
+                if !changed_coords.contains(&feature.root.coord) {
+                    return true;
+                }
+                let Some(column) = map.column(feature.root.coord) else {
+                    return false;
+                };
+                TraversalProfile::WALKER.admits_surface(
+                    table.is_solid(column.get(feature.root.level)),
+                    column.headroom_above(feature.root.level.saturating_add(1)),
+                )
             }
-            let Some(column) = map.column(feature.root.coord) else {
-                return false;
-            };
-            TraversalProfile::WALKER.admits_surface(
-                table.is_solid(column.get(feature.root.level)),
-                column.headroom_above(feature.root.level.saturating_add(1)),
-            )
+            procedural_v3::FeatureKind::CaveVegetation => {
+                let Some(blueprint) = art_catalog
+                    .as_deref()
+                    .and_then(|catalog| catalog.object(&feature.object_id))
+                else {
+                    return false;
+                };
+                let Some(visual_cells) =
+                    project_cave_vegetation_cells(feature.root, feature.rotation, blueprint)
+                else {
+                    return false;
+                };
+                if !changed_coords.contains(&feature.root.coord)
+                    && visual_cells
+                        .iter()
+                        .all(|position| !changed_coords.contains(&position.coord))
+                {
+                    return true;
+                }
+                visual_cells.iter().all(|visual| {
+                    let Some(column) = map.column(visual.coord) else {
+                        return false;
+                    };
+                    TraversalProfile::WALKER.admits_surface(
+                        table.is_solid(column.get(feature.root.level)),
+                        column.headroom_above(feature.root.level.saturating_add(1)),
+                    ) && map.get(*visual).is_air()
+                })
+            }
         });
     }
 

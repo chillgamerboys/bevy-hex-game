@@ -1836,6 +1836,7 @@ fn validate_hills_inner(
         .any(|feature| match feature.kind {
             FeatureKind::Tree => !eligible_dry.contains(&feature.root.coord),
             FeatureKind::TallGrass => !eligible_valley.contains(&feature.root.coord),
+            FeatureKind::CaveVegetation => true,
         })
     {
         issues.push(recipe_issue(

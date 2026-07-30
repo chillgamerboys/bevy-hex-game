@@ -101,6 +101,7 @@ pub(crate) fn spawn_presentations(
             Name::new(match feature.kind {
                 FeatureKind::Tree => "GeneratedTree",
                 FeatureKind::TallGrass => "GeneratedTallGrass",
+                FeatureKind::CaveVegetation => "GeneratedCaveVegetation",
             }),
         ));
         if feature.kind == FeatureKind::Tree {
@@ -134,11 +135,12 @@ mod tests {
             object_id: object_id(match kind {
                 FeatureKind::Tree => "plant/small-broadleaf",
                 FeatureKind::TallGrass => "prop/grass-tuft",
+                FeatureKind::CaveVegetation => "prop/cave-moss",
             }),
             rotation: HexObjectRotation::new(4).expect("fixture rotation should be valid"),
             blocker_footprint: match kind {
                 FeatureKind::Tree => BTreeSet::from([root]),
-                FeatureKind::TallGrass => BTreeSet::new(),
+                FeatureKind::TallGrass | FeatureKind::CaveVegetation => BTreeSet::new(),
             },
         }
     }
@@ -194,6 +196,35 @@ mod tests {
 
         let root = *roots.first().expect("publisher should return one root");
         assert!(world.entity(root).get::<CanopyOccluder>().is_none());
+    }
+
+    #[test]
+    fn cave_vegetation_publishes_its_distinct_noncanopy_identity() {
+        let planned = feature(FeatureKind::CaveVegetation);
+        let projection =
+            MapPresentationProjection::with_test_features([(FeatureId(3), planned.clone())]);
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let roots = {
+            let mut commands = Commands::new(&mut queue, &world);
+            spawn_presentations(&mut commands, 0.4, Some(&projection))
+                .expect("valid cave vegetation should publish")
+        };
+        queue.apply(&mut world);
+
+        let root = *roots.first().expect("publisher should return one root");
+        let entity = world.entity(root);
+        assert_eq!(
+            entity.get::<Name>().map(Name::as_str),
+            Some("GeneratedCaveVegetation")
+        );
+        assert_eq!(
+            entity
+                .get::<ObjectInstance>()
+                .map(ObjectInstance::object_id),
+            Some(&planned.object_id)
+        );
+        assert!(entity.get::<CanopyOccluder>().is_none());
     }
 
     #[test]

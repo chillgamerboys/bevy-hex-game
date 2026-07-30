@@ -448,7 +448,12 @@ fn construct_dry_plans(
             super::vegetation::tests::runtime_art_catalog(),
         )?,
         fort::construct_patch(patch(layout, 4)?, &V3FortSettings, LEVEL_HEIGHT, mode)?,
-        caves::construct_patch(patch(layout, 5)?, &recipes.caves, LEVEL_HEIGHT, mode)?,
+        caves::construct_patch_without_vegetation(
+            patch(layout, 5)?,
+            &recipes.caves,
+            LEVEL_HEIGHT,
+            mode,
+        )?,
         sky::construct_patch_with_catalog(
             patch(layout, 6)?,
             &recipes.sky,

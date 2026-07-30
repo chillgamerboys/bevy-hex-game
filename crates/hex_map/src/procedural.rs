@@ -283,6 +283,12 @@ pub struct CavesMetrics {
     pub optional_dark_floors: u32,
     /// Generated public gameplay-light sources.
     pub gameplay_lights: u32,
+    /// Exact rooted cave-moss instances.
+    pub moss_roots: u32,
+    /// Exact rooted cave-lichen instances.
+    pub lichen_roots: u32,
+    /// Exact authored voxels occupied by all cave vegetation.
+    pub vegetation_visual_voxels: u32,
     /// Thinnest roof above any covered cave floor.
     pub minimum_roof_thickness: Level,
     /// Smallest clear-air interval above a covered floor.

@@ -696,6 +696,7 @@ fn encode_features(encoder: &mut FingerprintEncoder, features: &FeaturePlan) -> 
         encoder.tag(match feature.kind {
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
+            FeatureKind::CaveVegetation => 2,
         });
         encoder.str(feature.object_id.as_str())?;
         encoder.u8(feature.rotation.steps());
