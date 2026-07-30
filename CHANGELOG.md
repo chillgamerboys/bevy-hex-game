@@ -3,7 +3,7 @@
 Release sections are prepended here and dated when their promoted `main` commit is
 tagged. `v0.3.0` is the first tagged build.
 
-## Unreleased
+## v0.4.0 — 2026-07-30
 
 ### Features
 
