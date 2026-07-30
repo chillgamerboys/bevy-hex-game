@@ -16,8 +16,8 @@ use hex_core::{
 use crate::procedural::{
     CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
     FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    MountainsMetrics as MountainsReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
-    WaterfallMetrics as WaterfallReportMetrics,
+    MountainsMetrics as MountainsReportMetrics, PrairieMetrics as PrairieReportMetrics,
+    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -52,6 +52,7 @@ mod materialize;
 pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
 mod patch;
+mod prairie;
 mod ring7;
 mod seam;
 mod seed;
@@ -66,6 +67,7 @@ mod selection;
 mod sky;
 mod traversal;
 mod vegetation;
+mod vegetation_landform;
 #[expect(
     dead_code,
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"
@@ -186,6 +188,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Forest(_)
                     | V3RecipeSettings::Fort(_)
                     | V3RecipeSettings::Caves(_)
+                    | V3RecipeSettings::Prairie(_)
             ) =>
         {
             Ok(())
@@ -338,6 +341,25 @@ pub(crate) fn build(
                 started,
                 caves_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Caves(caves_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Prairie(_)) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Prairie requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                prairie::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                prairie_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Prairie(prairie_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) => Err(V3GenerationError::RecipeUnavailable(recipe_name(
@@ -622,6 +644,21 @@ fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics
         )
         .unwrap_or(i32::MAX),
     }
+}
+
+fn prairie_report_metrics(metrics: &PrairieReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.grass_coverage_percent,
+        ..Default::default()
+    }
+}
+
+const fn prairie_recipe_metrics(metrics: &PrairieReportMetrics) -> PrairieReportMetrics {
+    *metrics
 }
 
 fn fort_report_metrics(metrics: &fort::FortMetrics) -> TacticalMetrics {
