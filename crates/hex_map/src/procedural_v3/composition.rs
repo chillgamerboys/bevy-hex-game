@@ -1682,8 +1682,8 @@ mod tests {
             caves: generated_patch(
                 V3EnvironmentSettings::Rocky,
                 V3RecipeSettings::Caves(V3CavesSettings {
-                    surface_level: 16,
-                    cave_floor_level: 7,
+                    surface_level: 17,
+                    cave_floor_level: 6,
                     chamber_count: 9,
                 }),
             ),

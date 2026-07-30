@@ -44,6 +44,8 @@ use crate::settings::{
 const CORRIDOR_CLEARANCE: i32 = 3;
 const CHAMBER_CLEARANCE: i32 = 4;
 const MIN_ROOF_THICKNESS: i32 = 3;
+const CAVE_TIER_RISE: i32 = 2;
+const CAVE_TIER_COUNT: usize = 3;
 const SURFACE_WATER_LEVEL: i32 = 14;
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
@@ -1308,7 +1310,7 @@ fn build_topology(
         chamber_centres.len(),
         streams.map(|streams| streams.floors),
     );
-    let chamber_footprints = chamber_footprints(mask, &chamber_centres)?;
+    let chamber_footprints = chamber_footprints(mask, &chamber_centres, &entrance)?;
 
     let ramp_end = entrance
         .rows
@@ -1351,13 +1353,8 @@ fn build_topology(
         )?);
     }
 
-    let floor_levels = reconcile_floor_levels(
-        settings,
-        &chamber_footprints,
-        &chamber_levels,
-        &mut routes,
-        &entrance,
-    )?;
+    let floor_levels =
+        reconcile_floor_levels(&chamber_footprints, &chamber_levels, &mut routes, &entrance)?;
     let ramp_coords = entrance.coords();
     let covered_coords: BTreeSet<_> = floor_levels
         .keys()
@@ -1422,20 +1419,20 @@ fn build_topology(
 fn chamber_footprints(
     mask: &BTreeSet<HexCoord>,
     chamber_centres: &[HexCoord],
+    entrance: &CaveRoute,
 ) -> Result<Vec<BTreeSet<HexCoord>>, Vec<WorldValidationIssue>> {
+    let entrance_coords = entrance.coords();
     let footprints = chamber_centres
         .iter()
         .enumerate()
         .map(|(index, center)| {
-            let radius = if index == 0 || index + 1 == chamber_centres.len() {
-                2
-            } else {
-                1 + u32::from(index % 4 == 0)
-            };
+            let radius = 1 + u32::from(matches!(index, 0 | 8 | 11));
             center
                 .within_radius(radius)
                 .into_iter()
-                .filter(|coord| mask.contains(coord))
+                .filter(|coord| {
+                    mask.contains(coord) && (index != 0 || !entrance_coords.contains(coord))
+                })
                 .collect::<BTreeSet<_>>()
         })
         .collect::<Vec<_>>();
@@ -1461,7 +1458,7 @@ fn cave_target_coordinates(
     entrance: &CaveRoute,
 ) -> Result<(BTreeSet<HexCoord>, BTreeSet<HexCoord>), Vec<WorldValidationIssue>> {
     let chamber_centres = chamber_centres(mask, frame, orientation, settings.chamber_count)?;
-    let footprints = chamber_footprints(mask, &chamber_centres)?;
+    let footprints = chamber_footprints(mask, &chamber_centres, entrance)?;
     let ramp_end = entrance
         .rows
         .last()
@@ -1575,10 +1572,10 @@ fn chamber_centres(
 ) -> Result<Vec<HexCoord>, Vec<WorldValidationIssue>> {
     const SLOTS: [(i32, i32); 12] = [
         (0, 0),
-        (-4, 4),
+        (-6, 6),
         (4, 0),
         (0, 7),
-        (-9, 9),
+        (-11, 11),
         (-5, 9),
         (0, 10),
         (5, 5),
@@ -1646,28 +1643,20 @@ fn chamber_floor_levels(
     count: usize,
     stream: Option<SeedStream<'_>>,
 ) -> Vec<i32> {
-    let mut levels = vec![settings.cave_floor_level; count];
-    for (parent, child) in chamber_tree_edges(count) {
-        let parent_level = levels
-            .get(parent)
-            .copied()
-            .unwrap_or(settings.cave_floor_level);
-        let rises = stream.is_none_or(|stream| {
-            stream
-                .sample(u64::try_from(child).unwrap_or(u64::MAX))
-                .is_multiple_of(3)
-                || child % 4 == 0
-        });
-        if let Some(level) = levels.get_mut(child) {
-            *level = parent_level.saturating_add(i32::from(rises));
-        }
-    }
-    if let Some((index, level)) = levels.iter_mut().enumerate().last() {
-        if index > 3 {
-            *level = (*level).max(settings.cave_floor_level.saturating_add(2));
-        }
-    }
-    levels
+    let north_tier = stream.map_or(1, |stream| i32::from(stream.sample(0).is_multiple_of(2)));
+    (0..count)
+        .map(|index| {
+            let tier = match index {
+                0 | 2 | 8 => 0,
+                4 => 2,
+                3 | 6 | 7 => north_tier,
+                _ => 1,
+            };
+            settings
+                .cave_floor_level
+                .saturating_add(CAVE_TIER_RISE.saturating_mul(tier))
+        })
+        .collect()
 }
 
 fn entrance_ramp(
@@ -1784,12 +1773,17 @@ fn paired_route(
 }
 
 fn reconcile_floor_levels(
-    settings: &V3CavesSettings,
     footprints: &[BTreeSet<HexCoord>],
     chamber_levels: &[i32],
     routes: &mut [CaveRoute],
     entrance: &CaveRoute,
 ) -> Result<BTreeMap<HexCoord, i32>, Vec<WorldValidationIssue>> {
+    if footprints.len() != chamber_levels.len() {
+        return Err(vec![recipe_issue(
+            "Caves chamber tiers do not match their authored footprints",
+        )]);
+    }
+
     let mut floors = BTreeMap::new();
     for (footprint, level) in footprints.iter().zip(chamber_levels) {
         for coord in footprint {
@@ -1798,24 +1792,140 @@ fn reconcile_floor_levels(
             }
         }
     }
-    for route in routes.iter_mut() {
-        for row in &mut route.rows {
-            let existing: BTreeSet<_> = row
-                .iter()
-                .filter_map(|position| floors.get(&position.coord).copied())
-                .collect();
-            if existing.len() > 1 {
-                return Err(vec![recipe_issue(
-                    "Caves corridor row intersects incompatible chamber terraces",
-                )]);
+    for (route_index, route) in routes.iter_mut().enumerate() {
+        let preferred = route
+            .rows
+            .iter()
+            .map(|row| {
+                row.first().map(|position| position.level).ok_or_else(|| {
+                    vec![recipe_issue(format!(
+                        "Caves corridor {route_index} contains an empty row"
+                    ))]
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fixed = route
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(row_index, row)| {
+                let existing = row
+                    .iter()
+                    .filter_map(|position| floors.get(&position.coord).copied())
+                    .collect::<BTreeSet<_>>();
+                if existing.len() > 1 {
+                    return Err(vec![recipe_issue(format!(
+                        "Caves corridor {route_index} row {row_index} intersects incompatible \
+                         chamber terraces"
+                    ))]);
+                }
+                Ok(existing.first().copied())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let anchors = fixed
+            .iter()
+            .enumerate()
+            .filter_map(|(index, level)| level.map(|level| (index, level)))
+            .collect::<Vec<_>>();
+        let Some(&(first_fixed, first_level)) = anchors.first() else {
+            return Err(vec![recipe_issue(format!(
+                "Caves corridor {route_index} has no chamber-tier anchor"
+            ))]);
+        };
+
+        let mut resolved = preferred.clone();
+        set_corridor_row_level(&mut resolved, first_fixed, first_level, route_index)?;
+        let mut next_level = first_level;
+        for (row_index, wanted) in preferred
+            .iter()
+            .copied()
+            .take(first_fixed)
+            .enumerate()
+            .rev()
+        {
+            let level = wanted.clamp(next_level.saturating_sub(1), next_level.saturating_add(1));
+            set_corridor_row_level(&mut resolved, row_index, level, route_index)?;
+            next_level = level;
+        }
+
+        for pair in anchors.windows(2) {
+            let Some(&(previous_fixed, previous_level)) = pair.first() else {
+                return Err(vec![recipe_issue(format!(
+                    "Caves corridor {route_index} lost a tier anchor"
+                ))]);
+            };
+            let Some(&(next_fixed, next_level)) = pair.get(1) else {
+                return Err(vec![recipe_issue(format!(
+                    "Caves corridor {route_index} lost a tier anchor"
+                ))]);
+            };
+            let available_steps =
+                u32::try_from(next_fixed.saturating_sub(previous_fixed)).unwrap_or(u32::MAX);
+            if previous_level.abs_diff(next_level) > available_steps {
+                return Err(vec![recipe_issue(format!(
+                    "Caves corridor {route_index} has too few rows to join chamber tiers"
+                ))]);
             }
-            let level = existing.first().copied().unwrap_or_else(|| {
-                row.first()
-                    .map_or(settings.cave_floor_level, |pos| pos.level)
-            });
+
+            let mut current_level = previous_level;
+            for (row_index, wanted) in preferred
+                .iter()
+                .copied()
+                .enumerate()
+                .take(next_fixed)
+                .skip(previous_fixed.saturating_add(1))
+            {
+                let remaining =
+                    i32::try_from(next_fixed.saturating_sub(row_index)).unwrap_or(i32::MAX);
+                let lower = current_level
+                    .saturating_sub(1)
+                    .max(next_level.saturating_sub(remaining));
+                let upper = current_level
+                    .saturating_add(1)
+                    .min(next_level.saturating_add(remaining));
+                if lower > upper {
+                    return Err(vec![recipe_issue(format!(
+                        "Caves corridor {route_index} cannot grade between chamber tiers"
+                    ))]);
+                }
+                let level = wanted.clamp(lower, upper);
+                set_corridor_row_level(&mut resolved, row_index, level, route_index)?;
+                current_level = level;
+            }
+            set_corridor_row_level(&mut resolved, next_fixed, next_level, route_index)?;
+        }
+
+        let Some(&(last_fixed, mut previous_level)) = anchors.last() else {
+            return Err(vec![recipe_issue(format!(
+                "Caves corridor {route_index} lost its final tier anchor"
+            ))]);
+        };
+        for (row_index, wanted) in preferred
+            .iter()
+            .copied()
+            .enumerate()
+            .skip(last_fixed.saturating_add(1))
+        {
+            let level = wanted.clamp(
+                previous_level.saturating_sub(1),
+                previous_level.saturating_add(1),
+            );
+            set_corridor_row_level(&mut resolved, row_index, level, route_index)?;
+            previous_level = level;
+        }
+
+        for (row_index, (row, level)) in route.rows.iter_mut().zip(resolved).enumerate() {
             for position in row {
+                if floors
+                    .get(&position.coord)
+                    .is_some_and(|existing| *existing != level)
+                {
+                    return Err(vec![recipe_issue(format!(
+                        "Caves corridor {route_index} row {row_index} would slope a chamber tier"
+                    ))]);
+                }
                 position.level = level;
-                floors.entry(position.coord).or_insert(level);
+                floors.insert(position.coord, level);
             }
         }
     }
@@ -1825,10 +1935,20 @@ fn reconcile_floor_levels(
                 position.level = level;
             }
         }
-        if route.rows.windows(2).any(|pair| {
-            !matches!(pair, [first, second] if first[0].level.abs_diff(second[0].level) <= 1
-                && first.iter().all(|from| second.iter().any(|to| from.coord.distance(to.coord) <= 1)))
-        }) {
+        let invalid_row = route.rows.iter().any(|row| {
+            !matches!(row, [first, second] if first.coord.distance(second.coord) == 1
+                && first.level.abs_diff(second.level) <= 1)
+        });
+        let invalid_transition = route.rows.windows(2).any(|pair| {
+            !matches!(pair, [first, second]
+            if first.iter().all(|from| second.iter().any(|to| {
+                from.coord.distance(to.coord) <= 1 && from.level.abs_diff(to.level) <= 1
+            }))
+            && second.iter().all(|to| first.iter().any(|from| {
+                from.coord.distance(to.coord) <= 1 && from.level.abs_diff(to.level) <= 1
+            })))
+        });
+        if invalid_row || invalid_transition {
             return Err(vec![recipe_issue(format!(
                 "Caves floor reconciliation made corridor {route_index} unwalkable"
             ))]);
@@ -1838,6 +1958,21 @@ fn reconcile_floor_levels(
         floors.remove(&coord);
     }
     Ok(floors)
+}
+
+fn set_corridor_row_level(
+    levels: &mut [i32],
+    row_index: usize,
+    level: i32,
+    route_index: usize,
+) -> Result<(), Vec<WorldValidationIssue>> {
+    let Some(slot) = levels.get_mut(row_index) else {
+        return Err(vec![recipe_issue(format!(
+            "Caves corridor {route_index} lost row {row_index} while grading its tiers"
+        ))]);
+    };
+    *slot = level;
+    Ok(())
 }
 
 fn cave_clearances(
@@ -2637,6 +2772,32 @@ fn validate_caves_inner(
     if minimum_clearance < CORRIDOR_CLEARANCE || maximum_clearance < CHAMBER_CLEARANCE {
         issues.push(recipe_issue(format!(
             "Caves clearance range {minimum_clearance}..={maximum_clearance} violates corridor/chamber contracts"
+        )));
+    }
+    let covered_floor_levels = interior
+        .floors
+        .difference(&interior.entrances)
+        .map(|floor| floor.level)
+        .collect::<BTreeSet<_>>();
+    let authored_tiers = (0..CAVE_TIER_COUNT)
+        .map(|tier| {
+            settings.cave_floor_level.saturating_add(
+                CAVE_TIER_RISE.saturating_mul(i32::try_from(tier).unwrap_or(i32::MAX)),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if !authored_tiers.is_subset(&covered_floor_levels)
+        || covered_floor_levels.iter().any(|level| {
+            *level < settings.cave_floor_level
+                || *level
+                    > settings
+                        .cave_floor_level
+                        .saturating_add(CAVE_TIER_RISE.saturating_mul(2))
+        })
+    {
+        issues.push(recipe_issue(format!(
+            "Caves covered floors must form three terraces at +0/+2/+4 with only one-level \
+             connector rows between them; got levels {covered_floor_levels:?}"
         )));
     }
     let roof_thicknesses: Vec<_> = interior
@@ -3585,8 +3746,8 @@ mod tests {
             caves: generated_patch(
                 V3EnvironmentSettings::Rocky,
                 V3RecipeSettings::Caves(V3CavesSettings {
-                    surface_level: 16,
-                    cave_floor_level: 7,
+                    surface_level: 17,
+                    cave_floor_level: 6,
                     chamber_count: 9,
                 }),
             ),
@@ -3723,6 +3884,138 @@ mod tests {
         assert!(selected.metrics.maximum_clearance >= 4);
         assert!(selected.metrics.minimum_roof_thickness >= 3);
         assert_eq!(selected.validated.plan.validate(), Vec::new());
+    }
+
+    #[test]
+    fn chamber_centres_use_three_two_level_tiers_with_walkable_connectors() {
+        let settings = settings();
+        let layout = resolve_layout(12, &settings).expect("Caves layout should resolve");
+        let patch =
+            PatchRecipeContext::resolve(&layout, PatchId(0)).expect("patch zero should resolve");
+        let mask = cave_topology_mask(&patch);
+        let frame = context_patch_frame(&patch, &mask).expect("Caves frame should resolve");
+        let cave_settings = match &settings.layout {
+            V3LayoutSettings::Single(spec) => match &spec.recipe {
+                V3RecipeSettings::Caves(caves) => caves,
+                _ => panic!("fixture should contain Caves"),
+            },
+            _ => panic!("fixture should use Single"),
+        };
+        let topology = build_topology(&mask, frame, 0, cave_settings, None)
+            .expect("fallback topology should resolve");
+        let chamber_levels =
+            chamber_floor_levels(cave_settings, topology.chamber_centres.len(), None);
+        let footprints = chamber_footprints(&mask, &topology.chamber_centres, &topology.entrance)
+            .expect("footprints should resolve");
+        let footprint_coords = footprints
+            .iter()
+            .flat_map(|footprint| footprint.iter().copied())
+            .collect::<BTreeSet<_>>();
+        for (footprint, expected_level) in footprints.iter().zip(&chamber_levels) {
+            for coord in footprint {
+                assert_eq!(
+                    topology.floor_levels.get(coord).copied(),
+                    Some(*expected_level),
+                    "every chamber footprint cell at {coord:?} must remain flat at its authored \
+                     tier"
+                );
+            }
+        }
+        for (coord, level) in &topology.floor_levels {
+            let is_connector_level = [
+                cave_settings.cave_floor_level + 1,
+                cave_settings.cave_floor_level + 3,
+            ]
+            .contains(level);
+            assert!(
+                !is_connector_level || !footprint_coords.contains(coord),
+                "intermediate level {level} at {coord:?} escaped a connector into a chamber"
+            );
+        }
+        let centre_levels = topology
+            .chamber_centres
+            .iter()
+            .map(|center| {
+                topology
+                    .floor_levels
+                    .get(center)
+                    .copied()
+                    .expect("every chamber centre should remain a floor")
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            centre_levels,
+            BTreeSet::from([
+                cave_settings.cave_floor_level,
+                cave_settings.cave_floor_level + 2,
+                cave_settings.cave_floor_level + 4,
+            ])
+        );
+
+        let selected =
+            generate(12, 0.4, &settings, 736_283_041).expect("tiered Caves should generate");
+        let interior = selected
+            .validated
+            .plan
+            .interiors
+            .by_id
+            .first_key_value()
+            .map(|(_id, interior)| interior)
+            .expect("Caves should publish its interior");
+        let graph = OrdinaryGraph::from_volume(&selected.validated.plan.volume, None);
+        let entrance = selected
+            .validated
+            .plan
+            .anchors
+            .get(PARTY_START)
+            .copied()
+            .expect("Caves should publish party_start");
+        let reached = graph.distances_from(entrance);
+        assert!(
+            interior
+                .floors
+                .iter()
+                .all(|floor| reached.contains_key(floor)),
+            "one-level connector rows must join every tier to the entrance"
+        );
+    }
+
+    #[test]
+    fn every_supported_chamber_count_keeps_flat_tier_footprints() {
+        let settings = settings();
+        let layout = resolve_layout(12, &settings).expect("Caves layout should resolve");
+        let patch =
+            PatchRecipeContext::resolve(&layout, PatchId(0)).expect("patch zero should resolve");
+        let mask = cave_topology_mask(&patch);
+        let frame = context_patch_frame(&patch, &mask).expect("Caves frame should resolve");
+        let cave_settings = match &settings.layout {
+            V3LayoutSettings::Single(spec) => match &spec.recipe {
+                V3RecipeSettings::Caves(caves) => caves,
+                _ => panic!("fixture should contain Caves"),
+            },
+            _ => panic!("fixture should use Single"),
+        };
+
+        for chamber_count in 6..=12 {
+            let configured = V3CavesSettings {
+                chamber_count,
+                ..cave_settings.clone()
+            };
+            let topology = build_topology(&mask, frame, 0, &configured, None)
+                .unwrap_or_else(|issues| panic!("{chamber_count} chambers failed: {issues:?}"));
+            let levels = chamber_floor_levels(&configured, topology.chamber_centres.len(), None);
+            let footprints =
+                chamber_footprints(&mask, &topology.chamber_centres, &topology.entrance)
+                    .expect("supported footprints should resolve");
+            for (footprint, expected_level) in footprints.iter().zip(levels) {
+                assert!(
+                    footprint.iter().all(|coord| {
+                        topology.floor_levels.get(coord).copied() == Some(expected_level)
+                    }),
+                    "{chamber_count} chambers sloped an authored footprint"
+                );
+            }
+        }
     }
 
     #[test]
@@ -4118,27 +4411,27 @@ mod tests {
         let expected: [(u64, Option<u8>, u64, u64); 4] = [
             (
                 33,
-                Some(1),
-                460_986_542_194_957_565,
-                16_715_970_756_191_823_297,
+                Some(0),
+                1_387_812_274_059_204_685,
+                9_574_413_140_216_521_519,
             ),
             (
                 178,
-                Some(4),
-                18_266_463_698_801_943_829,
-                15_852_936_182_682_831_065,
+                Some(5),
+                7_924_704_747_275_977_174,
+                2_269_552_231_048_453_154,
             ),
             (
                 445,
                 Some(5),
-                14_611_451_387_656_814_863,
-                1_525_721_581_912_758_674,
+                13_163_355_458_505_174_168,
+                10_935_244_680_947_485_329,
             ),
             (
                 736_283_041,
-                Some(3),
-                12_105_472_314_089_222_227,
-                4_037_154_299_986_603_022,
+                Some(1),
+                5_342_132_791_533_712_567,
+                13_720_716_990_910_912_966,
             ),
         ];
         let mut crystal_kinds = BTreeSet::new();
