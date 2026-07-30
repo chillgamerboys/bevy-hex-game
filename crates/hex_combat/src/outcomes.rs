@@ -5,9 +5,11 @@
 //! Presentation consumes these messages, but owns all wording and disclosure policy.
 //! No variant stores an `Entity`, a session-local `SpellId`, or a preformatted line.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::Message;
 use hex_core::{GameCommand, LatticeCoord, PartyPath, PlayerSeat, TilePos, UnitId};
-use hex_units::Faction;
+use hex_units::{Faction, OccupancyBlock};
 use serde::{Deserialize, Serialize};
 
 /// A runtime dependency the command applier needed but could not read.
@@ -23,6 +25,8 @@ pub enum CombatData {
     SubstanceTable,
     /// Faction-scoped current and remembered spatial knowledge.
     SpatialKnowledge,
+    /// Stable names for session-local element ids.
+    ElementCatalog,
 }
 
 /// One per-unit fact required to apply a command.
@@ -82,6 +86,11 @@ pub enum PartyMoveRefusal {
     InvalidMemberPath {
         /// Member with the invalid path.
         member: UnitId,
+    },
+    /// A member route conflicts with an external body or another member route.
+    Occupied {
+        /// Exact endpoint or pass-through conflict.
+        block: OccupancyBlock,
     },
     /// Two members would finish on the same surface.
     DuplicateDestination {
@@ -172,6 +181,11 @@ pub enum CommandRefusal {
     Busy,
     /// The supplied movement path was not a complete walkable route from the unit.
     InvalidPath,
+    /// The supplied route conflicts with another body's exact surface.
+    Occupied {
+        /// Exact endpoint or pass-through conflict.
+        block: OccupancyBlock,
+    },
     /// The route cost more movement than remained.
     MovementBudgetExceeded {
         /// The validated route cost.
@@ -203,6 +217,11 @@ pub enum CommandRefusal {
     NoTurn,
     /// The unit had already spent its action.
     ActionAlreadySpent,
+    /// A downed unit cannot spend a combat action.
+    ActingUnitDowned {
+        /// The downed acting unit.
+        unit: UnitId,
+    },
     /// A cast named no loaded spell.
     UnknownSpell {
         /// The stable spell name from the command.
@@ -261,8 +280,6 @@ pub enum CommandRefusal {
         /// The stable spell name from the command.
         spell: String,
     },
-    /// Channelling is part of the command vocabulary but has no applier yet.
-    ChannelUnavailable,
     /// Atomic party movement is contracted but its applier is not active yet.
     PartyMovementUnavailable,
     /// Restoration choice is contracted but its applier is not active yet.
@@ -320,6 +337,19 @@ pub enum CommandRefusal {
 /// One structured fact produced by successful combat resolution or command rejection.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum CombatEvent {
+    /// One combat turn completed and initiative advanced.
+    ///
+    /// This is emitted by the authoritative turn-order transition rather than
+    /// reconstructed from commands. A turn may contain movement plus an action,
+    /// only an explicit yield, or end because its owner was otherwise spent.
+    TurnAdvanced {
+        /// Unit whose turn completed.
+        unit: UnitId,
+        /// Unit that owns the next turn, if combat still has one.
+        next: Option<UnitId>,
+        /// Zero-based round after the transition.
+        round: u32,
+    },
     /// A spell was paid for and committed.
     Cast {
         /// The caster.
@@ -328,6 +358,13 @@ pub enum CombatEvent {
         spell: String,
         /// The spell's positional anchor.
         target: TilePos,
+    },
+    /// A unit spent its action to restore mana by element.
+    Channelled {
+        /// Unit that channelled.
+        unit: UnitId,
+        /// Exact mana restored under stable element names in lexical order.
+        restored: BTreeMap<String, u16>,
     },
     /// A melee strike committed.
     Strike {
@@ -491,6 +528,9 @@ mod tests {
             CommandRefusal::MissingCombatData {
                 data: CombatData::SpatialKnowledge,
             },
+            CommandRefusal::MissingCombatData {
+                data: CombatData::ElementCatalog,
+            },
             CommandRefusal::MissingUnitData {
                 unit: UnitId(1),
                 data: UnitData::EntityRecord,
@@ -517,6 +557,18 @@ mod tests {
             },
             CommandRefusal::Busy,
             CommandRefusal::InvalidPath,
+            CommandRefusal::Occupied {
+                block: OccupancyBlock::Route {
+                    position: target,
+                    occupant: UnitId(7),
+                },
+            },
+            CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: target,
+                    occupant: UnitId(7),
+                },
+            },
             CommandRefusal::MovementBudgetExceeded {
                 cost: 5,
                 remaining: 4,
@@ -527,6 +579,7 @@ mod tests {
             CommandRefusal::TargetOutOfMeleeReach { target: UnitId(2) },
             CommandRefusal::NoTurn,
             CommandRefusal::ActionAlreadySpent,
+            CommandRefusal::ActingUnitDowned { unit: UnitId(1) },
             CommandRefusal::UnknownSpell {
                 spell: "Unknown".to_owned(),
             },
@@ -569,12 +622,19 @@ mod tests {
             CommandRefusal::CastPlanStale {
                 spell: "Ember".to_owned(),
             },
-            CommandRefusal::ChannelUnavailable,
             CommandRefusal::PartyMovementUnavailable,
             CommandRefusal::RestorationUnavailable,
             CommandRefusal::RestUnavailable,
             CommandRefusal::PartyMove {
                 reason: PartyMoveRefusal::WrongAnchor,
+            },
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Destination {
+                        position: target,
+                        occupant: UnitId(7),
+                    },
+                },
             },
             CommandRefusal::Restoration {
                 reason: RestorationRefusal::NoDecision,
@@ -611,10 +671,19 @@ mod tests {
         let target = TilePos::new(HexCoord::ORIGIN, 1);
         let cell = LatticeCoord::new(1, 0);
         let events = vec![
+            CombatEvent::TurnAdvanced {
+                unit: source,
+                next: Some(target_unit),
+                round: 1,
+            },
             CombatEvent::Cast {
                 caster: source,
                 spell: "Ember".to_owned(),
                 target,
+            },
+            CombatEvent::Channelled {
+                unit: source,
+                restored: BTreeMap::from([("Air".to_owned(), 1), ("Fire".to_owned(), 2)]),
             },
             CombatEvent::Strike {
                 attacker: source,

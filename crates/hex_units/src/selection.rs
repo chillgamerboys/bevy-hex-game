@@ -37,7 +37,8 @@ use hex_core::{
 };
 
 use crate::movement::{Body, Footing, Reach, Standing};
-use crate::units::{Faction, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::units::{Faction, MovingTo, Party, Player, StandsOn, TileQuery, UnitRegistry};
+use crate::UnitOccupancy;
 
 /// Thickness of an overlay cap in world units. Thin enough to read as paint on the
 /// ground rather than as a slab sitting on it.
@@ -140,6 +141,7 @@ struct PreviewKey {
     from: TilePos,
     budget: Option<u32>,
     terrain: u64,
+    occupancy: u64,
 }
 
 /// The current search, and what is drawn from it.
@@ -489,7 +491,8 @@ fn redraw_overlays(
     revision: Res<TerrainRevision>,
     blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
-    selected: Query<(Entity, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
+    selected: Query<(Entity, &UnitId, &StandsOn, &Body, Option<&Turn>), With<Selected>>,
+    positions: Query<(&UnitId, &StandsOn, Option<&MovingTo>)>,
     drawn: Query<Entity, DrawnOverlays>,
 ) {
     let (Some(assets), Some(overlays), Some(table), Some(mode)) = (assets, overlays, table, mode)
@@ -497,8 +500,17 @@ fn redraw_overlays(
         return;
     };
 
+    let occupancy =
+        UnitOccupancy::from_positions(positions.iter().flat_map(|(unit, on, moving)| {
+            std::iter::once((*unit, on.0.pos)).chain(
+                moving
+                    .into_iter()
+                    .flat_map(|moving| moving.path.iter())
+                    .map(|step| (*unit, step.pos)),
+            )
+        }));
     let selection = selected.iter().next();
-    let key = selection.and_then(|(unit, standing, _, turn)| {
+    let key = selection.and_then(|(entity, _, standing, _, turn)| {
         let budget = match (mode.get(), turn) {
             // Somebody else's turn. Tinting a range the piece cannot use this turn
             // would promise a move that would then be refused.
@@ -508,10 +520,11 @@ fn redraw_overlays(
             (Mode::Exploring, _) => None,
         };
         Some(PreviewKey {
-            unit,
+            unit: entity,
             from: standing.0.pos,
             budget,
             terrain: revision.0,
+            occupancy: occupancy.fingerprint(),
         })
     });
 
@@ -524,10 +537,12 @@ fn redraw_overlays(
     // around four thousand of them — so rebuilding it per mouse-move would cost
     // hundreds of thousands of reads a second to arrive at the same answer.
     if key != preview.of {
-        preview.reach = selection.and_then(|(_, standing, body, _)| {
+        preview.reach = selection.and_then(|(_, unit, standing, body, _)| {
             let key = key?;
             let footing = Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref());
-            Some(Reach::from(standing.0, &footing, key.budget))
+            Some(Reach::with_occupancy(
+                standing.0, &footing, key.budget, &occupancy, *unit,
+            ))
         });
         preview.of = key;
     }

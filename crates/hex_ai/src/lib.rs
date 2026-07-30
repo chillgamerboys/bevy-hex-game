@@ -627,6 +627,16 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
         return Some(key);
     }
 
+    if request.observation.actor.lattice.cells.iter().any(|cell| {
+        cell.kind == Some(AiCellKind::Gem) && cell.disabled == Some(false) && cell.mana == Some(0)
+    }) {
+        if let Some(key) = actions.iter().find_map(|action| {
+            matches!(action.command, GameCommand::Channel { .. }).then_some(action.key)
+        }) {
+            return Some(key);
+        }
+    }
+
     actions
         .iter()
         .filter_map(|action| match &action.command {
@@ -674,8 +684,17 @@ impl<'a> ReverseTraversal<'a> {
             .collect();
         let mut predecessors = vec![Vec::new(); surfaces.len()];
         for (source_index, surface) in surfaces.iter().enumerate() {
+            if !surface.standable {
+                continue;
+            }
             for &neighbor in &surface.neighbors {
                 if let Some(&neighbor_index) = index_by_position.get(&neighbor) {
+                    if !surfaces
+                        .get(neighbor_index)
+                        .is_some_and(|candidate| candidate.standable)
+                    {
+                        continue;
+                    }
                     if let Some(incoming) = predecessors.get_mut(neighbor_index) {
                         incoming.push(source_index);
                     }
@@ -709,7 +728,7 @@ impl<'a> ReverseTraversal<'a> {
             .filter(|&index| {
                 self.surfaces
                     .get(index)
-                    .is_some_and(|surface| surface.neighbors.contains(&target))
+                    .is_some_and(|surface| surface.standable && surface.neighbors.contains(&target))
             })
             .collect();
         goals.sort_unstable();
@@ -999,6 +1018,35 @@ mod tests {
                 .resolve(last)
                 .map(|action| &action.command),
             Some(GameCommand::EndTurn { .. })
+        ));
+    }
+
+    #[test]
+    fn baseline_channels_a_depleted_lattice_from_the_canonical_set() {
+        let mut request = request();
+        request.observation.actor.lattice.cells = vec![AiLatticeCell {
+            coord: LatticeCoord::ORIGIN,
+            kind: Some(AiCellKind::Gem),
+            disabled: Some(false),
+            mana: Some(0),
+        }];
+        request.legal_actions = LegalActionSet::from_canonical_commands(
+            LegalActionFingerprint(10),
+            vec![
+                GameCommand::EndTurn { unit: UnitId(1) },
+                GameCommand::Channel { unit: UnitId(1) },
+            ],
+        );
+
+        let AiSelection::Action(key) = BaselineAlgorithm.select(&request) else {
+            panic!("a normal turn should select an action");
+        };
+        assert!(matches!(
+            request
+                .legal_actions
+                .resolve(key)
+                .map(|action| &action.command),
+            Some(GameCommand::Channel { unit: UnitId(1) })
         ));
     }
 

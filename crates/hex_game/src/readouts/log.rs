@@ -275,7 +275,11 @@ fn event_is_disclosed(
 ) -> bool {
     let unit = |id| unit_is_disclosed(viewer, id, registry, identities, spatial);
     match event {
+        CombatEvent::TurnAdvanced { unit: actor, .. } => unit(*actor),
         CombatEvent::Cast { caster, .. } => unit(*caster),
+        CombatEvent::Channelled {
+            unit: channeler, ..
+        } => unit(*channeler),
         CombatEvent::Strike { target, .. } => unit(*target),
         CombatEvent::DecisionOpened { decider, .. } => unit(*decider),
         CombatEvent::DamagePrevented { target, .. }
@@ -398,10 +402,32 @@ fn format_event(
     spells: Option<&SpellBook>,
 ) -> Option<LogLine> {
     let line = match event {
+        // Turn boundaries are canonical report facts, but the ordinary combat log
+        // already communicates initiative and should not grow one line per turn.
+        CombatEvent::TurnAdvanced { .. } => return None,
         CombatEvent::Cast { caster, spell, .. } => LogLine {
             text: format!("{} cast {spell}", unit_name(*caster, registry, identities)),
             danger: false,
         },
+        CombatEvent::Channelled { unit, restored } => {
+            let detail = restored
+                .iter()
+                .map(|(element, amount)| format!("{element} +{amount}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let suffix = if detail.is_empty() {
+                "no mana restored".to_owned()
+            } else {
+                detail
+            };
+            LogLine {
+                text: format!(
+                    "{} channelled ({suffix})",
+                    unit_name(*unit, registry, identities)
+                ),
+                danger: false,
+            }
+        }
         CombatEvent::Strike { attacker, target } => LogLine {
             text: format!(
                 "{} struck {}",
@@ -683,6 +709,10 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::MissingUnitData { .. } => "unit data unavailable",
         CommandRefusal::Busy => "still busy",
         CommandRefusal::InvalidPath => "invalid path",
+        CommandRefusal::Occupied { block } => match block {
+            hex_units::OccupancyBlock::Destination { .. } => "destination occupied",
+            hex_units::OccupancyBlock::Route { .. } => "route occupied",
+        },
         CommandRefusal::MovementBudgetExceeded { .. } => "not enough movement",
         CommandRefusal::UnknownTarget { .. } => "unknown target",
         CommandRefusal::TargetDowned { .. } => "target is already down",
@@ -690,6 +720,7 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::TargetOutOfMeleeReach { .. } => "target is out of reach",
         CommandRefusal::NoTurn => "no active turn",
         CommandRefusal::ActionAlreadySpent => "action already spent",
+        CommandRefusal::ActingUnitDowned { .. } => "acting unit is down",
         CommandRefusal::UnknownSpell { .. } => "unknown spell",
         CommandRefusal::MissingSpellDefinition { .. } => "spell definition unavailable",
         CommandRefusal::UndeliverableSpell { .. } => "spell is not implemented",
@@ -700,7 +731,6 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::SpellNotInscribed { .. } => "spell is not inscribed",
         CommandRefusal::CastBlocked { .. } => "lattice cannot pay",
         CommandRefusal::CastPlanStale { .. } => "lattice changed",
-        CommandRefusal::ChannelUnavailable => "channelling is unavailable",
         CommandRefusal::PartyMovementUnavailable => "party movement is unavailable",
         CommandRefusal::RestorationUnavailable => "restoration is unavailable",
         CommandRefusal::RestUnavailable => "rest is unavailable",

@@ -1,6 +1,6 @@
 //! Deterministic, session-scoped combat reporting.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bevy::prelude::*;
 use hex_ai::{AiDecisionRecord, AiDecisionTrace};
@@ -12,6 +12,8 @@ use crate::{AiDecisionTraces, CombatEvent, CombatSystems, EncounterOutcome, Turn
 
 /// Maximum compact AI records and structured events retained by [`CombatSummary`].
 pub const MAX_COMBAT_SUMMARY_DETAILS: usize = 4_096;
+/// Stable schema domain for deterministic summary fingerprints.
+pub const COMBAT_SUMMARY_FINGERPRINT_VERSION: u16 = 1;
 
 /// Stable command categories used by aggregate reporting.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -36,6 +38,68 @@ pub enum CommandKind {
     Rest,
 }
 
+/// Stable delivered-effect categories used by aggregate reporting.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeliveredEffectKind {
+    /// Incoming disable demand opened a defender choice.
+    Disable,
+    /// A persistent Burn was attached.
+    Burn,
+    /// Divination revealed lattice facts.
+    Reveal,
+    /// Disabled cells were restored by a spell.
+    Restore,
+    /// A defensive enchantment absorbed incoming disables.
+    Prevention,
+}
+
+/// Per-unit projection of the same canonical command and event stream as
+/// [`CombatSummary`].
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct UnitCombatSummary {
+    /// Completed authoritative turns owned by this unit.
+    pub turns: u32,
+    /// Successful commands issued by this unit.
+    pub successful_commands: u32,
+    /// Refused commands issued by this unit.
+    pub refused_commands: u32,
+    /// Exact surface edges committed by this unit.
+    pub movement_distance: u32,
+    /// Movement budget spent by this unit.
+    pub movement_budget_used: u32,
+    /// Successful casts by stable spell name.
+    pub casts_by_spell: BTreeMap<String, u32>,
+    /// Delivered spell/effect categories attributed to this unit.
+    pub delivered_effects: BTreeMap<DeliveredEffectKind, u32>,
+    /// Successful Channel actions.
+    pub channels: u32,
+    /// Mana restored by stable element name.
+    pub channelled_mana: BTreeMap<String, u32>,
+    /// Successful strikes.
+    pub strikes: u32,
+    /// Raw disables caused before prevention.
+    pub raw_disables: u32,
+    /// Incoming disables prevented by this unit's defences.
+    pub prevented_disables: u32,
+    /// Exact cells disabled by this unit.
+    pub applied_disables: u32,
+    /// Exact cells restored by this unit.
+    pub restored_cells: u32,
+    /// Times this unit was downed.
+    pub downings: u32,
+    /// Times this unit was revived.
+    pub revivals: u32,
+    /// Explicit no-action yields.
+    pub idle_turns: u32,
+    /// Current consecutive completed turns without progress for this unit.
+    pub no_progress_current: u32,
+    /// Longest no-progress stretch for this unit.
+    pub no_progress_max: u32,
+    /// Canonical AI decision dispatches for this unit.
+    pub ai_choices: u64,
+}
+
 impl CommandKind {
     fn of(command: &GameCommand) -> Self {
         match command {
@@ -57,8 +121,23 @@ impl CommandKind {
 pub struct CombatSummary {
     /// One-based rounds reached while combat was active.
     pub rounds: u32,
+    /// Completed authoritative combat turns.
+    #[serde(default)]
+    pub turns: u32,
+    /// Per-unit projections keyed by stable session identity.
+    #[serde(default)]
+    pub units: BTreeMap<UnitId, UnitCombatSummary>,
     /// Successful commands by stable unit and semantic kind.
     pub commands: BTreeMap<UnitId, BTreeMap<CommandKind, u32>>,
+    /// Refused commands by stable unit and semantic kind.
+    #[serde(default)]
+    pub refusals: BTreeMap<UnitId, BTreeMap<CommandKind, u32>>,
+    /// Total successful commands.
+    #[serde(default)]
+    pub successful_commands: u32,
+    /// Total refused commands.
+    #[serde(default)]
+    pub refused_commands: u32,
     /// Most recent compact algorithm dispatches in selection order.
     pub ai_selections: VecDeque<AiDecisionRecord>,
     /// Total algorithm dispatches, including records outside the retained window.
@@ -69,8 +148,26 @@ pub struct CombatSummary {
     pub ai_selection_fingerprint: u64,
     /// Successful moves, including atomic party moves.
     pub moves: u32,
+    /// Exact surface edges committed across individual and party paths.
+    #[serde(default)]
+    pub movement_distance: u32,
+    /// Movement budget spent; currently one per committed surface edge.
+    #[serde(default)]
+    pub movement_budget_used: u32,
     /// Successful casts.
     pub casts: u32,
+    /// Successful casts under stable spell names.
+    #[serde(default)]
+    pub casts_by_spell: BTreeMap<String, u32>,
+    /// Successfully delivered mechanical outcomes by semantic category.
+    #[serde(default)]
+    pub delivered_effects: BTreeMap<DeliveredEffectKind, u32>,
+    /// Successful Channel actions.
+    #[serde(default)]
+    pub channels: u32,
+    /// Mana restored by stable element name.
+    #[serde(default)]
+    pub channelled_mana: BTreeMap<String, u32>,
     /// Successful strikes.
     pub strikes: u32,
     /// Successful exact-cell answers.
@@ -89,6 +186,13 @@ pub struct CombatSummary {
     pub revivals: u32,
     /// Units downed.
     pub downings: u32,
+    /// Current consecutive completed turns with no committed movement, action, or
+    /// delivered effect.
+    #[serde(default)]
+    pub no_progress_current: u32,
+    /// Longest consecutive no-progress stretch in this session.
+    #[serde(default)]
+    pub no_progress_max: u32,
     /// Final retained-world result.
     pub outcome: Option<EncounterOutcome>,
     /// Most recent structured facts in simulation order.
@@ -102,46 +206,246 @@ pub struct CombatSummary {
     /// Next live AI trace sequence to collect. Runtime-only, never an artifact field.
     #[serde(skip)]
     ai_trace_cursor: u64,
+    /// Units that made progress since their most recent turn began.
+    ///
+    /// This small deterministic cursor is serialized because it affects the next
+    /// authoritative turn-boundary result. Omitting it would make a mid-session
+    /// round trip change no-progress telemetry.
+    #[serde(default)]
+    progress_units: BTreeSet<UnitId>,
 }
 
 impl CombatSummary {
+    /// Deterministic identity of every serialized aggregate and retained detail.
+    ///
+    /// Runtime cursors are serde-skipped, so collection timing cannot affect the
+    /// artifact. Count and rolling-fingerprint fields continue to cover details that
+    /// aged out of the bounded windows.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"hex-combat-summary-v1");
+        bytes.extend_from_slice(&COMBAT_SUMMARY_FINGERPRINT_VERSION.to_le_bytes());
+        if serde_json::to_writer(&mut bytes, self).is_err() {
+            bytes.extend_from_slice(b"<serialization-error>");
+        }
+        xxh3_64(&bytes)
+    }
+
     pub(crate) fn record_command(&mut self, command: &GameCommand) {
         let kind = CommandKind::of(command);
+        let unit = command.unit();
+        self.successful_commands = self.successful_commands.saturating_add(1);
         *self
             .commands
-            .entry(command.unit())
+            .entry(unit)
             .or_default()
             .entry(kind)
             .or_default() += 1;
+        let movement = command_movement_distance(command);
+        self.movement_distance = self.movement_distance.saturating_add(movement);
+        self.movement_budget_used = self.movement_budget_used.saturating_add(movement);
         match kind {
             CommandKind::Move | CommandKind::MoveParty => self.moves += 1,
             CommandKind::Strike => self.strikes += 1,
             CommandKind::EndTurn => self.idle_turns += 1,
-            CommandKind::Cast => self.casts += 1,
+            CommandKind::Cast => {
+                self.casts += 1;
+                if let GameCommand::Cast { spell, .. } = command {
+                    *self.casts_by_spell.entry(spell.clone()).or_default() += 1;
+                }
+            }
             CommandKind::ChooseDisables | CommandKind::ChooseRestores => self.decisions += 1,
-            CommandKind::Channel | CommandKind::Rest => {}
+            CommandKind::Channel => self.channels += 1,
+            CommandKind::Rest => {}
+        }
+        let successful = &mut self.units.entry(unit).or_default().successful_commands;
+        *successful = successful.saturating_add(1);
+        match command {
+            GameCommand::MoveAlong { .. } => {
+                let per_unit = self.units.entry(unit).or_default();
+                per_unit.movement_distance = per_unit.movement_distance.saturating_add(movement);
+                per_unit.movement_budget_used =
+                    per_unit.movement_budget_used.saturating_add(movement);
+            }
+            GameCommand::MoveParty { paths, .. } => {
+                for path in paths {
+                    let distance =
+                        u32::try_from(path.path.len().saturating_sub(1)).unwrap_or(u32::MAX);
+                    let member = self.units.entry(path.member).or_default();
+                    member.movement_distance = member.movement_distance.saturating_add(distance);
+                    member.movement_budget_used =
+                        member.movement_budget_used.saturating_add(distance);
+                    if distance > 0 {
+                        self.progress_units.insert(path.member);
+                    }
+                }
+            }
+            GameCommand::Strike { .. } => {
+                let strikes = &mut self.units.entry(unit).or_default().strikes;
+                *strikes = strikes.saturating_add(1);
+            }
+            GameCommand::EndTurn { .. } => {
+                let idle = &mut self.units.entry(unit).or_default().idle_turns;
+                *idle = idle.saturating_add(1);
+            }
+            GameCommand::Cast { spell, .. } => {
+                *self
+                    .units
+                    .entry(unit)
+                    .or_default()
+                    .casts_by_spell
+                    .entry(spell.clone())
+                    .or_default() += 1;
+            }
+            GameCommand::Channel { .. } => {
+                let channels = &mut self.units.entry(unit).or_default().channels;
+                *channels = channels.saturating_add(1);
+            }
+            GameCommand::ChooseDisables { .. }
+            | GameCommand::ChooseRestores { .. }
+            | GameCommand::Rest { .. } => {}
+        }
+        if !matches!(kind, CommandKind::EndTurn) {
+            self.progress_units.insert(unit);
         }
     }
 
     fn record_event(&mut self, event: &CombatEvent) {
         match event {
-            CombatEvent::DecisionOpened { count, .. } => {
-                self.raw_disables += u32::from(*count);
+            CombatEvent::TurnAdvanced { unit, .. } => {
+                self.turns = self.turns.saturating_add(1);
+                let progressed = self.progress_units.remove(unit);
+                if progressed {
+                    self.no_progress_current = 0;
+                } else {
+                    self.no_progress_current = self.no_progress_current.saturating_add(1);
+                    self.no_progress_max = self.no_progress_max.max(self.no_progress_current);
+                }
+                let per_unit = self.units.entry(*unit).or_default();
+                per_unit.turns = per_unit.turns.saturating_add(1);
+                if progressed {
+                    per_unit.no_progress_current = 0;
+                } else {
+                    per_unit.no_progress_current = per_unit.no_progress_current.saturating_add(1);
+                    per_unit.no_progress_max =
+                        per_unit.no_progress_max.max(per_unit.no_progress_current);
+                }
             }
-            CombatEvent::DamagePrevented { amount, .. } => {
+            CombatEvent::DecisionOpened { source, count, .. } => {
+                self.raw_disables += u32::from(*count);
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Disable)
+                    .or_default() += 1;
+                let source = self.units.entry(*source).or_default();
+                source.raw_disables = source.raw_disables.saturating_add(u32::from(*count));
+                *source
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Disable)
+                    .or_default() += 1;
+            }
+            CombatEvent::DamagePrevented {
+                source,
+                target,
+                amount,
+            } => {
                 self.raw_disables += u32::from(*amount);
                 self.prevented_disables += u32::from(*amount);
+                let source = self.units.entry(*source).or_default();
+                source.raw_disables = source.raw_disables.saturating_add(u32::from(*amount));
+                let target = self.units.entry(*target).or_default();
+                target.prevented_disables =
+                    target.prevented_disables.saturating_add(u32::from(*amount));
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Prevention)
+                    .or_default() += 1;
             }
-            CombatEvent::HexesDisabled { cells, .. } => {
-                self.applied_disables += u32::try_from(cells.len()).unwrap_or(u32::MAX);
+            CombatEvent::HexesDisabled { source, cells, .. } => {
+                let count = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+                self.applied_disables = self.applied_disables.saturating_add(count);
+                let source = self.units.entry(*source).or_default();
+                source.applied_disables = source.applied_disables.saturating_add(count);
             }
-            CombatEvent::HexesRestored { cells, .. } | CombatEvent::Rested { cells, .. } => {
-                self.restored_cells += u32::try_from(cells.len()).unwrap_or(u32::MAX);
+            CombatEvent::HexesRestored { caster, cells, .. } => {
+                let count = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+                self.restored_cells = self.restored_cells.saturating_add(count);
+                let caster = self.units.entry(*caster).or_default();
+                caster.restored_cells = caster.restored_cells.saturating_add(count);
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Restore)
+                    .or_default() += 1;
             }
-            CombatEvent::Revived { .. } => self.revivals += 1,
-            CombatEvent::Downed { .. } => self.downings += 1,
+            CombatEvent::Rested { unit, cells, .. } => {
+                let count = u32::try_from(cells.len()).unwrap_or(u32::MAX);
+                self.restored_cells = self.restored_cells.saturating_add(count);
+                let unit = self.units.entry(*unit).or_default();
+                unit.restored_cells = unit.restored_cells.saturating_add(count);
+            }
+            CombatEvent::BurnApplied { source, .. } => {
+                let source = self.units.entry(*source).or_default();
+                *source
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Burn)
+                    .or_default() += 1;
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Burn)
+                    .or_default() += 1;
+            }
+            CombatEvent::Revealed { .. } => {
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Reveal)
+                    .or_default() += 1;
+            }
+            CombatEvent::Channelled { unit, restored } => {
+                let per_unit = self.units.entry(*unit).or_default();
+                for (element, amount) in restored {
+                    let total = self.channelled_mana.entry(element.clone()).or_default();
+                    *total = total.saturating_add(u32::from(*amount));
+                    let total = per_unit.channelled_mana.entry(element.clone()).or_default();
+                    *total = total.saturating_add(u32::from(*amount));
+                }
+            }
+            CombatEvent::CommandRefused { command, .. } => {
+                let unit = command.unit();
+                self.refused_commands = self.refused_commands.saturating_add(1);
+                *self
+                    .refusals
+                    .entry(unit)
+                    .or_default()
+                    .entry(CommandKind::of(command))
+                    .or_default() += 1;
+                let unit = self.units.entry(unit).or_default();
+                unit.refused_commands = unit.refused_commands.saturating_add(1);
+            }
+            CombatEvent::Revived { unit, .. } => {
+                self.revivals = self.revivals.saturating_add(1);
+                let unit = self.units.entry(*unit).or_default();
+                unit.revivals = unit.revivals.saturating_add(1);
+            }
+            CombatEvent::Downed { unit } => {
+                self.downings = self.downings.saturating_add(1);
+                let unit = self.units.entry(*unit).or_default();
+                unit.downings = unit.downings.saturating_add(1);
+            }
             CombatEvent::EncounterResolved { outcome } => self.outcome = Some(*outcome),
-            _ => {}
+            CombatEvent::Cast { caster, .. }
+            | CombatEvent::Strike {
+                attacker: caster, ..
+            }
+            | CombatEvent::PartyMoved { anchor: caster, .. } => {
+                self.progress_units.insert(*caster);
+            }
+            CombatEvent::BurnTicked { source, .. } => {
+                self.progress_units.insert(*source);
+            }
+            CombatEvent::EnchantmentBroken { unit, .. } => {
+                self.progress_units.insert(*unit);
+            }
         }
         self.event_fingerprint = rolling_fingerprint(
             b"combat-event-v1",
@@ -155,6 +459,8 @@ impl CombatSummary {
 
     fn record_ai_selection(&mut self, trace: &AiDecisionTrace) {
         let record = AiDecisionRecord::from(trace);
+        let unit = self.units.entry(record.actor).or_default();
+        unit.ai_choices = unit.ai_choices.saturating_add(1);
         self.ai_selection_fingerprint = rolling_fingerprint(
             b"ai-selection-v1",
             self.ai_selection_fingerprint,
@@ -164,6 +470,20 @@ impl CombatSummary {
         self.ai_selection_count = self.ai_selection_count.saturating_add(1);
         self.ai_trace_cursor = trace.sequence.saturating_add(1);
         push_bounded(&mut self.ai_selections, record);
+    }
+}
+
+fn command_movement_distance(command: &GameCommand) -> u32 {
+    match command {
+        GameCommand::MoveAlong { path, .. } => {
+            u32::try_from(path.len().saturating_sub(1)).unwrap_or(u32::MAX)
+        }
+        GameCommand::MoveParty { paths, .. } => paths.iter().fold(0_u32, |total, member| {
+            total.saturating_add(
+                u32::try_from(member.path.len().saturating_sub(1)).unwrap_or(u32::MAX),
+            )
+        }),
+        _ => 0,
     }
 }
 
@@ -405,6 +725,59 @@ mod tests {
     }
 
     #[test]
+    fn per_unit_metrics_and_no_progress_use_canonical_turn_boundaries() {
+        let unit = UnitId(1);
+        let next = UnitId(2);
+        let start = TilePos::new(HexCoord::ORIGIN, 1);
+        let destination = TilePos::new(HexCoord::from_axial(1, 0), 1);
+        let mut summary = CombatSummary::default();
+
+        summary.record_command(&GameCommand::EndTurn { unit });
+        summary.record_event(&CombatEvent::TurnAdvanced {
+            unit,
+            next: Some(next),
+            round: 0,
+        });
+        assert_eq!(
+            (
+                summary.turns,
+                summary.no_progress_current,
+                summary.no_progress_max
+            ),
+            (1, 1, 1)
+        );
+
+        summary.record_command(&GameCommand::MoveAlong {
+            unit: next,
+            path: vec![start, destination],
+        });
+        summary.record_event(&CombatEvent::Channelled {
+            unit: next,
+            restored: BTreeMap::from([("Fire".to_owned(), 2)]),
+        });
+        summary.record_event(&CombatEvent::TurnAdvanced {
+            unit: next,
+            next: Some(unit),
+            round: 1,
+        });
+        summary.record_event(&CombatEvent::CommandRefused {
+            command: GameCommand::Channel { unit: next },
+            refusal: crate::CommandRefusal::ActionAlreadySpent,
+        });
+
+        let projected = summary.units.get(&next).expect("unit projection");
+        assert_eq!(projected.movement_distance, 1);
+        assert_eq!(projected.movement_budget_used, 1);
+        assert_eq!(projected.channelled_mana.get("Fire"), Some(&2));
+        assert_eq!(projected.refused_commands, 1);
+        assert_eq!(projected.turns, 1);
+        assert_eq!(projected.no_progress_max, 0);
+        assert_eq!(summary.turns, 2);
+        assert_eq!(summary.no_progress_current, 0);
+        assert_eq!(summary.no_progress_max, 1);
+    }
+
+    #[test]
     fn a_summary_round_trips_for_replay_artifacts() {
         let mut summary = CombatSummary::default();
         summary.record_command(&GameCommand::Strike {
@@ -418,6 +791,20 @@ mod tests {
         let encoded = serde_json::to_string(&summary).expect("summary serializes");
         let decoded: CombatSummary = serde_json::from_str(&encoded).expect("summary deserializes");
         assert_eq!(decoded, summary);
+        assert_eq!(decoded.fingerprint(), summary.fingerprint());
+    }
+
+    #[test]
+    fn summary_fingerprint_changes_with_canonical_combat_truth() {
+        let mut first = CombatSummary::default();
+        let mut second = CombatSummary::default();
+        assert_eq!(first.fingerprint(), second.fingerprint());
+
+        second.record_command(&GameCommand::EndTurn { unit: UnitId(1) });
+        assert_ne!(first.fingerprint(), second.fingerprint());
+
+        first.record_command(&GameCommand::EndTurn { unit: UnitId(1) });
+        assert_eq!(first.fingerprint(), second.fingerprint());
     }
 
     #[test]

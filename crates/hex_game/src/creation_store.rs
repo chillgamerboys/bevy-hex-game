@@ -164,6 +164,7 @@ mod tests {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
             creations: root.join("creations.ron"),
+            combat_reports: root.join("combat-reports.ron"),
         }
     }
 

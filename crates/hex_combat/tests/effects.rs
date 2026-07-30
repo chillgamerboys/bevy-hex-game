@@ -11,11 +11,10 @@
 //! files and should not need to: what is under test is the runtime, not the roster.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use bevy::app::PluginsState;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_assets::{
     CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, ElementFile, GemRequirement,
@@ -34,6 +33,7 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{Downed, Faction, Standing, StandsOn, UnitRegistry};
 
 /// The level every unit in these tests stands on.
@@ -234,11 +234,9 @@ fn watch_seam(pending: Res<PendingDecision>, queue: Res<CommandQueue>, mut seam:
               IS the failure"
 )]
 fn test_app(burn_turns: u16) -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     app.insert_resource(CombatSettings::default());
-    app.add_sub_state::<Mode>();
     app.add_plugins(hex_combat::plugin);
     app.init_resource::<UnitRegistry>();
 
@@ -263,10 +261,7 @@ fn test_app(burn_turns: u16) -> App {
         capture_events.after(hex_combat::CombatSystems::Advance),
     );
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
+    let mut app = builder.build();
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
         .set(Screen::Gameplay);
@@ -677,6 +672,11 @@ fn casting_a_burn_starts_a_countdown_rather_than_landing_damage() {
                 target: UnitId(2),
                 turns: 2,
             },
+            CombatEvent::TurnAdvanced {
+                unit: UnitId(1),
+                next: Some(UnitId(2)),
+                round: 0,
+            },
         ],
         "a successful cast is announced before the effect it booked"
     );
@@ -718,6 +718,11 @@ fn reveal_exposes_a_complete_live_lattice_for_the_configured_rollovers() {
                 subject: UnitId(2),
                 cells: revealed,
                 rounds: 1,
+            },
+            CombatEvent::TurnAdvanced {
+                unit: UnitId(1),
+                next: Some(UnitId(2)),
+                round: 0,
             },
         ]
     );
@@ -792,6 +797,11 @@ fn a_defence_reports_the_exact_damage_it_prevented() {
                 source: UnitId(1),
                 target: UnitId(2),
                 amount: 1,
+            },
+            CombatEvent::TurnAdvanced {
+                unit: UnitId(1),
+                next: Some(UnitId(2)),
+                round: 0,
             },
         ]
     );

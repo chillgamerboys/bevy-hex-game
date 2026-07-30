@@ -48,6 +48,8 @@ use hex_core::{
     TraversalBlockers, TraversalEndpoint, TraversalProfile, UnitId,
 };
 
+use crate::UnitOccupancy;
+
 /// Ordering for systems that consume a unit's logical position.
 #[derive(SystemSet, Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum MovementSystems {
@@ -380,7 +382,20 @@ impl Reach {
     /// most six edges each, so even the unbounded search is trivial.
     #[must_use]
     pub fn from(start: Standing, footing: &Footing, budget: Option<u32>) -> Self {
-        Self::flood(start, footing, budget, None)
+        Self::flood(start, footing, budget, None, None)
+    }
+
+    /// Floods through terrain while treating every other occupied exact surface as a
+    /// closed node.
+    #[must_use]
+    pub fn with_occupancy(
+        start: Standing,
+        footing: &Footing,
+        budget: Option<u32>,
+        occupancy: &UnitOccupancy,
+        mover: UnitId,
+    ) -> Self {
+        Self::flood(start, footing, budget, None, Some((occupancy, mover)))
     }
 
     /// Floods only until `target` is discovered, or the connected component ends.
@@ -390,8 +405,14 @@ impl Reach {
     /// the same breadth-first frontier and deterministic neighbor ordering. Stopping
     /// at discovery avoids traversing the rest of a large map when the highest
     /// priority formation slot is only one step away.
-    pub(crate) fn until(start: Standing, footing: &Footing, target: TilePos) -> Self {
-        Self::flood(start, footing, None, Some(target))
+    pub(crate) fn until_with_occupancy(
+        start: Standing,
+        footing: &Footing,
+        target: TilePos,
+        occupancy: &UnitOccupancy,
+        mover: UnitId,
+    ) -> Self {
+        Self::flood(start, footing, None, Some(target), Some((occupancy, mover)))
     }
 
     fn flood(
@@ -399,6 +420,7 @@ impl Reach {
         footing: &Footing,
         budget: Option<u32>,
         target: Option<TilePos>,
+        occupancy: Option<(&UnitOccupancy, UnitId)>,
     ) -> Self {
         let mut reach = Self::default();
         reach.steps.insert(
@@ -419,7 +441,12 @@ impl Reach {
         let direct = target.and_then(|target| {
             footing
                 .at(target)
-                .filter(|_| footing.admits_step(start.pos, target))
+                .filter(|_| {
+                    footing.admits_step(start.pos, target)
+                        && occupancy.is_none_or(|(occupancy, mover)| {
+                            !occupancy.is_occupied(target, Some(mover))
+                        })
+                })
                 .map(|standing| (target, standing))
         });
         if let Some((target, standing)) = direct {
@@ -449,6 +476,11 @@ impl Reach {
             for coord in current.pos.coord.neighbors() {
                 for next in footing.steps_from(current, coord) {
                     if reach.steps.contains_key(&next.pos) {
+                        continue;
+                    }
+                    if occupancy.is_some_and(|(occupancy, mover)| {
+                        occupancy.is_occupied(next.pos, Some(mover))
+                    }) {
                         continue;
                     }
                     reach.steps.insert(
@@ -523,6 +555,21 @@ pub fn route(from: Standing, to: Standing, footing: &Footing) -> Option<Vec<Stan
         return Some(vec![from]);
     }
     Reach::from(from, footing, None).path_to(to.pos)
+}
+
+/// The shortest walk that never enters another body's exact surface.
+#[must_use]
+pub fn route_with_occupancy(
+    from: Standing,
+    to: Standing,
+    footing: &Footing,
+    occupancy: &UnitOccupancy,
+    mover: UnitId,
+) -> Option<Vec<Standing>> {
+    if from.pos == to.pos {
+        return Some(vec![from]);
+    }
+    Reach::with_occupancy(from, footing, None, occupancy, mover).path_to(to.pos)
 }
 
 #[cfg(test)]
@@ -613,6 +660,43 @@ mod tests {
             panic!("flat ground should be walkable")
         };
         assert_eq!(steps.len(), line.len());
+    }
+
+    #[test]
+    fn occupied_chokepoints_and_destinations_are_not_reachable() {
+        let line: Vec<HexCoord> = HexCoord::ORIGIN.line_between(HexCoord::new_cubic(2, -2, 0));
+        let tiles: Vec<_> = line.iter().map(|coord| tile(*coord, 4)).collect();
+        let footing = footing_from(&tiles);
+        let from = footing
+            .ground(HexCoord::ORIGIN)
+            .expect("the fixture start exists");
+        let middle = footing
+            .ground(HexCoord::new_cubic(1, -1, 0))
+            .expect("the fixture chokepoint exists");
+        let to = footing
+            .ground(HexCoord::new_cubic(2, -2, 0))
+            .expect("the fixture destination exists");
+        let mover = UnitId(1);
+
+        let chokepoint =
+            UnitOccupancy::from_positions([(mover, from.pos), (UnitId(2), middle.pos)]);
+        assert!(
+            route_with_occupancy(from, to, &footing, &chokepoint, mover).is_none(),
+            "a one-surface route cannot pass through another body"
+        );
+
+        let destination = UnitOccupancy::from_positions([(mover, from.pos), (UnitId(2), to.pos)]);
+        let reach = Reach::with_occupancy(from, &footing, None, &destination, mover);
+        assert_eq!(reach.cost(to.pos), None);
+        assert_eq!(reach.path_to(to.pos), None);
+        assert_eq!(
+            destination.validate_route(&[from.pos, middle.pos, to.pos], mover),
+            Err(crate::OccupancyBlock::Destination {
+                position: to.pos,
+                occupant: UnitId(2),
+            }),
+            "preview and authoritative validation consume the same projection"
+        );
     }
 
     /// A ramp descending one level per hex is walkable however far it descends —
@@ -857,8 +941,10 @@ mod tests {
         let Some(steps) = route(from, to, &footing) else {
             panic!("a wall with a way round it is not 'no route exists'")
         };
+        let occupancy = UnitOccupancy::default();
         assert_eq!(
-            Reach::until(from, &footing, to.pos).path_to(to.pos),
+            Reach::until_with_occupancy(from, &footing, to.pos, &occupancy, UnitId(1))
+                .path_to(to.pos),
             Some(steps.clone()),
             "a target-bounded projection must retain the full router's exact tie-breaks"
         );

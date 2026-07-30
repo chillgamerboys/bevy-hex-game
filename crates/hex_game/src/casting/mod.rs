@@ -94,6 +94,7 @@ pub fn plugin(app: &mut App) {
         (
             refresh_readout,
             resolve_aim_input,
+            panel::channel_from_button,
             panel::end_turn_from_button,
         )
             .chain()

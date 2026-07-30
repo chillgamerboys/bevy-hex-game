@@ -3249,6 +3249,7 @@ dependencies = [
  "hex_core",
  "hex_lattice",
  "hex_perception",
+ "hex_test_support",
  "hex_units",
  "serde",
  "serde_json",
@@ -3311,10 +3312,13 @@ dependencies = [
  "hex_map",
  "hex_objects",
  "hex_perception",
+ "hex_test_support",
  "hex_units",
  "hex_world",
  "ron",
  "serde",
+ "serde_json",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -3367,6 +3371,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hex_test_support"
+version = "0.4.0"
+dependencies = [
+ "bevy",
+ "hex_assets",
+ "hex_core",
+]
+
+[[package]]
 name = "hex_units"
 version = "0.4.0"
 dependencies = [
@@ -3376,6 +3389,7 @@ dependencies = [
  "hex_assets",
  "hex_core",
  "hex_lattice",
+ "hex_test_support",
  "ron",
  "serde",
  "serde_json",

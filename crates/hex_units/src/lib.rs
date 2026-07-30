@@ -26,6 +26,8 @@ use bevy::prelude::*;
 pub mod formation;
 /// Which surfaces a piece may step between.
 pub mod movement;
+/// Which exact surfaces bodies currently occupy.
+pub mod occupancy;
 /// Hex-specific movement along a route of surfaces.
 pub mod pathing;
 /// Showing a piece where it can go before it goes there.
@@ -38,9 +40,13 @@ pub mod units;
 pub mod volumes;
 
 pub use formation::{
-    plan_formation_move, rotated, FormationMember, FormationPlan, FormationPlanError,
+    plan_formation_move, plan_formation_move_with_occupancy, rotated, FormationMember,
+    FormationPlan, FormationPlanError,
 };
-pub use movement::{route, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing};
+pub use movement::{
+    route, route_with_occupancy, Body, Footing, MovementCrossings, MovementSystems, Reach, Standing,
+};
+pub use occupancy::{OccupancyBlock, UnitOccupancy};
 pub use pathing::HexPathingLine;
 pub use selection::{
     HoveredSurface, PathOverlay, RangeOverlay, Selected, TerrainRevision, UnitRing,

@@ -25,10 +25,9 @@
 //! tests below are mostly about telling them apart.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
 use hex_assets::{
@@ -46,6 +45,7 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     PerceptionRuntimeStats, SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{Body, Downed, Faction, MovingTo, Standing, StandsOn, UnitAllocator, UnitRegistry};
 
 /// World height of one level in this fixture.
@@ -71,12 +71,10 @@ fn bridged(coord: HexCoord) -> bool {
 }
 
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
     app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
@@ -85,18 +83,12 @@ fn test_app() -> App {
     app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     app.add_plugins(hex_combat::plugin);
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 fn perception_combat_test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
-    app.add_sub_state::<Mode>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     app.configure_sets(
         Update,
         (
@@ -136,11 +128,7 @@ fn perception_combat_test_app() -> App {
     );
     app.add_plugins((hex_perception::plugin, hex_combat::plugin));
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 /// Ground everywhere, plus a bridge deck over one line of it.

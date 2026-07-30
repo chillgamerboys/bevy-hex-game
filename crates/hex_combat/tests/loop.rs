@@ -7,40 +7,30 @@
 //!
 //! Nothing here is visual. Whether a fight *reads* as a fight needs a person.
 
-use bevy::app::PluginsState;
+use std::time::Duration;
+
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_combat::{Initiative, TurnOrder};
 use hex_core::{
     CommandQueue, GameCommand, HexCoord, HexSpan, IssuedCommand, Mode, PlayerSeat, Screen, TilePos,
     Turn, UnitId,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{Faction, Standing, StandsOn};
 
 /// Far enough apart that no fight starts on its own.
 const FAR: i32 = 12;
 
 fn test_app() -> App {
-    let mut app = App::new();
-    // `InputPlugin` is not optional here: ending a turn reads the keyboard, and
-    // `MinimalPlugins` provides no `ButtonInput<KeyCode>` at all. Without it every
-    // test fails with "Resource does not exist" from inside the scheduler, which
-    // names neither the system nor the resource.
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
     app.add_plugins(hex_combat::plugin);
-
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 /// The stable id combat dealt this entity when the fight began.

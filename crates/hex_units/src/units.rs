@@ -16,7 +16,7 @@
 use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
-use bevy::platform::collections::{HashMap, HashSet};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -37,10 +37,12 @@ use hex_core::{
     TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
-use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
+use crate::movement::{route_with_occupancy, Body, Footing, MovementCrossings, Reach, Standing};
 use crate::pathing::reached_step_index;
 use crate::selection::Selected;
-use crate::{plan_formation_move, FormationMember, FormationPlanError};
+use crate::{
+    plan_formation_move_with_occupancy, FormationMember, FormationPlanError, UnitOccupancy,
+};
 
 const PLAYER_SWATCH_ID: &str = "unit/player";
 const HOSTILE_SWATCH_ID: &str = "unit/hostile";
@@ -360,6 +362,7 @@ fn on_tile_clicked(
         ),
         With<Player>,
     >,
+    positions: Query<(&UnitId, &StandsOn, Option<&MovingTo>)>,
     queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
     party: Option<Res<Party>>,
@@ -399,6 +402,15 @@ fn on_tile_clicked(
     let Some(mode) = mode else {
         return;
     };
+    let occupancy =
+        UnitOccupancy::from_positions(positions.iter().flat_map(|(unit, on, moving)| {
+            std::iter::once((*unit, on.0.pos)).chain(
+                moving
+                    .into_iter()
+                    .flat_map(|moving| moving.path.iter())
+                    .map(|step| (*unit, step.pos)),
+            )
+        }));
 
     // The click identifies a tile *entity*, which resolves to one specific surface
     // even where several share a coordinate. Picking is the right input for exactly
@@ -451,7 +463,14 @@ fn on_tile_clicked(
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
         };
-        let Some(anchor_path) = route(anchor_standing.0, destination, &anchor_footing) else {
+        let external_occupancy = occupancy.without(party.members.iter().copied());
+        let Some(anchor_path) = route_with_occupancy(
+            anchor_standing.0,
+            destination,
+            &anchor_footing,
+            &external_occupancy,
+            anchor,
+        ) else {
             return;
         };
         if anchor_path.len() < 2 {
@@ -491,7 +510,13 @@ fn on_tile_clicked(
                 footing: member_footing,
             });
         }
-        match plan_formation_move(preset, formation, &anchor_path, members) {
+        match plan_formation_move_with_occupancy(
+            preset,
+            formation,
+            &anchor_path,
+            members,
+            &external_occupancy,
+        ) {
             Ok(plan) => queue.push(IssuedCommand {
                 seat: owner.copied().unwrap_or_default().0,
                 command: GameCommand::MoveParty {
@@ -501,6 +526,9 @@ fn on_tile_clicked(
             }),
             Err(FormationPlanError::NoSafeSlot(member)) => {
                 warn!("party move rejected: member {member:?} has no safe compressed slot");
+            }
+            Err(FormationPlanError::Occupied(block)) => {
+                warn!("party move rejected: simultaneous routes conflict at {block:?}");
             }
             Err(FormationPlanError::InvalidFormation) => {
                 warn!("party move rejected: runtime formation assignments are invalid");
@@ -537,7 +565,9 @@ fn on_tile_clicked(
         // No route is a legitimate answer: terrain is not guaranteed connected, and
         // a cliff, a gap, or a ceiling too low to fit under means the piece simply
         // does not move.
-        let Some(steps) = route(standing.0, destination, &footing) else {
+        let Some(steps) =
+            route_with_occupancy(standing.0, destination, &footing, &occupancy, *unit)
+        else {
             continue;
         };
 
@@ -919,7 +949,7 @@ fn place_roster<'a>(
     let mut resolved: Vec<Option<Standing>> = vec![None; units.len()];
     // One unit per surface. Two pieces on one voxel is not a position the rest of the
     // game can express, so it is a setup failure rather than a rendering curiosity.
-    let mut taken: HashSet<TilePos> = HashSet::default();
+    let mut occupancy = UnitOccupancy::default();
 
     for (index, unit) in units.iter().enumerate() {
         let standing = match unit.placement {
@@ -942,7 +972,8 @@ fn place_roster<'a>(
             // placements have already claimed.
             EncounterPlacement::Formation { .. } => continue,
         };
-        if !taken.insert(standing.pos) {
+        let unit_id = UnitId(u64::try_from(index).unwrap_or(u64::MAX));
+        if occupancy.is_occupied(standing.pos, Some(unit_id)) {
             return Err(format!(
                 "Encounter {:?}: {} is placed on {:?}, where another unit already stands.",
                 encounter.name,
@@ -950,6 +981,7 @@ fn place_roster<'a>(
                 standing.pos
             ));
         }
+        occupancy.relocate(unit_id, standing.pos);
         if let Some(slot) = resolved.get_mut(index) {
             *slot = Some(standing);
         }
@@ -974,7 +1006,7 @@ fn place_roster<'a>(
 
         let Some(standing) = candidates
             .iter()
-            .find(|candidate| !taken.contains(&candidate.pos))
+            .find(|candidate| !occupancy.is_occupied(candidate.pos, None))
             .copied()
         else {
             return Err(format!(
@@ -986,7 +1018,10 @@ fn place_roster<'a>(
                 middle.pos
             ));
         };
-        let _first = taken.insert(standing.pos);
+        occupancy.relocate(
+            UnitId(u64::try_from(index).unwrap_or(u64::MAX)),
+            standing.pos,
+        );
         if let Some(slot) = resolved.get_mut(index) {
             *slot = Some(standing);
         }
