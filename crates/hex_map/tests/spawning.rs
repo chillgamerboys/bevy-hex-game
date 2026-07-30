@@ -54,8 +54,8 @@ use hex_map::{
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, Ring7Metrics,
     SkyIslandsSettings, SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings,
     V2EnvironmentSettings, V2HillsSettings, V2RecipeSettings, V3CavesSettings,
-    V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings, V3LayoutSettings,
-    V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
+    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -369,6 +369,38 @@ fn v3_forest_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(381_654_729));
+    app
+}
+
+fn v3_deep_forest_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::DeepForest(V3DeepForestSettings {
+                    base_level: 15,
+                    max_relief: 4,
+                    blocker_coverage_percent: 30,
+                    clearing_count: 3,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(1_592_598_566));
     app
 }
 
@@ -1031,6 +1063,129 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             "missing Forest anchor {anchor}"
         );
     }
+}
+
+#[test]
+fn v3_deep_forest_publishes_dense_trees_and_reenters_deterministically() {
+    let mut app = v3_deep_forest_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let first_report = app.world().resource::<GenerationReport>().clone();
+    let Some(ProceduralRecipeMetrics::DeepForest(metrics)) = &first_report.recipe_metrics else {
+        panic!("V3 Deep Forest should publish exact recipe metrics");
+    };
+    let metrics = *metrics;
+    assert_eq!(metrics.clearing_count, 3);
+    assert_eq!(metrics.clearing_surfaces, 30);
+    assert!((28..=32).contains(&metrics.blocker_coverage_percent));
+    assert_eq!(
+        metrics.tree_blocker_surfaces,
+        u32::try_from(app.world().resource::<TraversalBlockers>().len()).unwrap_or(u32::MAX)
+    );
+    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    for anchor in ["party_start", "hostile_start", "deep_forest_clearing"] {
+        assert!(
+            app.world()
+                .resource::<MapAnchors>()
+                .get(&MapAnchorId::from(anchor))
+                .is_some(),
+            "missing Deep Forest anchor {anchor}"
+        );
+    }
+
+    let first_roots = feature_roots(&mut app);
+    assert_eq!(
+        first_roots.len(),
+        usize::try_from(metrics.tree_roots).unwrap_or(usize::MAX)
+    );
+    assert!(first_roots
+        .iter()
+        .all(|(_entity, kind, _position, _parent)| kind == "GeneratedTree"));
+    let first_root_positions = first_roots
+        .iter()
+        .map(|(_entity, _kind, position, _parent)| *position)
+        .collect::<BTreeSet<_>>();
+    let first_blockers = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
+        .collect::<BTreeSet<_>>();
+    let first_biomes = app
+        .world()
+        .resource::<BiomeRegions>()
+        .iter()
+        .collect::<BTreeMap<_, _>>();
+    let first_tile_count = tile_count(&mut app);
+
+    app.world_mut()
+        .resource_mut::<NextState<Screen>>()
+        .set(Screen::Title);
+    app.update();
+    app.update();
+
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(feature_roots(&mut app).is_empty());
+    for absent in [
+        app.world().contains_resource::<VoxelMap>(),
+        app.world().contains_resource::<MapAnchors>(),
+        app.world().contains_resource::<SpecialMovementRegions>(),
+        app.world().contains_resource::<InteriorRegions>(),
+        app.world().contains_resource::<TraversalBlockers>(),
+        app.world().contains_resource::<BiomeRegions>(),
+        app.world().contains_resource::<MapViewHint>(),
+        app.world().contains_resource::<GenerationReport>(),
+        app.world().contains_resource::<TerrainReady>(),
+    ] {
+        assert!(!absent);
+    }
+
+    enter_gameplay(&mut app);
+    let second_report = app.world().resource::<GenerationReport>();
+    assert_eq!(second_report.seed, first_report.seed);
+    assert_eq!(
+        second_report.selected_candidate,
+        first_report.selected_candidate
+    );
+    assert_eq!(
+        second_report.settings_fingerprint,
+        first_report.settings_fingerprint
+    );
+    assert_eq!(
+        second_report.semantic_plan_fingerprint,
+        first_report.semantic_plan_fingerprint
+    );
+    assert_eq!(second_report.map_fingerprint, first_report.map_fingerprint);
+    assert_eq!(second_report.metrics, first_report.metrics);
+    assert_eq!(second_report.recipe_metrics, first_report.recipe_metrics);
+    assert_eq!(tile_count(&mut app), first_tile_count);
+    let second_roots = feature_roots(&mut app)
+        .iter()
+        .map(|(_entity, _kind, position, _parent)| *position)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(second_roots, first_root_positions);
+    assert_eq!(
+        app.world()
+            .resource::<TraversalBlockers>()
+            .iter()
+            .collect::<BTreeSet<_>>(),
+        first_blockers
+    );
+    assert_eq!(
+        app.world()
+            .resource::<BiomeRegions>()
+            .iter()
+            .collect::<BTreeMap<_, _>>(),
+        first_biomes
+    );
 }
 
 #[test]

@@ -14,10 +14,11 @@ use hex_core::{
 };
 
 use crate::procedural::{
-    CavesMetrics as CavesReportMetrics, ForestMetrics as ForestReportMetrics,
-    FortMetrics as FortReportMetrics, GenerationReport, HillsMetrics as HillsReportMetrics,
-    MountainsMetrics as MountainsReportMetrics, PrairieMetrics as PrairieReportMetrics,
-    ProceduralRecipeMetrics, TacticalMetrics, WaterfallMetrics as WaterfallReportMetrics,
+    CavesMetrics as CavesReportMetrics, DeepForestMetrics as DeepForestReportMetrics,
+    ForestMetrics as ForestReportMetrics, FortMetrics as FortReportMetrics, GenerationReport,
+    HillsMetrics as HillsReportMetrics, MountainsMetrics as MountainsReportMetrics,
+    PrairieMetrics as PrairieReportMetrics, ProceduralRecipeMetrics, TacticalMetrics,
+    WaterfallMetrics as WaterfallReportMetrics,
 };
 use crate::settings::{ProceduralV3Settings, V3LayoutSettings, V3RecipeSettings};
 use crate::terrain::TerrainPalette;
@@ -29,6 +30,7 @@ use world::WorldValidationIssue;
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
 mod composition;
+mod deep_forest;
 #[cfg(test)]
 mod dry_patch_tests;
 mod fingerprint;
@@ -188,6 +190,7 @@ pub(crate) fn ensure_recipe_available(
                     | V3RecipeSettings::Forest(_)
                     | V3RecipeSettings::Fort(_)
                     | V3RecipeSettings::Caves(_)
+                    | V3RecipeSettings::DeepForest(_)
                     | V3RecipeSettings::Prairie(_)
             ) =>
         {
@@ -341,6 +344,27 @@ pub(crate) fn build(
                 started,
                 caves_report_metrics,
                 |metrics| ProceduralRecipeMetrics::Caves(caves_recipe_metrics(metrics)),
+            )
+        }
+        V3LayoutSettings::Single(patch)
+            if matches!(patch.recipe, V3RecipeSettings::DeepForest(_)) =>
+        {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Deep Forest requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                deep_forest::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                deep_forest_report_metrics,
+                |metrics| ProceduralRecipeMetrics::DeepForest(deep_forest_recipe_metrics(metrics)),
             )
         }
         V3LayoutSettings::Single(patch) if matches!(patch.recipe, V3RecipeSettings::Prairie(_)) => {
@@ -644,6 +668,21 @@ fn forest_recipe_metrics(metrics: &forest::ForestMetrics) -> ForestReportMetrics
         )
         .unwrap_or(i32::MAX),
     }
+}
+
+fn deep_forest_report_metrics(metrics: &DeepForestReportMetrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.relief,
+        critical_route_steps: metrics.critical_route_steps,
+        reachable_surfaces: metrics.ordinary_surfaces,
+        reachable_elevation_levels: metrics.reachable_elevation_levels,
+        environment_signature_percent: metrics.blocker_coverage_percent,
+        ..Default::default()
+    }
+}
+
+const fn deep_forest_recipe_metrics(metrics: &DeepForestReportMetrics) -> DeepForestReportMetrics {
+    *metrics
 }
 
 fn prairie_report_metrics(metrics: &PrairieReportMetrics) -> TacticalMetrics {

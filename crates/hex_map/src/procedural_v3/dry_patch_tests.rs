@@ -4,13 +4,13 @@ use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
 use super::liquid::LiquidFlowState;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::validate_patch_walker_seams;
-use super::{caves, fort, hills, mountains, prairie, sky, waterfall};
+use super::{caves, deep_forest, fort, hills, mountains, prairie, sky, waterfall};
 use crate::settings::{
     EdgeElevationSettings, EdgeLiquidPortSettings, EdgeLiquidSettings, PatchEdgeContractSettings,
     PatchEdgesSettings, PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings,
-    V3CavesSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings, V3HillsSettings,
-    V3LayoutSettings, V3MountainsSettings, V3PrairieSettings, V3RecipeSettings, V3Ring7Settings,
-    V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
+    V3CavesSettings, V3DeepForestSettings, V3EnvironmentSettings, V3ForestSettings, V3FortSettings,
+    V3HillsSettings, V3LayoutSettings, V3MountainsSettings, V3PrairieSettings, V3RecipeSettings,
+    V3Ring7Settings, V3SkyIslandsSettings, V3WaterfallSettings, WalkerPortSettings,
 };
 
 const LEVEL_HEIGHT: f32 = 0.4;
@@ -98,6 +98,57 @@ fn prairie_stitched_patch_keeps_protected_approaches_clear_and_validates_exact_c
         u32::try_from(plan.features.by_id.len()).unwrap_or(u32::MAX)
     );
     assert!((65..=75).contains(&metrics.grass_coverage_percent));
+    assert_strict_patch(&layout, plan);
+}
+
+#[test]
+fn deep_forest_stitched_patch_keeps_authored_volumes_out_of_protected_approaches() {
+    let (settings, _) = dry_ring_settings();
+    let layout = resolve_layout(33, &settings).expect("the dry Ring7 fixture should resolve");
+    let context = patch(&layout, 3).expect("the vegetation slot should resolve");
+    let protected = context.protected_approaches();
+    assert!(
+        !protected.is_empty(),
+        "the stitched regression requires exact protected seam approaches"
+    );
+    let recipe = V3DeepForestSettings {
+        base_level: 15,
+        max_relief: 4,
+        blocker_coverage_percent: 30,
+        clearing_count: 3,
+    };
+    let catalog = super::vegetation::tests::runtime_art_catalog();
+    let plan = deep_forest::construct_patch(
+        context,
+        &recipe,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        PatchBuildMode::Candidate {
+            world_seed: 1_592_598_566,
+            candidate: 0,
+        },
+        catalog,
+    )
+    .expect("Deep Forest should construct inside a stitched vegetation patch");
+    assert!(plan.features.by_id.values().all(|feature| feature
+        .blocker_footprint
+        .iter()
+        .all(|blocker| !protected.contains(&blocker.coord))));
+    let metrics = match deep_forest::validate_patch(context, &recipe, &plan, catalog) {
+        super::selection::WorldValidation::Valid(metrics) => metrics,
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!(
+                "Deep Forest construction and patch validation must share exact authored-volume \
+                 eligibility: {issues:?}"
+            );
+        }
+    };
+    assert_eq!(metrics.clearing_count, 3);
+    assert!((28..=32).contains(&metrics.blocker_coverage_percent));
+    assert_eq!(
+        metrics.tree_blocker_surfaces,
+        u32::try_from(plan.blockers.len()).unwrap_or(u32::MAX)
+    );
     assert_strict_patch(&layout, plan);
 }
 
