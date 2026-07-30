@@ -30,8 +30,8 @@ pub mod view;
 pub mod voxel;
 
 pub use app::{
-    AppSystems, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause, RoundElapsed, Screen,
-    Turn,
+    AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Mode, PausableSystems, Pause,
+    RoundElapsed, Screen, Turn,
 };
 pub use commands::{Busy, CommandQueue, GameCommand, IssuedCommand, PendingDecision};
 pub use effects::{EffectEnd, EffectId, EffectPayload, PersistentEffect};

@@ -124,7 +124,9 @@ of the larger design remain ahead. The exact boundary is recorded in the
 
 The title screen separates development **Maps** and focused **Demos** from application
 **Actions**. **New Game** launches Party Trial as the one integrated default scenario;
-Ability Lab, Raider Mirror, and Lattice Demo keep narrow mechanics checks available.
+the Demos column contains **Character Creator**, **Spell Creator**, and **Combat Lab**. Combat Lab
+provides a transient roster/deployment Sandbox and a searchable fixed-fixture
+selector for Ability Lab, Raider Mirror, and creator-format matrices.
 **Continue** restores one explicitly saved exploration slot through the ordinary
 loading flow. Saving is available only while paused in a safe exploration state;
 combat, movement, and open decisions refuse it. The slot is bound to its build,
@@ -166,19 +168,12 @@ for later audio and rebinding work; Wave 5 does not pretend those products exist
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the title screen |
+| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
 
-<!--
-Regenerate readme_assets/lattice-demo-disabled-gem.png with:
-HEX_WALK_SCRIPT=walks/menus.ron \
-HEX_WALK_OUT=.context/readme-captures/lattice \
-cargo run --release -p hex_game --features visual-walk
-cp .context/readme-captures/lattice/07-demo-shield-broken.png \
-  readme_assets/lattice-demo-disabled-gem.png
--->
-![The interactive lattice demo after a metal gem has been disabled, leaving Metal Shield blocked and showing the broken enchantment in the event log](readme_assets/lattice-demo-disabled-gem.png)
-
-*The interactive rules demo: disabling one funding gem has broken Metal Shield.*
+The Creator's local mechanics test remains the focused place to cast, channel,
+disable, restore, and break enchantments without constructing a map combat. See the
+[Creator and Combat Lab contract](docs/systems/creator-and-combat-lab.md) for saved
+content, readiness, fixtures, deployment, and frozen Retry behavior.
 
 ## Read more
 

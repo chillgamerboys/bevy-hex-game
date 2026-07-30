@@ -313,12 +313,15 @@ forgets to update.
 
 ```
 Splash ──► Title ◄──────────────► Settings
+              │  ├──► Character Creator ──► local lattice test
+              │  ├──► Spell Creator
+              │  └──► Combat Lab setup ──► deployment
               │
-              │ New Game / valid Continue / development fixture
+              │ New Game / valid Continue / Sandbox / fixed fixture
               ▼
            Loading ──► Gameplay
                           │
-                          ├── BACKSPACE ──► Title
+                          ├── BACKSPACE ──► owning screen or Title
                           └── Pause (sub-state of Gameplay)
 ```
 
@@ -336,6 +339,12 @@ Party Trial default and neither reads nor overwrites the resume slot. Continue f
 validates the one pre-alpha resume file, stages it as `PendingResume`, and then lets
 `GameplaySetup::Restore` consume it. An absent, corrupt, or incompatible file stays
 on the title screen with a visible reason instead of constructing a partial session.
+
+Creator and Combat Lab launches also share Loading. They install one frozen
+shipped-plus-custom spell/content/lattice namespace before terrain and actors enter
+Gameplay. Dynamic Sandbox encounters and their resolved seed live in
+`ActiveScenario`, so Retry cannot observe later local-library edits. These sessions
+refuse resume writes and restore the shipped namespace when they return.
 
 An asset failure is terminal too. The asset server already reports it, and treating
 failure as "still loading" would turn a visible missing-asset problem into a permanent

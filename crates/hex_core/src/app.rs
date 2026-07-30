@@ -32,6 +32,12 @@ pub enum Screen {
     /// fusions, mana, disables, and enchantments. Slated for gating or removal
     /// before release.
     LatticeDemo,
+    /// Saved character authoring, reached only from the Demos lane.
+    CharacterCreator,
+    /// Saved spell authoring, reached only from the Demos lane.
+    SpellCreator,
+    /// Human sandbox setup and deterministic fixture selection.
+    CombatLab,
     /// Waits for settings and terminal asset states before gameplay may spawn.
     Loading,
     /// The game itself.
@@ -45,6 +51,21 @@ pub enum Screen {
 #[derive(SubStates, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
 #[source(Screen = Screen::Gameplay)]
 pub struct Pause(pub bool);
+
+/// Runtime boundary between terrain preparation, human deployment, and live combat.
+///
+/// Ordinary scenarios move directly from `Preparing` to `Active`. Combat Lab
+/// sandboxes pause at `Deployment` while the already-loaded terrain remains visible.
+#[derive(Resource, Reflect, Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub enum GameplayPhase {
+    /// Resources and terrain are being prepared.
+    Preparing,
+    /// The tester is assigning exact terrain surfaces to the frozen roster.
+    Deployment,
+    /// Actors, combat, AI, casting, and ordinary gameplay are live.
+    #[default]
+    Active,
+}
 
 /// Whether the world is running in real time or taking turns.
 ///

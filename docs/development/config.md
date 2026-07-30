@@ -19,6 +19,7 @@ you do not need to recompile the game.
 | `lighting.ron` | Sun brightness, colour and angle, ambient light, the sky gradient and its hex clouds |
 | `player.ron` | Player piece size and movement speed |
 | `scenarios.ron` | The default New Game and visible development fixtures: a map, a sky and an encounter |
+| `combat_lab_maps.ron` | Stable Combat Lab map IDs, scenario and fixed seed, plus Player/Hostile deployment-region centers and radii |
 | `encounters/*.ron` | Who is on the map: rosters by archetype, and where each unit starts |
 | `lattices.ron` | Who each of them *is*: the gems, fusions and spells an archetype is made of |
 | `menu.ron` | How the menu screens look |
@@ -560,8 +561,22 @@ has somewhere obvious to go.
 A scenario names a world, a sky, and an encounter. The library's `default_game`
 names the entry launched by New Game; that entry is hidden from the development lanes.
 Every other scenario chooses the independently scrollable `Map` or `Demo` lane through
-`category`. Scenario-backed demos share the Demo lane with the static **Lattice Demo**
-card.
+`category`. Wave 6 does not expose scenario-backed demos as title cards: the Demos
+lane contains only **Character Creator**, **Spell Creator**, and **Combat Lab**. Focused combat
+scenarios are selected by stable fixture ID inside Combat Lab.
+
+Immutable creator-format templates and automation records live in
+`creation_presets.ron`. `HumanTemplate` records appear as duplicable Creator choices;
+`AutomationFixture` records are isolated behind fixed fixtures. Local saved creations
+belong to the per-user data directory's `creations.ron`, not the shipped asset tree.
+
+`combat_lab_maps.ron` owns the deployable Sandbox map list independently from the
+title-screen scenario lanes. Its `schema_version` is checked on load. Every distinct
+supported shipped environment appears once. Each entry has a stable ID, display name,
+tactical description and tags, renderer-generated preview asset, scenario, optional
+fixed generation seed, and one deployment region per side. A region center is either
+`Fixed((x, y, z))` for authored terrain or `Anchor("name")` for a generated exact
+surface, with a bounded path-cost `radius`.
 
 ```ron
 (

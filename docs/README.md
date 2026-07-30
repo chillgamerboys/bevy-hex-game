@@ -30,6 +30,7 @@ doc or the code, not drift.
 | Changing enemy decision policy or AI diagnostics | [systems/ai.md](systems/ai.md) |
 | Writing code that touches party selection or formations | [systems/party.md](systems/party.md) |
 | Writing code that casts a spell or reshapes terrain | [systems/casting.md](systems/casting.md) |
+| Working on saved characters, spells, deployment, or test fixtures | [systems/creator-and-combat-lab.md](systems/creator-and-combat-lab.md) |
 | Wondering who owns a fact that crosses the boundary | [contracts.md](contracts.md) |
 | Writing code that reveals terrain or units | [systems/perception.md](systems/perception.md) |
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
@@ -50,6 +51,7 @@ doc or the code, not drift.
 | [systems/ai.md](systems/ai.md) | Anyone touching enemy decisions | Authorized observations, compact legal choices, deterministic algorithm dispatch, and bounded diagnostics | Gameplay owner |
 | [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and pre-alpha resume lifetime | Gameplay owner |
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
+| [systems/creator-and-combat-lab.md](systems/creator-and-combat-lab.md) | Anyone touching creators or deterministic test flows | Saved blueprints, readiness, Combat Lab setup/deployment, fixtures, snapshots, and return routing | Gameplay owner |
 | [systems/perception.md](systems/perception.md) | Anyone touching sight, fog, AI, or hidden information | Illumination, faction sight, remembered terrain, presentation, and the boundary between them | World owner (gameplay adapters: gameplay owner) |
 | [systems/sky.md](systems/sky.md) | Anyone touching presentation | How the sky is drawn, and the four choices in the shader that are not obvious | World owner |
 | [design/game.md](design/game.md) | Everyone | The game this is heading toward: lattices, elements, spells, damage, and the questions deliberately left open | The designer; open questions close only on purpose |

@@ -9,6 +9,8 @@ use bevy::prelude::*;
 use hex_assets::{to_color, MenuSettings};
 use hex_core::Screen;
 
+pub(crate) mod combat_lab;
+mod creator;
 mod gameplay;
 mod lattice_demo;
 mod loading;
@@ -24,6 +26,8 @@ pub(super) fn plugin(app: &mut App) {
         splash::plugin,
         title::plugin,
         settings::plugin,
+        creator::plugin,
+        combat_lab::plugin,
         lattice_demo::plugin,
         loading::plugin,
         gameplay::plugin,
@@ -93,19 +97,25 @@ pub fn despawn_screen(
 pub fn screen_root(screen: Screen, name: &'static str) -> impl Bundle {
     (
         Name::new(name),
-        Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            align_items: AlignItems::Center,
-            justify_content: JustifyContent::Center,
-            flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(16.0),
-            ..default()
-        },
+        screen_root_node(),
         BackgroundColor(FALLBACK_BACKGROUND),
         MenuBackground,
         DespawnOnExit(screen),
     )
+}
+
+/// The layout half of [`screen_root`], for screens that customize padding or alignment.
+#[must_use]
+pub fn screen_root_node() -> Node {
+    Node {
+        width: Val::Percent(100.0),
+        height: Val::Percent(100.0),
+        align_items: AlignItems::Center,
+        justify_content: JustifyContent::Center,
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(16.0),
+        ..default()
+    }
 }
 
 #[cfg(test)]

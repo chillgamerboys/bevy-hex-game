@@ -1,7 +1,7 @@
 // Same-archetype identity and hostile-turn lockout without party or terrain noise.
 [
     AwaitScreen("Title"),
-    StartScenario(name: "Raider Mirror"),
+    StartFixture(id: "raider-mirror"),
     AwaitScreen("Gameplay"),
     AwaitTerrain,
     AwaitButton("Cast Metal Shield"),

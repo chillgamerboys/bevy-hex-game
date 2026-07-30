@@ -22,7 +22,8 @@ use bevy::prelude::*;
 use bevy::render::settings::{InstanceFlags, WgpuSettings};
 use bevy::render::RenderPlugin;
 use hex_core::{
-    AppSystems, GameplaySetup, InputBindings, PausableSystems, Pause, PerceptionSystems, Screen,
+    AppSystems, GameplayPhase, GameplaySetup, InputBindings, PausableSystems, Pause,
+    PerceptionSystems, Screen,
 };
 
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
@@ -30,6 +31,8 @@ mod capture;
 mod casting;
 #[cfg(feature = "dev")]
 mod content_debug;
+mod creation_presentation;
+mod creation_store;
 mod menus;
 mod preferences;
 mod readouts;
@@ -97,7 +100,8 @@ pub struct AppPlugin;
 
 impl Plugin for AppPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<InputBindings>();
+        app.init_resource::<InputBindings>()
+            .init_resource::<GameplayPhase>();
         // Linux/WSL2 only, inert everywhere else (notably macOS/Metal, which has
         // no non-conformant adapters to filter). Allowing non-conformant Vulkan
         // adapters is what lets wgpu pick Mesa Dozen — the D3D12 translation layer
@@ -161,7 +165,12 @@ impl Plugin for AppPlugin {
         // One gate for everything that must stop while paused. `Pause` is a
         // sub-state of `Screen::Gameplay`, so it does not exist in menus and this
         // condition is false there too.
-        app.configure_sets(Update, PausableSystems.run_if(in_state(Pause(false))));
+        app.configure_sets(
+            Update,
+            PausableSystems
+                .run_if(in_state(Pause(false)))
+                .run_if(resource_equals(GameplayPhase::Active)),
+        );
         app.configure_sets(
             Update,
             (
@@ -208,6 +217,7 @@ impl Plugin for AppPlugin {
 
         app.add_plugins((
             hex_assets::plugin,
+            creation_store::plugin,
             preferences::plugin,
             hex_objects::plugin,
             hex_map::plugin,

@@ -368,6 +368,7 @@ fn launch_review_scenario(
     commands.insert_resource(ScenarioToLoad {
         scenario,
         resolved_seed,
+        encounter_override: None,
     });
     request.launched = true;
     next.set(Screen::Loading);
@@ -599,9 +600,13 @@ fn capture_timeout_diagnostic(
         CapturePhase::Readback
     } else {
         match screen {
-            Screen::Splash | Screen::Title | Screen::Settings | Screen::LatticeDemo => {
-                CapturePhase::AwaitingScenario
-            }
+            Screen::Splash
+            | Screen::Title
+            | Screen::Settings
+            | Screen::LatticeDemo
+            | Screen::CharacterCreator
+            | Screen::SpellCreator
+            | Screen::CombatLab => CapturePhase::AwaitingScenario,
             Screen::Loading => CapturePhase::Loading,
             Screen::Gameplay if !state.view_applied => CapturePhase::AwaitingCamera,
             Screen::Gameplay if !terrain_ready => CapturePhase::AwaitingTerrain,

@@ -217,6 +217,7 @@ fn continue_game(
     commands.insert_resource(ScenarioToLoad {
         scenario: scenario.clone(),
         resolved_seed: resume.resolved_seed.map(ResolvedMapSeed),
+        encounter_override: None,
     });
     commands.insert_resource(PendingResume(resume));
     next.set(Screen::Loading);
@@ -231,6 +232,7 @@ struct SaveWorld<'w, 's> {
     pending: Res<'w, PendingDecision>,
     resolution: Res<'w, EncounterResolution>,
     active: Option<Res<'w, ActiveScenario>>,
+    lab_session: Option<Res<'w, crate::screens::combat_lab::CombatLabSession>>,
     map: Option<Res<'w, MapSettings>>,
     formation: Res<'w, PartyFormation>,
     moving: Query<'w, 's, (), Or<(With<MovingTo>, With<Busy>)>>,
@@ -257,6 +259,11 @@ fn save_exploration(
     mut notice: ResMut<ResumeNotice>,
 ) {
     if *world.screen.get() != Screen::Gameplay || !bindings.just_pressed(&keys, InputAction::Save) {
+        return;
+    }
+    if world.lab_session.is_some() {
+        notice.0 =
+            Some("Resume not saved: Combat Lab sessions are temporary test fixtures.".to_owned());
         return;
     }
     let safe = world

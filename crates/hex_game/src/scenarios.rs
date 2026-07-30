@@ -68,6 +68,8 @@ pub(super) fn plugin(app: &mut App) {
 pub(super) struct ScenarioToLoad {
     pub(super) scenario: Scenario,
     pub(super) resolved_seed: Option<ResolvedMapSeed>,
+    /// Frozen creator/fixture roster. Normal authored scenarios leave this absent.
+    pub(super) encounter_override: Option<Encounter>,
 }
 
 /// Exact launch input retained for deterministic defeat retry.
@@ -136,6 +138,7 @@ fn apply_selected_scenario(
     commands.insert_resource(ActiveScenario(ScenarioToLoad {
         scenario: scenario.clone(),
         resolved_seed,
+        encounter_override: pending.encounter_override.clone(),
     }));
     commands.remove_resource::<ScenarioToLoad>();
 
@@ -154,12 +157,16 @@ fn apply_selected_scenario(
         &mut registry,
         &scenario.lighting,
     );
-    choose_settings::<Encounter>(
-        &mut commands,
-        &asset_server,
-        &mut registry,
-        &scenario.encounter,
-    );
+    if let Some(encounter) = pending.encounter_override.clone() {
+        commands.insert_resource(encounter);
+    } else {
+        choose_settings::<Encounter>(
+            &mut commands,
+            &asset_server,
+            &mut registry,
+            &scenario.encounter,
+        );
+    }
 }
 
 /// Validates facts which live in separate RON files once both have arrived.
@@ -1512,6 +1519,7 @@ mod tests {
         app.insert_resource(ScenarioToLoad {
             scenario,
             resolved_seed,
+            encounter_override: None,
         });
         app.world_mut()
             .resource_mut::<NextState<Screen>>()

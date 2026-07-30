@@ -84,8 +84,8 @@ fails naming the entry and the reason. It replaced a two-coordinate scaffold tha
 express one player and one enemy and nothing else. **The archetype is looked up in
 `lattices.ron`**, so a roster line is most of what a unit is. The shipped encounters are
 no longer limited to one unit a side. Party Trial fields matching three-member
-hedge-mage, raider, and wolf parties, while Ability Lab and Raider Mirror keep focused
-ability and identity checks small.
+hedge-mage, raider, and wolf parties. Ability Lab and Raider Mirror keep focused
+ability and identity checks small inside Combat Lab's fixture selector.
 
 The element wheel and spells now load as **validated content**: `elements.ron` (the
 six-element wheel, opposition, and fusion recipes, checked acyclic and feedable) and
@@ -147,7 +147,7 @@ battlefield, Retry rebuilds the same resolved seed, Renewal revives at the next 
 boundary, and exploration Rest recovers the whole party. The tactical HUD keeps actor,
 selected ally, decision owner, aimed target, and retained target as explicit roles.
 Party Trial is the 3v3 integration and human regression fixture; Ability Lab and Raider
-Mirror remain its focused automated companions.
+Mirror remain its focused automated companions behind stable fixture IDs.
 
 The **Wave 5 pre-alpha app shell is live**. The title deck exposes Maps, focused
 Demos, and Actions; New Game resolves the hidden Party Trial default, while Continue
@@ -161,6 +161,25 @@ and retained crash symbols. These are disposable continuity and artifact scaffol
 not a durable save contract, rebinding UI, audio content, signing, storefront, crash
 reporting, or telemetry.
 
+The **Wave 6 Creator and Combat Lab are live under Demos**. One versioned atomic
+creation library owns stable custom character and spell IDs, supports reopen,
+modify, rename, duplicate, and confirmed deletion, and refuses removal of referenced
+spells. Draft/Ready and Map-ready diagnostics fail closed through shared schema and
+combat validation. Immutable human templates are duplicable; automation-only
+creator-format records are isolated from local saves. Separate Character Creator and
+Spell Creator navigation leads to focused libraries and workspaces; the character
+workspace retains a direct spell-management link. The Character Creator provides a
+contiguous 64-cell lattice editor, manual stats, undo/redo, ordered spell effects, and
+an unsaved local mechanics test.
+
+Combat Lab owns transient Sandbox setup for all eleven distinct supported shipped
+maps, with deterministic renderer previews, tactical descriptions and tags, complete
+ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
+Its searchable fixture selector replaces individual title cards and adds packaged
+creator spell and roster matrices. Every launch freezes its content namespace,
+encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime
+content on exit.
+
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
@@ -171,14 +190,14 @@ mana and disabled state without extending its lifetime. The HUD renders that pro
 retains a valid aimed hostile, and freezes legal disclosure when each typed combat event
 enters the bounded log. The dev reveal-all toggle remains `K` under the `dev` feature.
 
-Around the game sits its own verification tooling. A **lattice-demo screen** on the
-title menu isolates the magic ruleset and shared lattice renderer from a full fight. A
+Around the game sits its own verification tooling. The Creator's **local lattice
+test** isolates the magic ruleset and shared lattice renderer from a full fight. A
 default-off
 **`visual-walk`** build drives the whole game through scripted RON walks — screens,
 clicks by `Name`, keys, scenario launches — photographing every step through an
 offscreen render target so an agent can read the frames; `/audit-pr` runs it as a
-mechanical gate. New Game reaches the 3v3 Party Trial in one click, while Ability Lab
-and Raider Mirror isolate ability and identity checks. The menus wear vendored
+mechanical gate. New Game reaches the 3v3 Party Trial in one click, while fixture walks
+launch Ability Lab and Raider Mirror by stable ID. The menus wear vendored
 Cinzel/Inter type over a
 design-token widget set; scenarios carry optional per-scenario lighting, and cyclic
 time-of-day is available to those that opt in. The title screen shows the workspace

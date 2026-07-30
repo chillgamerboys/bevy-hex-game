@@ -18,7 +18,9 @@ use bevy::prelude::*;
 /// Data-authored algorithm dispatch for AI controllers.
 pub mod ai_profiles;
 pub mod art_palette;
+pub mod combat_lab;
 pub mod content_index;
+pub mod creation;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
@@ -44,8 +46,19 @@ pub use art_palette::{
     VoxelEmission, VoxelStyle, VoxelStyleCatalog, VoxelStyleId, VoxelSurfaceMode,
     ART_SCHEMA_VERSION, DEFAULT_NEAR_COLOR_THRESHOLD,
 };
+pub use combat_lab::{
+    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
+    COMBAT_LAB_MAP_SCHEMA_VERSION,
+};
 pub use content_index::{
     AcceptedContentRevision, ContentError, ContentIndex, ContentReadinessSystems, ContentTables,
+};
+pub use creation::{
+    character_lattice_file, character_runtime_key, combined_spell_file, creator_character_issues,
+    creator_spell_issues, normalized_name, validate_name, CreationCell, CreationCellKind,
+    CreationLibraryFile, CreationPresetCatalog, CustomCharacterId, CustomSpellId,
+    PackagedCharacter, PackagedSpell, PresetAudience, SavedCharacter, SavedSpell, SpellReference,
+    CREATION_SCHEMA_VERSION, MAX_CREATION_CELLS, MAX_CREATION_NAME_CHARS, MAX_CREATION_RADIUS,
 };
 pub use elements::{ElementCatalog, ElementFile, FusionInput};
 pub use encounter::{
@@ -113,8 +126,10 @@ pub fn plugin(app: &mut App) {
         .register_type::<ScenarioLibrary>();
 
     app.add_plugins(substances::plugin);
+    app.add_plugins(combat_lab::plugin);
     app.add_plugins(ai_profiles::plugin);
     app.add_plugins(elements::plugin);
+    app.add_plugins(creation::plugin);
     app.add_plugins(spells::plugin);
     app.add_plugins(content_index::plugin);
     app.add_plugins(lattices::plugin);

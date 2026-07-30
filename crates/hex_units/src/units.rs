@@ -31,10 +31,10 @@ use hex_lattice::LatticeState;
 use std::{collections::BTreeMap, sync::Arc};
 
 use hex_core::{
-    CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, PartyFormation,
-    PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady, TilePos,
-    TraversalBlockers, TraversalProfile, Turn, UnitId,
+    CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure,
+    Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode,
+    PartyFormation, PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady,
+    TilePos, TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
@@ -368,8 +368,12 @@ fn on_tile_clicked(
     blockers: Option<Res<TraversalBlockers>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
+    phase: Option<Res<GameplayPhase>>,
     pending: Option<Res<PendingDecision>>,
 ) {
+    if phase.is_some_and(|phase| *phase != GameplayPhase::Active) {
+        return;
+    }
     // Every resource here is an `Option`. Observers are global: this one fires on the
     // title screen, in menus, and before anything has loaded. Bevy validates system
     // parameters *before* the body runs, so a plain `Res<T>` panics in those states
@@ -919,6 +923,15 @@ fn place_roster<'a>(
 
     for (index, unit) in units.iter().enumerate() {
         let standing = match unit.placement {
+            EncounterPlacement::Surface(pos) => footing.at(*pos).ok_or_else(|| {
+                format!(
+                    "Encounter {:?}: {} is placed on exact surface {:?}, but that surface is not \
+                     valid footing for its body.",
+                    encounter.name,
+                    describe(unit),
+                    pos
+                )
+            })?,
             EncounterPlacement::Fixed(coord) => {
                 authored_standing(*coord, footing, unit, encounter)?
             }

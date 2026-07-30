@@ -8,6 +8,12 @@ tagged build.
 
 ### Features
 
+- Replace Lattice Demo with separate Character Creator and Spell Creator screens,
+  saved draft/ready lifecycles, immutable templates, and local lattice testing.
+- Add Combat Lab Sandbox roster composition, terrain-backed exact-surface deployment,
+  frozen retry snapshots, and four isolated deterministic fixture families.
+- Offer every shipped map through thirteen described renderer previews, including the
+  V3 Fort and connected Seven Regions world.
 - Replace the Combat scenario lane with Maps, focused Demos, and Actions; New Game now
   launches Party Trial as the hidden integrated default.
 - Add one atomic, build-bound exploration resume slot, persistent display/volume
