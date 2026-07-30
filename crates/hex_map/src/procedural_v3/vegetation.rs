@@ -37,7 +37,15 @@ pub(super) struct TemperateVegetationSet {
     pub(super) grass_tuft: VegetationObjectSpec,
 }
 
-impl TemperateVegetationSet {
+/// Narrow authored authority for recipes that consume the three temperate trees.
+#[derive(Debug, Clone)]
+pub(super) struct TemperateTreeSet {
+    pub(super) small_broadleaf: VegetationObjectSpec,
+    pub(super) tall_narrow: VegetationObjectSpec,
+    pub(super) old_growth: VegetationObjectSpec,
+}
+
+impl TemperateTreeSet {
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
@@ -61,6 +69,23 @@ impl TemperateVegetationSet {
                 7,
                 recipe,
             )?,
+        })
+    }
+
+    pub(super) fn object(&self, id: &str) -> Option<&VegetationObjectSpec> {
+        [&self.small_broadleaf, &self.tall_narrow, &self.old_growth]
+            .into_iter()
+            .find(|object| object.id.as_str() == id)
+    }
+}
+
+impl TemperateVegetationSet {
+    pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
+        let trees = TemperateTreeSet::resolve(catalog, recipe)?;
+        Ok(Self {
+            small_broadleaf: trees.small_broadleaf,
+            tall_narrow: trees.tall_narrow,
+            old_growth: trees.old_growth,
             grass_tuft: VegetationObjectSpec::resolve(
                 catalog,
                 GRASS_TUFT_ID,
@@ -962,6 +987,45 @@ pub(crate) mod tests {
                 BTreeMap::from([(grass.id.clone(), grass)]),
             )
             .expect("grass-only runtime art graph should resolve")
+        })
+    }
+
+    pub(crate) fn tree_only_runtime_art_catalog() -> &'static RuntimeArtCatalog {
+        static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
+        CATALOG.get_or_init(|| {
+            let palette: ArtPalette = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/palette.ron"
+            )))
+            .expect("tracked art palette should parse");
+            let styles: VoxelStyleCatalog = ron::from_str(include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/voxel_styles.ron"
+            )))
+            .expect("tracked voxel styles should parse");
+            let mut objects = BTreeMap::new();
+            for source in [
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/old-growth.ron"
+                )),
+            ] {
+                let blueprint: ObjectBlueprint =
+                    ron::from_str(source).expect("tracked tree blueprint should parse");
+                objects.insert(blueprint.id.clone(), blueprint);
+            }
+            let manifest = ObjectCatalogFile::new(objects.keys().cloned())
+                .expect("tree-only object manifest should validate");
+            RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+                .expect("tree-only runtime art graph should resolve")
         })
     }
 

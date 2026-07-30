@@ -263,10 +263,12 @@ fn validate_recipe_settings(
     Ok(recipe)
 }
 
-#[allow(
-    dead_code,
-    clippy::allow_attributes,
-    reason = "patch entry point is consumed when Ring19 composition integrates"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "patch entry point is consumed when Ring19 composition integrates"
+    )
 )]
 pub(crate) fn construct_patch(
     patch: PatchRecipeContext<'_>,
@@ -467,10 +469,12 @@ fn construct_patch_with_objects(
     }
 }
 
-#[allow(
-    dead_code,
-    clippy::allow_attributes,
-    reason = "patch validator is consumed when Ring19 composition integrates"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "patch validator is consumed when Ring19 composition integrates"
+    )
 )]
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
