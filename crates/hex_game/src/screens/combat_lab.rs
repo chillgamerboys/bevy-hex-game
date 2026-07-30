@@ -94,12 +94,44 @@ pub(crate) struct CreatorEditRequest {
     pub(crate) character: CustomCharacterId,
 }
 
-/// Frozen content resources applied at the final loading boundary.
-#[derive(Resource, Debug, Clone)]
-pub(crate) struct CreatorContentOverlay {
+/// One coherent raw-and-derived gameplay content graph.
+///
+/// The accepted-revision publisher validates all five resources as a unit. Keeping
+/// them bundled prevents Creator sessions from installing a combined `SpellBook`
+/// while leaving the shipped raw files behind, which would make Loading either accept
+/// stale content or wait forever.
+#[derive(Debug, Clone)]
+struct CreatorContentBundle {
+    spell_file: SpellFile,
     spells: SpellBook,
+    lattice_file: LatticeFile,
     content: ContentIndex,
     lattices: LatticeLibrary,
+}
+
+impl CreatorContentBundle {
+    fn insert_with_commands(&self, commands: &mut Commands) {
+        commands.insert_resource(self.spell_file.clone());
+        commands.insert_resource(self.spells.clone());
+        commands.insert_resource(self.lattice_file.clone());
+        commands.insert_resource(self.content.clone());
+        commands.insert_resource(self.lattices.clone());
+    }
+
+    fn insert_into_world(&self, world: &mut World) {
+        world.insert_resource(self.spell_file.clone());
+        world.insert_resource(self.spells.clone());
+        world.insert_resource(self.lattice_file.clone());
+        world.insert_resource(self.content.clone());
+        world.insert_resource(self.lattices.clone());
+    }
+}
+
+/// Frozen Creator and shipped snapshots applied at the final loading boundary.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct CreatorContentOverlay {
+    active: CreatorContentBundle,
+    shipped: CreatorContentBundle,
     display_names: BTreeMap<String, String>,
 }
 
@@ -371,18 +403,9 @@ fn initialize_lab(
     mut commands: Commands,
     request: Option<Res<CreatorTestRequest>>,
     mut state: ResMut<CombatLabState>,
-    spell_file: Option<Res<SpellFile>>,
-    lattice_file: Option<Res<LatticeFile>>,
-    elements: Option<Res<ElementCatalog>>,
-    substances: Option<Res<SubstanceTable>>,
+    overlay: Option<Res<CreatorContentOverlay>>,
 ) {
-    restore_shipped_content(
-        &mut commands,
-        spell_file.as_deref(),
-        lattice_file.as_deref(),
-        elements.as_deref(),
-        substances.as_deref(),
-    );
+    restore_shipped_content(&mut commands, overlay.as_deref());
     commands.remove_resource::<CombatLabSession>();
     commands.remove_resource::<DeploymentSession>();
     commands.insert_resource(GameplayPhase::Active);
@@ -1456,10 +1479,39 @@ fn build_creator_overlay(
             ));
         }
     }
+    let shipped_spell_book = SpellBook::from_file(shipped_spells);
+    let shipped_content =
+        ContentIndex::build(elements, &shipped_spell_book, substances).map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+    let shipped_lattices = LatticeLibrary::build(base_lattices, elements, &shipped_spell_book)
+        .map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+
     Ok(CreatorContentOverlay {
-        spells: spell_book,
-        content,
-        lattices,
+        active: CreatorContentBundle {
+            spell_file,
+            spells: spell_book,
+            lattice_file,
+            content,
+            lattices,
+        },
+        shipped: CreatorContentBundle {
+            spell_file: shipped_spells.clone(),
+            spells: shipped_spell_book,
+            lattice_file: base_lattices.clone(),
+            content: shipped_content,
+            lattices: shipped_lattices,
+        },
         display_names: players
             .iter()
             .chain(hostiles)
@@ -2226,41 +2278,29 @@ fn clear_deployment_world(
     commands.remove_resource::<DeploymentSession>();
 }
 
-/// Reapplies a frozen combined namespace after normal hot-reload builders run.
-pub(crate) fn apply_creator_content_overlay(
-    mut commands: Commands,
-    overlay: Option<Res<CreatorContentOverlay>>,
-) {
-    let Some(overlay) = overlay else { return };
-    commands.insert_resource(overlay.spells.clone());
-    commands.insert_resource(overlay.content.clone());
-    commands.insert_resource(overlay.lattices.clone());
+/// Installs the frozen combined namespace before the accepted-revision publisher.
+///
+/// This is exclusive so all five resources become visible in the same schedule
+/// boundary without relying on deferred-command ordering.
+pub(crate) fn apply_creator_content_overlay(world: &mut World) {
+    let Some(active) = world
+        .get_resource::<CreatorContentOverlay>()
+        .map(|overlay| overlay.active.clone())
+    else {
+        return;
+    };
+    active.insert_into_world(world);
 }
 
 /// Restores the base namespace after a creator session froze combined ids.
 pub(crate) fn restore_shipped_content(
     commands: &mut Commands,
-    spell_file: Option<&SpellFile>,
-    lattice_file: Option<&LatticeFile>,
-    elements: Option<&ElementCatalog>,
-    substances: Option<&SubstanceTable>,
+    overlay: Option<&CreatorContentOverlay>,
 ) {
+    if let Some(overlay) = overlay {
+        overlay.shipped.insert_with_commands(commands);
+    }
     commands.remove_resource::<CreatorContentOverlay>();
-    let (Some(spell_file), Some(lattice_file), Some(elements), Some(substances)) =
-        (spell_file, lattice_file, elements, substances)
-    else {
-        return;
-    };
-    let spells = SpellBook::from_file(spell_file);
-    let Ok(content) = ContentIndex::build(elements, &spells, substances) else {
-        return;
-    };
-    let Ok(lattices) = LatticeLibrary::build(lattice_file, elements, &spells) else {
-        return;
-    };
-    commands.insert_resource(spells);
-    commands.insert_resource(content);
-    commands.insert_resource(lattices);
 }
 
 fn apply_creator_display_names(
@@ -2281,7 +2321,141 @@ fn apply_creator_display_names(
 
 #[cfg(test)]
 mod tests {
+    use bevy::state::app::StatesPlugin;
+    use hex_assets::{
+        AcceptedContentRevision, ArtPalette, ElementFile, SubstanceFile, SubstanceTable,
+    };
+
     use super::*;
+
+    struct ContentFixture {
+        element_file: ElementFile,
+        elements: ElementCatalog,
+        substance_file: SubstanceFile,
+        palette: ArtPalette,
+        substances: SubstanceTable,
+        shipped: CreatorContentBundle,
+        active: CreatorContentBundle,
+    }
+
+    fn bundle(
+        spell_file: SpellFile,
+        lattice_file: LatticeFile,
+        elements: &ElementCatalog,
+        substances: &SubstanceTable,
+    ) -> Result<CreatorContentBundle, String> {
+        let spells = SpellBook::from_file(&spell_file);
+        let content = ContentIndex::build(elements, &spells, substances).map_err(|errors| {
+            errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        })?;
+        let lattices =
+            LatticeLibrary::build(&lattice_file, elements, &spells).map_err(|errors| {
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            })?;
+        Ok(CreatorContentBundle {
+            spell_file,
+            spells,
+            lattice_file,
+            content,
+            lattices,
+        })
+    }
+
+    fn content_fixture() -> Result<ContentFixture, String> {
+        let element_file: ElementFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/elements.ron"
+        )))
+        .map_err(|error| error.to_string())?;
+        let shipped_spell_file: SpellFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/spells.ron"
+        )))
+        .map_err(|error| error.to_string())?;
+        let lattice_file: LatticeFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/lattices.ron"
+        )))
+        .map_err(|error| error.to_string())?;
+        let substance_file: SubstanceFile = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/config/substances.ron"
+        )))
+        .map_err(|error| error.to_string())?;
+        let palette: ArtPalette = ron::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/art/palette.ron"
+        )))
+        .map_err(|error| error.to_string())?;
+
+        let elements = ElementCatalog::from_file(&element_file);
+        let substances = SubstanceTable::from_file(&substance_file, &palette)
+            .map_err(|error| error.to_string())?;
+        let shipped = bundle(
+            shipped_spell_file.clone(),
+            lattice_file.clone(),
+            &elements,
+            &substances,
+        )?;
+        let mut creator_spell_file = shipped_spell_file;
+        let fixture_spell = creator_spell_file
+            .spells
+            .values()
+            .next()
+            .cloned()
+            .ok_or_else(|| "shipped spell fixture is empty".to_owned())?;
+        creator_spell_file
+            .spells
+            .insert("Creator Acceptance Test".to_owned(), fixture_spell);
+        let active = bundle(creator_spell_file, lattice_file, &elements, &substances)?;
+        Ok(ContentFixture {
+            element_file,
+            elements,
+            substance_file,
+            palette,
+            substances,
+            shipped,
+            active,
+        })
+    }
+
+    fn app_with_content_fixture(fixture: &ContentFixture) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(Screen::Loading);
+        app.insert_resource(fixture.element_file.clone());
+        app.insert_resource(fixture.elements.clone());
+        app.insert_resource(fixture.substance_file.clone());
+        app.insert_resource(fixture.palette.clone());
+        app.insert_resource(fixture.substances.clone());
+        fixture.shipped.insert_into_world(app.world_mut());
+        app.add_plugins(hex_assets::content_index::plugin);
+        app.add_systems(
+            PostUpdate,
+            apply_creator_content_overlay
+                .before(hex_assets::ContentReadinessSystems::PublishAcceptedRevision),
+        );
+        app
+    }
+
+    #[derive(Resource)]
+    struct RestoreCreatorContent;
+
+    fn restore_creator_content_once(
+        mut commands: Commands,
+        overlay: Option<Res<CreatorContentOverlay>>,
+    ) {
+        restore_shipped_content(&mut commands, overlay.as_deref());
+        commands.remove_resource::<RestoreCreatorContent>();
+    }
 
     #[test]
     fn roster_ordering_and_cap_helpers_are_deterministic() {
@@ -2309,5 +2483,110 @@ mod tests {
         assert_eq!(ids.len(), FIXTURES.len());
         assert!(ids.contains("ability-lab"));
         assert!(ids.contains("creator-spell-matrix"));
+    }
+
+    #[test]
+    fn creator_overlay_publishes_one_accepted_raw_and_derived_revision() {
+        let fixture = content_fixture().expect("shipped content fixture should resolve");
+        let mut app = app_with_content_fixture(&fixture);
+        app.update();
+        let shipped_revision = app
+            .world()
+            .resource::<AcceptedContentRevision>()
+            .fingerprint();
+
+        app.insert_resource(CreatorContentOverlay {
+            active: fixture.active,
+            shipped: fixture.shipped,
+            display_names: BTreeMap::new(),
+        });
+        app.update();
+
+        let world = app.world();
+        let accepted = world.resource::<AcceptedContentRevision>();
+        assert_ne!(accepted.fingerprint(), shipped_revision);
+        assert!(
+            accepted.matches_resolved(
+                world.resource::<ContentIndex>(),
+                world.resource::<LatticeLibrary>()
+            ),
+            "the creator graph should be accepted through the normal publisher"
+        );
+        assert!(world
+            .resource::<SpellBook>()
+            .matches_source(world.resource::<SpellFile>()));
+        assert!(world.resource::<LatticeLibrary>().matches_sources(
+            world.resource::<LatticeFile>(),
+            world.resource::<ElementCatalog>(),
+            world.resource::<SpellBook>()
+        ));
+    }
+
+    #[test]
+    fn partial_creator_bundle_cannot_remain_accepted() {
+        let fixture = content_fixture().expect("shipped content fixture should resolve");
+        let shipped_raw_spells = fixture.shipped.spell_file.clone();
+        let mut app = app_with_content_fixture(&fixture);
+        app.insert_resource(CreatorContentOverlay {
+            active: fixture.active,
+            shipped: fixture.shipped,
+            display_names: BTreeMap::new(),
+        });
+        app.update();
+        assert!(app.world().contains_resource::<AcceptedContentRevision>());
+
+        app.world_mut().remove_resource::<CreatorContentOverlay>();
+        app.insert_resource(shipped_raw_spells);
+        app.update();
+
+        assert!(
+            !app.world().contains_resource::<AcceptedContentRevision>(),
+            "a shipped raw file paired with creator-derived tables must fail closed"
+        );
+    }
+
+    #[test]
+    fn exit_retry_and_reentry_restore_the_shipped_accepted_revision() {
+        let fixture = content_fixture().expect("shipped content fixture should resolve");
+        let mut app = app_with_content_fixture(&fixture);
+        let overlay = CreatorContentOverlay {
+            active: fixture.active,
+            shipped: fixture.shipped,
+            display_names: BTreeMap::new(),
+        };
+        app.add_systems(
+            PreUpdate,
+            restore_creator_content_once.run_if(resource_exists::<RestoreCreatorContent>),
+        );
+        app.update();
+        let shipped_revision = app
+            .world()
+            .resource::<AcceptedContentRevision>()
+            .fingerprint();
+
+        for _ in 0..2 {
+            app.insert_resource(overlay.clone());
+            app.update();
+            assert_ne!(
+                app.world()
+                    .resource::<AcceptedContentRevision>()
+                    .fingerprint(),
+                shipped_revision,
+                "each Creator entry should install its frozen revision"
+            );
+
+            app.insert_resource(RestoreCreatorContent);
+            app.update();
+            let world = app.world();
+            assert!(!world.contains_resource::<CreatorContentOverlay>());
+            assert_eq!(
+                world.resource::<AcceptedContentRevision>().fingerprint(),
+                shipped_revision,
+                "exit and the next retry/re-entry must start from shipped content"
+            );
+            assert!(world
+                .resource::<SpellBook>()
+                .matches_source(world.resource::<SpellFile>()));
+        }
     }
 }

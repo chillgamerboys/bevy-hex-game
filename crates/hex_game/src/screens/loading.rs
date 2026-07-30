@@ -22,9 +22,14 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Loading), spawn_loading);
     app.add_systems(
         PostUpdate,
+        super::combat_lab::apply_creator_content_overlay
+            .before(ContentReadinessSystems::PublishAcceptedRevision)
+            .run_if(in_state(Screen::Loading)),
+    );
+    app.add_systems(
+        PostUpdate,
         (
             crate::scenarios::validate_loaded_scenario,
-            super::combat_lab::apply_creator_content_overlay,
             enter_gameplay_when_ready,
         )
             .chain()

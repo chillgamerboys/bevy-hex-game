@@ -79,14 +79,15 @@ Combat Lab has two tabs.
 
 ### Sandbox
 
-Sandbox offers all eleven distinct shipped environments through the versioned
+Sandbox offers all thirteen distinct shipped environments through the versioned
 `combat_lab_maps.ron` catalog: Flat Arena, The Crossing, Procedural Hills, Rolling
 Hills, Frozen Hills, Volcanic Hills, Sky Islands, Mountains, Caves, Waterfall, and
-Forest. Duplicate scenario uses of Flat Arena and The Crossing do not create duplicate
-map choices. Each stable map record names its scenario, deterministic seed contract,
-renderer-generated preview, tactical description and tags, and separate Player and
-Hostile deployment regions. A region resolves from an authored cube coordinate or
-named map anchor plus a bounded footing radius. Both rosters are
+Forest, Fort, and Seven Regions. Duplicate scenario uses of Flat Arena and The
+Crossing do not create duplicate map choices. Each stable map record names its
+scenario, deterministic seed contract, renderer-generated preview, tactical
+description and tags, and separate Player and Hostile deployment regions. A region
+resolves from an authored cube coordinate or named map anchor plus a bounded footing
+radius. Both rosters are
 fully editable and ordered, with one to six units per side. Choices come from packaged
 templates or saved Map-ready characters. Player units are human controlled; hostile
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.
@@ -137,7 +138,12 @@ retry contract. Loading installs the snapshot before actors are built. Retry reu
 the same active scenario, seed, encounter, and content even if the local library
 changes meanwhile.
 
-Combat Lab sessions never write Continue/resume state. Exiting restores the shipped
-spell, content-index, and lattice namespace in full. Creator-origin sessions return to
-the Creator on setup back, pause exit, or outcome exit; standalone Sandbox returns to
-Sandbox setup; fixture sessions return to the fixture selector.
+Combat Lab sessions never write Continue/resume state. The active Creator snapshot
+and its shipped counterpart each bundle the raw `SpellFile` and `LatticeFile` with
+their derived `SpellBook`, `ContentIndex`, and `LatticeLibrary`. Loading installs all
+five before the normal content-readiness publisher creates
+`AcceptedContentRevision`; it never manufactures or bypasses acceptance. Exiting
+restores all five shipped resources and lets that same publisher accept the shipped
+revision. Creator-origin sessions return to the Creator on setup back, pause exit, or
+outcome exit; standalone Sandbox returns to Sandbox setup; fixture sessions return to
+the fixture selector.

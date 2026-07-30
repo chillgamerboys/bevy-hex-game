@@ -190,5 +190,39 @@
                 radius: 4,
             ),
         ),
+        (
+            id: "fort",
+            display_name: "Fort",
+            description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",
+            tags: ["Fortification", "Gates", "Vertical"],
+            preview: "ui/combat-lab/fort.png",
+            scenario: "Fort",
+            fixed_seed: Some(640367719),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
+            id: "seven-regions",
+            display_name: "Seven Regions",
+            description: "One connected world joins hills, mountains, waterfall, forest, fort, caves, and sky islands.",
+            tags: ["Ring7", "Large", "Mixed"],
+            preview: "ui/combat-lab/seven-regions.png",
+            scenario: "Seven Regions",
+            fixed_seed: Some(703700113),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
     ],
 )

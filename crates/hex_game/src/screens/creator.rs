@@ -219,19 +219,10 @@ fn initialize_session(
     entry_request: Option<Res<CreatorEntryRequest>>,
     edit_request: Option<Res<super::combat_lab::CreatorEditRequest>>,
     store: Res<CreationStore>,
-    spell_file: Option<Res<SpellFile>>,
-    lattice_file: Option<Res<LatticeFile>>,
-    elements: Option<Res<ElementCatalog>>,
-    substances: Option<Res<SubstanceTable>>,
+    overlay: Option<Res<super::combat_lab::CreatorContentOverlay>>,
 ) {
     let editing_from_lab = edit_request.is_some();
-    super::combat_lab::restore_shipped_content(
-        &mut commands,
-        spell_file.as_deref(),
-        lattice_file.as_deref(),
-        elements.as_deref(),
-        substances.as_deref(),
-    );
+    super::combat_lab::restore_shipped_content(&mut commands, overlay.as_deref());
     commands.remove_resource::<super::combat_lab::CombatLabSession>();
     if editing_from_lab {
         session.return_to_combat_lab = true;

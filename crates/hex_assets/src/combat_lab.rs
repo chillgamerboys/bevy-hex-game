@@ -169,7 +169,9 @@ mod tests {
         assert!(catalog.get("the-crossing").is_some());
         assert!(catalog.get("procedural-hills").is_some());
         assert!(catalog.get("forest").is_some());
-        assert_eq!(catalog.maps.len(), 11);
+        assert!(catalog.get("fort").is_some());
+        assert!(catalog.get("seven-regions").is_some());
+        assert_eq!(catalog.maps.len(), 13);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
