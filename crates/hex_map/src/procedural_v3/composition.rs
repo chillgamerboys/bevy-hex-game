@@ -1282,6 +1282,38 @@ mod tests {
     }
 
     #[test]
+    fn ring7_numeric_and_named_namespaces_keep_the_legacy_encoding() {
+        assert_eq!(
+            namespace_numeric(PatchId(0), 42, NamespaceKind::Liquid),
+            Ok(42)
+        );
+        assert_eq!(
+            namespace_numeric(PatchId(6), 42, NamespaceKind::Feature),
+            Ok(0x6000_002a)
+        );
+        assert_eq!(
+            namespace_numeric(PatchId(6), MAX_LOCAL_ID, NamespaceKind::Interior),
+            Ok(0x6fff_ffff)
+        );
+
+        for (patch, expected) in [
+            (0, "center_party_start"),
+            (1, "mountains_party_start"),
+            (2, "waterfall_party_start"),
+            (3, "forest_party_start"),
+            (4, "fort_party_start"),
+            (5, "caves_party_start"),
+            (6, "sky_islands_party_start"),
+        ] {
+            assert_eq!(
+                namespace_name(PatchId(patch), "party_start"),
+                expected,
+                "update only with an explicit shipped Ring7 named-namespace decision"
+            );
+        }
+    }
+
+    #[test]
     fn final_whole_world_validation_remains_authoritative() {
         let layout = ring7_layout();
         let settings = WorldCompositionSettings {

@@ -659,35 +659,48 @@ fn v3_ring7_materializes_complete_world_and_reenters_deterministically() {
     let report = app.world().resource::<GenerationReport>().clone();
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 703_700_113);
+    assert_eq!(report.selected_candidate, Some(4));
     assert_eq!(report.candidates_evaluated, 8);
-    assert!(
-        report.valid_candidates >= 2,
-        "pinned Ring7 seed should retain multiple whole-world candidates: {:?}",
-        report.notes
-    );
-    assert!(report.selected_candidate.is_some());
+    assert_eq!(report.valid_candidates, 3);
     assert!(!report.used_fallback, "{:?}", report.notes);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_ne!(report.settings_fingerprint, 0);
-    assert!(
-        report
-            .semantic_plan_fingerprint
-            .is_some_and(|fingerprint| fingerprint != 0),
-        "V3 Ring7 should publish a distinct semantic identity"
+    assert_eq!(
+        report.settings_fingerprint, 11_463_780_561_406_126_783,
+        "update only with an explicit shipped Ring7 settings-identity decision"
     );
-    assert_ne!(report.map_fingerprint, 0);
+    assert_eq!(
+        report.semantic_plan_fingerprint,
+        Some(17_137_489_855_939_949_303),
+        "update only with an explicit shipped Ring7 semantic-plan decision"
+    );
+    assert_eq!(
+        report.map_fingerprint, 14_774_674_416_521_441_907,
+        "update only with an explicit shipped Ring7 materialized-map decision"
+    );
 
     let Some(ProceduralRecipeMetrics::Ring7(metrics)) = report.recipe_metrics.as_ref() else {
         panic!("V3 Ring7 should publish exact whole-world metrics");
     };
-    assert_eq!(metrics.ordinary_surfaces, metrics.reachable_surfaces);
-    assert!(metrics.reachable_elevation_levels > 1);
-    assert!(metrics.relief > 0);
-    assert!(metrics.critical_route_steps > 0);
-    assert_eq!(metrics.macro_edges, 12);
-    assert_eq!(metrics.redundant_regions, 7);
-    assert_eq!(metrics.directed_liquid_seams, 2);
+    assert_eq!(
+        metrics,
+        &Ring7Metrics {
+            ordinary_surfaces: 2_880,
+            reachable_surfaces: 2_880,
+            reachable_elevation_levels: 23,
+            relief: 22,
+            critical_route_steps: 28,
+            macro_edges: 12,
+            redundant_regions: 7,
+            directed_liquid_seams: 2,
+            liquid_cells: 227,
+            feature_instances: 382,
+            structures: 17,
+            gameplay_lights: 4,
+            interiors: 1,
+        },
+        "update only with an explicit shipped Ring7 aggregate-contract decision"
+    );
     assert!(metrics.liquid_cells > 0);
     assert!(metrics.feature_instances > 0);
     assert!(metrics.structures > 0);
