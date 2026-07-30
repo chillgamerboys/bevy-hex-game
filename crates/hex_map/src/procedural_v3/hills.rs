@@ -11,7 +11,7 @@ use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, PatchId, ResolvedEdgeId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, HexSide, PatchId, ResolvedEdgeId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
@@ -549,7 +549,7 @@ pub(crate) fn construct_patch_with_streams(
     let mut ordinary_by_coord = BTreeMap::new();
     for (coord, level) in &surface_by_coord {
         let bridge = crossings.bridge_deck.contains(coord);
-        let ford = crossings.ford_deck.contains(coord);
+        let ford = crossings.ford_deck.contains(coord) || crossings.auxiliary_fords.contains(coord);
         if crossings.river.contains(coord) {
             let Some((liquid_position, liquid_node)) = river_nodes_by_coord.get(coord).copied()
             else {
@@ -832,6 +832,7 @@ pub(crate) fn construct_patch_with_streams(
 #[derive(Debug, Clone)]
 struct LocalLiquidPort {
     edge: ResolvedEdgeId,
+    side: HexSide,
     source: bool,
     boundary: BTreeSet<HexCoord>,
     approach: BTreeSet<HexCoord>,
@@ -860,6 +861,7 @@ fn local_liquid_ports(
             edge.liquid_port().map(|(source, port)| {
                 (
                     edge.id,
+                    edge.side,
                     source,
                     port,
                     edge.minimum_level(),
@@ -867,7 +869,7 @@ fn local_liquid_ports(
                 )
             })
         })
-        .map(|(edge, source, port, minimum_level, maximum_level)| {
+        .map(|(edge, side, source, port, minimum_level, maximum_level)| {
             let boundary = port
                 .lanes
                 .iter()
@@ -881,6 +883,7 @@ fn local_liquid_ports(
                 .collect::<Result<BTreeSet<_>, _>>();
             Ok(LocalLiquidPort {
                 edge,
+                side,
                 source,
                 boundary: boundary.map_err(|error| {
                     vec![recipe_issue(format!(
@@ -904,6 +907,7 @@ struct CrossingGeometry {
     river: BTreeSet<HexCoord>,
     bridge_deck: BTreeSet<HexCoord>,
     ford_deck: BTreeSet<HexCoord>,
+    auxiliary_fords: BTreeSet<HexCoord>,
     bridge_centerline: Vec<HexCoord>,
     bridge_route: BTreeSet<HexCoord>,
     ford_centerline: Vec<HexCoord>,
@@ -940,6 +944,7 @@ impl CrossingGeometry {
             river: convert_set(self.river)?,
             bridge_deck: convert_set(self.bridge_deck)?,
             ford_deck: convert_set(self.ford_deck)?,
+            auxiliary_fords: convert_set(self.auxiliary_fords)?,
             bridge_centerline: convert_route(self.bridge_centerline)?,
             bridge_route: convert_set(self.bridge_route)?,
             ford_centerline: convert_route(self.ford_centerline)?,
@@ -1083,6 +1088,7 @@ fn crossing_geometry(
         river,
         bridge_deck,
         ford_deck,
+        auxiliary_fords: BTreeSet::new(),
         bridge_centerline: centerline(0),
         bridge_route,
         ford_centerline: centerline(ford_y),
@@ -1101,15 +1107,8 @@ fn confluence_hydrology(
     ports: &[LocalLiquidPort],
     river_exclusions: &BTreeSet<HexCoord>,
 ) -> Result<(u8, i32, CrossingGeometry, BTreeMap<TilePos, LiquidNode>), Vec<WorldValidationIssue>> {
-    let outlets = ports.iter().filter(|port| port.source).collect::<Vec<_>>();
+    let (outlet, main_inlet) = confluence_main_ports(ports)?;
     let inlets = ports.iter().filter(|port| !port.source).collect::<Vec<_>>();
-    if outlets.len() != 1 || inlets.len() < 2 {
-        return Err(vec![recipe_issue(format!(
-            "Hills confluence requires at least two inlets and exactly one outlet; found {} inlets and {} outlets",
-            inlets.len(),
-            outlets.len()
-        ))]);
-    }
     if ports
         .iter()
         .any(|port| river_level < port.minimum_level || river_level > port.maximum_level)
@@ -1128,12 +1127,6 @@ fn confluence_hydrology(
             }
         }
     }
-    let Some(outlet) = outlets.first().copied() else {
-        return Err(vec![recipe_issue(
-            "Hills confluence has no resolved outlet",
-        )]);
-    };
-
     for turn in 0..6 {
         let orientation = requested_orientation.saturating_add(turn) % 6;
         for river_offset in lateral_offsets {
@@ -1144,9 +1137,7 @@ fn confluence_hydrology(
             };
             if !crossings.river.is_disjoint(river_exclusions)
                 || !outlet.approach.is_subset(&crossings.river)
-                || !inlets
-                    .iter()
-                    .any(|port| port.approach.is_subset(&crossings.river))
+                || !main_inlet.approach.is_subset(&crossings.river)
             {
                 continue;
             }
@@ -1155,8 +1146,10 @@ fn confluence_hydrology(
             else {
                 continue;
             };
-            crossings.ford_deck.extend(branch_fords.iter().copied());
-            crossings.ford_route.extend(branch_fords.iter().copied());
+            if branch_fords.len() != inlets.len().saturating_sub(1) {
+                continue;
+            }
+            crossings.auxiliary_fords = branch_fords.clone();
             crossings.protected.extend(branch_fords);
             let Ok(nodes) = confluence_river_nodes(&crossings.river, river_level, &outlet.boundary)
             else {
@@ -1184,6 +1177,37 @@ fn confluence_hydrology(
     Err(vec![recipe_issue(
         "Hills cannot route its resolved inlets into one deterministic outlet",
     )])
+}
+
+fn confluence_main_ports(
+    ports: &[LocalLiquidPort],
+) -> Result<(&LocalLiquidPort, &LocalLiquidPort), Vec<WorldValidationIssue>> {
+    let outlets = ports.iter().filter(|port| port.source).collect::<Vec<_>>();
+    let inlets = ports.iter().filter(|port| !port.source).collect::<Vec<_>>();
+    if outlets.len() != 1 || inlets.len() < 2 {
+        return Err(vec![recipe_issue(format!(
+            "Hills confluence requires at least two inlets and exactly one outlet; found {} inlets and {} outlets",
+            inlets.len(),
+            outlets.len()
+        ))]);
+    }
+    let Some(outlet) = outlets.first().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills confluence has no resolved outlet",
+        )]);
+    };
+    let opposite_side = outlet.side.opposite();
+    let Some(main_inlet) = inlets
+        .iter()
+        .copied()
+        .find(|inlet| inlet.side == opposite_side)
+    else {
+        return Err(vec![recipe_issue(format!(
+            "Hills confluence requires an inlet opposite its {:?} outlet to preserve the complete three-wide two-crossing bank barrier",
+            outlet.side
+        ))]);
+    };
+    Ok((outlet, main_inlet))
 }
 
 fn attach_confluence_branches(
@@ -1251,6 +1275,91 @@ fn attach_confluence_branches(
     }
     crossings.river = river;
     Ok(branch_fords)
+}
+
+fn rederive_confluence_auxiliary_crossings(
+    plan: &GeneratedWorldPlan,
+    ports: &[LocalLiquidPort],
+    protected_approaches: &BTreeSet<HexCoord>,
+    scale: u32,
+) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
+    let Some(bridge) = plan.features.protected_routes.get(BRIDGE_ROUTE) else {
+        return Err(vec![recipe_issue(
+            "Hills cannot rederive tributary crossings without its main bridge route",
+        )]);
+    };
+    let Some(alternate) = plan.features.protected_routes.get(FORD_ROUTE) else {
+        return Err(vec![recipe_issue(
+            "Hills cannot rederive tributary crossings without its alternate route",
+        )]);
+    };
+    let bridge_coords = bridge
+        .surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    let alternate_coords = alternate
+        .surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    let fill_coords = plan
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let liquid_approaches = ports
+        .iter()
+        .flat_map(|port| port.approach.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let river_exclusions = protected_approaches
+        .difference(&liquid_approaches)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let (outlet, main_inlet) = confluence_main_ports(ports)?;
+    let inlet_count = ports.iter().filter(|port| !port.source).count();
+    let mut matches = BTreeSet::new();
+
+    for orientation in 0..6 {
+        for river_offset in [0, -4, 4, -6, 6, -2, 2] {
+            let Ok(mut geometry) =
+                crossing_geometry(&plan.layout.footprint, orientation, scale, river_offset)
+            else {
+                continue;
+            };
+            if geometry.bridge_route != bridge_coords
+                || geometry.ford_route != alternate_coords
+                || !geometry.river.is_disjoint(&river_exclusions)
+                || !outlet.approach.is_subset(&geometry.river)
+                || !main_inlet.approach.is_subset(&geometry.river)
+            {
+                continue;
+            }
+            let Ok(auxiliary) = attach_confluence_branches(
+                &plan.layout.footprint,
+                ports,
+                &river_exclusions,
+                &mut geometry,
+            ) else {
+                continue;
+            };
+            if auxiliary.len() == inlet_count.saturating_sub(1) && geometry.river == fill_coords {
+                matches.insert(auxiliary);
+            }
+        }
+    }
+
+    match matches.into_iter().collect::<Vec<_>>().as_slice() {
+        [expected] => Ok(expected.clone()),
+        [] => Err(vec![recipe_issue(
+            "Hills cannot rederive auxiliary tributary crossings from its exact liquid branches",
+        )]),
+        alternatives => Err(vec![recipe_issue(format!(
+            "Hills auxiliary tributary crossing authority is ambiguous across {} exact geometries",
+            alternatives.len()
+        ))]),
+    }
 }
 
 fn shortest_branch_path(
@@ -1912,6 +2021,8 @@ fn validate_hills(
         true,
         false,
         false,
+        0,
+        None,
         &BTreeSet::new(),
     )
 }
@@ -2079,6 +2190,12 @@ pub(crate) fn validate_patch(
         Err(issues) => return WorldValidation::Invalid(issues),
     };
     let confluence = liquid_ports.iter().filter(|port| !port.source).count() > 1;
+    let confluence_inlet_count = liquid_ports.iter().filter(|port| !port.source).count();
+    if confluence {
+        if let Err(issues) = confluence_main_ports(&liquid_ports) {
+            return WorldValidation::Invalid(issues);
+        }
+    }
     let liquid_issues = validate_resolved_liquid_ports(&patch, fragment, confluence);
     if !liquid_issues.is_empty() {
         return WorldValidation::Invalid(liquid_issues);
@@ -2113,16 +2230,33 @@ pub(crate) fn validate_patch(
         Err(issue) => return WorldValidation::Invalid(vec![issue]),
     };
     match frame.canonical_local_world(fragment) {
-        Ok(plan) => validate_hills_inner(
-            &plan,
-            settings,
-            environment,
-            vegetation.as_ref(),
-            false,
-            patch.layout().kind.is_composite(),
-            confluence,
-            &protected_approaches,
-        ),
+        Ok(plan) => {
+            let expected_auxiliary = if confluence {
+                match rederive_confluence_auxiliary_crossings(
+                    &plan,
+                    &liquid_ports,
+                    &protected_approaches,
+                    frame.scale(),
+                ) {
+                    Ok(expected) => Some(expected),
+                    Err(issues) => return WorldValidation::Invalid(issues),
+                }
+            } else {
+                None
+            };
+            validate_hills_inner(
+                &plan,
+                settings,
+                environment,
+                vegetation.as_ref(),
+                false,
+                patch.layout().kind.is_composite(),
+                confluence,
+                confluence_inlet_count,
+                expected_auxiliary.as_ref(),
+                &protected_approaches,
+            )
+        }
         Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
             "Hills validation projection failed: {error}"
         ))]),
@@ -2137,6 +2271,8 @@ fn validate_hills_inner(
     validate_common: bool,
     composite_layout: bool,
     confluence: bool,
+    confluence_inlet_count: usize,
+    expected_auxiliary_crossings: Option<&BTreeSet<HexCoord>>,
     additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<HillsMetrics> {
     let mut issues = if validate_common {
@@ -2188,13 +2324,36 @@ fn validate_hills_inner(
         ));
         return WorldValidation::Invalid(issues);
     };
-    let protected_surfaces = bridge
+    let fill_coords: BTreeSet<_> = plan
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect();
+    let main_crossing_surfaces = bridge
         .surfaces
         .union(&alternate.surfaces)
         .copied()
         .collect::<BTreeSet<_>>();
+    let auxiliary_crossings = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary
+                && fill_coords.contains(&position.coord)
+                && !main_crossing_surfaces.contains(position))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    let protected_surfaces = main_crossing_surfaces.clone();
+    let all_crossing_surfaces = protected_surfaces
+        .iter()
+        .copied()
+        .chain(auxiliary_crossings.iter().copied())
+        .collect::<BTreeSet<_>>();
     let (two_level_cliffs, three_level_cliffs) =
-        cliff_transition_counts(&ordinary, &protected_surfaces);
+        cliff_transition_counts(&ordinary, &all_crossing_surfaces);
     if settings.max_relief >= 10 {
         if relief < 10 {
             issues.push(recipe_issue(format!(
@@ -2220,12 +2379,6 @@ fn validate_hills_inner(
         ));
     }
 
-    let fill_coords: BTreeSet<_> = plan
-        .volume
-        .fill_runs_by_top()
-        .keys()
-        .map(|position| position.coord)
-        .collect();
     let validation_offsets: &[i32] = if composite_layout {
         &[0, -4, 4, -6, 6, -2, 2]
     } else {
@@ -2260,12 +2413,28 @@ fn validate_hills_inner(
             "Hills liquid does not form the exact three-wide edge-to-edge barrier"
         }));
     }
-    validate_barrier_surfaces(plan, &fill_coords, bridge, alternate, &mut issues);
+    validate_auxiliary_crossings(
+        plan,
+        &fill_coords,
+        &auxiliary_crossings,
+        confluence_inlet_count.saturating_sub(1),
+        expected_auxiliary_crossings,
+        environment,
+        &mut issues,
+    );
+    validate_barrier_surfaces(
+        plan,
+        &fill_coords,
+        bridge,
+        alternate,
+        &auxiliary_crossings,
+        &mut issues,
+    );
     validate_alternate_support(plan, &fill_coords, alternate, &mut issues);
     let frozen = ordinary
         .positions()
         .any(|position| solid_material_at(&plan.volume, position) == Some(SolidMaterialRole::Snow));
-    validate_frozen_ice_caps(plan, frozen, &protected_surfaces, &mut issues);
+    validate_frozen_ice_caps(plan, frozen, &all_crossing_surfaces, &mut issues);
     validate_small_fall(plan, validate_common, &mut issues);
     let mut vegetation_reserved = fill_coords.clone();
     for coord in protected_surfaces
@@ -2394,6 +2563,14 @@ fn validate_hills_inner(
         issues.push(recipe_issue(
             "Hills crossing footprints do not span the liquid barrier",
         ));
+    } else if confluence {
+        validate_confluence_crossing_authority(
+            &ordinary,
+            &bridge_barrier,
+            &alternate_barrier,
+            &auxiliary_crossings,
+            &mut issues,
+        );
     } else {
         if !ordinary
             .reachable_avoiding(party, &alternate_barrier)
@@ -2458,6 +2635,139 @@ fn validate_hills_inner(
         grass_roots: count_u32(vegetation.grass),
         valley_grass_percent,
     })
+}
+
+fn validate_confluence_crossing_authority(
+    ordinary: &OrdinaryGraph,
+    bridge: &BTreeSet<TilePos>,
+    alternate: &BTreeSet<TilePos>,
+    auxiliary: &BTreeSet<TilePos>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let wet_ordinary = bridge
+        .union(alternate)
+        .copied()
+        .chain(auxiliary.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let mut component_by_surface = BTreeMap::new();
+    let mut component_count = 0_usize;
+    for start in ordinary
+        .positions()
+        .filter(|position| !wet_ordinary.contains(position))
+    {
+        if component_by_surface.contains_key(&start) {
+            continue;
+        }
+        let reachable = ordinary.reachable_avoiding(start, &wet_ordinary);
+        for surface in reachable {
+            component_by_surface.insert(surface, component_count);
+        }
+        component_count = component_count.saturating_add(1);
+    }
+
+    let mut authorities = vec![
+        ("bridge", bridge.clone()),
+        ("alternate crossing", alternate.clone()),
+    ];
+    authorities.extend(
+        auxiliary
+            .iter()
+            .copied()
+            .map(|surface| ("auxiliary tributary crossing", BTreeSet::from([surface]))),
+    );
+    let mut bank_edges = Vec::with_capacity(authorities.len());
+    for (name, authority) in &authorities {
+        let Some(start) = authority.first().copied() else {
+            issues.push(recipe_issue(format!(
+                "Hills {name} has no liquid-barrier authority"
+            )));
+            return;
+        };
+        let mut authority_reachable = BTreeSet::from([start]);
+        let mut authority_frontier = VecDeque::from([start]);
+        while let Some(surface) = authority_frontier.pop_front() {
+            for neighbor in ordinary.neighbors(surface) {
+                if authority.contains(neighbor) && authority_reachable.insert(*neighbor) {
+                    authority_frontier.push_back(*neighbor);
+                }
+            }
+        }
+        if !authority.is_subset(&authority_reachable) {
+            issues.push(recipe_issue(format!(
+                "Hills {name} liquid-barrier authority is not internally walkable"
+            )));
+        }
+        let banks = authority
+            .iter()
+            .flat_map(|surface| ordinary.neighbors(*surface))
+            .filter(|neighbor| !wet_ordinary.contains(neighbor))
+            .filter_map(|neighbor| component_by_surface.get(neighbor).copied())
+            .collect::<BTreeSet<_>>();
+        let banks = banks.into_iter().collect::<Vec<_>>();
+        let [first, second] = banks.as_slice() else {
+            issues.push(recipe_issue(format!(
+                "Hills {name} must join exactly two distinct dry-bank components; found {}",
+                banks.len()
+            )));
+            return;
+        };
+        bank_edges.push((*first, *second));
+    }
+
+    if !bank_graph_is_connected(component_count, &bank_edges, &BTreeSet::new()) {
+        issues.push(recipe_issue(
+            "Hills declared confluence crossings do not connect every dry-bank component",
+        ));
+        return;
+    }
+    for (index, name) in ["bridge", "alternate crossing"].into_iter().enumerate() {
+        if !bank_graph_is_connected(component_count, &bank_edges, &BTreeSet::from([index])) {
+            issues.push(recipe_issue(format!(
+                "Hills {name} is not independently redundant in the confluence bank graph"
+            )));
+        }
+    }
+    if bank_graph_is_connected(
+        component_count,
+        &bank_edges,
+        &BTreeSet::from([0_usize, 1_usize]),
+    ) {
+        issues.push(recipe_issue(
+            "Hills confluence banks remain connected after both main crossings are removed",
+        ));
+    }
+}
+
+fn bank_graph_is_connected(
+    component_count: usize,
+    edges: &[(usize, usize)],
+    removed_edges: &BTreeSet<usize>,
+) -> bool {
+    if component_count == 0 {
+        return false;
+    }
+    let mut reachable = BTreeSet::from([0_usize]);
+    let mut frontier = VecDeque::from([0_usize]);
+    while let Some(component) = frontier.pop_front() {
+        for (index, (first, second)) in edges.iter().copied().enumerate() {
+            if removed_edges.contains(&index) {
+                continue;
+            }
+            let neighbor = if first == component {
+                Some(second)
+            } else if second == component {
+                Some(first)
+            } else {
+                None
+            };
+            if let Some(neighbor) = neighbor {
+                if reachable.insert(neighbor) {
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+    }
+    reachable.len() == component_count
 }
 
 fn validate_small_fall(
@@ -2761,11 +3071,14 @@ fn validate_barrier_surfaces(
     fill_coords: &BTreeSet<HexCoord>,
     bridge: &ProtectedFeatureRoute,
     alternate: &ProtectedFeatureRoute,
+    auxiliary_crossings: &BTreeSet<TilePos>,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
     let declared_crossing_coords: BTreeSet<_> = bridge
         .surfaces
         .union(&alternate.surfaces)
+        .copied()
+        .chain(auxiliary_crossings.iter().copied())
         .map(|surface| surface.coord)
         .collect();
     for coord in fill_coords {
@@ -2788,6 +3101,49 @@ fn validate_barrier_surfaces(
         } else if !ordinary_surfaces.is_empty() {
             issues.push(recipe_issue(format!(
                 "Hills liquid barrier is accidentally standable at {coord:?}"
+            )));
+        }
+    }
+}
+
+fn validate_auxiliary_crossings(
+    plan: &GeneratedWorldPlan,
+    fill_coords: &BTreeSet<HexCoord>,
+    auxiliary_crossings: &BTreeSet<TilePos>,
+    expected_count: usize,
+    expected_coords: Option<&BTreeSet<HexCoord>>,
+    environment: V3EnvironmentSettings,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    if auxiliary_crossings.len() != expected_count {
+        issues.push(recipe_issue(format!(
+            "Hills confluence has {} auxiliary tributary crossings; expected {expected_count}",
+            auxiliary_crossings.len()
+        )));
+    }
+    let actual_coords = auxiliary_crossings
+        .iter()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    if expected_coords.is_some_and(|expected| *expected != actual_coords) {
+        issues.push(recipe_issue(
+            "Hills auxiliary tributary crossings do not match their rederived liquid-branch authority",
+        ));
+    }
+    for surface in auxiliary_crossings {
+        if !fill_coords.contains(&surface.coord) {
+            issues.push(recipe_issue(format!(
+                "Hills auxiliary tributary crossing {surface:?} leaves the liquid barrier"
+            )));
+        }
+        if solid_material_at(&plan.volume, *surface) != Some(causeway_material(environment)) {
+            issues.push(recipe_issue(format!(
+                "Hills auxiliary tributary crossing {surface:?} does not use the exact causeway material"
+            )));
+        }
+        if !surface_has_contiguous_support_from_fill(&plan.volume, *surface) {
+            issues.push(recipe_issue(format!(
+                "Hills auxiliary tributary crossing has an unsupported vertical gap below {surface:?}"
             )));
         }
     }

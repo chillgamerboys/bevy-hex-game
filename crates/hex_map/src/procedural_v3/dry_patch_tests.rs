@@ -417,10 +417,10 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
     let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
         panic!("the fixture must remain Ring7");
     };
-    ring.center.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
         width: 3,
     }));
-    ring.waterfall.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
         width: 3,
     }));
     ring.center.edges.north_east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
@@ -437,10 +437,11 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
         shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
             width: 3,
         }));
-    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
-        width: 3,
-    }));
-    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+    ring.center.edges.south_west =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.fort.edges.north_east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
         width: 3,
     }));
 
@@ -468,6 +469,31 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
     assert_eq!(first.volume, second.volume);
     assert_eq!(first.liquids, second.liquids);
     assert_strict_patch(&layout, first.clone());
+    let seeded = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        PatchBuildMode::Candidate {
+            world_seed: 1_592_598_566,
+            candidate: 0,
+        },
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("the exact Ring19 confluence should construct as a seeded candidate");
+    assert_strict_patch(&layout, seeded.clone());
+    match hills::validate_patch(
+        context,
+        &seeded,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        super::vegetation::tests::runtime_art_catalog(),
+    ) {
+        super::selection::WorldValidation::Valid(_) => {}
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the seeded Ring19 confluence must validate: {issues:?}");
+        }
+    }
 
     let body = first
         .liquids
@@ -577,6 +603,186 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
             super::vegetation::tests::runtime_art_catalog(),
         )
     };
+    let (mut unsupported_settings, _) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(unsupported_ring) = &mut unsupported_settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    for side in HexSide::ALL {
+        let (center, outer) = if side == HexSide::SouthWest {
+            (
+                EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+            )
+        } else if matches!(side, HexSide::East | HexSide::West | HexSide::NorthWest) {
+            (
+                EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+            )
+        } else {
+            (EdgeLiquidSettings::Dry, EdgeLiquidSettings::Dry)
+        };
+        set_center_liquid_pair(unsupported_ring, side, center, outer);
+    }
+    let unsupported_layout =
+        resolve_layout(33, &unsupported_settings).expect("unsupported topology still resolves");
+    let unsupported_context = patch(&unsupported_layout, 0).expect("unsupported center patch");
+    assert_validation_rejects_with(
+        hills::validate_patch(
+            unsupported_context,
+            &first,
+            &recipes.hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        ),
+        "requires an inlet opposite its",
+    );
+
+    let fill_coords = first
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let bridge = first
+        .features
+        .protected_routes
+        .get("bridge_crossing")
+        .expect("main bridge route");
+    let alternate = first
+        .features
+        .protected_routes
+        .get("alternate_crossing")
+        .expect("main alternate route");
+    assert_eq!(bridge.surfaces.len(), 14);
+    assert_eq!(alternate.surfaces.len(), 14);
+    let main_crossings = bridge
+        .surfaces
+        .union(&alternate.surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let auxiliary_crossings = first
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == super::volume::SurfaceAccess::Ordinary
+                && fill_coords.contains(&position.coord)
+                && !main_crossings.contains(position))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(auxiliary_crossings.len(), 2);
+
+    let auxiliary = *auxiliary_crossings
+        .first()
+        .expect("one exact auxiliary tributary crossing");
+    let mut misclassified_auxiliary = first.clone();
+    misclassified_auxiliary
+        .features
+        .protected_routes
+        .get_mut("alternate_crossing")
+        .expect("alternate route")
+        .surfaces
+        .insert(auxiliary);
+    assert_validation_rejects_with(
+        validate(&misclassified_auxiliary),
+        "cannot rederive auxiliary tributary crossings",
+    );
+
+    let mut wrong_auxiliary_material = first.clone();
+    let auxiliary_support = wrong_auxiliary_material
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Solid(solid)
+                if solid.levels.bottom <= auxiliary.level && auxiliary.level < solid.levels.top =>
+            {
+                Some(solid)
+            }
+            _ => None,
+        })
+        .expect("auxiliary causeway support");
+    auxiliary_support.material = super::volume::SolidMaterialRole::Stone;
+    assert_validation_rejects_with(
+        validate(&wrong_auxiliary_material),
+        "does not use the exact causeway material",
+    );
+
+    let moved_coord = auxiliary
+        .coord
+        .neighbors()
+        .into_iter()
+        .find(|coord| {
+            fill_coords.contains(coord)
+                && !auxiliary_crossings
+                    .iter()
+                    .any(|surface| surface.coord == *coord)
+                && !main_crossings.iter().any(|surface| surface.coord == *coord)
+                && !first.volume.surfaces.iter().any(|(surface, metadata)| {
+                    surface.coord == *coord
+                        && metadata.access == super::volume::SurfaceAccess::Ordinary
+                })
+        })
+        .expect("a neighboring supported tributary liquid cell");
+    let moved_position = TilePos::new(moved_coord, auxiliary.level);
+    let mut moved_auxiliary = first.clone();
+    let auxiliary_metadata = moved_auxiliary
+        .volume
+        .surfaces
+        .remove(&auxiliary)
+        .expect("old auxiliary surface metadata");
+    let auxiliary_biome = moved_auxiliary
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("old auxiliary biome membership");
+    moved_auxiliary
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("old auxiliary column")
+        .elements
+        .retain(|element| {
+            !matches!(
+                element,
+                super::volume::VolumeElement::Solid(solid)
+                    if solid.material == super::volume::SolidMaterialRole::Gravel
+                        && solid.levels.bottom <= auxiliary.level
+                        && auxiliary.level < solid.levels.top
+            )
+        });
+    moved_auxiliary
+        .volume
+        .columns
+        .get_mut(&moved_coord)
+        .expect("new auxiliary column")
+        .elements
+        .push(super::volume::VolumeElement::Solid(
+            super::volume::SolidMass {
+                levels: super::volume::LevelInterval::new(
+                    moved_position.level,
+                    moved_position.level.saturating_add(1),
+                ),
+                material: super::volume::SolidMaterialRole::Gravel,
+                cutaway_for: None,
+            },
+        ));
+    assert!(moved_auxiliary
+        .volume
+        .surfaces
+        .insert(moved_position, auxiliary_metadata)
+        .is_none());
+    assert!(moved_auxiliary
+        .biome_regions
+        .insert(moved_position, auxiliary_biome)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&moved_auxiliary),
+        "do not match their rederived liquid-branch authority",
+    );
 
     let mut missing_inlet = first.clone();
     missing_inlet
@@ -685,6 +891,93 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
             displaced,
         );
     assert_validation_rejects_with(validate(&wrong_level), "liquid approach");
+}
+
+#[test]
+fn center_hills_confluence_topology_policy_is_exhaustive() {
+    let mut supported = 0_usize;
+    let mut rejected = 0_usize;
+    let catalog = super::vegetation::tests::runtime_art_catalog();
+
+    for (outlet_index, outlet) in HexSide::ALL.into_iter().enumerate() {
+        for inlet_bits in 0_u8..(1_u8 << HexSide::ALL.len()) {
+            if inlet_bits & (1_u8 << outlet_index) != 0
+                || !(2..=5).contains(&inlet_bits.count_ones())
+            {
+                continue;
+            }
+            let (mut settings, recipes) = dry_ring_settings();
+            let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+                panic!("the fixture must remain Ring7");
+            };
+            for (side_index, side) in HexSide::ALL.into_iter().enumerate() {
+                let (center, outer) = if side == outlet {
+                    (
+                        EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                        EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                    )
+                } else if inlet_bits & (1_u8 << side_index) != 0 {
+                    (
+                        EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 }),
+                        EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 }),
+                    )
+                } else {
+                    (EdgeLiquidSettings::Dry, EdgeLiquidSettings::Dry)
+                };
+                set_center_liquid_pair(ring, side, center, outer);
+            }
+
+            let layout =
+                resolve_layout(33, &settings).expect("the settings-valid topology should resolve");
+            let context = patch(&layout, 0).expect("center patch");
+            let result = hills::construct_patch_with_catalog(
+                context,
+                &recipes.hills,
+                V3EnvironmentSettings::TemperateGrassland,
+                LEVEL_HEIGHT,
+                PatchBuildMode::CanonicalFallback,
+                catalog,
+            );
+            let opposite_index = HexSide::ALL
+                .iter()
+                .position(|side| *side == outlet.opposite())
+                .expect("every side has one opposite");
+            if inlet_bits & (1_u8 << opposite_index) != 0 {
+                let plan = result.unwrap_or_else(|issues| {
+                    panic!(
+                        "supported confluence outlet {outlet:?}, inlet bits {inlet_bits:06b} failed construction: {issues:?}"
+                    )
+                });
+                match hills::validate_patch(
+                    context,
+                    &plan,
+                    &recipes.hills,
+                    V3EnvironmentSettings::TemperateGrassland,
+                    catalog,
+                ) {
+                    super::selection::WorldValidation::Valid(_) => {}
+                    super::selection::WorldValidation::Invalid(issues) => panic!(
+                        "supported confluence outlet {outlet:?}, inlet bits {inlet_bits:06b} failed validation: {issues:?}"
+                    ),
+                }
+                supported = supported.saturating_add(1);
+            } else {
+                let issues = result.expect_err(
+                    "a confluence without an opposite inlet must fail its explicit recipe policy",
+                );
+                assert!(
+                    issues.iter().any(|issue| issue
+                        .detail
+                        .contains("requires an inlet opposite its")),
+                    "unexpected policy error for outlet {outlet:?}, inlet bits {inlet_bits:06b}: {issues:?}"
+                );
+                rejected = rejected.saturating_add(1);
+            }
+        }
+    }
+
+    assert_eq!(supported, 90);
+    assert_eq!(rejected, 66);
 }
 
 #[test]
@@ -1120,4 +1413,40 @@ fn shared_edge(liquid: EdgeLiquidSettings) -> PatchEdgeContractSettings {
         liquid,
         approach_depth: 2,
     })
+}
+
+fn set_center_liquid_pair(
+    ring: &mut V3Ring7Settings,
+    side: HexSide,
+    center: EdgeLiquidSettings,
+    outer: EdgeLiquidSettings,
+) {
+    let center = shared_edge(center);
+    let outer = shared_edge(outer);
+    match side {
+        HexSide::NorthEast => {
+            ring.center.edges.north_east = center;
+            ring.mountains.edges.south_west = outer;
+        }
+        HexSide::East => {
+            ring.center.edges.east = center;
+            ring.waterfall.edges.west = outer;
+        }
+        HexSide::SouthEast => {
+            ring.center.edges.south_east = center;
+            ring.forest.edges.north_west = outer;
+        }
+        HexSide::SouthWest => {
+            ring.center.edges.south_west = center;
+            ring.fort.edges.north_east = outer;
+        }
+        HexSide::West => {
+            ring.center.edges.west = center;
+            ring.caves.edges.east = outer;
+        }
+        HexSide::NorthWest => {
+            ring.center.edges.north_west = center;
+            ring.sky_islands.edges.south_east = outer;
+        }
+    }
 }
