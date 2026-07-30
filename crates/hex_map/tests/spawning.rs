@@ -911,7 +911,7 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_eq!(report.notes.len(), 4);
+    assert_eq!(report.notes.len(), 10);
     assert!(report
         .notes
         .iter()
@@ -920,9 +920,9 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(18_228_041_691_196_337_561)
+        Some(4_552_642_622_679_288_608)
     );
-    assert_eq!(report.map_fingerprint, 9_451_210_891_195_990_324);
+    assert_eq!(report.map_fingerprint, 723_927_125_812_864_810);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };

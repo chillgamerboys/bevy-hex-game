@@ -65,6 +65,7 @@ mod seed;
 mod selection;
 mod sky;
 mod traversal;
+mod vegetation;
 #[expect(
     dead_code,
     reason = "the volume foundation is consumed by sequential V3 recipe implementations"

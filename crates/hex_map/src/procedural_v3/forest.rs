@@ -6,10 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hex_assets::{
-    HexObjectRotation, LocalAxialCoord, ObjectAssetId, ObjectBlueprint, ObjectCategory,
-    RuntimeArtCatalog,
-};
+use hex_assets::{HexObjectRotation, RuntimeArtCatalog};
 use hex_core::{HexCoord, MapViewHint, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -24,6 +21,10 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::{
+    TemperateVegetationSet, VegetationObjectSpec, GRASS_TUFT_ID, OLD_GROWTH_ID, SMALL_BROADLEAF_ID,
+    TALL_NARROW_ID,
+};
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
     VolumeElement, VolumePlan,
@@ -42,7 +43,6 @@ const BASE_LEVEL: i32 = 15;
 const MAX_RELIEF: i32 = 4;
 const MOUND_COUNT: u64 = 5;
 const CLEARING_COUNT: usize = 4;
-const TREE_SPACING: u32 = 2;
 const TREE_DENSITY_PERCENT: usize = 22;
 const GRASS_DENSITY_PERCENT: usize = 70;
 const PRAIRIE_TAPER_DEPTH: i32 = 3;
@@ -51,10 +51,6 @@ const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const FOREST_CLEARING: &str = "forest_clearing";
 const PRAIRIE_OVERLOOK: &str = "prairie_overlook";
-const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
-const TALL_NARROW_ID: &str = "plant/tall-narrow";
-const OLD_GROWTH_ID: &str = "plant/old-growth";
-const GRASS_TUFT_ID: &str = "prop/grass-tuft";
 
 /// Recipe metrics retained by the V3 candidate selector and diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,7 +84,7 @@ struct OrdinaryElevationMetrics {
 struct ForestRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
-    objects: ForestObjectSet,
+    objects: TemperateVegetationSet,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -112,36 +108,23 @@ struct PlannedRoad {
     surfaces: BTreeSet<HexCoord>,
 }
 
-#[derive(Debug, Clone)]
-struct ForestObjectSet {
-    small_broadleaf: ForestObjectSpec,
-    tall_narrow: ForestObjectSpec,
-    old_growth: ForestObjectSpec,
-    grass_tuft: ForestObjectSpec,
-}
-
-#[derive(Debug, Clone)]
-struct ForestObjectSpec {
-    id: ObjectAssetId,
-    origin: LocalAxialCoord,
-    blocker_footprint: Vec<LocalAxialCoord>,
-}
-
-impl ForestObjectSet {
-    fn resolve(catalog: &RuntimeArtCatalog) -> Result<Self, V3GenerationError> {
-        Ok(Self {
-            small_broadleaf: resolve_object(catalog, SMALL_BROADLEAF_ID, ObjectCategory::Plant, 1)?,
-            tall_narrow: resolve_object(catalog, TALL_NARROW_ID, ObjectCategory::Plant, 1)?,
-            old_growth: resolve_object(catalog, OLD_GROWTH_ID, ObjectCategory::Plant, 7)?,
-            grass_tuft: resolve_object(catalog, GRASS_TUFT_ID, ObjectCategory::Prop, 0)?,
-        })
-    }
-
-    fn tree(&self, family: TreeFamily) -> &ForestObjectSpec {
+impl TemperateVegetationSet {
+    fn forest_tree(&self, family: TreeFamily) -> &VegetationObjectSpec {
         match family {
             TreeFamily::SmallBroadleaf => &self.small_broadleaf,
             TreeFamily::TallNarrow => &self.tall_narrow,
         }
+    }
+
+    fn forest_object(&self, id: &str) -> Option<&VegetationObjectSpec> {
+        [
+            &self.small_broadleaf,
+            &self.tall_narrow,
+            &self.old_growth,
+            &self.grass_tuft,
+        ]
+        .into_iter()
+        .find(|object| object.id.as_str() == id)
     }
 }
 
@@ -149,67 +132,6 @@ impl ForestObjectSet {
 enum TreeFamily {
     SmallBroadleaf,
     TallNarrow,
-}
-
-fn resolve_object(
-    catalog: &RuntimeArtCatalog,
-    raw_id: &str,
-    expected_category: ObjectCategory,
-    expected_blocker_cells: usize,
-) -> Result<ForestObjectSpec, V3GenerationError> {
-    let id = ObjectAssetId::new(raw_id).map_err(|error| {
-        V3GenerationError::RecipeContract(format!(
-            "Forest authored-object id {raw_id:?} is invalid: {error}"
-        ))
-    })?;
-    let blueprint = catalog.object(&id).ok_or_else(|| {
-        V3GenerationError::RecipeContract(format!(
-            "Forest requires authored object {raw_id:?}, but it is absent from the accepted catalog"
-        ))
-    })?;
-    validate_forest_object(blueprint, expected_category, expected_blocker_cells)?;
-    Ok(ForestObjectSpec {
-        id,
-        origin: blueprint.origin.axial(),
-        blocker_footprint: blueprint.blocker_footprint.clone(),
-    })
-}
-
-fn validate_forest_object(
-    blueprint: &ObjectBlueprint,
-    expected_category: ObjectCategory,
-    expected_blocker_cells: usize,
-) -> Result<(), V3GenerationError> {
-    if blueprint.category != expected_category {
-        return Err(V3GenerationError::RecipeContract(format!(
-            "Forest object '{}' is {:?}; expected {expected_category:?}",
-            blueprint.id, blueprint.category
-        )));
-    }
-    if blueprint.origin.level != 0 {
-        return Err(V3GenerationError::RecipeContract(format!(
-            "Forest object '{}' must keep its authored origin at level zero",
-            blueprint.id
-        )));
-    }
-    if blueprint.blocker_footprint.len() != expected_blocker_cells {
-        return Err(V3GenerationError::RecipeContract(format!(
-            "Forest object '{}' must define exactly {expected_blocker_cells} blocker cells; got {}",
-            blueprint.id,
-            blueprint.blocker_footprint.len()
-        )));
-    }
-    if expected_blocker_cells > 0
-        && !blueprint
-            .blocker_footprint
-            .contains(&blueprint.origin.axial())
-    {
-        return Err(V3GenerationError::RecipeContract(format!(
-            "Forest tree '{}' must block its authored origin",
-            blueprint.id
-        )));
-    }
-    Ok(())
 }
 
 /// Runs the common eight-candidate V3 selector for one Forest world.
@@ -220,7 +142,8 @@ pub(crate) fn generate(
     seed: u64,
     catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
-    let objects = ForestObjectSet::resolve(catalog)?;
+    let objects = TemperateVegetationSet::resolve(catalog, "Forest")
+        .map_err(V3GenerationError::RecipeContract)?;
     generate_with_objects(grid_radius, level_height, settings, seed, objects)
 }
 
@@ -229,7 +152,7 @@ fn generate_with_objects(
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
-    objects: ForestObjectSet,
+    objects: TemperateVegetationSet,
 ) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
@@ -425,8 +348,8 @@ pub(crate) fn construct_patch(
     mode: PatchBuildMode,
     catalog: &RuntimeArtCatalog,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    let objects =
-        ForestObjectSet::resolve(catalog).map_err(|error| vec![recipe_issue(error.to_string())])?;
+    let objects = TemperateVegetationSet::resolve(catalog, "Forest")
+        .map_err(|error| vec![recipe_issue(error)])?;
     construct_patch_with_objects(patch, settings, environment, level_height, mode, &objects)
 }
 
@@ -436,7 +359,7 @@ fn construct_patch_with_objects(
     environment: V3EnvironmentSettings,
     level_height: f32,
     mode: PatchBuildMode,
-    objects: &ForestObjectSet,
+    objects: &TemperateVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     if environment != V3EnvironmentSettings::TemperateGrassland {
         return Err(vec![recipe_issue(
@@ -590,14 +513,19 @@ fn construct_patch_with_objects(
             .into_iter()
             .filter(|coord| mask.contains(coord)),
     );
+    tree_exclusions.extend(
+        hostile_coord
+            .within_radius(1)
+            .into_iter()
+            .filter(|coord| mask.contains(coord)),
+    );
     let tree_roots = select_tree_roots(
         &woodland,
         &tree_exclusions,
         &ordinary_surface_by_coord,
         streams.map(|streams| streams.trees),
-        stitched_patch,
     );
-    let tree_features = plan_tree_features(
+    let (tree_features, tree_visual_cells) = plan_tree_features(
         tree_roots,
         &woodland,
         &tree_exclusions,
@@ -606,13 +534,13 @@ fn construct_patch_with_objects(
         streams.map(|streams| streams.tree_objects),
         streams.map(|streams| streams.tree_rotations),
     )?;
-    let tree_blocker_coords: BTreeSet<_> = tree_features
+    let tree_route_obstructions: BTreeSet<_> = tree_visual_cells
         .iter()
-        .flat_map(|feature| {
-            feature
-                .blocker_footprint
-                .iter()
-                .map(|position| position.coord)
+        .filter_map(|position| {
+            ordinary_surface_by_coord
+                .get(&position.coord)
+                .filter(|surface| position.level <= surface.level.saturating_add(2))
+                .map(|_| position.coord)
         })
         .collect();
     let road = plan_road(
@@ -621,7 +549,7 @@ fn construct_patch_with_objects(
         party_coord,
         &ordinary_coords,
         &ordinary_surface_by_coord,
-        &tree_blocker_coords,
+        &tree_route_obstructions,
         &clearings,
         streams.map(|streams| streams.routes),
         stitched_patch,
@@ -643,10 +571,22 @@ fn construct_patch_with_objects(
     let road_centerline = exact_positions(&road.centerline, &ordinary_surface_by_coord)?;
     let road_surfaces = exact_position_set(&road.surfaces, &ordinary_surface_by_coord)?;
     let prairie: BTreeSet<_> = ordinary_coords.difference(&woodland).copied().collect();
+    let prairie_coord = rotate(HexCoord::from_axial(radius / 2, -radius / 4), rotation);
+    let prairie_overlook =
+        nearest_ordinary_landing(prairie_coord, &ordinary_surface_by_coord, rotation, false)
+            .and_then(|coord| ordinary_surface_by_coord.get(&coord).copied())
+            .ok_or_else(|| vec![recipe_issue("Forest has no prairie overlook surface")])?;
     let mut grass_exclusions = road.surfaces.clone();
     grass_exclusions.extend(local_protected.iter().copied());
     grass_exclusions.extend(
         hostile_coord
+            .within_radius(1)
+            .into_iter()
+            .filter(|coord| mask.contains(coord)),
+    );
+    grass_exclusions.extend(
+        prairie_overlook
+            .coord
             .within_radius(1)
             .into_iter()
             .filter(|coord| mask.contains(coord)),
@@ -683,11 +623,6 @@ fn construct_patch_with_objects(
         .and_then(|clearing| ordinary_surface_by_coord.get(&clearing.center))
         .copied()
         .ok_or_else(|| vec![recipe_issue("Forest has no clearing anchor surface")])?;
-    let prairie_coord = rotate(HexCoord::from_axial(radius / 2, -radius / 4), rotation);
-    let prairie_overlook =
-        nearest_ordinary_landing(prairie_coord, &ordinary_surface_by_coord, rotation, false)
-            .and_then(|coord| ordinary_surface_by_coord.get(&coord).copied())
-            .ok_or_else(|| vec![recipe_issue("Forest has no prairie overlook surface")])?;
     let anchors = BTreeMap::from([
         (PARTY_START.to_owned(), party_start),
         (HOSTILE_START.to_owned(), hostile_start),
@@ -1864,71 +1799,57 @@ fn select_tree_roots(
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
     stream: Option<SeedStream<'_>>,
-    stitched_patch: bool,
 ) -> BTreeSet<TilePos> {
-    let mut eligible: Vec<_> = woodland.difference(exclusions).copied().collect();
+    let mut eligible: Vec<_> = woodland
+        .difference(exclusions)
+        .copied()
+        .filter(|coord| {
+            coord
+                .within_radius(1)
+                .into_iter()
+                .all(|nearby| surfaces.contains_key(&nearby))
+        })
+        .collect();
     eligible.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 0), *coord));
     let target = woodland.len().saturating_mul(TREE_DENSITY_PERCENT) / 100;
-    if stitched_patch {
-        let mut color_classes: [Vec<HexCoord>; 3] = std::array::from_fn(|_| Vec::new());
-        for coord in &eligible {
-            let color = usize::try_from(coord.x().saturating_sub(coord.y()).rem_euclid(3))
-                .unwrap_or_default();
-            if let Some(class) = color_classes.get_mut(color) {
-                class.push(*coord);
-            }
+    let mut color_classes: [Vec<HexCoord>; 3] = std::array::from_fn(|_| Vec::new());
+    for coord in &eligible {
+        let color =
+            usize::try_from(coord.x().saturating_sub(coord.y()).rem_euclid(3)).unwrap_or_default();
+        if let Some(class) = color_classes.get_mut(color) {
+            class.push(*coord);
         }
-        for class in &mut color_classes {
-            class.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 1), *coord));
-        }
-        let phase = color_classes
-            .iter()
-            .enumerate()
-            .min_by_key(|(phase, class)| {
-                (
-                    std::cmp::Reverse(class.len()),
-                    stream.map_or(u64::try_from(*phase).unwrap_or_default(), |stream| {
-                        stream.sample(
-                            700_u64.saturating_add(u64::try_from(*phase).unwrap_or_default()),
-                        )
-                    }),
-                    *phase,
-                )
-            })
-            .map(|(phase, _)| phase)
-            .unwrap_or_default();
-        let mut selected = color_classes
-            .get(phase)
-            .into_iter()
-            .flatten()
-            .take(target)
-            .copied()
-            .collect::<BTreeSet<_>>();
-        for coord in eligible {
-            if selected.len() >= target {
-                break;
-            }
-            if coord
-                .neighbors()
-                .into_iter()
-                .all(|neighbor| !selected.contains(&neighbor))
-            {
-                selected.insert(coord);
-            }
-        }
-        return selected
-            .into_iter()
-            .filter_map(|coord| surfaces.get(&coord).copied())
-            .collect();
     }
-    let mut selected = BTreeSet::new();
+    for class in &mut color_classes {
+        class.sort_unstable_by_key(|coord| (feature_priority(stream, *coord, 1), *coord));
+    }
+    let phase = color_classes
+        .iter()
+        .enumerate()
+        .min_by_key(|(phase, class)| {
+            (
+                std::cmp::Reverse(class.len()),
+                stream.map_or(u64::try_from(*phase).unwrap_or_default(), |stream| {
+                    stream.sample(700_u64.saturating_add(u64::try_from(*phase).unwrap_or_default()))
+                }),
+                *phase,
+            )
+        })
+        .map(|(phase, _)| phase)
+        .unwrap_or_default();
+    let mut selected = color_classes
+        .get(phase)
+        .into_iter()
+        .flatten()
+        .take(target)
+        .copied()
+        .collect::<BTreeSet<_>>();
     for coord in eligible {
         if selected.len() >= target {
             break;
         }
-        let spacing_radius = TREE_SPACING.saturating_sub(1);
         if coord
-            .within_radius(spacing_radius)
+            .neighbors()
             .into_iter()
             .all(|neighbor| !selected.contains(&neighbor))
         {
@@ -1946,11 +1867,12 @@ fn plan_tree_features(
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
-    objects: &ForestObjectSet,
+    objects: &TemperateVegetationSet,
     object_stream: Option<SeedStream<'_>>,
     rotation_stream: Option<SeedStream<'_>>,
-) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
+) -> Result<(Vec<PlannedFeature>, BTreeSet<TilePos>), Vec<WorldValidationIssue>> {
     let mut occupied_blockers = BTreeSet::new();
+    let mut occupied_structural_cells = BTreeSet::new();
     let mut features = Vec::with_capacity(roots.len());
     let mut old_growth_by_root = BTreeMap::new();
     if object_stream.is_some() {
@@ -1963,20 +1885,30 @@ fn plan_tree_features(
             if old_growth_by_root.len() >= target {
                 break;
             }
-            let rotation = feature_rotation(rotation_stream, root.coord, 29)?;
-            let Some(blockers) = project_tree_blockers(
-                &objects.old_growth,
-                root,
-                rotation,
-                woodland,
-                exclusions,
-                surfaces,
-                &occupied_blockers,
-            ) else {
+            let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+            let mut selected = None;
+            for offset in 0..6 {
+                let rotation = offset_rotation(first_rotation, offset)?;
+                if let Some(projected) = project_tree(
+                    &objects.old_growth,
+                    root,
+                    rotation,
+                    woodland,
+                    exclusions,
+                    surfaces,
+                    &occupied_blockers,
+                    &occupied_structural_cells,
+                ) {
+                    selected = Some((rotation, projected));
+                    break;
+                }
+            }
+            let Some((rotation, projected)) = selected else {
                 continue;
             };
-            occupied_blockers.extend(blockers.iter().copied());
-            old_growth_by_root.insert(root, (rotation, blockers));
+            occupied_blockers.extend(projected.blockers.iter().copied());
+            occupied_structural_cells.extend(projected.structural_cells.iter().copied());
+            old_growth_by_root.insert(root, (rotation, projected.blockers));
         }
     }
 
@@ -1993,38 +1925,46 @@ fn plan_tree_features(
         }
         let family_hash = feature_priority(object_stream, root.coord, 17);
         let family = tree_family(family_hash);
-        let rotation = feature_rotation(rotation_stream, root.coord, 29)?;
-        let preferred = objects.tree(family);
+        let first_rotation = feature_rotation(rotation_stream, root.coord, 29)?;
+        let preferred = objects.forest_tree(family);
         let secondary = match family {
             TreeFamily::SmallBroadleaf | TreeFamily::TallNarrow => &objects.small_broadleaf,
         };
         let mut selected = None;
         for object in [preferred, secondary, &objects.small_broadleaf] {
-            if let Some(blockers) = project_tree_blockers(
-                object,
-                root,
-                rotation,
-                woodland,
-                exclusions,
-                surfaces,
-                &occupied_blockers,
-            ) {
-                selected = Some((object, blockers));
+            for offset in 0..6 {
+                let rotation = offset_rotation(first_rotation, offset)?;
+                if let Some(projected) = project_tree(
+                    object,
+                    root,
+                    rotation,
+                    woodland,
+                    exclusions,
+                    surfaces,
+                    &occupied_blockers,
+                    &occupied_structural_cells,
+                ) {
+                    selected = Some((object, rotation, projected));
+                    break;
+                }
+            }
+            if selected.is_some() {
                 break;
             }
         }
-        let Some((object, blockers)) = selected else {
+        let Some((object, rotation, projected)) = selected else {
             return Err(vec![recipe_issue(format!(
                 "Forest tree root {root:?} cannot support any accepted authored tree"
             ))]);
         };
-        occupied_blockers.extend(blockers.iter().copied());
+        occupied_blockers.extend(projected.blockers.iter().copied());
+        occupied_structural_cells.extend(projected.structural_cells.iter().copied());
         features.push(PlannedFeature {
             root,
             kind: FeatureKind::Tree,
             object_id: object.id.clone(),
             rotation,
-            blocker_footprint: blockers,
+            blocker_footprint: projected.blockers,
         });
     }
     while !feature_blockers_preserve_connectivity(&features, surfaces) {
@@ -2040,7 +1980,8 @@ fn plan_tree_features(
         feature.object_id = objects.tall_narrow.id.clone();
         feature.blocker_footprint = BTreeSet::from([feature.root]);
     }
-    Ok(features)
+    let final_visual_cells = collect_tree_visual_cells(&features, objects)?;
+    Ok((features, final_visual_cells))
 }
 
 fn feature_blockers_preserve_connectivity(
@@ -2083,7 +2024,7 @@ fn feature_blockers_preserve_connectivity(
 
 fn plan_grass_features(
     roots: BTreeSet<TilePos>,
-    objects: &ForestObjectSet,
+    objects: &TemperateVegetationSet,
     rotation_stream: Option<SeedStream<'_>>,
 ) -> Result<Vec<PlannedFeature>, Vec<WorldValidationIssue>> {
     roots
@@ -2121,34 +2062,97 @@ fn feature_rotation(
     })
 }
 
-fn project_tree_blockers(
-    object: &ForestObjectSpec,
+fn offset_rotation(
+    first: HexObjectRotation,
+    offset: u8,
+) -> Result<HexObjectRotation, Vec<WorldValidationIssue>> {
+    HexObjectRotation::new(first.steps().saturating_add(offset) % 6).map_err(|error| {
+        vec![recipe_issue(format!(
+            "invalid Forest object rotation: {error}"
+        ))]
+    })
+}
+
+#[derive(Debug)]
+struct ProjectedTree {
+    blockers: BTreeSet<TilePos>,
+    structural_cells: BTreeSet<TilePos>,
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the placement boundary validates each independent spatial constraint explicitly"
+)]
+fn project_tree(
+    object: &VegetationObjectSpec,
     root: TilePos,
     rotation: HexObjectRotation,
     woodland: &BTreeSet<HexCoord>,
     exclusions: &BTreeSet<HexCoord>,
     surfaces: &BTreeMap<HexCoord, TilePos>,
-    occupied: &BTreeSet<TilePos>,
-) -> Option<BTreeSet<TilePos>> {
-    let mut blockers = BTreeSet::new();
-    for local in &object.blocker_footprint {
-        let rotated = rotation.rotate_axial(*local, object.origin)?;
-        let delta_q = rotated.q.checked_sub(object.origin.q)?;
-        let delta_r = rotated.r.checked_sub(object.origin.r)?;
-        let coord = HexCoord::from_axial(
-            root.coord.x().checked_add(delta_q)?,
-            root.coord.y().checked_add(delta_r)?,
-        );
-        if !woodland.contains(&coord) || exclusions.contains(&coord) {
-            return None;
-        }
-        let support = surfaces.get(&coord).copied()?;
-        if support.level != root.level || occupied.contains(&support) {
-            return None;
-        }
-        blockers.insert(support);
+    occupied_blockers: &BTreeSet<TilePos>,
+    occupied_structural_cells: &BTreeSet<TilePos>,
+) -> Option<ProjectedTree> {
+    let blockers = object.project_blockers(root, rotation, surfaces)?;
+    if blockers.iter().any(|support| {
+        !woodland.contains(&support.coord)
+            || exclusions.contains(&support.coord)
+            || occupied_blockers.contains(support)
+    }) {
+        return None;
     }
-    (blockers.len() == object.blocker_footprint.len()).then_some(blockers)
+
+    let volume = object.project_visual_volume(root, rotation)?;
+    for visual in &volume.cells {
+        let support = surfaces.get(&visual.coord).copied()?;
+        if visual.level <= support.level
+            || (exclusions.contains(&visual.coord)
+                && visual.level <= support.level.saturating_add(2))
+        {
+            return None;
+        }
+    }
+    if !volume
+        .structural_cells
+        .is_disjoint(occupied_structural_cells)
+    {
+        return None;
+    }
+    Some(ProjectedTree {
+        blockers,
+        structural_cells: volume.structural_cells,
+    })
+}
+
+fn collect_tree_visual_cells(
+    features: &[PlannedFeature],
+    objects: &TemperateVegetationSet,
+) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let mut visual_cells = BTreeSet::new();
+    let mut structural_cells = BTreeSet::new();
+    for feature in features {
+        let Some(object) = objects.forest_object(feature.object_id.as_str()) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest feature at {:?} uses unsupported authored object '{}'",
+                feature.root, feature.object_id
+            ))]);
+        };
+        let Some(volume) = object.project_visual_volume(feature.root, feature.rotation) else {
+            return Err(vec![recipe_issue(format!(
+                "Forest object '{}' cannot project its complete authored bounds at {:?}",
+                feature.object_id, feature.root
+            ))]);
+        };
+        if !volume.structural_cells.is_disjoint(&structural_cells) {
+            return Err(vec![recipe_issue(format!(
+                "Forest object '{}' overlaps neighboring structural vegetation at {:?}",
+                feature.object_id, feature.root
+            ))]);
+        }
+        visual_cells.extend(volume.cells);
+        structural_cells.extend(volume.structural_cells);
+    }
+    Ok(visual_cells)
 }
 
 fn select_grass_roots(
@@ -2540,7 +2544,8 @@ mod tests {
         settings: &ProceduralV3Settings,
         seed: u64,
     ) -> Result<ValidatedWorldSelection<ForestMetrics>, V3GenerationError> {
-        let objects = ForestObjectSet::resolve(runtime_art_catalog())?;
+        let objects = TemperateVegetationSet::resolve(runtime_art_catalog(), "Forest")
+            .map_err(V3GenerationError::RecipeContract)?;
         generate_with_objects(grid_radius, level_height, settings, seed, objects)
     }
 
@@ -2640,6 +2645,83 @@ mod tests {
         }
     }
 
+    fn walker_volume(surfaces: impl IntoIterator<Item = TilePos>) -> BTreeSet<TilePos> {
+        surfaces
+            .into_iter()
+            .flat_map(|surface| {
+                [1, 2]
+                    .map(|offset| TilePos::new(surface.coord, surface.level.saturating_add(offset)))
+            })
+            .collect()
+    }
+
+    fn assert_complete_authored_vegetation_bounds(plan: &GeneratedWorldPlan) {
+        let objects = TemperateVegetationSet::resolve(runtime_art_catalog(), "Forest")
+            .expect("the tracked Forest art graph should resolve");
+        let route_and_review_surfaces = plan
+            .features
+            .protected_routes
+            .values()
+            .flat_map(|route| route.surfaces.iter().copied())
+            .chain(
+                plan.features
+                    .clearings
+                    .values()
+                    .flat_map(|clearing| clearing.surfaces.iter().copied()),
+            )
+            .chain(plan.anchors.values().copied())
+            .collect::<BTreeSet<_>>();
+        let protected_walker_volume = walker_volume(route_and_review_surfaces);
+        let surface_by_coord = plan
+            .volume
+            .surfaces
+            .keys()
+            .map(|surface| (surface.coord, *surface))
+            .collect::<BTreeMap<_, _>>();
+        let mut claimed_structural_cells = BTreeSet::new();
+
+        for feature in plan.features.by_id.values() {
+            let object = objects
+                .forest_object(feature.object_id.as_str())
+                .unwrap_or_else(|| panic!("unexpected Forest object '{}'", feature.object_id));
+            let projected = object
+                .project_visual_volume(feature.root, feature.rotation)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Forest object '{}' should project its complete authored bounds",
+                        feature.object_id
+                    )
+                });
+            for visual in &projected.cells {
+                let support = surface_by_coord.get(&visual.coord).unwrap_or_else(|| {
+                    panic!(
+                        "Forest object '{}' leaves the generated terrain at {visual:?}",
+                        feature.object_id
+                    )
+                });
+                assert!(
+                    visual.level > support.level,
+                    "Forest object '{}' intersects terrain at {visual:?}",
+                    feature.object_id
+                );
+            }
+            assert!(
+                projected
+                    .structural_cells
+                    .is_disjoint(&claimed_structural_cells),
+                "Forest object '{}' overlaps a neighboring rigid root or trunk",
+                feature.object_id
+            );
+            assert!(
+                projected.cells.is_disjoint(&protected_walker_volume),
+                "Forest object '{}' intersects a protected route, clearing, or review-anchor \
+                 walker volume",
+                feature.object_id
+            );
+            claimed_structural_cells.extend(projected.structural_cells);
+        }
+    }
+
     #[test]
     fn fixed_corpus_builds_valid_forests_at_supported_radii() {
         for radius in [12, 20, 40] {
@@ -2653,6 +2735,14 @@ mod tests {
                 assert_eq!(selected.validated.plan.validate(), Vec::new());
                 assert_distinct_clearings(&selected.validated.plan);
             }
+        }
+    }
+
+    #[test]
+    fn complete_authored_vegetation_bounds_clear_protected_walker_volumes() {
+        for seed in [91, 2_026, 381_654_729] {
+            let selected = generate(12, 0.4, &settings(), seed).expect("Forest should generate");
+            assert_complete_authored_vegetation_bounds(&selected.validated.plan);
         }
     }
 
@@ -3152,7 +3242,7 @@ mod tests {
             &ForestRecipe {
                 level_height: 0.4,
                 layout: resolve_layout(12, &settings()).expect("test layout should resolve"),
-                objects: ForestObjectSet::resolve(runtime_art_catalog())
+                objects: TemperateVegetationSet::resolve(runtime_art_catalog(), "Forest")
                     .expect("tracked Forest objects should resolve"),
                 reject_candidates: true,
             },
