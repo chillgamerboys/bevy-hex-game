@@ -17,30 +17,48 @@ The world is a voxel map with substances, destruction, and a deterministic
 procedural generator: seeded recipes with validated crossings, anchors that encounters
 place units on by name, architecture probes for frozen and volcanic Hills, and
 dedicated Sky Islands, Mountains, and Caves biomes. Sky Islands preserves a complete
-playable Hills map below a high flight-gated upper network. Mountains covers most of
-the map with sharp frozen massifs, deliberate cliffs, and a high-pass/low-bypass route
-pair without introducing a river. Caves places a varied rocky surface above a
-two-wide entrance and a dense, height-validated underground chamber network with
-exact opaque cutaway roofs.
+playable Hills map below a higher, multi-band flight-gated upper network. Mountains
+covers most of the map with sharp frozen massifs, deliberate cliffs, a
+high-pass/low-bypass route pair, snow caps, and a peak-fed river and fall. Caves
+places a varied rocky surface above a two-wide entrance and a dense,
+height-validated underground chamber network with exact opaque cutaway roofs.
 
-V3 now has seven complete recipe variants: Hills, Sky Islands, Mountains, Caves,
-Waterfall, Forest, and Fort. The Ring7 composition places all seven in one connected
-radius-33 world. Waterfall authors deterministic
-directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
-basin, outlet, and redundant land routes; an opaque animated renderer consumes the
-same exact flow facts. Forest plans rolling terrain and clearings, places its denser
-woodland, then bends a mostly two-wide road around exact authored tree footprints with
-short one-wide constraints and a three-cell prairie taper. Small broadleaf, tall
-narrow, and seven-root old-growth trees vary the canopy and height profile; most
-prairie surfaces carry nonblocking authored grass tufts. Object ids, exact rotations,
-and rotated blocker footprints are fingerprinted before routing. Map validation,
-movement previews, click routing, command validation, spawning, review relocation,
-enemy pathfinding, terrain-edit protection, and the object renderer consume the same
-world-owned projection.
-Native V3 Caves plans the rocky exterior and stacked underground network together:
-six through twelve chambers, two-wide corridors and entrance ramp, varied floor and
-clearance levels, exact cutaway roofs, and deterministic Bright gameplay lights that
-cover the required network while leaving optional branches dark.
+V3 now has ten complete recipe variants: Hills, Sky Islands, Mountains, Caves,
+Waterfall, Forest, Fort, Volcano, Deep Forest, and Prairie. Ring7 places its fixed
+seven-recipe roster in one connected radius-33 world. Ring19 powers the selectable
+**Two Rings** map: a radius-55, 9,241-column world with 19 fixed regions, 42
+reciprocal seams, 30 outer boundary sides, and a physical ordinary-walker graph that
+keeps all regions reachable after any one seam is removed. Its three mountain-fed
+water branches meet in central Hills before flowing through downstream Hills and an
+outlet Waterfall; the western Volcano owns a separate lava outlet. Single and Ring7
+retain their 4-bit patch namespace, while Ring19 uses 5 patch bits so slots 16–18
+remain collision-free.
+
+Waterfall authors deterministic directed liquid topology from calm inlet through
+rapids, a contiguous thirteen-level fall, plunge basin, outlet, redundant land
+routes, and sparse vegetation; an opaque animated renderer consumes the same exact
+flow facts. Forest plans rolling terrain and clearings, places its denser woodland,
+then bends a mostly two-wide road around exact authored tree footprints with short
+one-wide constraints and a three-cell prairie taper. Deep Forest extends blocking
+woodland across a complete patch around a winding trail and three clearings; Prairie
+ships the complementary tree-free grassland. Volcano replaces the old volcanic-Hills
+geometry behind the stable scenario name with a crater massif, descending lava, and
+an elevated stair-served bridge.
+
+Small broadleaf, tall narrow, and seven-root old-growth trees vary the canopy and
+height profile; most prairie surfaces carry nonblocking authored grass tufts. Object
+ids, exact rotations, and rotated blocker footprints are fingerprinted before
+routing. Map validation, movement previews, click routing, command validation,
+spawning, review relocation, enemy pathfinding, terrain-edit protection, and the
+object renderer consume the same world-owned projection. Native V3 Caves plans the
+rocky exterior and stacked underground network together: six through twelve chambers
+on three `+0/+2/+4` floor tiers, one-level two-wide connectors, exact cutaway roofs,
+sparse authored moss and lichen, and deterministic Bright gameplay lights that cover
+the required network while leaving optional branches dark.
+
+Two Rings is mechanically selectable and covered by deterministic generation,
+spawning, regeneration, and re-entry checks. Its mandatory human visual and play
+approval remains pending, so the development wave is not yet a release candidate.
 
 Authoritative spatial perception now runs headlessly every gameplay frame.
 `hex_world` publishes a renderer-independent Bright or Dim exterior tier;
@@ -62,10 +80,10 @@ becoming gameplay authority.
 
 Fort adds the first complete V3 structure recipe and the canonical worked-stone
 substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
-keep, with six stepped towers, two lintelled gates, two broad stair terraces, and
-alternating outer battlements. Exact graph validation proves that closing both gates
-seals the courtyard, either gate independently reconnects it, and every usable wall
-or tower surface remains ordinary-walker accessible.
+keep, with six small accessible turrets, two lintelled gates, two broad stair
+terraces, and alternating outer battlements. Exact graph validation proves that
+closing both gates seals the courtyard, either gate independently reconnects it, and
+every usable wall or tower surface remains ordinary-walker accessible.
 
 Movement is level-based over stacked surfaces, with body size decided by headroom and
 a breadth-first pathfinder that cannot collapse a stack. A movement preview draws the
@@ -177,7 +195,7 @@ contiguous 64-cell lattice editor, manual stats, undo/redo, and an unsaved local
 mechanics test. The Spell Creator provides ordered repeatable effects, targeting,
 range, requirements, and permanent Draft/Ready diagnostics.
 
-Combat Lab owns transient Sandbox setup for all thirteen distinct supported shipped
+Combat Lab owns transient Sandbox setup for all sixteen distinct supported shipped
 maps, with deterministic renderer previews, tactical descriptions and tags, complete
 ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
 Its searchable fixture selector replaces individual title cards and adds packaged
@@ -226,13 +244,14 @@ review pack, contact sheet, and semantic report under `.context/asset-workshop/`
 The runtime resolves that complete art graph atomically and retains its last valid
 revision across a bad hot reload. `hex_objects` renders static instances from cached
 mesh chunks using the game prism and exact palette-backed material modes. Production
-review exemplars cover six-, twelve-, and eighteen-level trees, a nonblocking grass
-tuft, and three nonblocking emissive crystal silhouettes. Terrain substances, liquids,
-construction metal, and unit presentation resolve exact palette swatches. Forest
-publishes its generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and composable canopy cutaway. Caves publishes authored crystal
-`ObjectInstance`s with presentation-only point-light children at its gameplay-light
-sites. Procedural plant synthesis has not landed yet.
+review exemplars cover nine-, sixteen-, and twenty-one-level trees, their snowy
+variants, a nonblocking grass tuft and snowy variant, cave moss and lichen, and three
+nonblocking emissive crystal silhouettes. Terrain substances, liquids, construction
+metal, and unit presentation resolve exact palette swatches. Forest and Deep Forest
+publish generated vegetation as shared `ObjectInstance`s while retaining exact
+rotated blockers and composable canopy cutaway; Prairie publishes nonblocking grass.
+Caves publishes authored crystal `ObjectInstance`s with presentation-only
+point-light children at its gameplay-light sites.
 
 ## What is provisional
 

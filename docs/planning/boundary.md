@@ -518,10 +518,12 @@ without pinning the response table's version.
 
 ## F — Deliberate non-asks
 
-- **Streaming / chunks**: `Ring7` is one radius-33 map, not a streaming
-  decision. Keep `VoxelMap` private so a later chunked rewrite changes no
-  consumer. Record generation time, entity count, and perception recomputation
-  for the composite before choosing a streaming model.
+- **Streaming / chunks**: Ring7 and Ring19 are finite maps, not a streaming
+  decision. Ring7 remains one radius-33 world; Ring19 is one radius-55,
+  9,241-column world with 19 regions, 42 internal seams, and 30 outer boundary
+  sides. Keep `VoxelMap` private so a later chunked rewrite changes no consumer.
+  Record generation time, entity count, and perception recomputation for both
+  composites before choosing a streaming model.
 - **Unit obstruction / occupancy**: gameplay-side (hex_combat), not a map
   concern.
 - **Anchor constants**: raised in the PR #52 review rather than here — if

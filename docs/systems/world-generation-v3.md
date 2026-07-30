@@ -63,11 +63,13 @@ leave stale current or fall descriptors behind.
 
 ## Layouts and patches
 
-`generator_version: 3` selects one of two layouts:
+`generator_version: 3` selects one of three layouts:
 
 - `Single(PatchSpec)` fills one connected world footprint with one recipe.
 - `Ring7` fills one radius-33 footprint with a central patch and six surrounding
   connected patches.
+- `Ring19` fills one radius-55 footprint with a central patch, six first-ring
+  patches, and twelve second-ring patches.
 
 A `PatchSpec` contains an environment, a typed recipe, named overlays, one connected
 mask, and six directional edge contracts. A mask is a set of horizontal columns
@@ -107,11 +109,48 @@ Sky Islands upper layer remain within their owning horizontal masks for the firs
 composite. The critical ordinary-walker network must connect every region through
 redundant macro routes, but every shared boundary need not be open.
 
+`Ring19` is the fixed **Two Rings** composite. Its deterministic Voronoi masks cover
+exactly 9,241 columns around patch centres 22 columns apart, with 42 reciprocal
+internal seams and 30 outer boundary sides. Slot order is stable: centre, six
+first-ring slots clockwise, then twelve second-ring slots clockwise. The shipped
+roster is:
+
+1. central Hills confluence;
+2. Frozen Hills, Forest A, Prairie A, downstream Hills, Waterfall B, and Waterfall A;
+3. Sky Islands, Deep Forest A, Deep Forest B, Forest B, Prairie B, outlet Waterfall,
+   Fort, Caves, Volcano, Mountains A, Mountains B, and Mountains C.
+
+Each region also carries an explicit rotation in `0..=5`. Every internal seam has two
+width-two walker ports and protected depth-three approaches. Whole-world validation
+requires both endpoints of all 42 seams to join the party-reachable physical graph,
+then removes each seam in turn and proves that all 19 regions remain reachable.
+Optional Sky Islands surfaces remain flight-gated and are not promoted into the
+ordinary network.
+
+The fixed water graph has three mountain sources and one confluence:
+
+- Mountains A → Waterfall B → central Hills;
+- Mountains B → Waterfall A → central Hills;
+- Mountains C → Frozen Hills → central Hills; and
+- central Hills → downstream Hills → outlet Waterfall → the south-east world
+  boundary.
+
+The first two mountain handoffs are level 29; all remaining internal water handoffs
+are level 16. The outlet Waterfall reaches its boundary terminal at level 3.
+Volcano owns a separate lava body which exits the western boundary at level 14; lava
+never joins the water graph. Every liquid crossing is explicit, directed, acyclic,
+level or descending, and checked against the exact seam lanes.
+
+Single and Ring7 retain their shipped 4-bit patch / 28-bit local numeric namespace.
+Ring19 uses a layout-specific 5-bit patch / 27-bit local namespace, so patch ids
+16–18 cannot alias local feature, structure, liquid, light, interior, or
+special-movement identities.
+
 ## Determinism and selection
 
-One top-level candidate represents the complete output. In `Ring7`, patches are not
-selected independently: a locally strong patch cannot win if its seams make the
-world invalid.
+One top-level candidate represents the complete output. In `Ring7` and `Ring19`,
+patches are not selected independently: a locally strong patch cannot win if its
+seams make the world invalid.
 
 - Every build evaluates eight deterministic candidates.
 - A V3 `SeedStreams` API derives independent named streams from generator version,
@@ -135,12 +174,14 @@ Reports record generator version, resolved seed, candidate, repair actions, fall
 use, the three fingerprints, metrics, and timings. Diagnostic collections are sorted
 before reporting or hashing.
 
-The public `Ring7` recipe metrics summarize the admitted whole world rather than
-concatenating seven recipe reports. They record ordinary and reachable surfaces,
+The public composite metrics summarize the admitted whole world rather than
+concatenating patch reports. Ring7 records ordinary and reachable surfaces,
 reachable elevation diversity and relief, the critical route, macro edges and
 redundant regions, directed liquid seams, and exact counts of feature instances,
-structures, gameplay lights, and interiors. These fields are deterministic semantic
-measurements; timing and presentation-only entity counts remain outside them.
+structures, gameplay lights, and interiors. Ring19 additionally records its exact
+world columns, biome-region count, reciprocal seams, outer boundary sides, and
+boundary liquid outlets. These fields are deterministic semantic measurements;
+timing and presentation-only entity counts remain outside them.
 
 After an admitted map is edited, `hex_map` keeps its published exact consequences
 honest. Edited columns discard buried `BiomeRegions` entries and classify every
@@ -158,7 +199,7 @@ as live movement.
 
 Plan a directed, acyclic, steady-state water graph before carving terrain. Its flow
 states are `Still`, `Current`, `Rapid`, and edge-aligned `Fall`. The graph establishes
-a calm elevated inlet, rapids, a contiguous eleven-level fall, an extended plunge
+a calm elevated inlet, rapids, a contiguous thirteen-level fall, an extended plunge
 basin, and an outlet. All three lanes reach both resolved world boundaries, so an
 upstream two-wide metal bridge is the only ordinary crossing between the riverbanks.
 Terrain is then fitted to that graph.
@@ -215,15 +256,40 @@ character-camera presentation. The current walk DSL cannot address map-space til
 so that script is not a route traversal: exact graph validation and recorded manual
 traversal cover topology until the tooling gains that capability.
 
+### Deep Forest and Prairie
+
+Deep Forest and Prairie are distinct additive recipes backed by the same private
+vegetation placement vocabulary as Forest. Deep Forest covers the complete patch
+with updated authored trees, keeps blocking-root coverage in the 28–32% band, and
+protects one winding trail plus three irregular clearings. It has no prairie grass
+zone. Prairie uses rolling Forest-style ground without trees or an authored road and
+covers 65–75% of eligible surfaces with nonblocking authored grass.
+
+Both recipes retain exact object ids, six-way rotations, complete rotated bounds,
+blocker footprints, and deterministic semantic fingerprints. Their standalone
+selectable maps are **Deep Forest** and **Prairie**, both pinned to seed
+`1592598566`.
+
+### Volcano
+
+Volcanic Hills keeps its scenario name for compatibility but now dispatches the V3
+Volcano recipe. An off-centre crater massif occupies roughly one quarter of the
+patch and rises at least 20 levels above its base. A directed lava body descends from
+the crater to the boundary with distinct static, current, fall, and deterministic
+landing presentation. There is no ford. The only ordinary crossing is an elevated
+bridge at least four levels above lava, reached by one-level stair approaches.
+
 ### Caves
 
 Plan one varied rocky exterior and one rooted underground network in the same stacked
-volume. The native V3 recipe creates six through twelve chambers at floor levels six
-through eight, connects the critical network with two-wide corridors, and descends
-through an open two-wide one-level entrance ramp. Corridors preserve at least three
-clear levels, chambers at least four, and every covered cell retains at least three
-solid cutaway roof levels. Exact interior floors and roof voxels remain the source of
-truth for perception domains and presentation.
+volume. The native V3 recipe creates six through twelve chambers on three flat floor
+tiers at relative levels `+0/+2/+4`, connects the critical network with one-level
+two-wide corridors, and descends through an open two-wide one-level entrance ramp.
+Corridors preserve at least three clear levels, chambers at least four, and every
+covered cell retains at least three solid cutaway roof levels. Exact interior floors
+and roof voxels remain the source of truth for perception domains and presentation.
+Sparse nonblocking authored moss and lichen stay outside required connectors and
+crystal reservations.
 
 Generated cave lights are deterministic gameplay semantics. Bright sources with
 radii from four through seven cover the entrance, required actor route, and critical
@@ -257,9 +323,9 @@ The authored emission and physical light are presentation only; neither carries
 
 Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and
 keeps every shared-edge approach outside the structure footprint. Worked-stone
-volumes form a five-level, two-column-thick curtain, six stepped corner towers, two
-opposite two-wide gates, two independent two-wide stair terraces, a gravel
-courtyard, and an offset keep. Three-level gate apertures preserve the normal
+volumes form a five-level, two-column-thick curtain, six small accessible corner
+turrets, two opposite two-wide gates, two independent two-wide stair terraces, a
+gravel courtyard, and an offset keep. Three-level gate apertures preserve the normal
 two-level-tall walker contract. Alternating battlement columns sit outside the usable
 wall walk and are tagged as non-ordinary review geometry.
 
@@ -274,9 +340,9 @@ fort remains generated static geometry, not a player construction system.
 
 ### Composite
 
-`Ring7` first resolves the global routes, elevation profiles, liquid ports, and
-protected seam approaches. It then runs each recipe against its resolved mask and
-contracts, validates patch-local invariants, and finally validates the exact combined
+Ring7 and Ring19 first resolve global routes, elevation profiles, liquid ports, and
+protected seam approaches. They then run each recipe against its resolved mask and
+contracts, validate patch-local invariants, and finally validate the exact combined
 `TilePos` graph. Materials and decorative boundaries are classified only after the
 geometry and semantics are accepted.
 
@@ -315,7 +381,9 @@ The normative delivery order is:
 9. `Ring7`;
 10. V3 rebuilds of Hills, Frozen, Volcanic, Sky Islands, Mountains, and Caves;
 11. complete scenario and review-tool migration;
-12. V1/V2 removal.
+12. additive Volcano, Deep Forest, and Prairie recipes;
+13. `Ring19` and the selectable Two Rings map;
+14. V1/V2 removal.
 
 See [planning/status.md](../planning/status.md) for progress through this sequence.
 
@@ -353,12 +421,15 @@ Recipe tests must enforce each runnable recipe's topology and protected routes.
 Fast fixed corpora run in CI; ignored 10,000-seed recipe corpora must produce 100%
 valid final maps including fallback and target less than 1% fallback use.
 
-Recipe-level benchmarks cover runnable patches at radii 12, 20, and 40. Before
-`Ring7` lands, add radius-33 composite coverage for generation time, entity count,
-terrain-edit projection, and seam traversal. Perception benchmarks separately cover
-fog recomputation. Review packs must include deterministic reports and default,
-rotated, top-down, and character-camera captures. Manual review must traverse every
-critical recipe route and every open composite seam before that surface ships.
+Recipe-level benchmarks cover runnable patches at radii 12, 20, and 40. Composite
+coverage measures Ring7 at radius 33 and Ring19 at radius 55 on the same machine,
+including generation time, entity count, terrain-edit projection, and physical seam
+traversal; Ring19 generation p95 may not exceed 3.5× Ring7. Perception benchmarks
+separately cover fog recomputation. Review packs must include deterministic reports
+and default, rotated, top-down, and character-camera captures. Manual review must
+traverse every critical recipe route and every open composite seam before that
+surface ships. Two Rings is selectable for review, but its final visual and play
+approval remains a mandatory human gate.
 
 ## Primary precedents
 
