@@ -11,4 +11,3 @@ slow-timeout = "60s"
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
-report-skipped = "ignored"
