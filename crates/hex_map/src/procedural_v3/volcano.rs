@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{resolve_layout, HexSide, PatchId, ResolvedLayoutPlan};
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
@@ -301,9 +301,10 @@ fn construct_patch_with_streams(
             "Volcano local mask conversion failed: {error}"
         ))]
     })?;
-    let orientation = streams.map_or(0, |streams| {
+    let seeded_orientation = streams.map_or(0, |streams| {
         u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
     });
+    let orientation = volcano_orientation(&patch, seeded_orientation)?;
     let geometry = plan_geometry(
         &local_mask,
         frame.scale(),
@@ -464,6 +465,32 @@ fn construct_patch_with_streams(
     } else {
         Err(issues)
     }
+}
+
+fn volcano_orientation(
+    patch: &PatchRecipeContext<'_>,
+    seeded_orientation: u8,
+) -> Result<u8, Vec<WorldValidationIssue>> {
+    if !patch.layout().kind.is_composite() {
+        return Ok(seeded_orientation);
+    }
+    if !patch.is_world_boundary(HexSide::West) {
+        return Err(vec![recipe_issue(
+            "composite Volcano lava requires a western world-boundary outlet",
+        )]);
+    }
+    if patch
+        .shared_edges()
+        .any(|edge| edge.liquid_port().is_some())
+    {
+        return Err(vec![recipe_issue(
+            "composite Volcano lava must remain separate from stitched liquid ports",
+        )]);
+    }
+
+    // Local lava advances along +x. Three turns map that axis to world-West,
+    // making every terminal lane exit the required outer boundary.
+    Ok(3)
 }
 
 fn plan_geometry(
@@ -1208,6 +1235,11 @@ fn shift(coord: HexCoord, delta: HexCoord) -> HexCoord {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::procedural_v3::layout::{
+        LayoutKind, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
+        ResolvedElevationBand, ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+        ResolvedWalkerPorts,
+    };
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     };
@@ -1316,5 +1348,150 @@ mod tests {
                 selected.notes
             );
         }
+    }
+
+    #[test]
+    fn composite_volcano_exits_the_western_boundary_without_a_liquid_seam() {
+        let mask = HexCoord::ORIGIN
+            .within_radius(12)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring7,
+            grid_radius: 33,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: hex_core::BiomeRegionId(0),
+                    mask: mask.clone(),
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+        };
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        let orientation = volcano_orientation(&patch, 1).expect("western outlet");
+        assert_eq!(orientation, 3);
+
+        let fixture = settings(12);
+        let V3LayoutSettings::Single(spec) = &fixture.layout else {
+            unreachable!("fixture is Single");
+        };
+        let V3RecipeSettings::Volcano(volcano) = &spec.recipe else {
+            unreachable!("fixture is Volcano");
+        };
+        let geometry =
+            plan_geometry(&mask, 12, volcano, orientation, None).expect("valid geometry");
+        let terminals = geometry
+            .lava
+            .iter()
+            .filter_map(|(position, node)| node.downstream.is_none().then_some(position.coord))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(terminals.len(), LAVA_LANES.len());
+        assert!(terminals
+            .iter()
+            .all(|coord| !mask.contains(&HexSide::West.neighbor(*coord))));
+    }
+
+    #[test]
+    fn composite_volcano_rejects_a_non_western_outlet() {
+        let mask = HexCoord::ORIGIN
+            .within_radius(12)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let mut edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect::<BTreeMap<_, _>>();
+        edges.insert(
+            HexSide::West,
+            ResolvedEdgeReference::Shared(ResolvedEdgeId(0)),
+        );
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring7,
+            grid_radius: 33,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: hex_core::BiomeRegionId(0),
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+        };
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        let issues = volcano_orientation(&patch, 1).expect_err("western seam must be rejected");
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("western world-boundary outlet")));
+    }
+
+    #[test]
+    fn composite_volcano_rejects_stitched_lava() {
+        let mask = HexCoord::ORIGIN
+            .within_radius(12)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edge_id = ResolvedEdgeId(0);
+        let mut edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect::<BTreeMap<_, _>>();
+        edges.insert(HexSide::East, ResolvedEdgeReference::Shared(edge_id));
+        let port = ResolvedPort {
+            lanes: BTreeSet::new(),
+            first_approach: BTreeSet::new(),
+            second_approach: BTreeSet::new(),
+        };
+        let layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring7,
+            grid_radius: 33,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: hex_core::BiomeRegionId(0),
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::from([(
+                edge_id,
+                ResolvedEdgeContract {
+                    first: (PatchId(0), HexSide::East),
+                    second: (PatchId(1), HexSide::West),
+                    elevation: ResolvedElevationBand {
+                        preferred: 15,
+                        min: 15,
+                        max: 15,
+                    },
+                    walker: ResolvedWalkerPorts {
+                        count: 0,
+                        width: 0,
+                        ports: Vec::new(),
+                    },
+                    liquid: ResolvedLiquidPort::Directed {
+                        source: PatchId(0),
+                        sink: PatchId(1),
+                        port,
+                    },
+                    approach_depth: 0,
+                    boundary_pairs: BTreeSet::new(),
+                    protected_approaches: BTreeMap::new(),
+                },
+            )]),
+        };
+        let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
+        let issues = volcano_orientation(&patch, 1).expect_err("stitched lava must be rejected");
+        assert!(issues
+            .iter()
+            .any(|issue| issue.detail.contains("separate from stitched liquid ports")));
     }
 }

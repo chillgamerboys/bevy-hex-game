@@ -160,6 +160,15 @@ impl<'a> PatchRecipeContext<'a> {
         })
     }
 
+    /// Whether this exact patch side exits the complete resolved world.
+    #[must_use]
+    pub(crate) fn is_world_boundary(&self, side: HexSide) -> bool {
+        matches!(
+            self.patch.edges.get(&side),
+            Some(ResolvedEdgeReference::WorldBoundary)
+        )
+    }
+
     /// Union of exact approach cells which recipe-local features must not occupy.
     #[must_use]
     pub(crate) fn protected_approaches(&self) -> BTreeSet<HexCoord> {
