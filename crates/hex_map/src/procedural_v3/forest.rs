@@ -2620,7 +2620,7 @@ fn plan_grass_features(
 }
 
 fn tree_family(hash: u64) -> TreeFamily {
-    if hash.is_multiple_of(2) {
+    if hash.is_multiple_of(4) {
         TreeFamily::TallNarrow
     } else {
         TreeFamily::SmallBroadleaf
@@ -3530,9 +3530,9 @@ mod tests {
         .expect("hero Forest should materialize");
         assert_eq!(
             selected.validated.semantic_fingerprint,
-            16_803_101_637_412_033_592
+            3_116_162_104_822_374_845
         );
-        assert_eq!(build.report.map_fingerprint, 2_816_539_634_225_236_468);
+        assert_eq!(build.report.map_fingerprint, 18_084_914_740_711_593_486);
         assert_eq!(build.map.len(), 469);
         assert_eq!(
             build.blockers.len(),
@@ -3565,6 +3565,14 @@ mod tests {
                 .detail
                 .contains("must retain at least one exact authored Old-Growth")
         }));
+    }
+
+    #[test]
+    fn tree_family_preference_retains_one_quarter_tall_narrow() {
+        let tall = (0..400_u64)
+            .filter(|hash| tree_family(*hash) == TreeFamily::TallNarrow)
+            .count();
+        assert_eq!(tall, 100);
     }
 
     #[test]
