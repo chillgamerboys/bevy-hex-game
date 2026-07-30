@@ -4,6 +4,17 @@ Release sections are prepended here and dated when their promoted `main` commit 
 tagged. The repository has no earlier release tags; `v0.3.0` is planned as its first
 tagged build.
 
+## Unreleased
+
+### Features
+
+- Replace the Combat scenario lane with Maps, focused Demos, and Actions; New Game now
+  launches Party Trial as the hidden integrated default.
+- Add one atomic, build-bound exploration resume slot, persistent display/volume
+  settings, centralized fixed input actions, and empty audio-bus seams.
+- Normalize release artifacts under the Hex Game identity, retain symbol material,
+  and document future signing, Steam, and crash-reporting credential boundaries.
+
 ## v0.3.0 — 2026-07-28
 
 ### Features
@@ -19,6 +30,8 @@ tagged build.
   with Close Quarters as the combat showcase and Lattice Demo as the rules sandbox.
 - Add the deterministic V3 Waterfall showcase with directed water stages, an upstream
   bridge, and two independent high-to-low land routes.
+- Move the shipped Hills, Frozen, Volcanic, Sky Islands, and Mountains maps to native
+  V3 recipes with exact crossing, stacked-volume, route, and environment contracts.
 - Export serde-capable combat outcomes and refusals using stable replay vocabulary.
 - Integrate the canonical runtime art palette and the Asset Workshop recovery and
   deterministic review workflow from `dev`.

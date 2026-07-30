@@ -1,6 +1,26 @@
 (
     schema_version: 1,
     styles: {
+        "crystal/cyan-body": (
+            display_name: "Emissive Cyan Crystal",
+            base_swatch: "crystal/cyan-body",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: Some((
+                swatch: "crystal/cyan-body",
+                strength: 0.65,
+            )),
+        ),
+        "crystal/cyan-glow": (
+            display_name: "Additive Cyan Crystal Glow",
+            base_swatch: "crystal/cyan-glow",
+            surface_mode: Additive,
+            opacity: 0.40,
+            emission: Some((
+                swatch: "crystal/cyan-glow",
+                strength: 1.4,
+            )),
+        ),
         "plant/foliage-dark": (
             display_name: "Dark Foliage",
             base_swatch: "plant/foliage-dark",
@@ -18,6 +38,13 @@
         "plant/foliage-mid": (
             display_name: "Mid Foliage",
             base_swatch: "plant/foliage-mid",
+            surface_mode: Opaque,
+            opacity: 1.0,
+            emission: None,
+        ),
+        "plant/grass-tuft": (
+            display_name: "Grass Tuft",
+            base_swatch: "plant/grass-light",
             surface_mode: Opaque,
             opacity: 1.0,
             emission: None,

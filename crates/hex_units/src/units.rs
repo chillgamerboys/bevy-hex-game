@@ -13,30 +13,34 @@
 //! nowhere to stand is not a unit that quietly does not appear — that is the failure
 //! mode this codebase is worst at seeing.
 
+use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use hex_ai::{AiController, AiGroupId, AiProfileId};
 use hex_anim::Transformation;
 use hex_assets::{
-    ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement, FormationCenter,
-    GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit, SubstanceTable,
+    AiProfileCatalog, ArtPalette, CubeCoord, Encounter, EncounterFaction, EncounterPlacement,
+    FormationCatalog, FormationCenter, GameAssets, LatticeLibrary, PlayerSettings, RosteredUnit,
+    SubstanceTable,
 };
 use hex_lattice::LatticeState;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, Pause,
-    PendingDecision, Screen, SubstanceId, TerrainReady, TilePos, TraversalBlockers,
-    TraversalProfile, Turn, UnitId,
+    HexCoord, HexSpan, HexTile, IssuedCommand, MapAnchorId, MapAnchors, Mode, PartyFormation,
+    PartyMovementMode, Pause, PendingDecision, Screen, SubstanceId, TerrainReady, TilePos,
+    TraversalBlockers, TraversalProfile, Turn, UnitId,
 };
 
 use crate::movement::{route, Body, Footing, MovementCrossings, Reach, Standing};
 use crate::pathing::reached_step_index;
 use crate::selection::Selected;
+use crate::{plan_formation_move, FormationMember, FormationPlanError};
 
 const PLAYER_SWATCH_ID: &str = "unit/player";
 const HOSTILE_SWATCH_ID: &str = "unit/hostile";
@@ -259,13 +263,17 @@ pub fn plugin(app: &mut App) {
         .register_type::<Archetype>()
         .register_type::<Downed>()
         .register_type::<Faction>()
+        .register_type::<AiController>()
         // `hex_core` has no plugin, so the runtime plugin that introduces its
         // shared types registers them.
         .register_type::<UnitId>()
         .register_type::<ControlOwner>()
+        .register_type::<PartyFormation>()
+        .register_type::<PartyMovementMode>()
         .init_resource::<UnitAllocator>()
         .init_resource::<UnitRegistry>()
         .init_resource::<Party>()
+        .init_resource::<PartyFormation>()
         // The funnel's queue. Initialised here as well as by `hex_combat` so
         // the click emitter works in an app composing either crate alone.
         .init_resource::<CommandQueue>()
@@ -289,6 +297,7 @@ fn despawn_units(
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
+    mut formation: ResMut<PartyFormation>,
 ) {
     for entity in &units {
         commands.entity(entity).despawn();
@@ -298,6 +307,7 @@ fn despawn_units(
     *allocator = UnitAllocator::default();
     registry.clear();
     party.members.clear();
+    *formation = PartyFormation::default();
 }
 
 /// Global picking observer: when any `HexTile` is clicked, resolve the route and
@@ -339,8 +349,22 @@ fn on_tile_clicked(
             Without<MovingTo>,
         ),
     >,
+    party_players: Query<
+        (
+            &UnitId,
+            Option<&ControlOwner>,
+            &StandsOn,
+            &Body,
+            Has<Transformation>,
+            Has<MovingTo>,
+        ),
+        With<Player>,
+    >,
     queue: Option<ResMut<CommandQueue>>,
     table: Option<Res<SubstanceTable>>,
+    party: Option<Res<Party>>,
+    formation: Option<Res<PartyFormation>>,
+    formations: Option<Res<FormationCatalog>>,
     blockers: Option<Res<TraversalBlockers>>,
     mode: Option<Res<State<Mode>>>,
     pause: Option<Res<State<Pause>>>,
@@ -379,6 +403,107 @@ fn on_tile_clicked(
     let Ok((pos, _, _, _)) = tiles.get(clicked) else {
         return;
     };
+
+    if *mode.get() == Mode::Exploring
+        && party
+            .as_deref()
+            .is_some_and(|party| party.members.len() > 1)
+        && formation
+            .as_deref()
+            .is_some_and(|formation| formation.mode == PartyMovementMode::Group)
+    {
+        let (Some(party), Some(formation), Some(formations)) = (
+            party.as_deref(),
+            formation.as_deref(),
+            formations.as_deref(),
+        ) else {
+            return;
+        };
+        let Some(preset) = formations.get(&formation.preset) else {
+            return;
+        };
+        let Some(anchor) = formation.anchor_member(preset) else {
+            return;
+        };
+        if queue.holds_command_for(anchor)
+            || party_players
+                .iter()
+                .any(|(_, _, _, _, transforming, moving)| transforming || moving)
+        {
+            return;
+        }
+        let Some((_, owner, anchor_standing, anchor_body, _, _)) = party_players
+            .iter()
+            .find(|(unit, _, _, _, _, _)| **unit == anchor)
+        else {
+            return;
+        };
+        let anchor_footing = Arc::new(Footing::from_tiles(
+            tiles.iter(),
+            &table,
+            *anchor_body,
+            blockers.as_deref(),
+        ));
+        let Some(destination) = anchor_footing.at(*pos) else {
+            return;
+        };
+        let Some(anchor_path) = route(anchor_standing.0, destination, &anchor_footing) else {
+            return;
+        };
+        if anchor_path.len() < 2 {
+            return;
+        }
+        // Footing is body-profile specific, but members with the same body read the
+        // same immutable terrain index. Today every shipped unit is a walker, so a
+        // six-member move needs one index rather than six duplicate map projections;
+        // retaining the profile-keyed cache keeps future heterogeneous parties valid.
+        let mut footing_by_body = vec![(*anchor_body, Arc::clone(&anchor_footing))];
+        let mut members = Vec::with_capacity(party.members.len());
+        for member in &party.members {
+            let Some((unit, _, standing, body, _, _)) = party_players
+                .iter()
+                .find(|(unit, _, _, _, _, _)| *unit == member)
+            else {
+                return;
+            };
+            let member_footing = if let Some((_, footing)) = footing_by_body
+                .iter()
+                .find(|(cached_body, _)| *cached_body == *body)
+            {
+                Arc::clone(footing)
+            } else {
+                let footing = Arc::new(Footing::from_tiles(
+                    tiles.iter(),
+                    &table,
+                    *body,
+                    blockers.as_deref(),
+                ));
+                footing_by_body.push((*body, Arc::clone(&footing)));
+                footing
+            };
+            members.push(FormationMember {
+                unit: *unit,
+                standing: standing.0,
+                footing: member_footing,
+            });
+        }
+        match plan_formation_move(preset, formation, &anchor_path, members) {
+            Ok(plan) => queue.push(IssuedCommand {
+                seat: owner.copied().unwrap_or_default().0,
+                command: GameCommand::MoveParty {
+                    anchor,
+                    paths: plan.paths,
+                },
+            }),
+            Err(FormationPlanError::NoSafeSlot(member)) => {
+                warn!("party move rejected: member {member:?} has no safe compressed slot");
+            }
+            Err(FormationPlanError::InvalidFormation) => {
+                warn!("party move rejected: runtime formation assignments are invalid");
+            }
+        }
+        return;
+    }
 
     for (unit, owner, standing, body, turn) in players.iter() {
         // In combat a click is only a move if it is this unit's turn. Out of combat
@@ -557,11 +682,13 @@ pub struct Archetype(pub String);
 /// **The provisional first implementation of death**, and provisional is the operative
 /// word — the design leaves both functional death (a threshold before zero) and
 /// permadeath open, and this settles neither. A downed unit leaves the turn order and is
-/// retained with its lattice for a future restoration flow. Reactivation is not built.
+/// retained with its lattice. Renewal can restore one or more cells, remove `Downed`,
+/// and schedule it to rejoin initiative at the next round boundary; exploration Rest
+/// also recovers downed party members.
 ///
 /// A marker rather than a despawn, for two reasons. `UnitRegistry` has no `unregister`
 /// and its own doc says death must add one or it will serve a dead entity — a marker
-/// avoids needing it at all. A future restoration flow also needs something to target:
+/// avoids needing it at all. The restoration flow also needs something to target:
 /// a despawned unit cannot be brought back, so despawning would preclude that design
 /// option.
 ///
@@ -597,6 +724,15 @@ fn coord_from(setting: CubeCoord) -> Result<HexCoord, String> {
     })
 }
 
+#[derive(SystemParam)]
+struct SpawnContent<'w> {
+    lattices: Option<Res<'w, LatticeLibrary>>,
+    profiles: Option<Res<'w, AiProfileCatalog>>,
+    formations: Option<Res<'w, FormationCatalog>>,
+    anchors: Option<Res<'w, MapAnchors>>,
+    blockers: Option<Res<'w, TraversalBlockers>>,
+}
+
 /// Places every rostered unit on the terrain.
 ///
 /// Runs in `Actors`, after the map has built and flushed its tiles. Reading them any
@@ -619,24 +755,23 @@ fn spawn_units(
     // waits on — so in practice it is here. Optional rather than required because a
     // headless test harness has no content, and demanding it would make every one of
     // them build a library to spawn a unit that does not cast.
-    lattices: Option<Res<LatticeLibrary>>,
-    anchors: Option<Res<MapAnchors>>,
-    blockers: Option<Res<TraversalBlockers>>,
+    content: SpawnContent,
     mut allocator: ResMut<UnitAllocator>,
     mut registry: ResMut<UnitRegistry>,
     mut party: ResMut<Party>,
+    mut formation: ResMut<PartyFormation>,
 ) {
     let mut identity = UnitIdentity {
         allocator: &mut allocator,
         registry: &mut registry,
         party: &mut party,
     };
-    // Every unit shares a body for now. When lattices land, size becomes a property of
-    // the archetype rather than a global setting, and this is where that starts.
+    // Every unit shares a body for now. When traversal size becomes an archetype
+    // property rather than a global setting, this is where that starts.
     let body = Body::new(TraversalProfile::WALKER);
-    let footing = Footing::from_tiles(tiles.iter(), &table, body, blockers.as_deref());
+    let footing = Footing::from_tiles(tiles.iter(), &table, body, content.blockers.as_deref());
 
-    let placements = match place_roster(&encounter, &footing, anchors.as_deref()) {
+    let placements = match place_roster(&encounter, &footing, content.anchors.as_deref()) {
         Ok(placements) => placements,
         Err(reason) => {
             error!("{reason}");
@@ -662,6 +797,33 @@ fn spawn_units(
     // rather than of this run.
     for (unit, standing) in placements {
         let faction = Faction::from(unit.faction);
+        let lattice = lattice_for(content.lattices.as_deref(), unit.archetype);
+        let controller = if faction == Faction::Hostile {
+            let profile = unit
+                .ai_profile
+                .or_else(|| lattice.and_then(|archetype| archetype.ai_profile.as_deref()))
+                .unwrap_or("baseline");
+            let profile_id = AiProfileId(profile.to_owned());
+            if content
+                .profiles
+                .as_deref()
+                .is_some_and(|catalog| catalog.get(&profile_id).is_none())
+            {
+                let reason = format!(
+                    "Encounter {:?}: hostile {:?} references missing AI profile {:?}.",
+                    encounter.name, unit.archetype, profile
+                );
+                error!("{reason}");
+                commands.insert_resource(GameplaySetupFailure::new(reason));
+                return;
+            }
+            Some(AiController {
+                profile: profile_id,
+                group: unit.ai_group.map(|group| AiGroupId(group.to_owned())),
+            })
+        } else {
+            None
+        };
         spawn_unit(
             &mut commands,
             &assets,
@@ -673,12 +835,20 @@ fn spawn_units(
                     Faction::Hostile => enemy_material.clone(),
                 },
                 archetype: unit.archetype,
-                lattice: lattice_for(lattices.as_deref(), unit.archetype),
+                lattice,
+                controller,
                 settings: &settings,
                 body,
             },
             &mut identity,
         );
+    }
+    if let Some(preset) = content
+        .formations
+        .as_deref()
+        .and_then(|catalog| catalog.get("Compact").or_else(|| catalog.presets.first()))
+    {
+        formation.select_preset(preset, &identity.party.members);
     }
 }
 
@@ -929,6 +1099,7 @@ struct UnitSpawn<'a> {
     /// this — it simply cannot cast and cannot be damaged. That is the honest fallback,
     /// and `spawn_units` warns when it happens so it is not a silent one.
     lattice: Option<&'a hex_assets::Archetype>,
+    controller: Option<AiController>,
     settings: &'a PlayerSettings,
     body: Body,
 }
@@ -977,6 +1148,9 @@ fn spawn_unit(
             LatticeState::new(&lattice.spec, &lattice.stats),
             lattice.stats.clone(),
         ));
+    }
+    if let Some(controller) = spawn.controller {
+        unit.insert(controller);
     }
 
     match spawn.faction {

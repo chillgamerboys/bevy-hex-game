@@ -176,20 +176,23 @@ views of the same deterministic scenario for liquid-motion and cliff-scale revie
 ### Forest
 
 Plan the walkable surface and clearings first, then place the blocking woodland before
-routing the road through it. A deterministic weighted path bends between separated
-non-overlapping clearings and around exact tree roots. Validation requires the four
-stable clearing names and rejects any shared surface membership. Its mostly two-wide
-gravel footprint admits short one-wide constraints where the existing trees pinch it,
-then tapers for three cells into the prairie and stops. Tall grass can therefore
-reclaim the meadow instead of preserving a bare feature-free line across it.
+routing the road through it. Each planned feature carries an exact authored object id,
+one of six rotations, and its rotated blocker footprint. A deterministic weighted path
+bends between separated non-overlapping clearings and around the complete footprint,
+not merely the object origin. Validation requires the four stable clearing names and
+rejects any shared surface membership. Its mostly two-wide gravel footprint admits
+short one-wide constraints where the existing trees pinch it, then tapers for three
+cells into the prairie and stops. Tall grass can therefore reclaim the meadow instead
+of preserving a bare feature-free line across it.
 
-Trees are shared stylized low-poly features. Their root `TilePos` is a traversal
-blocker; their canopy is presentation only. The non-voxel prototype reuses the same
-semantic tree kind for a few renderer-private tall exemplars, without pretending that
-their future multi-voxel footprint exists yet. Tree roots cover roughly 20-24% of the
-woodland, while non-blocking tall grass covers 65-75% of the prairie. Tall grass has no
-concealment rule. Character-camera canopy cutaway composes with fog and cave cutaway.
-Trees cannot be chopped in this milestone.
+Small broadleaf and tall narrow trees have one-cell blockers. Old-growth trees require
+seven same-level grounded supports and publish that exact rotated footprint as
+traversal blockers; connectivity validation may deterministically substitute a
+one-cell tree where a large footprint would sever ordinary terrain. Grass tufts are
+visual-only. All features publish renderer-neutral `ObjectInstance`s, and only
+authored canopy chunks receive the composable canopy-cutaway reason. Tree roots cover
+roughly 20-24% of the woodland, while non-blocking tall grass covers 65-75% of the
+prairie. Tall grass has no concealment rule. Trees cannot be chopped in this milestone.
 
 Forest likewise uses candidate rejection rather than semantic repair: its bounded
 repair hook returns `NoChange`, selection advances to the next deterministic
@@ -205,16 +208,58 @@ character-camera presentation. The current walk DSL cannot address map-space til
 so that script is not a route traversal: exact graph validation and recorded manual
 traversal cover topology until the tooling gains that capability.
 
+### Caves
+
+Plan one varied rocky exterior and one rooted underground network in the same stacked
+volume. The native V3 recipe creates six through twelve chambers at floor levels six
+through eight, connects the critical network with two-wide corridors, and descends
+through an open two-wide one-level entrance ramp. Corridors preserve at least three
+clear levels, chambers at least four, and every covered cell retains at least three
+solid cutaway roof levels. Exact interior floors and roof voxels remain the source of
+truth for perception domains and presentation.
+
+Generated cave lights are deterministic gameplay semantics. Bright sources with
+radii from four through seven cover the entrance, required actor route, and critical
+chambers, while at least one optional branch floor remains dark. `hex_map` publishes
+each source as an entity carrying its floor `TilePos` and `GameplayLight`;
+`hex_perception` derives the interior domain from `InteriorRegions`. Static sources
+make their supporting columns map-owned until terrain edits can replan light-bearing
+objects.
+
+Every source reserves a flat radius-one presentation footprint. Underground sources
+carve a roofed alcove with the required three-level roof thickness; the upper source
+uses an open landing beside the entrance rather than flattening its one-level ramp.
+The reservation records a deterministic two-, three-, or four-level crystal kind and
+one of six rotations in semantic and materialized fingerprints. Exact floor,
+clearance, roof, interior, and unoccupied visual-volume checks reject an invalid
+candidate.
+
+The V3 recipe does not render a crystal itself. The later stacked integration maps
+the ordered kinds to `prop/crystal-low-cluster`, `prop/crystal-branched`, or
+`prop/crystal-spire`. Its authoritative `GameplayLight` and `TilePos` remain on the
+exact cave floor; the corresponding `ObjectInstance` origin is one voxel above it.
+Emission and restrained physical point lights remain presentation and never
+determine gameplay illumination. The map-side light entity remains valid without
+that optional visual layer.
+
 ### Fort
 
-Plan the defensive footprint and circulation before decorative details. Worked-stone
-volumes form walls, towers, gates, a courtyard, a small keep, two-wide wall walks,
-and two-wide one-level stair terraces. Edge-mounted battlements do not consume
-walkable surfaces.
+Fort resolves an unobstructed radius-nine site inside its arbitrary patch mask and
+keeps every shared-edge approach outside the structure footprint. Worked-stone
+volumes form a five-level, two-column-thick curtain, six stepped corner towers, two
+opposite two-wide gates, two independent two-wide stair terraces, a gravel
+courtyard, and an offset keep. Three-level gate apertures preserve the normal
+two-level-tall walker contract. Alternating battlement columns sit outside the usable
+wall walk and are tagged as non-ordinary review geometry.
 
-Validation requires closed defenses, an accessible wall top, at least two ordinary
-routes, two levels of headroom, and no accidental shortcut through a decorative
-feature. The fort is generated static geometry, not a player construction system.
+Validation closes both gates to prove the defenses have no accidental shortcut,
+then admits each gate separately to prove two independent ordinary routes. It also
+checks exact worked-stone structure membership, gate headroom, one-level stairs,
+wall-walk and tower access, anchor placement, and whole-network connectivity.
+Candidates vary orientation and keep placement through independent named streams;
+major structural failures reject the candidate rather than carving the topology,
+and a separately authored orientation-zero fallback passes the same checks. The
+fort remains generated static geometry, not a player construction system.
 
 ### Composite
 

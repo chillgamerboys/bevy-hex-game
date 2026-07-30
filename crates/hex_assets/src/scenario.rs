@@ -20,15 +20,38 @@
 use bevy::prelude::*;
 use serde::{de::Error as _, Deserialize, Deserializer};
 
-/// `assets/config/scenarios.ron` — everything the title screen offers.
+/// `assets/config/scenarios.ron` — the default game and development scenarios.
 ///
 /// Order is the order they appear, so it is a designer's decision rather than an
 /// accident of hashing.
 #[derive(Asset, Resource, Reflect, Debug, Clone, Deserialize)]
 #[reflect(Resource)]
 pub struct ScenarioLibrary {
+    /// Stable name of the scenario launched by New Game.
+    ///
+    /// The entry remains in `scenarios` so it uses the same validated world,
+    /// lighting, encounter, and seed vocabulary as every development fixture. The
+    /// title screen resolves it independently and does not also list it in a lane.
+    pub default_game: String,
     /// The scenarios, in the order they are listed.
     pub scenarios: Vec<Scenario>,
+}
+
+impl ScenarioLibrary {
+    /// Resolves the exact scenario launched by New Game.
+    #[must_use]
+    pub fn default_scenario(&self) -> Option<&Scenario> {
+        self.scenarios
+            .iter()
+            .find(|scenario| scenario.name == self.default_game)
+    }
+
+    /// Development scenarios visible in the Maps and Demos lanes.
+    pub fn visible_scenarios(&self) -> impl Iterator<Item = &Scenario> {
+        self.scenarios
+            .iter()
+            .filter(|scenario| scenario.name != self.default_game)
+    }
 }
 
 /// One playable setup: a world, and where the units start on it.
@@ -72,13 +95,11 @@ pub struct Scenario {
     pub encounter: String,
 }
 
-/// The three title-screen lanes a scenario can inhabit.
+/// The development title-screen lane a non-default scenario can inhabit.
 #[derive(Reflect, Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize)]
 pub enum ScenarioCategory {
     /// Worlds whose terrain or traversal is the main attraction.
     Map,
-    /// Setups authored to exercise the combat loop.
-    Combat,
     /// Focused mechanics showcases and rules probes.
     Demo,
 }
@@ -90,6 +111,7 @@ pub enum ScenarioCategory {
 /// count parentheses to discover which entry failed. Reading the other fields first
 /// lets the error identify the exact scenario while keeping category genuinely required.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScenarioFields {
     name: String,
     #[serde(default, deserialize_with = "deserialize_present_category")]
@@ -178,6 +200,10 @@ mod tests {
             library.scenarios.len() >= 2,
             "a picker with one entry is not a picker"
         );
+        assert!(
+            library.default_scenario().is_some(),
+            "default_game must name exactly one shipped scenario"
+        );
         for scenario in &library.scenarios {
             assert!(!scenario.name.is_empty(), "a scenario needs a name");
             assert!(!scenario.world.is_empty(), "a scenario needs a world");
@@ -200,6 +226,24 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(before, names.len(), "two scenarios share a name");
+    }
+
+    #[test]
+    fn the_default_is_resolved_independently_from_visible_scenarios() {
+        let library: ScenarioLibrary =
+            ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
+                .expect("the shipped scenarios should parse");
+        let default = library
+            .default_scenario()
+            .expect("the shipped default should resolve");
+
+        assert_eq!(default.name, "Party Trial");
+        assert!(
+            library
+                .visible_scenarios()
+                .all(|scenario| scenario.name != default.name),
+            "the default must not also appear in a development lane"
+        );
     }
 
     #[test]
@@ -251,6 +295,24 @@ mod tests {
         assert!(error.contains("Forgotten Lane"), "{error}");
     }
 
+    #[test]
+    fn unknown_scenario_fields_are_rejected() {
+        let error = ron::from_str::<Scenario>(
+            r#"(
+                name: "Typo",
+                category: Demo,
+                blurb: "Invalid on purpose.",
+                world: "config/world.ron",
+                encounter: "config/encounters/bridge-crossing.ron",
+                generaton_seed: Some(7),
+            )"#,
+        )
+        .expect_err("a misspelled field must not be silently ignored")
+        .to_string();
+
+        assert!(error.contains("generaton_seed"), "{error}");
+    }
+
     /// Generated scenarios own distinct reproducible seeds and name an encounter file.
     ///
     /// Whether that encounter places its units through generated *anchors* is a
@@ -269,8 +331,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            8,
-            "the scenario library should include all eight generated maps"
+            9,
+            "the scenario library should include all nine generated maps"
         );
         let seeds: HashSet<u64> = generated
             .iter()

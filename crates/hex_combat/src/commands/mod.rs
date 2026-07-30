@@ -37,14 +37,15 @@ use bevy::prelude::*;
 
 use hex_anim::Transformation;
 use hex_assets::{
-    CombatSettings, ContentIndex, ContentTables, ElementCatalog, PlayerSettings, SpellBook,
-    SubstanceTable,
+    CombatSettings, ContentIndex, ContentTables, ElementCatalog, FormationCatalog, PlayerSettings,
+    SpellBook, SubstanceTable,
 };
 use hex_core::{
-    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode,
+    AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
     PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
 };
-use hex_units::{Body, Downed, Faction, MovingTo, StandsOn, UnitRegistry};
+use hex_perception::FactionMapKnowledge;
+use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitRegistry};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
@@ -52,9 +53,12 @@ use crate::turns::TurnOrder;
 pub(crate) mod cast;
 pub use cast::{delivers_anything, UNDELIVERABLE};
 mod choose_disables;
+mod choose_restores;
 mod end_turn;
 mod move_along;
+mod move_party;
 mod presentation;
+mod rest;
 mod strike;
 
 /// Tiles, as the applier needs them to ground a commanded path.
@@ -116,10 +120,20 @@ struct Verb<'a> {
     effects: &'a mut crate::effects::PersistentEffects,
     /// Knowledge written by divination effects after a cast resolves.
     knowledge: &'a mut crate::knowledge::FactionLatticeKnowledge,
+    /// World-owned current and remembered spatial knowledge for both factions.
+    ///
+    /// Casting fails closed when this is absent; no command may infer observation
+    /// directly from authoritative terrain or unit entities.
+    spatial: Option<&'a FactionMapKnowledge>,
     /// Structured outcomes accumulated in command order for presentation consumers.
     events: &'a mut Vec<CombatEvent>,
+    /// Restored units waiting for a round boundary before initiative.
+    revivals: &'a mut crate::turns::PendingRevivals,
     /// Policy knobs: budgets, ranges, and what a strike costs.
     combat: Option<&'a CombatSettings>,
+    party: &'a Party,
+    formation: &'a mut PartyFormation,
+    formations: Option<&'a FormationCatalog>,
     /// Exact world-space obstacles excluded from footing for movement and reach.
     blockers: Option<&'a TraversalBlockers>,
     /// Units this drain already committed presentation for. `Busy` lands via
@@ -135,11 +149,30 @@ struct ResolutionStores<'w> {
     pending: ResMut<'w, PendingDecision>,
     effects: ResMut<'w, crate::effects::PersistentEffects>,
     knowledge: ResMut<'w, crate::knowledge::FactionLatticeKnowledge>,
+    spatial: Option<Res<'w, FactionMapKnowledge>>,
     events: MessageWriter<'w, CombatEvent>,
+    revivals: ResMut<'w, crate::turns::PendingRevivals>,
+    summary: ResMut<'w, crate::CombatSummary>,
+}
+
+#[derive(SystemParam)]
+struct PartyStores<'w> {
+    party: Res<'w, Party>,
+    formation: ResMut<'w, PartyFormation>,
+    formations: Option<Res<'w, FormationCatalog>>,
+}
+
+#[derive(SystemParam)]
+struct UnitStores<'w, 's> {
+    actors: ActorQuery<'w, 's>,
+    lattices: cast::LatticeQuery<'w, 's>,
+    lattice_stats: Query<'w, 's, &'static hex_lattice::LatticeStats>,
 }
 
 pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<CommandQueue>()
+        .init_resource::<Party>()
+        .init_resource::<PartyFormation>()
         // A resource rather than a marker component since it carries a payload, so it
         // needs initialising as well as registering. Nothing sets it to anything but
         // `None` until the damage model lands.
@@ -240,8 +273,8 @@ fn apply_commands(
     combat: Option<Res<CombatSettings>>,
     blockers: Option<Res<TraversalBlockers>>,
     tiles: TileQuery,
-    mut actors: ActorQuery,
-    mut lattices: cast::LatticeQuery,
+    mut units: UnitStores,
+    mut party_stores: PartyStores,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
     let mut emitted: Vec<CombatEvent> = Vec::new();
@@ -261,7 +294,8 @@ fn apply_commands(
         // Seat validation. Units without an owner belong to seat 0 — "the only
         // session there is" — matching how they are spawned; the check grows
         // teeth the moment a second seat exists.
-        let owner = actors
+        let owner = units
+            .actors
             .get(entity)
             .ok()
             .and_then(|(_, _, _, _, owner, _, _)| owner.copied())
@@ -291,34 +325,51 @@ fn apply_commands(
             pending: &mut stores.pending,
             effects: &mut stores.effects,
             knowledge: &mut stores.knowledge,
+            spatial: stores.spatial.as_deref(),
             events: &mut emitted,
+            revivals: &mut stores.revivals,
             combat: combat.as_deref(),
+            party: &party_stores.party,
+            formation: &mut party_stores.formation,
+            formations: party_stores.formations.as_deref(),
             blockers: blockers.as_deref(),
             committed: &mut committed,
             in_combat,
         };
 
+        let recorded = issued.command.clone();
         let outcome = match issued.command {
             GameCommand::MoveAlong { ref path, .. } => move_along::apply(
                 &mut verb,
                 &mut commands,
                 &tiles,
-                &mut actors,
+                &mut units.actors,
                 unit,
                 entity,
                 path,
+            ),
+            GameCommand::MoveParty { ref paths, .. } => move_party::apply(
+                &mut verb,
+                &mut commands,
+                &tiles,
+                &mut units.actors,
+                issued.seat,
+                unit,
+                paths,
             ),
             GameCommand::Strike { target, .. } => strike::apply(
                 &mut verb,
                 &mut commands,
                 &tiles,
-                &mut actors,
-                &mut lattices,
+                &mut units.actors,
+                &mut units.lattices,
                 unit,
                 entity,
                 target,
             ),
-            GameCommand::EndTurn { .. } => end_turn::apply(&mut verb, &mut actors, unit, entity),
+            GameCommand::EndTurn { .. } => {
+                end_turn::apply(&mut verb, &mut units.actors, unit, entity)
+            }
             GameCommand::Cast {
                 ref spell,
                 target,
@@ -327,8 +378,8 @@ fn apply_commands(
             } => cast::apply(
                 &mut verb,
                 &mut commands,
-                &mut actors,
-                &mut lattices,
+                &mut units.actors,
+                &mut units.lattices,
                 unit,
                 entity,
                 spell,
@@ -337,12 +388,32 @@ fn apply_commands(
             ),
             GameCommand::Channel { .. } => Err(CommandRefusal::ChannelUnavailable),
             GameCommand::ChooseDisables { ref cells, .. } => {
-                choose_disables::apply(&mut verb, &mut lattices, unit, entity, cells)
+                choose_disables::apply(&mut verb, &mut units.lattices, unit, entity, cells)
             }
+            GameCommand::ChooseRestores {
+                target, ref cells, ..
+            } => choose_restores::apply(
+                &mut verb,
+                &mut commands,
+                &mut units.actors,
+                &mut units.lattices,
+                unit,
+                target,
+                cells,
+            ),
+            GameCommand::Rest { .. } => rest::apply(
+                &mut verb,
+                &mut commands,
+                &mut units.lattices,
+                &units.lattice_stats,
+                unit,
+            ),
         };
 
         if let Err(refusal) = outcome {
             drop_command(&mut emitted, &issued, refusal);
+        } else {
+            stores.summary.record_command(&recorded);
         }
     }
     stores.events.write_batch(emitted);
@@ -351,12 +422,20 @@ fn apply_commands(
 /// While resolution is waiting on a defender, the answer is the whole command
 /// vocabulary. Nothing else may interleave with the lattice state it settles.
 fn modal_refusal(pending: &PendingDecision, command: &GameCommand) -> Option<CommandRefusal> {
-    let PendingDecision::ChooseDisables { decider, .. } = *pending else {
-        return None;
+    let decider = match *pending {
+        PendingDecision::None => return None,
+        PendingDecision::ChooseDisables { decider, .. }
+        | PendingDecision::ChooseRestores { decider, .. } => decider,
     };
-    match command {
-        GameCommand::ChooseDisables { unit, .. } if *unit == decider => None,
-        GameCommand::ChooseDisables { .. } => {
+    match (pending, command) {
+        (PendingDecision::ChooseDisables { .. }, GameCommand::ChooseDisables { unit, .. })
+        | (PendingDecision::ChooseRestores { .. }, GameCommand::ChooseRestores { unit, .. })
+            if *unit == decider =>
+        {
+            None
+        }
+        (PendingDecision::ChooseDisables { .. }, GameCommand::ChooseDisables { .. })
+        | (PendingDecision::ChooseRestores { .. }, GameCommand::ChooseRestores { .. }) => {
             Some(CommandRefusal::WrongDecisionUnit { expected: decider })
         }
         _ => Some(CommandRefusal::DecisionPending { decider }),

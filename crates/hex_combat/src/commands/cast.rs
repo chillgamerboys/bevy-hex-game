@@ -21,7 +21,9 @@
 use bevy::prelude::*;
 
 use hex_assets::{CastingAxis, Effect, Spell, TargetShape};
-use hex_core::{Busy, KnowledgeExpiry, LatticeCoord, PendingDecision, TilePos, UnitId};
+use hex_core::{
+    Busy, KnowledgeExpiry, KnowledgeState, LatticeCoord, PendingDecision, TilePos, UnitId,
+};
 use hex_lattice::{apply_cast, castable, CastBlocked, CellKind, LatticeSpec, LatticeState};
 use hex_units::{targeting, volumes};
 
@@ -60,7 +62,8 @@ pub(super) fn apply(
     // answer would resolve its damage against a lattice that is about to change.
     if ctx.pending.is_open() {
         let decider = match *ctx.pending {
-            PendingDecision::ChooseDisables { decider, .. } => decider,
+            PendingDecision::ChooseDisables { decider, .. }
+            | PendingDecision::ChooseRestores { decider, .. } => decider,
             PendingDecision::None => unit,
         };
         return Err(CommandRefusal::DecisionPending { decider });
@@ -178,10 +181,12 @@ pub(super) fn apply(
         });
     }
 
-    // Observation. Returns true because no fog exists yet — every current target
-    // genuinely *is* observed — and it is written as a function rather than omitted so
-    // that the day `hex_perception` lands, this is the one line that changes.
-    if !anchor_is_observed(target) {
+    let Some(spatial) = ctx.spatial else {
+        return Err(CommandRefusal::MissingCombatData {
+            data: CombatData::SpatialKnowledge,
+        });
+    };
+    if spatial.faction(caster_faction).state(target) != KnowledgeState::Observed {
         return Err(CommandRefusal::TargetUnobserved {
             spell: spell_name.to_owned(),
             target,
@@ -362,8 +367,26 @@ pub(super) fn apply(
                     defender.0
                 );
             }
-            Effect::RestoreHexes { .. } => {
-                refusals.push("RestoreHexes waits on choosing which hexes come back");
+            Effect::RestoreHexes { count } => {
+                let Some((target_unit, target_entity, _)) = target_unit else {
+                    continue;
+                };
+                let Ok((target_spec, target_state)) = lattices.get(target_entity) else {
+                    refusals.push("the restoration target has no lattice");
+                    continue;
+                };
+                let disabled = target_spec
+                    .cells()
+                    .filter(|&(coord, _)| target_state.is_disabled(coord))
+                    .count();
+                let owed = usize::from(*count).min(disabled);
+                if owed > 0 {
+                    *ctx.pending = PendingDecision::ChooseRestores {
+                        decider: unit,
+                        target: target_unit,
+                        count: u16::try_from(owed).unwrap_or(u16::MAX),
+                    };
+                }
             }
             Effect::ModifyIncomingDisables { .. } => {
                 refusals.push("one-shot wards have nowhere to live in the lattice yet");
@@ -410,7 +433,7 @@ const DEFAULT_LEVELS_PER_BONUS: u32 = 5;
 /// lowest `LatticeCoord` makes the choice deterministic rather than dependent on
 /// iteration; `spec.cells()` is already ordered, so first-match is that. The alternative
 /// — refusing an ambiguous lattice — would turn a redundancy into an authoring error.
-fn spell_cell(
+pub(crate) fn spell_cell(
     spec: &LatticeSpec,
     state: &LatticeState,
     spell: hex_core::SpellId,
@@ -431,16 +454,6 @@ fn spell_cell(
         fallback = fallback.or(Some(coord));
     }
     fallback
-}
-
-/// Whether the cast's anchor is currently observed by the acting faction.
-///
-/// **True, and that is the truth rather than a stub.** The rule is absolute — a cast
-/// must anchor on an observed position, including divination — but no fog exists yet, so
-/// every position genuinely is observed. Written as a function so the day `hex_perception`
-/// publishes what a faction can see, this is the one line that changes, in one crate.
-const fn anchor_is_observed(_anchor: TilePos) -> bool {
-    true
 }
 
 /// Parks the defender's choice of which hexes go down.
@@ -496,10 +509,10 @@ pub const UNDELIVERABLE: &str = "nothing this spell does is built yet";
 /// Whether the applier delivers **any** of a spell's effects today.
 ///
 /// The gate the interface and the applier share, and the reason it exists is a specific
-/// failure: several shipped spells — Renewal, Earthen Wall, Stone Shaper, Daylight —
-/// are legal casts whose every effect is still waiting on a lane that has not
-/// landed. Offering one is worse than hiding it. The cast is legal, so it is charged: the
-/// mana goes, the turn goes, and the only trace is a log line the player cannot see.
+/// failure: several shipped spells — Earthen Wall, Stone Shaper, Daylight — are legal
+/// casts whose every effect is still waiting on a lane that has not landed. Offering
+/// one is worse than hiding it. The cast is legal, so it is charged: the mana goes, the
+/// turn goes, and the only trace is a log line the player cannot see.
 ///
 /// **Any, not all.** A partially built spell still does something, and refusing it would
 /// take away a real effect because a second one is pending; the applier already reports
@@ -516,8 +529,9 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         spell.casting,
         CastingAxis::Enchantment { defense } if defense > 0
     ) || spell.effects.iter().any(|effect| match effect {
-        // Damage the defender chooses hexes for, and fire. Both land today.
+        // Damage and restoration both park on an exact-cell decision; fire lands too.
         Effect::DisableHexes { targeted, .. } => !targeted,
+        Effect::RestoreHexes { .. } => true,
         Effect::Burn { .. } => true,
         // Everything below is refused by name in the match above; see the reasons there.
         Effect::Reveal { .. } => true,
@@ -525,7 +539,6 @@ pub fn delivers_anything(spell: &Spell) -> bool {
         | Effect::SetTerrain { .. }
         | Effect::ClearTerrain
         | Effect::SpawnWall { .. }
-        | Effect::RestoreHexes { .. }
         | Effect::ModifyIncomingDisables { .. }
         | Effect::Displace { .. } => false,
     })
@@ -545,7 +558,7 @@ fn unit_standing_on(
 
 /// Whether this implemented effect would further damage a unit on the anchor.
 ///
-/// Downed lattices stay queryable because future restoration needs them. Damage is a
+/// Downed lattices stay queryable because restoration needs them. Damage is a
 /// narrower rule: it refuses a spent target before payment instead of opening a
 /// defender choice that can only answer with zero cells.
 fn effect_damages_unit(effect: &Effect) -> bool {
@@ -565,8 +578,30 @@ fn effect_damages_unit(effect: &Effect) -> bool {
 /// one query at once. Keeping them apart makes each access a short scope rather than a
 /// lifetime puzzle.
 ///
-/// **Deliberately unfiltered by `Downed`.** A future restoration flow needs access to
-/// the retained lattice even though reactivation is not built. Being downed stops a
-/// unit *acting*, which is the turn order's job, not its lattice's.
+/// **Deliberately unfiltered by `Downed`.** Renewal needs access to the retained lattice
+/// before it can reactivate the target. Being downed stops a unit *acting*, which is the
+/// turn order's job, not its lattice's.
 pub(super) type LatticeQuery<'w, 's> =
     Query<'w, 's, (&'static LatticeSpec, &'static mut LatticeState)>;
+
+#[cfg(test)]
+mod tests {
+    use hex_core::{LatticeCoord, SpellId};
+    use hex_lattice::{apply_disables, CellKind, LatticeSpec, LatticeState, LatticeStats};
+
+    use super::spell_cell;
+
+    #[test]
+    fn redundant_spell_resolution_prefers_a_live_copy() {
+        let spell = SpellId(4);
+        let first = LatticeCoord::ORIGIN;
+        let second = LatticeCoord::new(1, 0);
+        let spec = LatticeSpec::default()
+            .with(first, CellKind::Spell { spell })
+            .with(second, CellKind::Spell { spell });
+        let mut state = LatticeState::new(&spec, &LatticeStats::default());
+        apply_disables(&mut state, &[first]);
+
+        assert_eq!(spell_cell(&spec, &state, spell), Some(second));
+    }
+}

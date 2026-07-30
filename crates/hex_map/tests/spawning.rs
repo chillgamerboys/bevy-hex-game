@@ -29,27 +29,31 @@ use bevy::prelude::*;
 use bevy::state::app::StatesPlugin;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::{Duration, Instant};
 
 use hex_assets::GameAssets;
 use hex_assets::{
-    ArtPalette, PaletteSwatch, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+    ArtPalette, ObjectBlueprint, ObjectCatalogFile, ObjectInstance, PaletteSwatch,
+    RuntimeArtCatalog, SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
+    VoxelStyleCatalog,
 };
 use hex_core::{
-    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplaySetup,
+    BiomeRegionId, BiomeRegions, CanopyOccluder, CutawayOccluder, GameplayLight, GameplaySetup,
     GameplaySetupFailure, Headroom, HexCoord, HexGrid, HexSpan, HexTile, InteriorRegionId,
     InteriorRegions, Level, MapAnchorId, MapAnchors, MapViewHint, PresentationOcclusion,
     ResolvedMapSeed, Screen, SpecialMovementRegion, SpecialMovementRegions, SubstanceId,
     TerrainEdit, TerrainReady, TilePos, TraversalBlockers, MAX_HEADROOM,
 };
 use hex_map::{
-    CavesSettings, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
+    CavesReportMetrics, CrossingSettings, EnvironmentSettings, GenerationReport, HillsSettings,
     LandformSettings, LayeredSkyIslandsSettings, LinkedIslandsSettings, MapSettings,
     MountainsSettings, PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
     PerlinSettings, PerlinStepSettings, ProceduralRecipeMetrics, ProceduralSettings,
     ProceduralV1Settings, ProceduralV2Settings, ProceduralV3Settings, SkyIslandsSettings,
     SubstanceRun, TacticalMetrics, TacticalSettings, TerrainSettings, V2EnvironmentSettings,
-    V2HillsSettings, V2RecipeSettings, V3EnvironmentSettings, V3ForestSettings, V3HillsSettings,
-    V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings, VoxelMap,
+    V2HillsSettings, V2RecipeSettings, V3CavesSettings, V3EnvironmentSettings, V3ForestSettings,
+    V3FortSettings, V3HillsSettings, V3LayoutSettings, V3RecipeSettings, V3WaterfallSettings,
+    VoxelMap,
 };
 
 /// Radius used by the tests. Small enough to stay fast, large enough that the
@@ -130,25 +134,18 @@ fn substance_table() -> SubstanceTable {
     substance_table_without(None)
 }
 
-fn substance_table_without_swatch(omitted: &str) -> SubstanceTable {
-    substance_table_fixture(None, Some(omitted))
-}
-
 fn substance_table_without(omitted: Option<&str>) -> SubstanceTable {
-    substance_table_fixture(omitted, None)
+    substance_table_fixture(omitted)
 }
 
 #[expect(
     clippy::expect_used,
     reason = "invalid compile-time fixture data should fail the integration test immediately"
 )]
-fn substance_table_fixture(
-    omitted_substance: Option<&str>,
-    omitted_swatch: Option<&str>,
-) -> SubstanceTable {
+fn substance_table_fixture(omitted_substance: Option<&str>) -> SubstanceTable {
     let swatch = SwatchId::new("test/neutral").expect("the fixture swatch id should be valid");
     let foam = SwatchId::new("liquid/foam").expect("the foam swatch id should be valid");
-    let mut swatches = BTreeMap::from([
+    let swatches = BTreeMap::from([
         (
             foam,
             PaletteSwatch::new(
@@ -169,28 +166,6 @@ fn substance_table_fixture(
             .expect("the fixture swatch should be valid"),
         ),
     ]);
-    for (id, display_name, (red, green, blue)) in [
-        ("plant/trunk", "Tree Trunk", (0.28, 0.15, 0.07)),
-        ("plant/foliage-dark", "Dark Foliage", (0.12, 0.34, 0.12)),
-        ("plant/foliage-mid", "Mid Foliage", (0.18, 0.42, 0.14)),
-        ("plant/foliage-light", "Light Foliage", (0.25, 0.48, 0.16)),
-        ("plant/grass-dark", "Dark Grass Blade", (0.34, 0.52, 0.14)),
-        ("plant/grass-light", "Light Grass Blade", (0.45, 0.62, 0.18)),
-    ] {
-        if omitted_swatch == Some(id) {
-            continue;
-        }
-        swatches.insert(
-            SwatchId::new(id).expect("fixture plant swatch ids should be valid"),
-            PaletteSwatch::new(
-                display_name,
-                SrgbColor::new(red, green, blue)
-                    .expect("fixture plant swatch colors should be valid"),
-                BTreeSet::from(["test".to_owned()]),
-            )
-            .expect("fixture plant swatches should be valid"),
-        );
-    }
     let palette = ArtPalette::new(swatches).expect("the fixture palette should be valid");
     let mut substances = bevy::platform::collections::HashMap::default();
     for (name, solid, diggable) in [
@@ -202,6 +177,7 @@ fn substance_table_fixture(
         ("gravel", true, true),
         ("water", false, true),
         ("metal", true, true),
+        ("worked_stone", true, true),
         ("snow", true, true),
         ("ice", true, true),
         ("basalt", true, true),
@@ -221,6 +197,37 @@ fn substance_table_fixture(
     }
     SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
         .expect("the fixture substances should resolve through the fixture palette")
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "invalid compile-time art fixtures should fail the integration test immediately"
+)]
+fn runtime_art_catalog() -> RuntimeArtCatalog {
+    let palette: ArtPalette = ron::from_str(include_str!("../../../assets/art/palette.ron"))
+        .expect("tracked art palette should parse");
+    let styles: VoxelStyleCatalog =
+        ron::from_str(include_str!("../../../assets/art/voxel_styles.ron"))
+            .expect("tracked voxel styles should parse");
+    let manifest: ObjectCatalogFile =
+        ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+            .expect("tracked object catalog should parse");
+    let mut objects = BTreeMap::new();
+    for source in [
+        include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+        include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+        include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+        include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+        include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
+    ] {
+        let blueprint: ObjectBlueprint =
+            ron::from_str(source).expect("tracked object blueprint should parse");
+        objects.insert(blueprint.id.clone(), blueprint);
+    }
+    RuntimeArtCatalog::from_sources(&palette, &styles, &manifest, objects)
+        .expect("tracked runtime art catalog should resolve")
 }
 
 /// Runs the app until it has entered gameplay and the world has settled.
@@ -333,6 +340,7 @@ fn v3_waterfall_app() -> App {
 
 fn v3_forest_app() -> App {
     let mut app = procedural_app();
+    app.insert_resource(runtime_art_catalog());
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
@@ -354,6 +362,32 @@ fn v3_forest_app() -> App {
         })),
     });
     app.insert_resource(ResolvedMapSeed(381_654_729));
+    app
+}
+
+fn v3_fort_app() -> App {
+    let mut app = procedural_app();
+    app.insert_resource(MapSettings {
+        grid_radius: 12,
+        level_height: 0.4,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::TemperateGrassland,
+                recipe: V3RecipeSettings::Fort(V3FortSettings),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
+            }),
+        })),
+    });
+    app.insert_resource(ResolvedMapSeed(640_367_719));
     app
 }
 
@@ -412,17 +446,29 @@ fn v2_mountains_app() -> App {
     app
 }
 
-fn v2_caves_app() -> App {
+fn v3_caves_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
         grid_radius: 12,
         level_height: 0.4,
-        terrain: TerrainSettings::Procedural(ProceduralSettings::V2(ProceduralV2Settings {
-            environment: V2EnvironmentSettings::Rocky,
-            recipe: V2RecipeSettings::Caves(CavesSettings {
-                surface_level: 17,
-                cave_floor_level: 6,
-                chamber_count: 12,
+        terrain: TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Single(PatchSpec {
+                environment: V3EnvironmentSettings::Rocky,
+                recipe: V3RecipeSettings::Caves(V3CavesSettings {
+                    surface_level: 17,
+                    cave_floor_level: 6,
+                    chamber_count: 12,
+                }),
+                overlays: Vec::new(),
+                mask: PatchMaskSettings::WholeWorld,
+                edges: PatchEdgesSettings {
+                    east: PatchEdgeContractSettings::WorldBoundary,
+                    south_east: PatchEdgeContractSettings::WorldBoundary,
+                    south_west: PatchEdgeContractSettings::WorldBoundary,
+                    west: PatchEdgeContractSettings::WorldBoundary,
+                    north_west: PatchEdgeContractSettings::WorldBoundary,
+                    north_east: PatchEdgeContractSettings::WorldBoundary,
+                },
             }),
         })),
     });
@@ -563,15 +609,26 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(14_183_726_856_212_867_729)
+        Some(18_228_041_691_196_337_561)
     );
-    assert_eq!(report.map_fingerprint, 17_318_082_348_573_723_024);
+    assert_eq!(report.map_fingerprint, 9_451_210_891_195_990_324);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
     assert_eq!(metrics.clearing_count, 4);
     assert_eq!(metrics.relief, 4);
     assert_eq!(metrics.tree_roots, 53);
+    assert!(metrics.old_growth_roots > 0);
+    assert_eq!(
+        metrics.old_growth_blocker_surfaces,
+        metrics.old_growth_roots.saturating_mul(7)
+    );
+    assert_eq!(
+        metrics.tree_blocker_surfaces,
+        metrics
+            .tree_roots
+            .saturating_add(metrics.old_growth_roots.saturating_mul(6))
+    );
     assert_eq!(metrics.tall_grass_roots, 155);
     assert!(metrics.tall_grass_roots.saturating_mul(2) > metrics.prairie_surfaces);
     assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
@@ -610,18 +667,25 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
             (kind == "GeneratedTallGrass").then_some(*position)
         })
         .collect();
-    assert_eq!(tree_roots, blockers);
+    assert!(tree_roots.is_subset(&blockers));
+    assert_eq!(
+        blockers.len(),
+        usize::try_from(metrics.tree_blocker_surfaces).unwrap_or(usize::MAX)
+    );
     assert!(grass_roots.is_disjoint(&blockers));
     let canopy_roots: BTreeSet<_> = {
         let world = app.world_mut();
-        let mut canopies =
-            world.query::<(&CanopyOccluder, &PresentationOcclusion, Option<&HexTile>)>();
+        let mut canopies = world.query::<(
+            &CanopyOccluder,
+            Option<&PresentationOcclusion>,
+            Option<&HexTile>,
+        )>();
         canopies
             .iter(world)
             .map(|(canopy, occlusion, tile)| {
                 assert!(tile.is_none(), "a tree canopy became terrain footing");
                 assert!(
-                    !occlusion.is_hidden(),
+                    occlusion.is_none_or(|occlusion| !occlusion.is_hidden()),
                     "a freshly spawned canopy carried a stale cutaway reason"
                 );
                 canopy.0
@@ -657,17 +721,82 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
 }
 
 #[test]
-fn v3_forest_missing_required_feature_swatch_fails_presentation_setup() {
+fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
+    let mut app = v3_fort_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    let report = app.world().resource::<GenerationReport>();
+    assert_eq!(report.generator_version, 3);
+    assert_eq!(report.seed, 640_367_719);
+    assert_eq!(report.candidates_evaluated, 8);
+    assert!(report.valid_candidates > 0);
+    assert!(!report.used_fallback);
+    assert_eq!(report.repair_rounds, 0);
+    assert!(report.repair_actions.is_empty());
+    let Some(ProceduralRecipeMetrics::Fort(metrics)) = &report.recipe_metrics else {
+        panic!("V3 Fort should publish exact recipe metrics");
+    };
+    assert_eq!(metrics.gate_count, 2);
+    assert_eq!(metrics.stair_count, 2);
+    assert_eq!(metrics.tower_count, 6);
+    assert_eq!(metrics.independent_gate_routes, 2);
+    assert_eq!(metrics.curtain_height, 5);
+    assert_eq!(metrics.keep_height, 8);
+    assert_eq!(metrics.ordinary_surfaces, report.metrics.reachable_surfaces);
+    assert_eq!(
+        metrics.critical_route_steps,
+        report.metrics.critical_route_steps
+    );
+
+    let anchors = app.world().resource::<MapAnchors>();
+    for name in [
+        "party_start",
+        "hostile_start",
+        "fort_courtyard",
+        "fort_wall_walk",
+        "fort_keep",
+    ] {
+        assert!(
+            anchors.get(&MapAnchorId::from(name)).is_some(),
+            "missing Fort anchor {name}"
+        );
+    }
+    let worked_stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("worked_stone")
+        .expect("Fort fixture should register worked stone");
+    assert!(app
+        .world()
+        .resource::<VoxelMap>()
+        .columns()
+        .any(|(_coord, column)| column.iter().any(|substance| substance == worked_stone)));
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 23);
+    assert!(app.world().resource::<MapViewHint>().is_valid());
+}
+
+#[test]
+fn v3_forest_missing_runtime_art_catalog_fails_before_terrain_publication() {
     let mut app = v3_forest_app();
-    app.insert_resource(substance_table_without_swatch("plant/foliage-mid"));
+    app.world_mut().remove_resource::<RuntimeArtCatalog>();
     enter_gameplay(&mut app);
 
     let failure = app
         .world()
         .get_resource::<GameplaySetupFailure>()
-        .expect("missing Forest presentation colour should publish a setup failure");
+        .expect("missing Forest art graph should publish a setup failure");
     assert!(
-        failure.reason.contains("plant/foliage-mid"),
+        failure.reason.contains("runtime art catalog"),
         "unexpected setup failure: {}",
         failure.reason
     );
@@ -727,8 +856,10 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
         .collect();
     assert_eq!(unchanged_roots, initial_roots);
 
-    let root_coords: BTreeSet<_> = initial_roots
-        .keys()
+    let blocker_coords: BTreeSet<_> = app
+        .world()
+        .resource::<TraversalBlockers>()
+        .iter()
         .map(|position| position.coord)
         .collect();
     let unrelated = {
@@ -737,7 +868,7 @@ fn v3_forest_protects_feature_roots_and_rebuilds_them_deterministically() {
         world
             .resource::<VoxelMap>()
             .columns()
-            .filter(|(coord, _column)| !root_coords.contains(coord))
+            .filter(|(coord, _column)| !blocker_coords.contains(coord))
             .find_map(|(coord, column)| {
                 hex_map::runs(column)
                     .into_iter()
@@ -990,8 +1121,8 @@ fn v2_mountains_publishes_route_anchors_and_geometry_derived_view() {
 }
 
 #[test]
-fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
-    let mut app = v2_caves_app();
+fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
+    let mut app = v3_caves_app();
     enter_gameplay(&mut app);
 
     assert!(
@@ -1010,10 +1141,24 @@ fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
     );
 
     let report = app.world().resource::<GenerationReport>();
-    assert_eq!(report.generator_version, 2);
+    assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 736_283_041);
     assert_eq!(report.candidates_evaluated, 8);
     assert!(!report.used_fallback, "{:?}", report.notes);
+    let Some(ProceduralRecipeMetrics::Caves(CavesReportMetrics {
+        chamber_count,
+        gameplay_lights,
+        optional_dark_floors,
+        minimum_roof_thickness,
+        ..
+    })) = report.recipe_metrics
+    else {
+        panic!("V3 Caves should publish exact recipe metrics");
+    };
+    assert_eq!(chamber_count, 12);
+    assert!(gameplay_lights > 0);
+    assert!(optional_dark_floors > 0);
+    assert!(minimum_roof_thickness >= 3);
 
     let anchors = app.world().resource::<MapAnchors>();
     for name in [
@@ -1073,6 +1218,24 @@ fn v2_caves_publish_exact_interiors_anchors_and_cutaway_roofs() {
     assert!(
         projected_cutaways > 0,
         "exact roof voxels did not project onto rendered runs"
+    );
+    let generated_lights = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .inspect(|(position, light)| {
+                assert!((4..=7).contains(&light.radius));
+                assert!(
+                    floors.iter().any(|(floor, _region)| floor == *position),
+                    "generated gameplay light is not rooted on an interior floor"
+                );
+            })
+            .count()
+    };
+    assert_eq!(
+        generated_lights,
+        usize::try_from(gameplay_lights).unwrap_or(usize::MAX)
     );
 }
 
@@ -1320,15 +1483,27 @@ fn insert_stale_generated_resources(app: &mut App) {
 }
 
 #[test]
-fn unavailable_v3_recipe_fails_closed_and_clears_stale_generated_state() {
+fn invalid_v3_recipe_contract_fails_closed_and_clears_stale_generated_state() {
     let mut app = v3_hills_app();
+    {
+        let mut settings = app.world_mut().resource_mut::<MapSettings>();
+        let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &mut settings.terrain else {
+            panic!("test uses V3 procedural settings");
+        };
+        let V3LayoutSettings::Single(patch) = &mut v3.layout else {
+            panic!("test uses a Single layout");
+        };
+        patch.environment = V3EnvironmentSettings::Rocky;
+    }
     insert_stale_generated_resources(&mut app);
 
     enter_gameplay(&mut app);
 
     let failure = app.world().resource::<GameplaySetupFailure>();
     assert!(
-        failure.reason.contains("V3 recipe Hills is not available"),
+        failure
+            .reason
+            .contains("Hills does not support the Rocky environment"),
         "unexpected setup failure: {}",
         failure.reason
     );
@@ -1415,34 +1590,34 @@ fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
         .collect()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "a generated visual origin below its exact footing is a broken test fixture"
+)]
 fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     let world = app.world_mut();
     let level_height = world.resource::<MapSettings>().level_height;
-    let mut query = world.query::<(Entity, &Name, &Transform, &ChildOf, Option<&HexTile>)>();
+    let mut query = world.query::<(Entity, &Name, &ObjectInstance, &ChildOf, Option<&HexTile>)>();
     query
         .iter(world)
-        .filter(|(_entity, name, _transform, _parent, _tile)| {
+        .filter(|(_entity, name, _instance, _parent, _tile)| {
             matches!(name.as_str(), "GeneratedTree" | "GeneratedTallGrass")
         })
-        .map(|(entity, name, transform, parent, tile)| {
+        .map(|(entity, name, instance, parent, tile)| {
             assert!(
                 tile.is_none(),
                 "feature roots must not become terrain tiles"
             );
-            let surface_boundary = transform.translation.y / level_height;
-            assert!(
-                (surface_boundary - surface_boundary.round()).abs() < 1.0e-4,
-                "feature root height must resolve to one exact voxel boundary"
-            );
-            #[expect(
-                clippy::cast_possible_truncation,
-                reason = "validated map levels are bounded signed integers"
-            )]
-            let level = surface_boundary.round() as i32 - 1;
+            assert!((instance.level_height() - level_height).abs() <= f32::EPSILON);
+            let visual_origin = instance.origin();
+            let level = visual_origin
+                .level
+                .checked_sub(1)
+                .expect("Forest visual origins should sit above their exact footing");
             (
                 entity,
                 name.as_str().to_owned(),
-                TilePos::new(HexCoord::from_world(transform.translation), level),
+                TilePos::new(visual_origin.coord, level),
                 parent.parent(),
             )
         })
@@ -2087,6 +2262,161 @@ fn terrain_edits_below_the_floor_are_ignored() {
     );
 }
 
+#[test]
+fn one_hundred_idle_frames_do_not_rebuild_or_republish_terrain() {
+    let mut app = test_app();
+    enter_gameplay(&mut app);
+
+    let grid_before = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should exist");
+    let tiles_before: BTreeSet<_> = {
+        let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+        tiles.iter(app.world()).collect()
+    };
+    app.world_mut().clear_trackers();
+
+    for _ in 0..100 {
+        app.update();
+    }
+
+    let grid_after = app
+        .world_mut()
+        .query_filtered::<Entity, With<HexGrid>>()
+        .single(app.world())
+        .expect("the grid should still exist");
+    let tiles_after: BTreeSet<_> = {
+        let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+        tiles.iter(app.world()).collect()
+    };
+    assert_eq!(grid_after, grid_before);
+    assert_eq!(
+        tiles_after, tiles_before,
+        "idle terrain reconciliation replaced unchanged run entities"
+    );
+    assert!(
+        !app.world().resource_ref::<VoxelMap>().is_changed(),
+        "an empty terrain-edit stream marked voxel storage changed"
+    );
+    assert!(
+        !app.world()
+            .resource_ref::<SpecialMovementRegions>()
+            .is_changed(),
+        "an empty terrain-edit stream marked special regions changed"
+    );
+}
+
+#[test]
+#[ignore = "manual release-mode localized terrain-edit stress gate"]
+fn one_hundred_localized_terrain_edits_stay_within_the_interactive_budget() {
+    let mut app = procedural_app();
+    enter_gameplay(&mut app);
+
+    let (target, original) = {
+        let map = app.world().resource::<VoxelMap>();
+        let table = app.world().resource::<SubstanceTable>();
+        map.columns()
+            .find_map(|(coord, column)| {
+                let level = column.surface()?;
+                let substance = column.get(level);
+                table
+                    .is_diggable(substance)
+                    .then_some((TilePos::new(coord, level), substance))
+            })
+            .expect("radius-12 Hills should expose diggable surface terrain")
+    };
+    let meshes_before = app.world().resource::<Assets<Mesh>>().len();
+    let materials_before = app.world().resource::<Assets<StandardMaterial>>().len();
+    let mut samples = Vec::with_capacity(100);
+    let mut created_entities = 0_usize;
+    let mut maximum_created = 0_usize;
+    let mut assets_after_warmup = None;
+
+    for index in 0..100 {
+        let before: BTreeSet<_> = {
+            let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+            tiles.iter(app.world()).collect()
+        };
+        if index % 2 == 0 {
+            app.world_mut()
+                .write_message(TerrainEdit::Clear { pos: target });
+        } else {
+            app.world_mut().write_message(TerrainEdit::Set {
+                pos: target,
+                substance: original,
+            });
+        }
+
+        let started = Instant::now();
+        app.update();
+        samples.push(started.elapsed());
+
+        let after: BTreeSet<_> = {
+            let mut tiles = app.world_mut().query_filtered::<Entity, With<HexTile>>();
+            tiles.iter(app.world()).collect()
+        };
+        let created = after.difference(&before).count();
+        created_entities = created_entities.saturating_add(created);
+        maximum_created = maximum_created.max(created);
+        let expected = if index % 2 == 0 {
+            SubstanceId::AIR
+        } else {
+            original
+        };
+        assert_eq!(
+            app.world().resource::<VoxelMap>().get(target),
+            expected,
+            "localized edit {index} did not settle in one update"
+        );
+        if index == 3 {
+            assets_after_warmup = Some((
+                app.world().resource::<Assets<Mesh>>().len(),
+                app.world().resource::<Assets<StandardMaterial>>().len(),
+            ));
+        }
+    }
+
+    samples.sort_unstable();
+    let p95 = samples
+        .get(94)
+        .copied()
+        .expect("the terrain benchmark records exactly 100 samples");
+    let worst = samples
+        .get(99)
+        .copied()
+        .expect("the terrain benchmark records exactly 100 samples");
+    let (meshes_after_warmup, materials_after_warmup) =
+        assets_after_warmup.expect("the terrain benchmark completes its four-edit warmup");
+    let meshes_after = app.world().resource::<Assets<Mesh>>().len();
+    let materials_after = app.world().resource::<Assets<StandardMaterial>>().len();
+    eprintln!(
+        "radius-12 localized terrain edits: p95={p95:?}, worst={worst:?}, \
+         created_total={created_entities}, max_created_per_edit={maximum_created}, \
+         meshes={meshes_before}->{meshes_after_warmup}->{meshes_after}, \
+         materials={materials_before}->{materials_after_warmup}->{materials_after}"
+    );
+    assert_eq!(
+        meshes_after, meshes_after_warmup,
+        "localized terrain edits kept allocating mesh assets after the warmup"
+    );
+    assert_eq!(
+        materials_after, materials_after_warmup,
+        "localized terrain edits kept allocating material assets after the warmup"
+    );
+
+    let (p95_budget, worst_budget) = if cfg!(debug_assertions) {
+        (Duration::from_millis(100), Duration::from_millis(250))
+    } else {
+        (Duration::from_micros(16_700), Duration::from_millis(50))
+    };
+    assert!(
+        p95 < p95_budget && worst < worst_budget,
+        "localized terrain edits exceeded the interaction budget: p95={p95:?}, worst={worst:?}"
+    );
+}
+
 /// Building above the surface leaves the space between as air — a floating platform.
 #[test]
 fn setting_a_voxel_above_the_surface_builds_a_platform() {
@@ -2552,8 +2882,8 @@ fn v2_mountains_teardown_and_reentry_preserve_generated_state() {
 }
 
 #[test]
-fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
-    let mut app = v2_caves_app();
+fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
+    let mut app = v3_caves_app();
     enter_gameplay(&mut app);
 
     assert!(
@@ -2582,9 +2912,18 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
         .resource::<InteriorRegions>()
         .roof_voxels()
         .collect();
+    let first_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
 
     assert!(!first_floors.is_empty());
     assert!(!first_roofs.is_empty());
+    assert!(!first_lights.is_empty());
 
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
@@ -2600,6 +2939,12 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
     assert!(!app.world().contains_resource::<MapViewHint>());
     assert!(!app.world().contains_resource::<GenerationReport>());
     assert!(!app.world().contains_resource::<TerrainReady>());
+    let light_count_after_exit = {
+        let world = app.world_mut();
+        let mut lights = world.query::<&GameplayLight>();
+        lights.iter(world).count()
+    };
+    assert_eq!(light_count_after_exit, 0);
 
     enter_gameplay(&mut app);
 
@@ -2641,9 +2986,18 @@ fn v2_caves_teardown_and_reentry_preserve_exact_interiors() {
         .resource::<InteriorRegions>()
         .roof_voxels()
         .collect();
+    let second_lights: BTreeMap<TilePos, GameplayLight> = {
+        let world = app.world_mut();
+        let mut lights = world.query::<(&TilePos, &GameplayLight)>();
+        lights
+            .iter(world)
+            .map(|(position, light)| (*position, *light))
+            .collect()
+    };
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_floors, first_floors);
     assert_eq!(second_roofs, first_roofs);
+    assert_eq!(second_lights, first_lights);
 }
 
 #[test]

@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a twelve-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a fourteen-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -95,10 +95,11 @@ cargo run -p hex_game --features visual-walk
 ```
 
 Exit code is the mechanical verdict: any stalled step or black frame fails the
-run. `walks/menus.ron` covers the title and lattice-demo loop; `walks/gameplay.ron`
-covers both scenario families and the pause overlay. The capture goes through an
-offscreen render target (the window surface is not readable on macOS/Metal), with
-every UI root pointed at the redirected camera.
+run. `walks/menus.ron` covers the title, Settings, and lattice-demo loop;
+`walks/gameplay.ron` covers New Game, save/Continue restore, and the pause overlay.
+Ability Lab and Raider Mirror provide the focused combat walks. The capture goes
+through an offscreen render target (the window surface is not readable on
+macOS/Metal), with every UI root pointed at the redirected camera.
 
 ## Workspace
 
@@ -106,6 +107,7 @@ every UI root pointed at the redirected camera.
 hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → hex_game
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
+hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -128,10 +130,10 @@ and the renderer does not project gameplay blockers.
 
 **`hex_perception`** owns authoritative illumination, faction sight, and map
 knowledge. It depends on `hex_units` to observe unit positions.
-`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`,
-while `hex_combat` consumes the richer current-observation API only to gate
-gameplay-owned lattice knowledge. Neither gameplay crate may import map-generator
-internals.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`
+for player movement, while `hex_combat` consumes faction-generic projections and the
+richer current-observation API to gate gameplay-owned lattice knowledge, cast anchors,
+and AI. Neither gameplay crate may import map-generator internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
@@ -175,17 +177,22 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **`AppSystems`** (`TickTimers → RecordInput → Update`) orders systems that opt
   into those global `Update` phases; self-contained state/UI systems can run outside.
   **`PausableSystems`** gates gameplay work behind `Pause(false)`;
-  **`GameplaySetup`** (`Resources → Terrain → Actors → Perception → View → Finalize`)
-  orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary *must* use a
-  shared set — `.chain()` cannot express it, and a local chain that looks correct
-  will race. The set boundary also supplies a sync point: `Commands`-spawned entities
-  are not queryable until the queue is applied, so `Actors` sees the tiles `Terrain`
-  made, `Perception` sees the actors, `View` sees the completed projection, and
+  **`GameplaySetup`** (`Resources → Terrain → Actors → Restore → Perception → View
+  → Finalize`) orders `OnEnter(Screen::Gameplay)`. Ordering across a crate boundary
+  *must* use a shared set — `.chain()` cannot express it, and a local chain that
+  looks correct will race. The set boundary also supplies a sync point:
+  `Commands`-spawned entities are not queryable until the queue is applied, so
+  `Actors` sees the tiles `Terrain` made, `Restore` sees the scenario roster,
+  `Perception` sees restored actors, `View` sees the completed projection, and
   `Finalize` sees the required actors.
 - **`PerceptionSystems`** (`PublishAmbient → ResolveIllumination →
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
+  knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
+  Casting and AI must use that publication; neither preview nor a legal-action request
+  authorizes a later command by itself.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.
@@ -206,6 +213,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
+  Elements, substances, spells, and lattices additionally require one matching
+  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
+  admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 
@@ -315,7 +325,9 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 1,236 tests. macOS is the primary
+terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
+not frozen here; the current foundation gate and its exact count are recorded in
+[foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

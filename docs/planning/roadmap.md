@@ -26,20 +26,15 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Complete-party combat integration | Finish party selection, deterministic AI hosting, atomic formation traversal, and multi-party combat behavior | units/combat |
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Outcome flow | victory, defeat and rout screens; what happens after a fight ends; returning to the world | game | <!-- linear: HEX-22 owner: shravan-kumaran -->
-| Trajectories and lingering effects | obstruction-aware spell trajectories once `RunBottom` and line-of-sight land, authored `Path` shapes, area-lingering zones, and dispel | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
-| Magic outside combat | casting in real time; rest has settled recovery, but exploration needs its own input, time-cost, and interruption rules | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
+| Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
+| Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
-| Save and load | versioned `SaveFile` snapshot of domain state; the terrain edit log; restore through the existing Loading flow; then mid-combat saves | game | <!-- linear: HEX-15 owner: shravan-kumaran -->
-| Settings menu, persistence, and audio | in-game options backed by bevy_persistent; window modes; input-map centralization; an audio facade over bevy_kira_audio with volume buses | game | <!-- linear: HEX-16 owner: shravan-kumaran -->
-| Steam packaging and crash reporting | app icon, macOS codesign/notarize lane, Steam depot upload on the release workflow, split debug symbols, opt-in crash reporting via sentry-rust-minidump | game | <!-- linear: HEX-17 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
-| Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
+| Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | Forest authored-object adoption | World-side Forest placements publish shared `ObjectInstance`s while blockers remain a separate exact projection; procedural plant synthesis follows only after exemplar review | map/shared presentation |
 | Structures and Fort | worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation | map |
 | Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
@@ -47,6 +42,24 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Named rule regions | revisit a content-addressable exact-surface overlay when the first region-sensitive spell lands; do not combine biome identity, lighting, and anti-magic into generic tile tags | map/combat |
 | Pre-spawn terrain edit replay | drain a `PendingTerrainEdits` resource after map build and before first spawn, so save-restore and authored pre-battle terrain cost zero respawns | map |
 | Terrain snapshot | a name-keyed `VoxelMap` dump behind a request/response pair, making saves survive generator changes | map |
+
+## Delivered
+
+| Epic | Delivered |
+|---|---|
+| Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
+| Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
+| AI host | Wave 4: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
+| Knowledge-safe AI and casting | Foundation hardening: faction-authorized AI identities, terrain, traversal, turn/effect fields and legal commands; Observed-only cast anchors from preview through authoritative application |
+| Persistent effects | HEX-20: `{source, target, payload, start, end}` vocabulary and combat runtime, including personal-turn Burn and enchantment-bound expiry <!-- linear: HEX-20 owner: shravan-kumaran --> |
+| Party controls | Wave 4: stable six-member strip and number-key selection, camera focus, combat-owned acting selection, Group/Solo mode, and preset/member-slot editing |
+| Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
+| Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
+| Party-combat checkpoint | Wave 4: deterministic 3v3 Party Trial summary/replay, focused Ability Lab and Raider Mirror walks, and the completed human Crossing playtest |
+| Pre-alpha app shell | Wave 5: Maps, focused Demos, and Actions; Party Trial is the hidden New Game default and Close Quarters retired |
+| Exploration resume | Wave 5 / HEX-15: one atomic, build/content-bound slot, saved only from quiescent paused exploration and restored before first perception <!-- linear: HEX-15 owner: shravan-kumaran --> |
+| Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
+| Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 
 ## Sequencing — independent lanes behind one contract
 
@@ -60,11 +73,11 @@ branched from updated `dev` after that contract merged.
 The map owner keeps semantic plans private and publishes exact shared consequences.
 Recipe PRs do not edit gameplay-owned crates.
 
-**Perception lane:** fog presentation and cave lights → movement adapter →
-engagement/targeting/AI adapters. `hex_perception` may observe unit positions, while
-`hex_units` reads
-only `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned
-crate is isolated and reviewed by that owner.
+**Perception lane:** knowledge-safe casting and AI are live. Fog presentation and cave
+lights → movement adapter → engagement/ordinary-targeting/lost-contact adapters remain.
+`hex_perception` may observe unit positions, while `hex_units` reads only
+`LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned crate is
+isolated and reviewed by that owner.
 
 Headless perception remains independent of the map lane. Forest and Fort do not
 depend on combat integration. `Ring7` waits for Waterfall, Forest, and Fort semantic
@@ -84,16 +97,30 @@ The gameplay side delivers in **waves**: a short-lived `wave/N-*` branch collect
 group of ticket PRs in dependency order, a human walks the integrated build once, and
 the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
 
-- **Wave 4 — combat breadth.** Complete-party combat integration, outcome flow,
-  trajectories and lingering zones, magic outside combat, channelling/co-casting,
-  and the gameplay-owned movement/engagement/targeting/AI perception adapters.
-- **Wave 5 — productization.** Save and load, Settings/persistence/audio, Steam
-  packaging and crash reporting, Engine upkeep (pinned to the Bevy 0.20 window).
+- **Wave 3 — the slice becomes a game.** Lattices wired (the damage loop: cast,
+  disables, downed state), Terrain magic, Persistent effects, Knowledge and divination,
+  Encounters. `RunBottom` lands before Terrain magic starts, and Terrain magic starts
+  only after the declarative impact, outcome, and conjuration-admission asks G/H/L have
+  an agreed shape. Other wave work need not wait for those boundary contracts. Damage
+  exists at the end of it.
+- **Wave 4 — complete party combat (delivered).** Algorithm-neutral AI hosting, party
+  controls, formation traversal, outcomes, Renewal, Rest, and one integrated 3v3
+  scenario through a mandatory human playtest checkpoint. Casting UX and combat
+  readability already landed in Wave 3. General real-time casting, Channel,
+  co-casting, initiative, action economy, and rout remain future gameplay decisions.
+  Perception adapters and `RunBottom`-dependent obstruction/trajectory work are
+  optional satellites, not retroactive Wave 4 gates.
+- **Wave 5 — pre-alpha continuity (delivered).** A stable app shell and default New Game,
+  one disposable exploration-resume slot, persistent settings and audio/input seams,
+  and release-artifact scaffolding. This wave gets ahead of productization without
+  promising save compatibility or live storefront, signing, telemetry, or crash
+  reporting. Engine upkeep remains parked for the Bevy 0.20 window and is not a Wave 5
+  gate.
 
-Save and load sits in wave 5 rather than wave 3 deliberately. A production save may not
-depend on regenerating a legacy seed, which makes the terrain snapshot (boundary ask
-D2) and pre-spawn replay (D1) prerequisites — so saves wait for the world lane rather
-than blocking on it.
+The Wave 5 resume slot deliberately uses explicit seeded regeneration and refuses
+generator/content drift. It is a development convenience, not the production save
+format. Generator-independent terrain snapshots (boundary ask D2) and pre-spawn edit
+replay (D1) remain prerequisites for durable saves, but do not block this scaffold.
 
 The casting contract those waves implement — the announce model, the legality ladder,
 volumes, and persistent effects — is [casting.md](../systems/casting.md).
@@ -106,43 +133,46 @@ today, and its status, is [contracts.md](../contracts.md).
 
 ## The epics, in detail
 
+### Pre-alpha app shell and default game
+
+The development-friendly three-column title deck now has Maps, focused Demos, and
+Actions lanes. Party Trial is the one integrated default game and launches through
+New Game rather than appearing beside diagnostic fixtures. Ability Lab and Raider
+Mirror remain visible focused combat demos; Close Quarters and the Combat category
+are retired. Continue and Settings are active, while starting a New Game never reads
+or overwrites the resume slot.
+
 ### Save and load
 
-A hand-shaped, versioned serde `SaveFile` in `hex_game/src/save/` — domain
-snapshot, not ECS reflection (the ecosystem consensus; see the audit's
-research section). Contents: scenario reference, world seed + settings digest
-+ the terrain-edit log (substances by name), content digests for legible
-drift refusal, units (id, seat, faction, `TilePos`, body, lattice trio,
-initiative), optional combat state including any pending decision, knowledge,
-campaign flags. Restore rides the existing Loading flow. World restoration is
-seeded-regen + edit replay until the map-side terrain snapshot lands
-([boundary.md](boundary.md), ask D2) — which is the generator-change-proof
-primary format. Floats never enter a save: positions are `TilePos`, spans are
-re-derived.
+Wave 5 ships one hand-shaped, versioned, atomic resume file through
+`crates/hex_game/src/save.rs` — domain state, not ECS reflection. It is written only
+from paused, quiescent exploration and records the scenario reference, explicit
+resolved seed and generator version, coarse scenario/content digests, and the party's
+exploration state. Restore rides the existing Loading flow. Corrupt or incompatible
+data is refused visibly rather than partially loaded. Combat state, migrations,
+durable compatibility, and a terrain edit log are outside this scaffold; the resume
+slot can be discarded between builds.
 
 ### Settings menu, persistence, and audio
 
-The player-facing options surface: an in-game settings menu whose values
-persist across sessions via bevy_persistent; window modes (fullscreen
-toggle, resolution) beside the existing `present_mode`; input-map
-centralization so keys stop being hardcoded in systems (rebinding-ready,
-not yet rebindable); and audio behind a small facade over bevy_kira_audio
-with music/SFX/UI volume buses wired to the menu — trim the unused
-`bevy_audio` feature in the same change. Versions and sources for every
-crate choice are in [production-audit.md](production-audit.md).
+The pre-alpha options surface persists display/window presentation and music, SFX,
+and UI volume values across sessions. Input actions are centralized so systems stop
+owning raw keys, but there is no rebinding UI. Audio sits behind music/SFX/UI buses
+ready for later content; Wave 5 does not ship audio. The frozen production audit
+remains the research record, not a requirement to adopt every integration now.
 
 ### Steam packaging and crash reporting
 
-The ship lane: an app icon; a macOS codesign/notarize lane (arm64 — Rosetta
-retires before any plausible release window); a Steam depot upload job
-stacked on the existing tag-triggered release workflow; split debug symbols
-retained from release builds; and opt-in crash reporting via
-sentry-rust-minidump. Independently landable pieces — the audit's research
-section carries the reasoning per pick.
+Wave 5 builds use an app identity and icon, normalized release artifact names and
+layout, and retained debug symbols. Release documentation reserves the future
+credential and configuration slots for signing, Steam upload, and crash reporting.
+Live integrations, codesigning, notarization, upload, consent UI, and telemetry remain
+later productization work.
 
 ### Engine upkeep
 
-The audit budgets exactly one Bevy upgrade before any release window: 0.20
+This is explicitly outside Wave 5. The audit budgets exactly one Bevy upgrade before
+any release window: 0.20
 (~Q4 2026, BSN asset files and assets-as-entities are the churn to watch),
 landed together with the long-deferred feature trim (`default-features =
 false` plus the collections actually used) so both risky changes share one
@@ -170,9 +200,11 @@ The decision-complete contract is
 ### Spatial perception
 
 Remaining perception work follows
-[the perception contract](../systems/perception.md): presentation and each
+[the perception contract](../systems/perception.md): presentation and each remaining
 gameplay-owned adapter stay separate, while spatial observation and hidden lattice
-contents remain distinct information channels.
+contents remain distinct information channels. Casting and AI already use the live
+faction authority; fog/picking, unknown-frontier movement, engagement, ordinary
+attacks, and lost-contact search do not.
 
 ### The map rows
 

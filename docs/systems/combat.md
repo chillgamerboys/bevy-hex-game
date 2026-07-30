@@ -28,6 +28,51 @@ title screen" is unrepresentable rather than merely unlikely.
 The two thresholds differ on purpose. Without a margin, a unit sitting exactly on the
 boundary would flip in and out of combat every frame it drifted.
 
+## Tactical HUD and role resolution
+
+Gameplay UI is one safe frame with 12px viewport margins and 8px inter-panel gaps:
+a 224px party rail, a 300px inspector, a 72px top turn rail, and a 132px bottom
+action dock. The center bands use those side widths as insets, so 1280×720 and
+1920×1080 have no independently positioned panels competing for the same pixels.
+Noninteractive regions pass pointer input through to the world; opaque action and
+history panels catch clicks intended for their controls.
+
+The HUD is mode-aware:
+
+- Exploring shows the party rail, selected-ally lattice, formation editor, Group/Solo,
+  presets, Rest, and the exploration hint. Combat-only spell actions are absent.
+- A player turn shows the compact initiative rail, party rail, active ally lattice,
+  movement and action budget, spells, and a visible End Turn button.
+- A hostile turn says `ENEMY TURN`, keeps a labeled `SELECTED ALLY` lattice for
+  inspection, and replaces action buttons with `PLAYER COMMANDS LOCKED`.
+- A damage or restoration decision replaces ordinary actions with its exact role,
+  owner and target, quota, Clear, and Confirm. Hiding ordinary HUD chrome cannot hide
+  these required controls.
+
+`hex_game::readouts::GameplayUiContext` is the presentation-private projection that
+keeps acting unit, selected ally, caster, decision owner, decision target, aimed
+target, and retained target separate. No panel applies a precedence rule to guess
+which unit is “mine.” Every binding selects one explicit role:
+`ACTIVE ALLY`, `SELECTED ALLY`, `DAMAGE CHOICE`, `RESTORE TARGET`, `AIM TARGET`, or
+`PINNED TARGET`. Identity lines always include faction and unit identity, such as
+`ALLY 2 · RAIDER #1` or `HOSTILE · RAIDER #4`.
+
+Only the acting unit and current target receive short world badges. A hostile target
+is retained while an aim moves over empty terrain only as `PINNED TARGET`; it is
+cleared when aim is cancelled, its caster or turn changes, combat exits, or the target
+is no longer valid. Hostile lattice contents still pass exclusively through faction
+knowledge.
+
+The default combat feed is the latest three structured events. `L` opens and closes
+the bounded full-history drawer; command refusals use high-priority styling and remain
+in the same 64-event history as actions, Rest, revival, and encounter outcomes.
+
+The projection asserts rather than conceals producer disagreements. On player turns,
+actor, selected unit, and caster must agree. On hostile turns, player casting cannot
+remain enabled. Decision headings must name owner and affected target. A violation is
+a state-production defect to fix and cover, not a reason for the UI to choose another
+precedence rule.
+
 ## A turn
 
 One unit holds a `Turn` at a time. It carries a movement budget and whether the action
@@ -48,11 +93,11 @@ simulation command except a `ChooseDisables` answer for that exact defender. Inp
 emitters also stop producing movement, casts, end-turn commands, and AI actions while
 the decision is open, keeping the refusal log quiet during ordinary play.
 
-A `Player` defender uses the own-lattice panel: only live cells are buttons, additional
-picks stop at the owed quota, Clear removes the local selection, and Confirm or `ENTER`
-emits the answer. If every live cell is owed, all are preselected but confirmation is
-still explicit. Non-player defenders use the deterministic policy and issue the answer
-under their own `ControlOwner`.
+A `Player` defender uses the explicitly labeled ally lattice: only live cells are
+buttons, additional picks stop at the owed quota, and the bottom decision dock's Clear
+and Confirm controls (or `ENTER`) answer it. If every live cell is owed, all are
+preselected but confirmation is still explicit. Non-player defenders use the
+deterministic policy and issue the answer under their own `ControlOwner`.
 
 This is not the `Pause` state. Camera and ordinary UI keep running. `H` hides ordinary
 readouts but deliberately leaves an active decision lattice and its controls visible.
@@ -64,10 +109,77 @@ strings. The combat log applies faction disclosure when it ingests each event, s
 divination cannot rewrite what an older line was allowed to reveal.
 
 The one-decision seam is also an authoring boundary: a spell may contain at most one
-non-targeted `DisableHexes` effect, because two would otherwise overwrite each other's
-defender choice. Damage commands aimed at an already downed unit are refused before
-spending action or mana; non-damaging inspection such as Reveal remains legal because
-the retained lattice is the future restoration target.
+exact-cell decision effect across non-targeted `DisableHexes` and `RestoreHexes`,
+because two would otherwise overwrite each other's choice. Damage commands aimed at an
+already downed unit are refused before spending action or mana; non-damaging inspection
+such as Reveal remains legal because the retained lattice is the restoration target.
+
+### Terminal outcomes retain the battlefield
+
+After commands apply, outstanding decisions settle, and newly spent lattices become
+`Downed`, combat counts active factions. A surviving player side with no active
+hostile is Victory; no active player is Defeat, including simultaneous elimination.
+The result is emitted once and stored in `EncounterResolution`.
+
+That resource gates the same `PausableSystems` set as ordinary pause, freezing
+movement, casting, AI, effects, command application, and turns while the world remains
+visible. Outcome UI runs outside the gate. Victory continues into Exploring. Defeat
+can rebuild the retained scenario snapshot with its original resolved seed, or return
+to the title screen.
+
+### Revival waits for a round boundary
+
+`RestoreHexes` opens `ChooseRestores` for the caster, naming the target and quota.
+The answer is a command containing exact target cells; every coordinate must be a
+distinct disabled cell on that target, and the answer count is the smaller of the
+authored amount and the cells currently disabled. Restoring at least one cell removes
+`Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
+it rejoins the initiative sort by initiative then stable `UnitId`.
+
+### Focused automation and Party Trial
+
+`CombatSummary` is the session-scoped, serde-capable verification artifact. It records
+the highest round reached; successful commands by stable unit and semantic kind; exact
+AI dispatch traces (profile, algorithm, observation, canonical legal actions,
+fingerprint, selection, and emitted command); aggregate moves, casts, strikes,
+decisions, and explicit end turns; raw, prevented, and applied disables; restored
+cells, revivals, and downings; the ordered structured event stream; and the final
+outcome. It resets with the gameplay session.
+
+The automated UI suite deliberately does not use the authored Crossing:
+
+- **Ability Lab** is a flat 2v1 with one player hedge-mage, one player wolf, and one
+  hostile raider. Two allies are the minimum honest fixture for friendly damage,
+  downing, Renewal, and next-round revival. The same walk covers Scrying Eye,
+  aim/pin/confirm, damage decisions, refusal history, and the wolf's no-spell turn.
+- **Raider Mirror** is a flat 1v1 with the same archetype on opposite factions. It is
+  the focused regression fixture for a hostile raider ever being presented as the
+  selected or active allied raider.
+
+Both use `config/worlds/flat-combat.ron`, whose empty Perlin recipe produces one
+connected level surface. Run both walks at the minimum review size:
+
+```sh
+HEX_WALK_SCRIPT=walks/ability_lab.ron \
+HEX_WALK_OUT=.context/walks/ability-lab-1280 \
+HEX_WALK_SIZE=1280x720 \
+cargo run --release --features visual-walk
+
+HEX_WALK_SCRIPT=walks/raider_mirror.ron \
+HEX_WALK_OUT=.context/walks/raider-mirror-1280 \
+HEX_WALK_SIZE=1280x720 \
+cargo run --release --features visual-walk
+```
+
+The shipped **Party Trial** remains the full 3v3 integration and human test: matching
+hedge-mage, raider, and wolf rosters approach the authored Crossing from opposite
+banks. Its headless simulation replay still compares party routes, AI observations,
+legal-action fingerprints, commands, events, turn order, positions, summary, and
+outcome. The release playtest alone owns formation editing, bridge compression,
+reformation, six-unit readability, and the interaction between terrain and combat.
+The Wave 4 gate passed after that walk exercised Renewal on a downed ally and verified
+next-round initiative return. Party Trial keeps the same coverage as the persistent
+human regression walk for later waves.
 
 ## Saying no out loud
 
@@ -312,6 +424,12 @@ logical position can advance at each completed leg and interruption has somewher
 to put the piece. `HexPathingLine` and `MovingTo` share cumulative, world-space leg
 durations, so climbs take their actual 3D travel time while every waypoint still maps
 back to its surface.
+
+Exploration Group movement applies that same contract to every player member. One
+exact-path `MoveParty` is validated in full before any member receives presentation,
+and interruption reconciles every in-flight member before initiative is built.
+Rotation, bottleneck compression, reformation, and Solo behavior are specified in
+[party.md](party.md).
 
 ## The high ground
 

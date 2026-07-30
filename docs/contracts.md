@@ -46,10 +46,10 @@ than agreed, the fallback the gameplay side ships without it is in
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
 | `IlluminationLevel` / `ExteriorIllumination` — gameplay illumination, never sampled from the renderer | world | perception | live | [systems/perception.md](systems/perception.md) |
-| `GameplayLight` + derived `LightDomain` — consumer live; generated cave sources pending | world | perception | **partial** | [systems/perception.md](systems/perception.md) |
+| `GameplayLight` + derived `LightDomain` — fixed V3 cave sources published and consumed | world | perception | live | [systems/perception.md](systems/perception.md) |
 | `SightProfile` / `SightBand` — sight limits per illumination tier | perception | perception | live | [systems/perception.md](systems/perception.md) |
-| `LocalMapKnowledge` — publisher live; movement adapter pending | perception | `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
-| `FactionMapKnowledge` current-unit observations gate lattice views | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
+| `LocalMapKnowledge` — faction-generic Observed/Remembered traversal projection; AI consumer live, player movement adapter pending | perception | `hex_combat` / `hex_units` | **partial** | [systems/perception.md](systems/perception.md) |
+| `FactionMapKnowledge` — current observations gate hostile lattice views, cast anchors, and AI identities | perception | `hex_combat` | live | [systems/perception.md](systems/perception.md) |
 | `KnowledgeSource` / `KnowledgeExpiry` — how a lattice fact was learned and when it stops being true | core | combat | live | [systems/combat.md](systems/combat.md) |
 | `CanopyOccluder` — root-keyed generated-feature marker for current camera cutaway | world | presentation | live | [systems/perception.md](systems/perception.md) |
 | `PresentationOcclusion` — cave/canopy reasons live; fog reason pending | shared | presentation | **partial** | [systems/perception.md](systems/perception.md) |
@@ -59,11 +59,11 @@ than agreed, the fallback the gameplay side ships without it is in
 
 | Contract | Publisher | Consumer | Status | Specified in |
 |---|---|---|---|---|
-| `GameplaySetup` — `Resources → Terrain → Actors → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
+| `GameplaySetup` — `Resources → Terrain → Actors → Restore → Perception → View → Finalize` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
 | `PerceptionSystems` — headless phases through `PublishKnowledge` | core | perception | live | [systems/perception.md](systems/perception.md) |
 | `PerceptionSystems::ApplyPresentation` — fog projection phase | core | perception | reserved | [systems/perception.md](systems/perception.md) |
 | `AppSystems`, `PausableSystems` | core | all | live | [`CLAUDE.md`](../CLAUDE.md) |
-| `CombatSystems` — `Act → Apply → Advance` | gameplay | gameplay | live | [`hex_combat/src/lib.rs`](../crates/hex_combat/src/lib.rs) |
+| Same-frame combat knowledge — `PublishKnowledge → spatial lattice sync → Act → Apply → Resolve → Advance` | perception / gameplay | combat / AI | live | [systems/ai.md](systems/ai.md) |
 
 ## Content
 
@@ -76,15 +76,23 @@ than agreed, the fallback the gameplay side ships without it is in
 | `substances.ron` — substance names, exact palette references, solidity, diggability | world | both | live | [development/config.md](development/config.md) |
 | World files, lighting profiles | world | world | live | [development/config.md](development/config.md) |
 | `spells.ron`, `elements.ron` — requirements, axes, targeting, effects | gameplay | gameplay | live | [development/config.md](development/config.md) |
+| `AcceptedContentRevision` — one deterministic semantic identity across elements, substances, spells, and lattices; Loading requires it | shared loader boundary | game setup | live | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
+| `lattices.ron` — every authored archetype is one contiguous hex arrangement; errors name the archetype | gameplay | lattice spawning | live | [development/config.md](development/config.md#writing-a-lattice) |
 | `combat.ron` — engagement, budgets, policy knobs | gameplay | gameplay | live | [development/config.md](development/config.md) |
-| `scenarios.ron` — the scenario list | shared | both | live | [development/config.md](development/config.md) |
+| `scenarios.ron` — hidden New Game default plus visible Map and focused Demo fixtures | shared | both | live | [development/config.md](development/config.md) |
 | `encounters/*.ron` — rosters by archetype, and where each unit starts | shared | both | live | [development/config.md](development/config.md) |
 | Terrain-response table — authored stable names resolved to `(ElementId, power, SubstanceId)` | world | world | **agreed** | [planning/boundary.md](planning/boundary.md) G |
 | `Substance::conjurable` plus spell-reference validation | world policy / gameplay loader | gameplay | **agreed** | [planning/boundary.md](planning/boundary.md) L |
 
 Cross-file references between the two content domains are resolved and validated by
-[`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets a spell name a substance without either side
-guessing.
+[`ContentIndex`](../crates/hex_assets/src/content_index.rs) at load, which is what lets
+a spell name a substance without either side guessing. `ContentIndex` and
+`LatticeLibrary` retain their last valid values across a rejected edit, but
+deterministic canonical source fingerprints prevent those retained values from
+masquerading as the new revision. Loading proceeds only when every raw catalog,
+direct catalog, and both derived tables match one published
+`AcceptedContentRevision`; resource presence and Bevy change ticks are not readiness
+signals.
 
 ## What each side commits to
 
