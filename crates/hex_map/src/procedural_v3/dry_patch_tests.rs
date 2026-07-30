@@ -620,9 +620,11 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
     let mut outlets = BTreeSet::new();
     let mut liquid_approaches = BTreeSet::new();
     for edge in context.shared_edges() {
-        let Some((source, port)) = edge.liquid_port() else {
+        let Some(liquid) = edge.liquid_port() else {
             continue;
         };
+        let source = liquid.is_source;
+        let port = liquid.port;
         let boundary = port
             .lanes
             .iter()

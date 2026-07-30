@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use hex_assets::{HexObjectRotation, ObjectAssetId, ObjectCategory};
 use hex_core::{BiomeRegionId, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
-use super::layout::{ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidPort};
+use super::layout::{
+    ResolvedEdgeContract, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+};
 pub(crate) use super::liquid::LiquidPlan;
 use super::liquid::{LiquidBodyId, LiquidIssue};
 use super::volume::{NonSolidFill, SurfaceAccess, VolumeElement, VolumeIssue, VolumePlan};
@@ -190,14 +192,27 @@ impl GeneratedWorldPlan {
     /// Checks recipe-independent relationships across every semantic layer.
     #[must_use]
     pub(crate) fn validate(&self) -> Vec<WorldValidationIssue> {
+        self.validate_internal(true)
+    }
+
+    /// Checks semantic layers after the caller has validated the authoritative layout.
+    ///
+    /// Patch composition uses this for an isolated fragment projection whose
+    /// coordinates and complete-world radius do not form a standalone layout.
+    #[must_use]
+    pub(crate) fn validate_semantic_layers(&self) -> Vec<WorldValidationIssue> {
+        self.validate_internal(false)
+    }
+
+    fn validate_internal(&self, validate_layout: bool) -> Vec<WorldValidationIssue> {
         let mut issues = Vec::new();
 
-        if let Err(error) = self.layout.validate() {
-            issues.extend(
-                error.issues().iter().map(|issue| {
+        if validate_layout {
+            if let Err(error) = self.layout.validate() {
+                issues.extend(error.issues().iter().map(|issue| {
                     WorldValidationIssue::new(WorldIssueCode::Layout, issue.to_string())
-                }),
-            );
+                }));
+            }
         }
         if self.layout.footprint != self.volume.mask {
             issues.push(WorldValidationIssue::new(
@@ -273,7 +288,12 @@ impl GeneratedWorldPlan {
                     }
                     validate_dry_seam_contacts(*edge_id, edge, &runs_by_coord, issues);
                 }
-                ResolvedLiquidPort::Directed { source, sink, port } => {
+                ResolvedLiquidPort::Directed {
+                    source,
+                    sink,
+                    port,
+                    elevation,
+                } => {
                     let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
                     let source_is_second = *source == edge.second.0 && *sink == edge.first.0;
                     if !source_is_first && !source_is_second {
@@ -293,17 +313,30 @@ impl GeneratedWorldPlan {
                             ));
                             continue;
                         }
-                        if !level_in_edge_band(crossing.source.level, edge)
-                            || !level_in_edge_band(crossing.target.level, edge)
-                        {
+                        let level_valid = match elevation {
+                            ResolvedLiquidElevation::EdgeBand => {
+                                level_in_edge_band(crossing.source.level, edge)
+                                    && level_in_edge_band(crossing.target.level, edge)
+                            }
+                            ResolvedLiquidElevation::Exact(level) => {
+                                crossing.source.level == *level && crossing.target.level == *level
+                            }
+                        };
+                        if !level_valid {
+                            let expected = match elevation {
+                                ResolvedLiquidElevation::EdgeBand => format!(
+                                    "elevation band {}..={}",
+                                    edge.elevation.min, edge.elevation.max
+                                ),
+                                ResolvedLiquidElevation::Exact(level) => {
+                                    format!("exact level {level}")
+                                }
+                            };
                             issues.push(WorldValidationIssue::new(
                                 WorldIssueCode::Liquid,
                                 format!(
-                                    "liquid seam {edge_id:?} crossing {:?} -> {:?} leaves elevation band {}..={}",
-                                    crossing.source,
-                                    crossing.target,
-                                    edge.elevation.min,
-                                    edge.elevation.max
+                                    "liquid seam {edge_id:?} crossing {:?} -> {:?} leaves {expected}",
+                                    crossing.source, crossing.target
                                 ),
                             ));
                             continue;
@@ -340,6 +373,93 @@ impl GeneratedWorldPlan {
                         &runs_by_coord,
                         issues,
                     );
+                }
+            }
+        }
+        self.validate_boundary_liquid_outlets(issues);
+    }
+
+    fn validate_boundary_liquid_outlets(&self, issues: &mut Vec<WorldValidationIssue>) {
+        for ((source, side), outlet) in &self.layout.boundary_liquid_outlets {
+            let declared_terminals = outlet
+                .lanes
+                .iter()
+                .map(|(inside, _)| TilePos::new(*inside, outlet.level))
+                .collect::<BTreeSet<_>>();
+            let actual_terminals = self
+                .layout
+                .patches
+                .get(source)
+                .map(|patch| {
+                    self.liquids
+                        .bodies
+                        .values()
+                        .flat_map(|plan| &plan.nodes)
+                        .filter_map(|(position, node)| {
+                            (patch.mask.contains(&position.coord)
+                                && !self
+                                    .layout
+                                    .footprint
+                                    .contains(&side.neighbor(position.coord))
+                                && node.state == super::liquid::LiquidFlowState::Still
+                                && node.downstream.is_none())
+                            .then_some(*position)
+                        })
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            if actual_terminals != declared_terminals {
+                issues.push(WorldValidationIssue::new(
+                    WorldIssueCode::Liquid,
+                    format!(
+                        "boundary liquid outlet {source:?}/{side:?} terminals must exactly equal its declared lanes (actual {actual_terminals:?}, declared {declared_terminals:?})"
+                    ),
+                ));
+            }
+            for (inside_coord, outside_coord) in &outlet.lanes {
+                let inside = TilePos::new(*inside_coord, outlet.level);
+                let matches = self
+                    .liquids
+                    .bodies
+                    .iter()
+                    .filter_map(|(body, plan)| {
+                        plan.nodes.get(&inside).copied().map(|node| (*body, node))
+                    })
+                    .collect::<Vec<_>>();
+                let [(body, node)] = matches.as_slice() else {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Liquid,
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} requires one exact terminal at {inside:?}, found {}",
+                            matches.len()
+                        ),
+                    ));
+                    continue;
+                };
+                if node.state != super::liquid::LiquidFlowState::Still || node.downstream.is_some()
+                {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Liquid,
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} terminal {inside:?} in body {body:?} must be Still with no downstream"
+                        ),
+                    ));
+                }
+                let outside_nodes = self
+                    .liquids
+                    .bodies
+                    .values()
+                    .flat_map(|plan| plan.nodes.keys())
+                    .filter(|position| position.coord == *outside_coord)
+                    .copied()
+                    .collect::<Vec<_>>();
+                if !outside_nodes.is_empty() {
+                    issues.push(WorldValidationIssue::new(
+                        WorldIssueCode::Liquid,
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} must not materialize outside nodes at {outside_coord:?}: {outside_nodes:?}"
+                        ),
+                    ));
                 }
             }
         }
@@ -1002,9 +1122,9 @@ mod tests {
 
     use super::*;
     use crate::procedural_v3::layout::{
-        HexSide, LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
-        ResolvedElevationBand, ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
-        ResolvedWalkerPorts,
+        HexSide, LayoutKind, PatchId, ResolvedBoundaryLiquidOutlet, ResolvedEdgeContract,
+        ResolvedEdgeId, ResolvedEdgeReference, ResolvedElevationBand, ResolvedLayoutPlan,
+        ResolvedLiquidPort, ResolvedPatch, ResolvedPort, ResolvedWalkerPorts,
     };
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode};
     use crate::procedural_v3::volume::{
@@ -1045,6 +1165,7 @@ mod tests {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let mut volume = VolumePlan::new(mask);
         volume.columns.insert(
@@ -1468,6 +1589,7 @@ mod tests {
                         source: PatchId(0),
                         sink: PatchId(1),
                         port,
+                        elevation: ResolvedLiquidElevation::EdgeBand,
                     },
                     approach_depth: 1,
                     boundary_pairs,
@@ -1477,6 +1599,7 @@ mod tests {
                     ]),
                 },
             )]),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let mut volume = VolumePlan::new(footprint);
         for coord in [first_low, first_high, second_low, second_high] {
@@ -1614,6 +1737,134 @@ mod tests {
     }
 
     #[test]
+    fn exact_liquid_seams_ignore_walker_band_but_require_their_exact_level() {
+        let mut exact = two_patch_liquid_plan();
+        let edge = exact
+            .layout
+            .shared_edges
+            .get_mut(&ResolvedEdgeId(0))
+            .expect("the seam fixture has one edge");
+        edge.elevation = ResolvedElevationBand {
+            preferred: 15,
+            min: 14,
+            max: 16,
+        };
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut edge.liquid else {
+            panic!("the seam fixture has directed liquid");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(3);
+        assert_eq!(
+            seam_issues(&exact),
+            Vec::new(),
+            "exact liquid authority must remain independent of the walker elevation band"
+        );
+
+        let edge = exact
+            .layout
+            .shared_edges
+            .get_mut(&ResolvedEdgeId(0))
+            .expect("the seam fixture has one edge");
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut edge.liquid else {
+            panic!("the seam fixture has directed liquid");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(4);
+        assert!(seam_issues(&exact)
+            .iter()
+            .any(|issue| issue.detail.contains("exact level 4")));
+    }
+
+    #[test]
+    fn boundary_liquid_terminals_are_exact_and_never_materialize_outside() {
+        let mut plan = two_patch_liquid_plan();
+        let inside = BTreeSet::from([
+            hex_core::HexCoord::new_cubic(1, 0, -1),
+            hex_core::HexCoord::new_cubic(1, 1, -2),
+        ]);
+        let lanes = inside
+            .iter()
+            .copied()
+            .map(|coord| (coord, HexSide::East.neighbor(coord)))
+            .collect::<BTreeSet<_>>();
+        plan.layout.boundary_liquid_outlets.insert(
+            (PatchId(1), HexSide::East),
+            ResolvedBoundaryLiquidOutlet {
+                source: PatchId(1),
+                side: HexSide::East,
+                lanes: lanes.clone(),
+                inward_approach: inside.clone(),
+                approach_depth: 1,
+                level: 3,
+            },
+        );
+        let boundary_issues = |plan: &GeneratedWorldPlan| {
+            let mut issues = Vec::new();
+            plan.validate_boundary_liquid_outlets(&mut issues);
+            issues
+        };
+        assert_eq!(boundary_issues(&plan), Vec::new());
+
+        let terminal = TilePos::new(*inside.first().expect("two terminal lanes"), 3);
+        let mut moving = plan.clone();
+        liquid_node_mut(&mut moving, terminal).state = LiquidFlowState::Current;
+        assert!(boundary_issues(&moving)
+            .iter()
+            .any(|issue| issue.detail.contains("must be Still")));
+
+        let mut missing = plan.clone();
+        missing
+            .liquids
+            .bodies
+            .get_mut(&LiquidBodyId(0))
+            .expect("the fixture liquid body")
+            .nodes
+            .remove(&terminal);
+        assert!(boundary_issues(&missing)
+            .iter()
+            .any(|issue| issue.detail.contains("requires one exact terminal")));
+
+        let mut undeclared = plan.clone();
+        undeclared
+            .liquids
+            .bodies
+            .get_mut(&LiquidBodyId(0))
+            .expect("the fixture liquid body")
+            .nodes
+            .insert(
+                TilePos::new(terminal.coord, terminal.level.saturating_add(1)),
+                LiquidNode {
+                    state: LiquidFlowState::Still,
+                    downstream: None,
+                },
+            );
+        assert!(boundary_issues(&undeclared).iter().any(|issue| issue
+            .detail
+            .contains("must exactly equal its declared lanes")));
+
+        let outside = lanes
+            .iter()
+            .next()
+            .map(|(_, outside)| TilePos::new(*outside, 3))
+            .expect("two outlet lanes");
+        let mut escaped = plan;
+        escaped.liquids.bodies.insert(
+            LiquidBodyId(99),
+            LiquidBodyPlan {
+                material: FillMaterialRole::Water,
+                nodes: BTreeMap::from([(
+                    outside,
+                    LiquidNode {
+                        state: LiquidFlowState::Still,
+                        downstream: None,
+                    },
+                )]),
+            },
+        );
+        assert!(boundary_issues(&escaped)
+            .iter()
+            .any(|issue| issue.detail.contains("must not materialize outside nodes")));
+    }
+
+    #[test]
     fn liquid_seams_reject_reversed_extra_and_dry_crossings() {
         let plan = two_patch_liquid_plan();
         let first_low = TilePos::new(hex_core::HexCoord::ORIGIN, 3);
@@ -1722,6 +1973,28 @@ mod tests {
     fn complete_stacked_plan_cross_checks_every_exact_layer() {
         let plan = complete_stacked_plan();
         assert_eq!(plan.validate(), Vec::new());
+    }
+
+    #[test]
+    fn isolated_fragment_validation_skips_only_the_complete_layout_contract() {
+        let mut plan = complete_stacked_plan();
+        plan.layout.grid_radius = 55;
+
+        assert!(plan
+            .validate()
+            .iter()
+            .any(|issue| issue.code == WorldIssueCode::Layout));
+        assert_eq!(
+            plan.validate_semantic_layers(),
+            Vec::new(),
+            "an authorized composite fragment keeps world coordinates while its semantic layers remain fully checked"
+        );
+
+        plan.volume.surfaces.clear();
+        assert!(
+            !plan.validate_semantic_layers().is_empty(),
+            "skipping the synthetic layout contract must not skip volume or cross-layer checks"
+        );
     }
 
     #[test]

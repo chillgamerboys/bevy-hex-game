@@ -242,6 +242,7 @@ impl LocalPatchFrame {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         Ok(GeneratedWorldPlan {
             layout,

@@ -886,14 +886,20 @@ fn local_liquid_ports(
     patch
         .shared_edges()
         .filter_map(|edge| {
-            edge.liquid_port().map(|(source, port)| {
+            edge.liquid_port().map(|liquid| {
+                let (minimum_level, maximum_level) = match liquid.elevation {
+                    super::layout::ResolvedLiquidElevation::EdgeBand => {
+                        (edge.minimum_level(), edge.maximum_level())
+                    }
+                    super::layout::ResolvedLiquidElevation::Exact(level) => (level, level),
+                };
                 (
                     edge.id,
                     edge.side,
-                    source,
-                    port,
-                    edge.minimum_level(),
-                    edge.maximum_level(),
+                    liquid.is_source,
+                    liquid.port,
+                    minimum_level,
+                    maximum_level,
                 )
             })
         })
@@ -2408,8 +2414,16 @@ fn validate_resolved_liquid_ports(
 
     for edge in patch.shared_edges() {
         shared_boundary.extend(edge.boundary_pairs().into_iter().map(|(inside, _)| inside));
-        let Some((source, port)) = edge.liquid_port() else {
+        let Some(liquid) = edge.liquid_port() else {
             continue;
+        };
+        let source = liquid.is_source;
+        let port = liquid.port;
+        let (minimum_level, maximum_level) = match liquid.elevation {
+            super::layout::ResolvedLiquidElevation::EdgeBand => {
+                (edge.minimum_level(), edge.maximum_level())
+            }
+            super::layout::ResolvedLiquidElevation::Exact(level) => (level, level),
         };
         if source {
             outlet_count = outlet_count.saturating_add(1);
@@ -2423,8 +2437,8 @@ fn validate_resolved_liquid_ports(
                 .iter()
                 .filter(|(position, _)| {
                     position.coord == *coord
-                        && edge.minimum_level() <= position.level
-                        && position.level <= edge.maximum_level()
+                        && minimum_level <= position.level
+                        && position.level <= maximum_level
                 })
                 .count();
             if matching != 1 {
@@ -2439,9 +2453,9 @@ fn validate_resolved_liquid_ports(
                 .iter()
                 .filter_map(|(position, node)| {
                     (position.coord == coord
-                        && edge.minimum_level() <= position.level
-                        && position.level <= edge.maximum_level())
-                    .then_some((*position, *node))
+                        && minimum_level <= position.level
+                        && position.level <= maximum_level)
+                        .then_some((*position, *node))
                 })
                 .collect::<Vec<_>>();
             let [(position, node)] = matching.as_slice() else {

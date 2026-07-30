@@ -1719,8 +1719,8 @@ mod tests {
     use super::*;
     use crate::procedural_v3::layout::{
         LayoutKind, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
-        ResolvedElevationBand, ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
-        ResolvedWalkerPorts,
+        ResolvedElevationBand, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+        ResolvedPatch, ResolvedPort, ResolvedWalkerPorts,
     };
     use crate::settings::{
         PatchEdgeContractSettings, PatchEdgesSettings, PatchMaskSettings, PatchSpec,
@@ -1998,6 +1998,7 @@ mod tests {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
         let orientation = volcano_orientation(&patch, 1).expect("western outlet");
@@ -2050,6 +2051,7 @@ mod tests {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
         let issues = volcano_orientation(&patch, 1).expect_err("western seam must be rejected");
@@ -2106,12 +2108,14 @@ mod tests {
                         source: PatchId(0),
                         sink: PatchId(1),
                         port,
+                        elevation: ResolvedLiquidElevation::EdgeBand,
                     },
                     approach_depth: 0,
                     boundary_pairs: BTreeSet::new(),
                     protected_approaches: BTreeMap::new(),
                 },
             )]),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let patch = PatchRecipeContext::resolve(&layout, PatchId(0)).expect("fixture patch");
         let issues = volcano_orientation(&patch, 1).expect_err("stitched lava must be rejected");

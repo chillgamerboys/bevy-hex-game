@@ -630,7 +630,7 @@ fn construct_patch_with_streams(
 }
 
 fn seam_landing_candidates(patch: &PatchRecipeContext<'_>) -> BTreeSet<HexCoord> {
-    let protected = patch.protected_approaches();
+    let protected = patch.walker_protected_approaches();
     if protected.is_empty() {
         patch.mask().clone()
     } else {
@@ -846,20 +846,23 @@ fn build_mountain_streams(
 
     let mut outgoing = Vec::new();
     for edge in patch.shared_edges() {
-        let Some((is_source, port)) = edge.liquid_port() else {
+        let Some(liquid) = edge.liquid_port() else {
             continue;
         };
-        if !is_source {
+        if !liquid.is_source {
             return Err(vec![recipe_issue(
                 "Mountains supports source/outlet liquid contracts, not incoming liquid",
             )]);
         }
-        let endpoint_level = edge
-            .preferred_level()
-            .saturating_sub(1)
-            .max(edge.contract.elevation.min)
-            .min(edge.contract.elevation.max);
-        outgoing.push((port, endpoint_level));
+        let endpoint_level = match liquid.elevation {
+            super::layout::ResolvedLiquidElevation::EdgeBand => edge
+                .preferred_level()
+                .saturating_sub(1)
+                .max(edge.contract.elevation.min)
+                .min(edge.contract.elevation.max),
+            super::layout::ResolvedLiquidElevation::Exact(level) => level,
+        };
+        outgoing.push((liquid.port, endpoint_level));
     }
     if outgoing.is_empty() {
         return Ok(Vec::new());
@@ -1405,7 +1408,7 @@ pub(crate) fn validate_patch(
             Ok(vegetation) => vegetation,
             Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
         };
-    let seam_approaches = patch.protected_approaches();
+    let seam_approaches = patch.walker_protected_approaches();
     let available_rise = fragment
         .features
         .protected_routes
@@ -1467,7 +1470,7 @@ pub(crate) fn validate_patch(
             .shared_edges()
             .filter_map(|edge| {
                 edge.liquid_port()
-                    .and_then(|(is_source, port)| is_source.then_some(port.lanes.len()))
+                    .and_then(|liquid| liquid.is_source.then_some(liquid.port.lanes.len()))
             })
             .sum(),
         &protected_approaches,

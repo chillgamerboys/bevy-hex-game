@@ -547,6 +547,7 @@ mod tests {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let mut volume = VolumePlan::new(mask);
         volume.columns.insert(

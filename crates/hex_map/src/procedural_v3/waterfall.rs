@@ -796,7 +796,7 @@ fn waterfall_rotation(patch: &PatchRecipeContext<'_>) -> Result<u8, Vec<WorldVal
         .shared_edges()
         .filter_map(|edge| {
             edge.liquid_port()
-                .and_then(|(is_source, _)| is_source.then_some(edge.side))
+                .and_then(|liquid| liquid.is_source.then_some(edge.side))
         })
         .collect::<Vec<_>>();
     let [outlet] = outlets.as_slice() else {
@@ -826,9 +826,11 @@ fn validate_waterfall_liquid_ports(
     let mut incoming = Vec::new();
     let mut outgoing = Vec::new();
     for edge in patch.shared_edges() {
-        let Some((is_source, port)) = edge.liquid_port() else {
+        let Some(liquid) = edge.liquid_port() else {
             continue;
         };
+        let is_source = liquid.is_source;
+        let port = liquid.port;
         let boundary = port
             .lanes
             .iter()
@@ -839,11 +841,13 @@ fn validate_waterfall_liquid_ports(
                     "Waterfall liquid port conversion failed: {error}"
                 ))]
             })?;
-        let contract = (
-            boundary,
-            edge.contract.elevation.min,
-            edge.contract.elevation.max,
-        );
+        let (minimum_level, maximum_level) = match liquid.elevation {
+            super::layout::ResolvedLiquidElevation::EdgeBand => {
+                (edge.contract.elevation.min, edge.contract.elevation.max)
+            }
+            super::layout::ResolvedLiquidElevation::Exact(level) => (level, level),
+        };
+        let contract = (boundary, minimum_level, maximum_level);
         if is_source {
             outgoing.push(contract);
         } else {

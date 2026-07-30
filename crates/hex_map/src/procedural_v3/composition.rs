@@ -6,11 +6,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{HexCoord, InteriorRegionId, MapViewHint, SpecialMovementRegion, TilePos};
+use hex_core::{HexCoord, InteriorRegionId, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeId, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort, ResolvedPatch,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPatch,
 };
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::volume::{FillMaterialRole, SurfaceAccess, VolumeElement, VolumePlan};
@@ -91,14 +91,102 @@ impl GeneratedPatchPlan {
         }
 
         let isolated = self.isolated_world_unchecked(layout, resolved_patch);
-        issues.extend(isolated.validate().into_iter().map(|issue| {
-            PatchValidationIssue::new(
-                self.patch_id,
-                PatchIssueCode::Semantic(issue.code),
-                issue.detail,
-            )
-        }));
+        issues.extend(
+            isolated
+                .validate_semantic_layers()
+                .into_iter()
+                .map(|issue| {
+                    PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(issue.code),
+                        issue.detail,
+                    )
+                }),
+        );
+        self.validate_boundary_liquid_outlets(layout, &mut issues);
         issues
+    }
+
+    fn validate_boundary_liquid_outlets(
+        &self,
+        layout: &ResolvedLayoutPlan,
+        issues: &mut Vec<PatchValidationIssue>,
+    ) {
+        for ((source, side), outlet) in layout
+            .boundary_liquid_outlets
+            .iter()
+            .filter(|((source, _), _)| *source == self.patch_id)
+        {
+            let declared_terminals = outlet
+                .lanes
+                .iter()
+                .map(|(inside, _)| TilePos::new(*inside, outlet.level))
+                .collect::<BTreeSet<_>>();
+            let actual_terminals = self
+                .liquids
+                .bodies
+                .values()
+                .flat_map(|plan| &plan.nodes)
+                .filter_map(|(position, node)| {
+                    (self.volume.mask.contains(&position.coord)
+                        && !layout.footprint.contains(&side.neighbor(position.coord))
+                        && node.state == LiquidFlowState::Still
+                        && node.downstream.is_none())
+                    .then_some(*position)
+                })
+                .collect::<BTreeSet<_>>();
+            if actual_terminals != declared_terminals {
+                issues.push(PatchValidationIssue::new(
+                    self.patch_id,
+                    PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                    format!(
+                        "boundary liquid outlet {source:?}/{side:?} terminals must exactly equal its declared lanes (actual {actual_terminals:?}, declared {declared_terminals:?})"
+                    ),
+                ));
+            }
+            for (inside_coord, outside_coord) in &outlet.lanes {
+                let inside = TilePos::new(*inside_coord, outlet.level);
+                let matches = self
+                    .liquids
+                    .bodies
+                    .iter()
+                    .filter_map(|(body, plan)| {
+                        plan.nodes.get(&inside).copied().map(|node| (*body, node))
+                    })
+                    .collect::<Vec<_>>();
+                let exact_terminal = matches.as_slice().first().is_some_and(|(_, node)| {
+                    matches.len() == 1
+                        && node.state == LiquidFlowState::Still
+                        && node.downstream.is_none()
+                });
+                if !exact_terminal {
+                    issues.push(PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} requires one exact Still terminal with no downstream at {inside:?}"
+                        ),
+                    ));
+                }
+                let outside_nodes = self
+                    .liquids
+                    .bodies
+                    .values()
+                    .flat_map(|plan| plan.nodes.keys())
+                    .filter(|position| position.coord == *outside_coord)
+                    .copied()
+                    .collect::<Vec<_>>();
+                if !outside_nodes.is_empty() {
+                    issues.push(PatchValidationIssue::new(
+                        self.patch_id,
+                        PatchIssueCode::Semantic(WorldIssueCode::Liquid),
+                        format!(
+                            "boundary liquid outlet {source:?}/{side:?} must not contain outside nodes at {outside_coord:?}: {outside_nodes:?}"
+                        ),
+                    ));
+                }
+            }
+        }
     }
 
     fn isolated_world_unchecked(
@@ -123,6 +211,7 @@ impl GeneratedPatchPlan {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         GeneratedWorldPlan {
             layout: isolated_layout,
@@ -324,6 +413,7 @@ pub(crate) enum CollisionKind {
 /// Why complete patch fragments could not form one strict whole-world plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WorldCompositionError {
+    Ring19Unavailable,
     InvalidLayout(Vec<String>),
     MissingFragment(PatchId),
     DuplicateFragment(PatchId),
@@ -396,6 +486,9 @@ pub(crate) fn compose_world(
     fragments: Vec<GeneratedPatchPlan>,
     settings: WorldCompositionSettings,
 ) -> Result<GeneratedWorldPlan, WorldCompositionError> {
+    if layout.kind == LayoutKind::Ring19 {
+        return Err(WorldCompositionError::Ring19Unavailable);
+    }
     if let Err(error) = layout.validate() {
         return Err(WorldCompositionError::InvalidLayout(
             error.issues().iter().map(ToString::to_string).collect(),
@@ -546,7 +639,13 @@ fn stitch_directed_liquid_seams(
 ) -> Result<(), WorldCompositionError> {
     let mut links = Vec::new();
     for (edge_id, edge) in &layout.shared_edges {
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation,
+        } = &edge.liquid
+        else {
             continue;
         };
         let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
@@ -555,6 +654,7 @@ fn stitch_directed_liquid_seams(
             continue;
         }
 
+        let (minimum_level, maximum_level) = liquid_level_bounds(edge, *elevation);
         for (first_coord, second_coord) in &port.lanes {
             let (source_coord, sink_coord) = if source_is_first {
                 (*first_coord, *second_coord)
@@ -565,16 +665,16 @@ fn stitch_directed_liquid_seams(
                 *edge_id,
                 *source,
                 source_coord,
-                edge.elevation.min,
-                edge.elevation.max,
+                minimum_level,
+                maximum_level,
                 liquids,
             )?;
             let sink_endpoint = unique_liquid_endpoint(
                 *edge_id,
                 *sink,
                 sink_coord,
-                edge.elevation.min,
-                edge.elevation.max,
+                minimum_level,
+                maximum_level,
                 liquids,
             )?;
             validate_liquid_link(*edge_id, source_endpoint, sink_endpoint)?;
@@ -654,6 +754,16 @@ fn stitch_directed_liquid_seams(
         source.downstream = Some(link.sink.position);
     }
     Ok(())
+}
+
+const fn liquid_level_bounds(
+    edge: &super::layout::ResolvedEdgeContract,
+    elevation: ResolvedLiquidElevation,
+) -> (Level, Level) {
+    match elevation {
+        ResolvedLiquidElevation::EdgeBand => (edge.elevation.min, edge.elevation.max),
+        ResolvedLiquidElevation::Exact(level) => (level, level),
+    }
 }
 
 fn unique_liquid_endpoint(
@@ -1204,6 +1314,34 @@ mod tests {
     }
 
     #[test]
+    fn exact_liquid_bounds_do_not_reuse_the_walker_band() {
+        let layout = directed_ring7_layout();
+        let edge = layout
+            .shared_edges
+            .values()
+            .find(|edge| matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }))
+            .expect("the fixture has a directed seam");
+        assert_eq!(
+            liquid_level_bounds(edge, ResolvedLiquidElevation::EdgeBand),
+            (edge.elevation.min, edge.elevation.max)
+        );
+        assert_eq!(
+            liquid_level_bounds(edge, ResolvedLiquidElevation::Exact(29)),
+            (29, 29)
+        );
+    }
+
+    #[test]
+    fn ring19_cannot_reach_legacy_namespacing_before_its_namespace_lands() {
+        let mut layout = ring7_layout();
+        layout.kind = LayoutKind::Ring19;
+        assert!(matches!(
+            compose_world(layout, Vec::new(), composition_settings()),
+            Err(WorldCompositionError::Ring19Unavailable)
+        ));
+    }
+
+    #[test]
     fn directed_liquid_seams_reject_missing_and_mismatched_endpoints() {
         let layout = directed_ring7_layout();
         let (edge_id, edge) = layout
@@ -1213,7 +1351,10 @@ mod tests {
                 matches!(edge.liquid, ResolvedLiquidPort::Directed { .. }).then_some((*id, edge))
             })
             .expect("the fixture has one directed seam");
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source, sink, port, ..
+        } = &edge.liquid
+        else {
             panic!("the selected seam should be directed");
         };
         let first_lane = *port.lanes.first().expect("the directed port has lanes");
@@ -1355,7 +1496,10 @@ mod tests {
     fn directed_fragments(layout: &ResolvedLayoutPlan) -> Vec<GeneratedPatchPlan> {
         let mut fragments = complete_fragments(layout);
         for edge in layout.shared_edges.values() {
-            let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+            let ResolvedLiquidPort::Directed {
+                source, sink, port, ..
+            } = &edge.liquid
+            else {
                 continue;
             };
             let source_is_first = *source == edge.first.0;

@@ -512,6 +512,7 @@ fn isolated_patch_world(
             },
         )]),
         shared_edges: BTreeMap::new(),
+        boundary_liquid_outlets: BTreeMap::new(),
     };
     GeneratedWorldPlan {
         layout,

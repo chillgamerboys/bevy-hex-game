@@ -9,8 +9,9 @@ use std::collections::BTreeSet;
 use hex_core::{BiomeRegionId, HexCoord, Level};
 
 use super::layout::{
-    HexSide, PatchId, ResolvedEdgeContract, ResolvedEdgeId, ResolvedEdgeReference,
-    ResolvedLayoutPlan, ResolvedLiquidPort, ResolvedPatch, ResolvedPort,
+    HexSide, PatchId, ResolvedBoundaryLiquidOutlet, ResolvedEdgeContract, ResolvedEdgeId,
+    ResolvedEdgeReference, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+    ResolvedPatch, ResolvedPort,
 };
 use super::seed::SeedStreams;
 use super::V3GenerationError;
@@ -47,6 +48,14 @@ pub(crate) struct PatchSharedEdge<'a> {
     patch_is_first: bool,
 }
 
+/// One directed liquid seam projected into a patch's local orientation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PatchLiquidPort {
+    pub(crate) is_source: bool,
+    pub(crate) port: ResolvedPort,
+    pub(crate) elevation: ResolvedLiquidElevation,
+}
+
 impl<'a> PatchSharedEdge<'a> {
     /// Preferred surface level agreed by both neighboring patches.
     #[must_use]
@@ -80,6 +89,24 @@ impl<'a> PatchSharedEdge<'a> {
         }
     }
 
+    /// Exact cells reserved only for this edge's ordinary-walker apertures.
+    #[must_use]
+    pub(crate) fn walker_protected_approaches(&self) -> BTreeSet<HexCoord> {
+        self.contract
+            .walker
+            .ports
+            .iter()
+            .flat_map(|port| {
+                if self.patch_is_first {
+                    port.first_approach.iter()
+                } else {
+                    port.second_approach.iter()
+                }
+            })
+            .copied()
+            .collect()
+    }
+
     /// Walker apertures oriented from this patch to its neighbor.
     #[must_use]
     pub(crate) fn walker_ports(&self) -> Vec<ResolvedPort> {
@@ -107,8 +134,14 @@ impl<'a> PatchSharedEdge<'a> {
 
     /// Directed liquid aperture when this patch is the source or sink.
     #[must_use]
-    pub(crate) fn liquid_port(&self) -> Option<(bool, ResolvedPort)> {
-        let ResolvedLiquidPort::Directed { source, port, .. } = &self.contract.liquid else {
+    pub(crate) fn liquid_port(&self) -> Option<PatchLiquidPort> {
+        let ResolvedLiquidPort::Directed {
+            source,
+            port,
+            elevation,
+            ..
+        } = &self.contract.liquid
+        else {
             return None;
         };
         let patch = if self.patch_is_first {
@@ -116,7 +149,11 @@ impl<'a> PatchSharedEdge<'a> {
         } else {
             self.contract.second.0
         };
-        Some((*source == patch, orient_port(port, self.patch_is_first)))
+        Some(PatchLiquidPort {
+            is_source: *source == patch,
+            port: orient_port(port, self.patch_is_first),
+            elevation: *elevation,
+        })
     }
 }
 
@@ -188,7 +225,28 @@ impl<'a> PatchRecipeContext<'a> {
         for edge in self.shared_edges() {
             protected.extend(edge.protected_approaches().iter().copied());
         }
+        for outlet in self.boundary_liquid_outlets() {
+            protected.extend(outlet.inward_approach.iter().copied());
+        }
         protected
+    }
+
+    /// Union of approach cells reserved only for ordinary-walker seam apertures.
+    #[must_use]
+    pub(crate) fn walker_protected_approaches(&self) -> BTreeSet<HexCoord> {
+        self.shared_edges()
+            .flat_map(|edge| edge.walker_protected_approaches())
+            .collect()
+    }
+
+    /// Exact complete-world boundary liquid outlets owned by this patch.
+    pub(crate) fn boundary_liquid_outlets(
+        &self,
+    ) -> impl Iterator<Item = &'a ResolvedBoundaryLiquidOutlet> + '_ {
+        self.layout
+            .boundary_liquid_outlets
+            .values()
+            .filter(move |outlet| outlet.source == self.id)
     }
 
     /// Candidate streams namespaced by the stable patch slot.
@@ -304,6 +362,7 @@ mod tests {
                     ]),
                 },
             )]),
+            boundary_liquid_outlets: BTreeMap::new(),
         }
     }
 
@@ -338,6 +397,38 @@ mod tests {
             first.seed_streams(44, 3).stage("landform").sample(9),
             second.seed_streams(44, 3).stage("landform").sample(9)
         );
+    }
+
+    #[test]
+    fn boundary_liquid_approaches_join_full_but_not_walker_only_reservations() {
+        let mut layout = two_patch_layout();
+        layout.kind = LayoutKind::Ring19;
+        let boundary_approach = HexCoord::from_axial(-1, 0);
+        layout.boundary_liquid_outlets.insert(
+            (PatchId(2), HexSide::West),
+            ResolvedBoundaryLiquidOutlet {
+                source: PatchId(2),
+                side: HexSide::West,
+                lanes: BTreeSet::from([(
+                    HexCoord::ORIGIN,
+                    HexSide::West.neighbor(HexCoord::ORIGIN),
+                )]),
+                inward_approach: BTreeSet::from([boundary_approach]),
+                approach_depth: 1,
+                level: 3,
+            },
+        );
+        let context = PatchRecipeContext::resolve(&layout, PatchId(2)).expect("first patch");
+
+        assert_eq!(
+            context.walker_protected_approaches(),
+            BTreeSet::from([HexCoord::ORIGIN])
+        );
+        assert_eq!(
+            context.protected_approaches(),
+            BTreeSet::from([HexCoord::ORIGIN, boundary_approach])
+        );
+        assert_eq!(context.boundary_liquid_outlets().count(), 1);
     }
 
     #[test]

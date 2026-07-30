@@ -1215,6 +1215,7 @@ mod tests {
             footprint: mask.clone(),
             patches: BTreeMap::from([(PatchId(0), patch)]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let anchor = TilePos::new(anchor_coord, 0);
         let tree = TilePos::new(tree_coord, 0);

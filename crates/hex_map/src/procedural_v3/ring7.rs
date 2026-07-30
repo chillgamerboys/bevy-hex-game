@@ -13,7 +13,9 @@ use hex_core::{BiomeRegionId, HexCoord, Level, MapViewHint, TilePos};
 use super::composition::{
     compose_world, GeneratedPatchPlan, PatchAnchorRef, WorldCompositionSettings,
 };
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidPort};
+use super::layout::{
+    resolve_layout, PatchId, ResolvedLayoutPlan, ResolvedLiquidElevation, ResolvedLiquidPort,
+};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::selection::{
@@ -403,16 +405,29 @@ fn ring_specs(ring: &V3Ring7Settings) -> [(PatchId, &PatchSpec); 7] {
 }
 
 fn validate_resolved_hydrology(layout: &ResolvedLayoutPlan) -> Result<(), V3GenerationError> {
-    let actual = layout
-        .shared_edges
-        .values()
-        .filter_map(|edge| {
-            let ResolvedLiquidPort::Directed { source, sink, .. } = &edge.liquid else {
-                return None;
-            };
-            Some((*source, *sink))
-        })
-        .collect::<BTreeSet<_>>();
+    if !layout.boundary_liquid_outlets.is_empty() {
+        return Err(V3GenerationError::RecipeContract(
+            "Ring7 cannot own complete-world boundary liquid outlets".to_owned(),
+        ));
+    }
+    let mut actual = BTreeSet::new();
+    for edge in layout.shared_edges.values() {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            elevation,
+            ..
+        } = &edge.liquid
+        else {
+            continue;
+        };
+        if *elevation != ResolvedLiquidElevation::EdgeBand {
+            return Err(V3GenerationError::RecipeContract(
+                "Ring7 liquid seams must retain legacy edge-band elevation authority".to_owned(),
+            ));
+        }
+        actual.insert((*source, *sink));
+    }
     let expected = BTreeSet::from([(PatchId(2), PatchId(0)), (PatchId(0), PatchId(5))]);
     if actual != expected {
         return Err(V3GenerationError::RecipeContract(format!(
@@ -811,10 +826,22 @@ fn validate_directed_liquid_seams(
 ) -> u32 {
     let mut seam_count = 0_u32;
     for edge in plan.layout.shared_edges.values() {
-        let ResolvedLiquidPort::Directed { source, sink, port } = &edge.liquid else {
+        let ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation,
+        } = &edge.liquid
+        else {
             continue;
         };
         seam_count = seam_count.saturating_add(1);
+        if *elevation != ResolvedLiquidElevation::EdgeBand {
+            issues.push(recipe_issue(
+                "Ring7 directed liquid seams must retain legacy edge-band elevation authority",
+            ));
+            continue;
+        }
         let source_is_first = *source == edge.first.0 && *sink == edge.second.0;
         for (first, second) in &port.lanes {
             let (source_coord, sink_coord) = if source_is_first {

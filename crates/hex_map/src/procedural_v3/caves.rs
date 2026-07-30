@@ -1207,18 +1207,23 @@ fn cave_liquid_sinks(
     let mut sinks = Vec::new();
     let mut occupied = BTreeSet::new();
     for edge in patch.shared_edges() {
-        let Some((is_source, port)) = edge.liquid_port() else {
+        let Some(liquid) = edge.liquid_port() else {
             continue;
         };
-        if is_source {
+        if liquid.is_source {
             return Err(vec![recipe_issue(format!(
                 "Caves patch {:?} cannot source directed liquid edge {:?}",
                 patch.id, edge.id
             ))]);
         }
 
-        let top_level =
-            SURFACE_WATER_LEVEL.clamp(edge.contract.elevation.min, edge.contract.elevation.max);
+        let top_level = match liquid.elevation {
+            super::layout::ResolvedLiquidElevation::EdgeBand => {
+                SURFACE_WATER_LEVEL.clamp(edge.contract.elevation.min, edge.contract.elevation.max)
+            }
+            super::layout::ResolvedLiquidElevation::Exact(level) => level,
+        };
+        let port = liquid.port;
         let boundary = port
             .lanes
             .iter()

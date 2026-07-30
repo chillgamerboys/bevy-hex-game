@@ -18,7 +18,7 @@ use crate::settings::{
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort, ResolvedPort,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPort,
 };
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::volume::{
@@ -492,6 +492,7 @@ fn encode_layout_plan(
     encoder.tag(match layout.kind {
         LayoutKind::Single => 0,
         LayoutKind::Ring7 => 1,
+        LayoutKind::Ring19 => 2,
     });
     encoder.u32(layout.grid_radius);
     encode_coord_set(encoder, &layout.footprint)?;
@@ -517,6 +518,23 @@ fn encode_layout_plan(
         encoder.u32(id.0);
         encode_resolved_edge(encoder, edge)?;
     }
+    if layout.kind == LayoutKind::Ring19 {
+        encoder.collection_count(layout.boundary_liquid_outlets.len())?;
+        for ((source, side), outlet) in &layout.boundary_liquid_outlets {
+            encoder.u32(source.0);
+            encoder.tag(hex_side_tag(*side));
+            encoder.u32(outlet.source.0);
+            encoder.tag(hex_side_tag(outlet.side));
+            encoder.collection_count(outlet.lanes.len())?;
+            for (inside, outside) in &outlet.lanes {
+                encoder.hex_coord(*inside);
+                encoder.hex_coord(*outside);
+            }
+            encode_coord_set(encoder, &outlet.inward_approach)?;
+            encoder.u32(outlet.approach_depth);
+            encoder.i32(outlet.level);
+        }
+    }
     Ok(())
 }
 
@@ -537,11 +555,28 @@ fn encode_resolved_edge(
     }
     match &edge.liquid {
         ResolvedLiquidPort::Dry => encoder.tag(0),
-        ResolvedLiquidPort::Directed { source, sink, port } => {
+        ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation: ResolvedLiquidElevation::EdgeBand,
+        } => {
             encoder.tag(1);
             encoder.u32(source.0);
             encoder.u32(sink.0);
             encode_resolved_port(encoder, port)?;
+        }
+        ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation: ResolvedLiquidElevation::Exact(level),
+        } => {
+            encoder.tag(2);
+            encoder.u32(source.0);
+            encoder.u32(sink.0);
+            encode_resolved_port(encoder, port)?;
+            encoder.i32(*level);
         }
     }
     encoder.u32(edge.approach_depth);
@@ -866,7 +901,8 @@ mod tests {
 
     use super::*;
     use crate::procedural_v3::layout::{
-        ResolvedEdgeReference, ResolvedElevationBand, ResolvedPatch, ResolvedWalkerPorts,
+        ResolvedBoundaryLiquidOutlet, ResolvedEdgeReference, ResolvedElevationBand, ResolvedPatch,
+        ResolvedWalkerPorts,
     };
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{LevelInterval, SolidMass, SurfaceMetadata, VolumeColumn};
@@ -926,6 +962,7 @@ mod tests {
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let volume = VolumePlan {
             mask,
@@ -1407,15 +1444,135 @@ mod tests {
             source: PatchId(0),
             sink: PatchId(1),
             port: port.clone(),
+            elevation: ResolvedLiquidElevation::EdgeBand,
         };
         let directed_fingerprint = fingerprint_edge(&baseline);
         assert_ne!(directed_fingerprint, dry_fingerprint);
+
+        let mut exact = baseline.clone();
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut exact.liquid else {
+            unreachable!("the fixture has a directed port");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(16);
+        let exact_fingerprint = fingerprint_edge(&exact);
+        assert_ne!(exact_fingerprint, directed_fingerprint);
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut exact.liquid else {
+            unreachable!("the fixture has a directed port");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(17);
+        assert_ne!(fingerprint_edge(&exact), exact_fingerprint);
 
         let ResolvedLiquidPort::Directed { port, .. } = &mut baseline.liquid else {
             unreachable!("the fixture has a directed port");
         };
         port.first_approach.insert(HexCoord::from_axial(-1, 0));
         assert_ne!(fingerprint_edge(&baseline), directed_fingerprint);
+    }
+
+    #[test]
+    fn ring19_boundary_outlet_identity_covers_exact_geometry_and_level() {
+        fn fingerprint_layout(layout: &ResolvedLayoutPlan) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_layout_plan(&mut encoder, layout).expect("the layout encodes");
+            encoder.finish_semantic_plan()
+        }
+
+        let inside_a = HexCoord::from_axial(2, -1);
+        let inside_b = HexCoord::from_axial(2, 0);
+        let outside_a = HexSide::East.neighbor(inside_a);
+        let outside_b = HexSide::East.neighbor(inside_b);
+        let mask = HexCoord::ORIGIN
+            .within_radius(2)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let mut layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring19,
+            grid_radius: 55,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: BiomeRegionId(0),
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::from([(
+                (PatchId(0), HexSide::East),
+                ResolvedBoundaryLiquidOutlet {
+                    source: PatchId(0),
+                    side: HexSide::East,
+                    lanes: BTreeSet::from([(inside_a, outside_a), (inside_b, outside_b)]),
+                    inward_approach: BTreeSet::from([
+                        inside_a,
+                        inside_b,
+                        HexSide::West.neighbor(inside_a),
+                        HexSide::West.neighbor(inside_b),
+                    ]),
+                    approach_depth: 2,
+                    level: 16,
+                },
+            )]),
+        };
+        let baseline = fingerprint_layout(&layout);
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .level += 1;
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .level -= 1;
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .approach_depth += 1;
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .approach_depth -= 1;
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .inward_approach
+            .insert(HexCoord::from_axial(0, 1));
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .inward_approach
+            .remove(&HexCoord::from_axial(0, 1));
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .lanes
+            .remove(&(inside_b, outside_b));
+        assert_ne!(fingerprint_layout(&layout), baseline);
     }
 
     #[test]
