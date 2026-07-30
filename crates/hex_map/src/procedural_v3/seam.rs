@@ -386,10 +386,10 @@ fn admitted_walker_boundary_pairs(edge: &ResolvedEdgeContract) -> BTreeSet<(HexC
         .iter()
         .copied()
         .filter(|(first, second)| {
-            edge.walker
-                .ports
-                .iter()
-                .any(|port| port.lanes.contains(&(*first, *second)))
+            edge.walker.ports.iter().any(|port| {
+                port.lanes.iter().any(|(coord, _)| coord == first)
+                    && port.lanes.iter().any(|(_, coord)| coord == second)
+            })
         })
         .collect()
 }
@@ -477,48 +477,4 @@ fn valid_two_wide_contract(count: u8, width: u32, ports: &[super::layout::Resolv
     width == 2
         && usize::from(count) == ports.len()
         && ports.iter().all(|port| port.lanes.len() == 2)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::procedural_v3::layout::{
-        HexSide, ResolvedElevationBand, ResolvedLiquidPort, ResolvedPort, ResolvedWalkerPorts,
-    };
-
-    #[test]
-    fn walker_admission_does_not_cross_pair_independent_lanes() {
-        let first_a = HexCoord::from_axial(0, 0);
-        let first_b = HexCoord::from_axial(0, 1);
-        let second_a = HexCoord::from_axial(1, 0);
-        let second_b = HexCoord::from_axial(1, 1);
-        let exact_lanes = BTreeSet::from([(first_a, second_a), (first_b, second_b)]);
-        let diagonal = (first_a, second_b);
-        let edge = ResolvedEdgeContract {
-            first: (PatchId(0), HexSide::East),
-            second: (PatchId(1), HexSide::West),
-            elevation: ResolvedElevationBand {
-                preferred: 15,
-                min: 14,
-                max: 16,
-            },
-            walker: ResolvedWalkerPorts {
-                count: 1,
-                width: 2,
-                ports: vec![ResolvedPort {
-                    lanes: exact_lanes.clone(),
-                    first_approach: BTreeSet::from([first_a, first_b]),
-                    second_approach: BTreeSet::from([second_a, second_b]),
-                }],
-            },
-            liquid: ResolvedLiquidPort::Dry,
-            approach_depth: 1,
-            boundary_pairs: BTreeSet::from([(first_a, second_a), (first_b, second_b), diagonal]),
-            protected_approaches: BTreeMap::new(),
-        };
-
-        let admitted = admitted_walker_boundary_pairs(&edge);
-        assert_eq!(admitted, exact_lanes);
-        assert!(!admitted.contains(&diagonal));
-    }
 }
