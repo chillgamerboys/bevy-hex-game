@@ -1021,18 +1021,41 @@ mod tests {
         // while hardening the initial 0..32 audit. Keep the blocking CI corpus
         // focused; the ignored stress test below owns broad statistical coverage.
         const REGRESSION_SEEDS: [u64; 8] = [0, 7, 14, 17, 19, 23, 28, 31];
-        let fallback_seeds = REGRESSION_SEEDS
-            .into_iter()
-            .filter(|seed| {
-                generate(RING_RADIUS, 0.4, settings(), *seed, runtime_art_catalog())
-                    .expect("every Ring7 seed must produce a validated final world")
-                    .used_fallback
-            })
-            .collect::<Vec<_>>();
-        assert!(
-            fallback_seeds.is_empty(),
-            "fixed Ring7 corpus unexpectedly used fallback for seeds {fallback_seeds:?}"
-        );
+        for seed in REGRESSION_SEEDS {
+            let selected = generate(RING_RADIUS, 0.4, settings(), seed, runtime_art_catalog())
+                .expect("every Ring7 seed must produce a validated final world");
+            assert!(
+                !selected.used_fallback,
+                "fixed Ring7 seed {seed} unexpectedly used fallback: {:#?}",
+                selected.notes
+            );
+            assert!(
+                selected.valid_candidates >= 1,
+                "fixed Ring7 seed {seed} must retain at least one complete candidate"
+            );
+            let forest_old_growth = selected
+                .validated
+                .plan
+                .features
+                .by_id
+                .values()
+                .filter(|feature| {
+                    feature.object_id.as_str() == super::super::vegetation::OLD_GROWTH_ID
+                        && selected.validated.plan.biome_regions.get(&feature.root)
+                            == Some(&BiomeRegionId(3))
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                !forest_old_growth.is_empty(),
+                "fixed Ring7 seed {seed} must retain authored Old-Growth in Forest"
+            );
+            assert!(
+                forest_old_growth
+                    .iter()
+                    .all(|feature| feature.blocker_footprint.len() == 7),
+                "fixed Ring7 seed {seed} must retain exact seven-cell Old-Growth roots"
+            );
+        }
     }
 
     #[test]
