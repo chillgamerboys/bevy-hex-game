@@ -91,7 +91,7 @@ disable, restore, enchantment breakage, and reset without entering map gameplay.
 
 ## Combat Lab
 
-Combat Lab has two tabs.
+Combat Lab has three tabs: Sandbox, Fixed Fixtures, and Saved Reports.
 
 ### Sandbox
 
@@ -142,21 +142,29 @@ seed, roster order, and resolved surfaces. Fixed fixtures bypass Deployment beca
 their encounter placements are immutable.
 
 During a Lab encounter, a collapsible statistics drawer supplements rather than
-replaces the ordinary HUD. It reads `CombatSummary` directly and labels rounds,
-outcome, successful/refused commands, AI choices, movement distance/budget, casts,
-Channel and mana restored by element, strikes, idle turns, disable flow,
-restorations, downings, and revivals.
+replaces the ordinary HUD. It reads `CombatSummary` directly and labels rounds and
+completed turns, current and maximum no-progress stretches, outcome,
+successful/refused commands, AI choices, movement distance/budget, casts, Channel and
+mana restored by element, strikes, idle turns, disable flow, restorations, downings,
+and revivals. The same projection carries per-unit command, movement, spell, Channel,
+disable, recovery, condition, idle, and AI totals; presentation never reconstructs
+them from live entities.
 
 At combat start, the Lab freezes the accepted content revision, stable map and seed,
 ordered roster/controller headers, and exact initial `TilePos` deployment. Outcome
 combines those launch facts with the canonical summary into `CombatLabReport`; it
 never substitutes final battlefield positions. The full-screen outcome surface
-provides Overview, Units, Spells & Effects, Timeline, and Compare labels plus Save
-Report, Retry Exact, and Tune & Run Again actions.
+provides functional Overview, Units, Spells & Effects, Timeline, and Compare modes
+plus Save Report, Retry Exact, and Tune & Run Again actions. Timeline reads the
+bounded canonical event window and labels truncation. Compare explicitly selects a
+saved report and shows signed numeric deltas against the current run. Tune returns to
+Rules with the frozen map, ordered rosters, profile, and every still-valid exact
+deployment surface retained.
 
-Saved Reports lists only explicitly saved local reports. When two or more exist it
-shows frozen profile/roster headers and signed numeric deltas for rounds, successful
-and refused commands, movement, Channel, and applied disables. Deletion is a two-step
+Saved Reports lists only explicitly saved local reports. The user selects the left
+and right report independently; when they differ, the view shows frozen
+profile/roster headers and signed numeric deltas for rounds, successful and refused
+commands, movement, Channel, and applied disables. Deletion is a two-step
 request/confirm action and affects only the selected local report.
 
 ### Fixed fixtures
@@ -176,6 +184,15 @@ One searchable selector owns the stable fixture IDs:
 Automated walks launch by ID, never by list position. Creator-format fixture records,
 roster, AI, map, seed, and placements are immutable and never consult the local
 creation library.
+
+The three Wave 7 fixtures own launch inputs rather than merely renaming existing
+scenario cards. Occupancy and Tempo materialize frozen 3v3 encounter overrides.
+Channel Attrition materializes a 3v3 matrix with depleted human and AI casters, one
+locked enchantment, one partly disabled body, one full-mana reference, and one fully
+disabled body. Tempo exposes Shipped, Tactical two-step, and a validated Custom
+three-step run over the same encounter. A fixed-fixture outcome offers Copy to
+Sandbox, carrying its exact map, roster, initial placement, profile, and any frozen
+creator content into the ordinary Rules and Deployment flow.
 
 ## Frozen launch and return routing
 

@@ -87,8 +87,11 @@ fn spawn_panel(
                 Node {
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
                     column_gap: Val::Px(8.0),
+                    row_gap: Val::Px(2.0),
                     align_items: AlignItems::Center,
+                    align_content: AlignContent::Center,
                     ..default()
                 },
                 Pickable::IGNORE,
@@ -161,8 +164,11 @@ fn rebuild(
     let Ok(body) = bodies.single() else { return };
     commands.entity(body).despawn_related::<Children>();
     commands.entity(body).with_children(|rows| {
+        let dense = readout.0.len() > 8;
         for entry in &readout.0 {
             let side = match entry.faction {
+                Faction::Player if dense => "P",
+                Faction::Hostile if dense => "H",
                 Faction::Player => "ALLY",
                 Faction::Hostile => "HOSTILE",
             };
@@ -172,9 +178,13 @@ fn rebuild(
                 Text::new(format!("{marker} {side} · {}", entry.name)),
                 TextFont {
                     font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(13.0)
+                    ..TextFont::from_font_size(if dense { 11.0 } else { 13.0 })
                 },
                 TextColor(if entry.current { ACCENT } else { LABEL }),
+                Node {
+                    flex_shrink: 0.0,
+                    ..default()
+                },
                 Pickable::IGNORE,
             ));
         }
@@ -231,5 +241,56 @@ mod tests {
                 ("· HOSTILE · wolf #9".to_owned(), LABEL),
             ]
         );
+    }
+
+    #[test]
+    fn dense_initiative_uses_compact_nonshrinking_entries() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        });
+        app.init_resource::<InitiativeReadout>()
+            .add_systems(Startup, spawn_panel)
+            .add_systems(Update, rebuild);
+        app.update();
+        app.insert_resource(InitiativeReadout(
+            (0..12)
+                .map(|id| InitiativeEntry {
+                    unit: UnitId(id),
+                    name: format!("raider #{id}"),
+                    faction: if id < 6 {
+                        Faction::Player
+                    } else {
+                        Faction::Hostile
+                    },
+                    current: id == 0,
+                })
+                .collect(),
+        ));
+        app.update();
+
+        let mut rows = app
+            .world_mut()
+            .query_filtered::<(&Text, &TextFont, &Node), (With<Name>, Without<InitiativeBody>)>();
+        let rendered: Vec<_> = rows
+            .iter(app.world())
+            .filter(|(text, _, _)| text.0.contains("raider #"))
+            .map(|(text, font, node)| (text.0.clone(), font.font_size, node.flex_shrink))
+            .collect();
+        assert_eq!(rendered.len(), 12);
+        assert_eq!(
+            rendered.first().map(|entry| entry.0.as_str()),
+            Some("▶ P · raider #0")
+        );
+        assert_eq!(
+            rendered.last().map(|entry| entry.0.as_str()),
+            Some("· H · raider #11")
+        );
+        assert!(rendered.iter().all(|(_, font_size, flex_shrink)| {
+            *font_size == FontSize::Px(11.0) && *flex_shrink == 0.0
+        }));
     }
 }

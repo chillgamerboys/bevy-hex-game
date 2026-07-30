@@ -337,6 +337,19 @@ pub enum CommandRefusal {
 /// One structured fact produced by successful combat resolution or command rejection.
 #[derive(Message, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub enum CombatEvent {
+    /// One combat turn completed and initiative advanced.
+    ///
+    /// This is emitted by the authoritative turn-order transition rather than
+    /// reconstructed from commands. A turn may contain movement plus an action,
+    /// only an explicit yield, or end because its owner was otherwise spent.
+    TurnAdvanced {
+        /// Unit whose turn completed.
+        unit: UnitId,
+        /// Unit that owns the next turn, if combat still has one.
+        next: Option<UnitId>,
+        /// Zero-based round after the transition.
+        round: u32,
+    },
     /// A spell was paid for and committed.
     Cast {
         /// The caster.
@@ -658,6 +671,11 @@ mod tests {
         let target = TilePos::new(HexCoord::ORIGIN, 1);
         let cell = LatticeCoord::new(1, 0);
         let events = vec![
+            CombatEvent::TurnAdvanced {
+                unit: source,
+                next: Some(target_unit),
+                round: 1,
+            },
             CombatEvent::Cast {
                 caster: source,
                 spell: "Ember".to_owned(),

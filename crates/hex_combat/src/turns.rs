@@ -466,6 +466,7 @@ fn advance_turn(
     registry: Res<UnitRegistry>,
     settings: Res<CombatSettings>,
     mut rounds: MessageWriter<RoundElapsed>,
+    mut combat_events: MessageWriter<crate::CombatEvent>,
     acting: Query<(Entity, &Turn, Has<Busy>)>,
     initiatives: Query<&Initiative>,
     downed: Query<(), With<Downed>>,
@@ -531,6 +532,11 @@ fn advance_turn(
             acted: false,
         });
     }
+    combat_events.write(crate::CombatEvent::TurnAdvanced {
+        unit: current,
+        next: turn_order.current(),
+        round: turn_order.round,
+    });
 }
 
 /// Movement budget when `combat.ron` has not loaded, for headless harnesses only.

@@ -12,8 +12,8 @@
 //! Headless, so nothing visual is covered — see the note in `hex_map`'s tests.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
-use bevy::app::PluginsState;
 use bevy::asset::AssetPlugin;
 use bevy::camera::NormalizedRenderTarget;
 use bevy::picking::backend::HitData;
@@ -33,6 +33,7 @@ use hex_core::{
     HexTile, MapAnchorId, MapAnchors, Mode, PartyFormation, PartyMovementMode, Pause, Screen,
     SubstanceId, TerrainReady, TilePos, TraversalBlockers, TraversalProfile, Turn, MAX_HEADROOM,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{
     Body, Enemy, Faction, Footing, HexPathingLine, HoveredSurface, MovementSystems, MovingTo,
     Party, PathOverlay, Player, RangeOverlay, Selected, StandsOn, UnitRegistry, UnitRing,
@@ -130,32 +131,8 @@ fn duel(player: EncounterPlacement, hostile: EncounterPlacement) -> Encounter {
 /// carrying `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`, and anything
 /// producing that contract will do.
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin));
-    app.init_asset::<Mesh>();
-    app.init_asset::<StandardMaterial>();
-    app.init_state::<Screen>();
-    // The real app registers this in `screens/gameplay.rs`. Without it there is no
-    // `State<Mode>` at all, and click-to-move correctly refuses to act — which looks
-    // exactly like a movement bug from inside a test.
-    app.add_sub_state::<Mode>();
-    // The real app registers this in `screens/gameplay.rs` too. Without it there is no
-    // `State<Pause>` at all, and a test for "a paused click does nothing" would pass
-    // whether or not the observer checks — the resource simply would not exist.
-    app.add_sub_state::<Pause>();
-
-    app.configure_sets(
-        OnEnter(Screen::Gameplay),
-        (
-            GameplaySetup::Resources,
-            GameplaySetup::Terrain,
-            GameplaySetup::Actors,
-            GameplaySetup::Perception,
-            GameplaySetup::View,
-            GameplaySetup::Finalize,
-        )
-            .chain(),
-    );
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
 
     // Stand-in terrain: flat ground across a small patch, spawned in `Terrain` so it
     // is visible to anything in `Actors`, exactly as the real map is.
@@ -181,11 +158,7 @@ fn test_app() -> App {
 
     app.add_plugins(hex_units::plugin);
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 /// Flat ground across a small patch — as **two stacked runs per column**, which is

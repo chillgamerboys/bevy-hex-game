@@ -196,6 +196,18 @@ creator spell and roster matrices. Every launch freezes its content namespace,
 encounter, and seed for Retry, refuses Continue writes, and restores shipped runtime
 content on exit.
 
+The **Wave 7 tactical integrity and tuning workspace is live**. Exact-surface
+occupancy is shared by previews, validation, AI, formation movement, encounter
+placement, and deployment; Channel is a canonical one-action mana recovery path.
+Combat Lab adds frozen Shipped, Tactical, and validated Custom rule profiles,
+direct deployment repositioning, immutable occupancy/channel/tempo fixtures, a
+canonical live dashboard, and versioned reports with functional Overview, Units,
+Spells & Effects, Timeline, and independently selectable Compare modes. Retry Exact,
+Tune & Run Again, and fixture Copy preserve the frozen map, ordered rosters, exact
+deployment, and profile through re-entry. The bounded tempo audit retained the
+shipped four-hex movement default; its measurements and limits are recorded in the
+[Wave 7 decision audit](../development/wave-7-tempo-decision.md).
+
 The **knowledge seam is live** as `hex_combat::knowledge`:
 `FactionLatticeKnowledge::view` is the one read path for a hostile lattice.
 World-owned `FactionMapKnowledge` gates which subjects currently exist to each viewer;
@@ -254,7 +266,7 @@ place** — they are meant to be replaced.
 | Thing | Now | What it is waiting for |
 |---|---|---|
 | **Initiative** | a number on a component, high to low, ties by stable `UnitId` | The initiative question; derived-from-lattice is one candidate and could also address boss action economy |
-| **A turn** | 4 hexes of movement and one action | The action-economy question. The design's current preference is 1–2 hexes plus an action |
+| **A turn** | 4 hexes of movement and one action; retained after the Wave 7 bounded tempo audit | Broader human playtesting and future initiative/action-economy work; Tactical two-step lengthened the fixed 3v3 fixture without a clear compensating benefit |
 | **Damage** | disables lattice hexes; a player defender chooses and confirms live cells in the HUD, while non-player defenders use a deterministic cheapest-first policy | The fight-length question — how many hexes a spell should take is a feel question nobody has played with yet |
 | **Enemy behaviour** | deterministic `baseline-v1`: revive, reveal, direct-damage cast, self-enchant, strike, then approach an observed live hostile | A rout threshold to know when to stop and a broader tactical policy; this remains a deliberately small baseline rather than a balance decision |
 | **Engage range** | 4 hexes, 6 to disengage; perception will gate the reach trigger on observation | The numbers remain a feel question. The disengage margin stays spatial hysteresis; the separate lost-contact rule searches for one round |
@@ -305,11 +317,6 @@ Everything in [the design](../design/game.md#open-questions)'s open questions, p
 - **Terrain that costs something to cross.** `Reach` charges one per step, so the
   shortest route is the one taken and breadth-first order is enough to find it. Mud,
   ice or a climb would each need a priority queue, and none of them are designed.
-- **Units obstructing each other.** Two units can occupy the same surface, and the
-  pathfinder will happily route one straight through another. An occupancy map over
-  unit positions would fix both and lives entirely in `hex_combat`. Encounter placement
-  is the one exception: a roster never *starts* two units on one voxel, because
-  placement tracks the surfaces it has already used.
 - **A way out of a stalemate.** A melee-only enemy separated by terrain it cannot cross
   stays in the fight forever: `approach` finds no route, so it spends its turn doing
   nothing, every round. Height makes this easier to fall into, since a fight now starts

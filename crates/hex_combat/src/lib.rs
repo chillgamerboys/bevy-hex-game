@@ -61,7 +61,7 @@ pub use outcomes::{
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
 pub use summary::{
-    CombatSummary, CombatTranscriptRecorder, CommandKind, DeliveredEffectKind,
+    CombatSummary, CombatTranscriptRecorder, CommandKind, DeliveredEffectKind, UnitCombatSummary,
     COMBAT_SUMMARY_FINGERPRINT_VERSION, MAX_COMBAT_SUMMARY_DETAILS,
 };
 pub use turns::{Initiative, TurnOrder};

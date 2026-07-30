@@ -8,18 +8,13 @@
 //! Terrain is spawned by the test, because `hex_combat` cannot see `hex_map` and does
 //! not need to: it consumes `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
-use hex_assets::{
-    ArtPalette, ElementCatalog, ElementFile, PaletteSwatch, PlayerSettings, SrgbColor, Substance,
-    SubstanceFile, SubstanceTable, SwatchId,
-};
+use hex_assets::{ElementCatalog, ElementFile, PlayerSettings};
 use hex_combat::{
     AiDecisionTraces, CombatSummary, CombatTranscriptRecorder, EncounterOutcome,
     EncounterResolution, Initiative, TurnOrder, MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
@@ -27,32 +22,34 @@ use hex_combat::{
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand,
     LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos,
-    Turn, UnitId, MAX_HEADROOM,
+    Turn, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::{SyntheticArena, TestAppBuilder};
 use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn, UnitAllocator};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
-const STONE: SubstanceId = SubstanceId(1);
-
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(10, GROUND_LEVEL))
+        .expect("the shared synthetic arena must be valid");
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
-    app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
     });
-    app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     // `hex_units::movement::plugin`, not the whole of `hex_units::plugin`: this is what
     // keeps `StandsOn` honest as a unit walks, and combat is meaningless without it.
     // The full plugin would also read the active scenario placements and spawn its own
@@ -63,49 +60,7 @@ fn test_app() -> App {
         hex_combat::plugin,
     ));
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
-}
-
-/// Flat, walkable ground with plenty of headroom.
-fn spawn_terrain(mut commands: Commands) {
-    for coord in HexCoord::ORIGIN.within_radius(10) {
-        commands.spawn((
-            HexTile,
-            coord,
-            TilePos::new(coord, GROUND_LEVEL),
-            HexSpan::new(GROUND - 1.0, GROUND),
-            STONE,
-            Headroom(MAX_HEADROOM),
-        ));
-    }
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the test immediately"
-)]
-fn substance_table() -> SubstanceTable {
-    let stone_id = SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
-    let stone = PaletteSwatch::new(
-        "Stone",
-        SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
-        BTreeSet::from(["test".to_owned()]),
-    )
-    .expect("the fixture swatch should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
-        .expect("the fixture palette should be valid");
-    let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert("air".to_owned(), Substance::invisible(false, false));
-    substances.insert(
-        "stone".to_owned(),
-        Substance::from_swatch(stone_id, true, true),
-    );
-    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
-        .expect("the fixture substance should resolve through its palette")
+    builder.build()
 }
 
 /// The stable id combat dealt this entity when the fight began.

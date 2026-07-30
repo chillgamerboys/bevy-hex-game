@@ -12,8 +12,11 @@
 //! before an interface for it existed; nothing here emits a command any more.
 
 use bevy::prelude::*;
+use bevy::ui_widgets::ScrollArea;
 use hex_assets::FormationCatalog;
-use hex_combat::{CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder};
+use hex_combat::{
+    CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder, UnitCombatSummary,
+};
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySystems, HexCoord, InputAction,
     InputBindings, IssuedCommand, Mode, PartyFormation, PartyMovementMode, Pause, PendingDecision,
@@ -22,7 +25,10 @@ use hex_core::{
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
-use super::combat_lab::{CombatLabReportLaunch, CombatLabSession, CreatorDisplayName};
+use super::combat_lab::{
+    CombatLabReportLaunch, CombatLabSandboxRequest, CombatLabSession, CreatorContentOverlay,
+    CreatorDisplayName,
+};
 use super::{despawn_screen, DespawnOnExit};
 use crate::combat_reports::{CombatLabReport, CombatLabReportStore, CurrentCombatLabReport};
 use crate::menus::widgets::{
@@ -32,8 +38,9 @@ use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup
 use crate::scenarios::ActiveScenario;
 use crate::storage::StoragePaths;
 
-pub(super) fn plugin(app: &mut App) {
+pub(crate) fn plugin(app: &mut App) {
     app.init_resource::<InputBindings>();
+    app.init_resource::<OutcomeReportState>();
     app.add_sub_state::<Pause>();
     app.register_type::<Pause>();
     // A second sub-state of `Screen::Gameplay`, independent of `Pause`. Both are
@@ -64,7 +71,12 @@ pub(super) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        (sync_outcome_modal, handle_outcome_actions)
+        (
+            handle_outcome_report_controls,
+            sync_outcome_modal,
+            update_outcome_report,
+            handle_outcome_actions,
+        )
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
@@ -75,6 +87,10 @@ pub(super) fn plugin(app: &mut App) {
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
+    );
+    app.add_systems(
+        Update,
+        sync_lab_statistics_visibility.run_if(in_state(Screen::Gameplay)),
     );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
@@ -93,6 +109,7 @@ pub(super) fn plugin(app: &mut App) {
         (
             reset_pause,
             reset_mode,
+            reset_outcome_report,
             spawn_hud.in_set(HudSetup::Panels),
             spawn_party_strip.in_set(HudSetup::Panels),
             spawn_lab_statistics.in_set(HudSetup::Panels),
@@ -147,14 +164,60 @@ struct LabStatisticsToggle;
 #[derive(Component)]
 struct LabStatisticsToggleText;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum OutcomeReportMode {
+    #[default]
+    Overview,
+    Units,
+    SpellsEffects,
+    Timeline,
+    Compare,
+}
+
+impl OutcomeReportMode {
+    const ALL: [(Self, &'static str); 5] = [
+        (Self::Overview, "Overview"),
+        (Self::Units, "Units"),
+        (Self::SpellsEffects, "Spells & Effects"),
+        (Self::Timeline, "Timeline"),
+        (Self::Compare, "Compare"),
+    ];
+}
+
+#[derive(Resource, Debug, Default)]
+struct OutcomeReportState {
+    mode: OutcomeReportMode,
+    compare_report: Option<crate::combat_reports::CombatLabReportId>,
+}
+
+#[derive(Component, Debug, Clone, Copy)]
+enum OutcomeReportControl {
+    Mode(OutcomeReportMode),
+    CompareWith(crate::combat_reports::CombatLabReportId),
+}
+
+#[derive(Component)]
+struct OutcomeReportTab(OutcomeReportMode);
+
+#[derive(Component)]
+struct OutcomeReportBody;
+
+#[derive(Component)]
+struct OutcomeCompareControls;
+
 #[derive(Component, Clone, Copy)]
 enum OutcomeAction {
     Continue,
     Retry,
     RetryExact,
     TuneAgain,
+    CopyToSandbox,
     SaveReport,
     ReturnTitle,
+}
+
+fn reset_outcome_report(mut state: ResMut<OutcomeReportState>) {
+    *state = OutcomeReportState::default();
 }
 
 fn spawn_lab_statistics(
@@ -172,9 +235,10 @@ fn spawn_lab_statistics(
             DespawnOnExit(Screen::Gameplay),
             Node {
                 position_type: PositionType::Absolute,
-                right: Val::Px(18.0),
-                top: Val::Px(86.0),
+                right: Val::Px(320.0),
+                top: Val::Px(200.0),
                 width: Val::Px(480.0),
+                max_height: Val::Px(300.0),
                 padding: UiRect::all(Val::Px(10.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(7.0),
@@ -199,9 +263,13 @@ fn spawn_lab_statistics(
             drawer
                 .spawn((
                     LabStatisticsPanel,
+                    ScrollArea,
                     Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
                         flex_direction: FlexDirection::Column,
                         row_gap: Val::Px(5.0),
+                        overflow: Overflow::scroll_y(),
                         ..default()
                     },
                 ))
@@ -222,6 +290,25 @@ fn spawn_lab_statistics(
                     ));
                 });
         });
+}
+
+pub(crate) fn lab_statistics_should_be_visible(
+    phase: GameplayPhase,
+    resolution: Option<&EncounterResolution>,
+) -> bool {
+    phase == GameplayPhase::Active && resolution.is_none_or(|resolution| resolution.0.is_none())
+}
+
+fn sync_lab_statistics_visibility(
+    phase: Res<GameplayPhase>,
+    resolution: Option<Res<EncounterResolution>>,
+    mut drawers: Query<&mut Visibility, With<LabStatisticsDrawer>>,
+) {
+    let visibility = lab_statistics_should_be_visible(*phase, resolution.as_deref())
+        .then_some(Visibility::Inherited);
+    for mut drawer in &mut drawers {
+        *drawer = visibility.unwrap_or(Visibility::Hidden);
+    }
 }
 
 fn toggle_lab_statistics(
@@ -263,7 +350,7 @@ fn update_lab_statistics(
     **text = live_statistics_label(summary);
 }
 
-fn live_statistics_label(summary: &CombatSummary) -> String {
+pub(crate) fn live_statistics_label(summary: &CombatSummary) -> String {
     let mana = if summary.channelled_mana.is_empty() {
         "none".to_owned()
     } else {
@@ -280,15 +367,25 @@ fn live_statistics_label(summary: &CombatSummary) -> String {
             EncounterOutcome::Victory => "VICTORY",
             EncounterOutcome::Defeat => "DEFEAT",
         });
+    let units = summary
+        .units
+        .iter()
+        .map(|(unit, summary)| format_unit_statistics(*unit, summary))
+        .collect::<Vec<_>>()
+        .join("\n");
     format!(
-        "Round {} · Outcome {outcome}\n\
+        "Round {} · Turns {} · Outcome {outcome} · No-progress {}/{} current/max\n\
          Commands {} successful / {} refused · AI choices {}\n\
          Move {} actions · {} distance / {} budget used\n\
          Casts {} · Channel {} · Strikes {} · Idle turns {}\n\
          Disables {} raw / {} prevented / {} applied\n\
          Restored {} · Downed {} · Revived {}\n\
-         Mana restored · {mana}",
+         Mana restored · {mana}\n\
+         PER UNIT\n{units}",
         summary.rounds,
+        summary.turns,
+        summary.no_progress_current,
+        summary.no_progress_max,
         summary.successful_commands,
         summary.refused_commands,
         summary.ai_selection_count,
@@ -305,6 +402,38 @@ fn live_statistics_label(summary: &CombatSummary) -> String {
         summary.restored_cells,
         summary.downings,
         summary.revivals,
+    )
+}
+
+fn format_unit_statistics(unit: UnitId, summary: &UnitCombatSummary) -> String {
+    let mana = summary
+        .channelled_mana
+        .iter()
+        .map(|(element, amount)| format!("{element} {amount}"))
+        .collect::<Vec<_>>()
+        .join("/");
+    format!(
+        "#{} turns {} · no-progress {}/{} · cmd {}/{} · move {}/{} · cast {} · channel {} [{}] · strike {} · disable {}/{}/{} · restore {} · down/revive {}/{} · idle {} · AI {}",
+        unit.0,
+        summary.turns,
+        summary.no_progress_current,
+        summary.no_progress_max,
+        summary.successful_commands,
+        summary.refused_commands,
+        summary.movement_distance,
+        summary.movement_budget_used,
+        summary.casts_by_spell.values().sum::<u32>(),
+        summary.channels,
+        if mana.is_empty() { "none" } else { &mana },
+        summary.strikes,
+        summary.raw_disables,
+        summary.prevented_disables,
+        summary.applied_disables,
+        summary.restored_cells,
+        summary.downings,
+        summary.revivals,
+        summary.idle_turns,
+        summary.ai_choices,
     )
 }
 
@@ -860,6 +989,7 @@ fn sync_outcome_modal(
     launch: Option<Res<CombatLabReportLaunch>>,
     summary: Option<Res<CombatSummary>>,
     reports: Option<Res<CombatLabReportStore>>,
+    report_state: Res<OutcomeReportState>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         for entity in &existing {
@@ -977,53 +1107,78 @@ fn sync_outcome_modal(
                                 ..default()
                             })
                             .with_children(|tabs| {
-                                for mode in [
-                                    "Overview · ACTIVE",
-                                    "Units",
-                                    "Spells & Effects",
-                                    "Timeline",
-                                    "Compare",
-                                ] {
-                                    tabs.spawn(row_button(mode, 155.0))
-                                        .with_child(blurb(&assets, mode));
+                                for (mode, label) in OutcomeReportMode::ALL {
+                                    let text = if report_state.mode == mode {
+                                        format!("{label} · ACTIVE")
+                                    } else {
+                                        label.to_owned()
+                                    };
+                                    tabs.spawn((
+                                        row_button(label, 155.0),
+                                        OutcomeReportControl::Mode(mode),
+                                        OutcomeReportTab(mode),
+                                    ))
+                                    .with_child(blurb(&assets, text));
                                 }
                             });
-                        panel.spawn(blurb(
-                            &assets,
-                            format!(
-                                "OVERVIEW\nRounds {} · Commands {} successful / {} refused · AI choices {}\n\
-                                 Movement {} distance / {} budget · Casts {} · Channel {} · Strikes {} · Idle {}\n\
-                                 Disables {} raw / {} prevented / {} applied · Restored {} · Downed {} · Revived {}\n\
-                                 Timeline {} of {} canonical events retained · Compare: {} explicitly saved report{}",
-                                report.summary.rounds,
-                                report.summary.successful_commands,
-                                report.summary.refused_commands,
-                                report.summary.ai_selection_count,
-                                report.summary.movement_distance,
-                                report.summary.movement_budget_used,
-                                report.summary.casts,
-                                report.summary.channels,
-                                report.summary.strikes,
-                                report.summary.idle_turns,
-                                report.summary.raw_disables,
-                                report.summary.prevented_disables,
-                                report.summary.applied_disables,
-                                report.summary.restored_cells,
-                                report.summary.downings,
-                                report.summary.revivals,
-                                report.summary.events.len(),
-                                report.summary.event_count,
-                                reports.as_deref().map_or(0, |store| store.history.reports.len()),
-                                if reports
-                                    .as_deref()
-                                    .is_some_and(|store| store.history.reports.len() == 1)
-                                {
-                                    ""
-                                } else {
-                                    "s"
+                        panel
+                            .spawn((
+                                ScrollArea,
+                                Node {
+                                    width: Val::Percent(100.0),
+                                    min_height: Val::Px(0.0),
+                                    flex_grow: 1.0,
+                                    overflow: Overflow::scroll_y(),
+                                    flex_direction: FlexDirection::Column,
+                                    ..default()
                                 },
-                            ),
-                        ));
+                            ))
+                            .with_child((
+                                OutcomeReportBody,
+                                blurb(
+                                    &assets,
+                                    outcome_report_text(
+                                        report,
+                                        report_state.mode,
+                                        reports.as_deref(),
+                                        report_state.compare_report,
+                                    ),
+                                ),
+                            ));
+                        panel
+                            .spawn((
+                                OutcomeCompareControls,
+                                Node {
+                                    flex_direction: FlexDirection::Row,
+                                    column_gap: Val::Px(6.0),
+                                    flex_wrap: FlexWrap::Wrap,
+                                    ..default()
+                                },
+                                if report_state.mode == OutcomeReportMode::Compare {
+                                    Visibility::Inherited
+                                } else {
+                                    Visibility::Hidden
+                                },
+                            ))
+                            .with_children(|selectors| {
+                                if let Some(reports) = reports.as_deref() {
+                                    for saved in &reports.history.reports {
+                                        let selected =
+                                            report_state.compare_report == Some(saved.id);
+                                        let label = if selected {
+                                            format!("COMPARE · REPORT {}", saved.id.0)
+                                        } else {
+                                            format!("Report {}", saved.id.0)
+                                        };
+                                        selectors
+                                            .spawn((
+                                                row_button(label.clone(), 150.0),
+                                                OutcomeReportControl::CompareWith(saved.id),
+                                            ))
+                                            .with_child(blurb(&assets, label));
+                                    }
+                                }
+                            });
                     }
                     panel
                         .spawn(Node {
@@ -1040,6 +1195,20 @@ fn sync_outcome_modal(
                                 ] {
                                     buttons
                                         .spawn((row_button(text, 170.0), action))
+                                        .with_child(blurb(&assets, text));
+                                }
+                                if matches!(
+                                    report.as_ref().map(|report| &report.origin),
+                                    Some(crate::combat_reports::CombatLabReportOrigin::FixedFixture {
+                                        ..
+                                    })
+                                ) {
+                                    let text = "Copy to Sandbox";
+                                    buttons
+                                        .spawn((
+                                            row_button(text, 170.0),
+                                            OutcomeAction::CopyToSandbox,
+                                        ))
                                         .with_child(blurb(&assets, text));
                                 }
                             } else {
@@ -1064,11 +1233,261 @@ fn sync_outcome_modal(
         });
 }
 
+fn handle_outcome_report_controls(
+    clicked: Query<(&Interaction, &OutcomeReportControl), Changed<Interaction>>,
+    mut state: ResMut<OutcomeReportState>,
+) {
+    for (interaction, control) in &clicked {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match *control {
+            OutcomeReportControl::Mode(mode) => state.mode = mode,
+            OutcomeReportControl::CompareWith(id) => {
+                state.mode = OutcomeReportMode::Compare;
+                state.compare_report = Some(id);
+            }
+        }
+    }
+}
+
+fn update_outcome_report(
+    state: Res<OutcomeReportState>,
+    report: Option<Res<CurrentCombatLabReport>>,
+    reports: Option<Res<CombatLabReportStore>>,
+    mut body: Query<&mut Text, With<OutcomeReportBody>>,
+    tabs: Query<(&OutcomeReportTab, &Children)>,
+    mut tab_text: Query<&mut Text, Without<OutcomeReportBody>>,
+    mut compare_controls: Query<&mut Visibility, With<OutcomeCompareControls>>,
+) {
+    let Some(report) = report.as_deref() else {
+        return;
+    };
+    if let Ok(mut text) = body.single_mut() {
+        **text = outcome_report_text(
+            &report.0,
+            state.mode,
+            reports.as_deref(),
+            state.compare_report,
+        );
+    }
+    for (tab, children) in &tabs {
+        let Some((_, label)) = OutcomeReportMode::ALL
+            .iter()
+            .find(|(mode, _)| *mode == tab.0)
+        else {
+            continue;
+        };
+        if let Some(child) = children.first() {
+            if let Ok(mut text) = tab_text.get_mut(*child) {
+                **text = if state.mode == tab.0 {
+                    format!("{label} · ACTIVE")
+                } else {
+                    (*label).to_owned()
+                };
+            }
+        }
+    }
+    if let Ok(mut visibility) = compare_controls.single_mut() {
+        *visibility = if state.mode == OutcomeReportMode::Compare {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+pub(crate) fn outcome_report_text(
+    report: &CombatLabReport,
+    mode: OutcomeReportMode,
+    store: Option<&CombatLabReportStore>,
+    selected: Option<crate::combat_reports::CombatLabReportId>,
+) -> String {
+    match mode {
+        OutcomeReportMode::Overview => format!(
+            "OVERVIEW\nRounds {} · Turns {} · Commands {} successful / {} refused · AI choices {}\n\
+             Movement {} distance / {} budget · Casts {} · Channel {} · Strikes {} · Idle {}\n\
+             Disables {} raw / {} prevented / {} applied · Restored {} · Downed {} · Revived {}\n\
+             No-progress stretch {} current / {} maximum · Timeline {} of {} canonical events retained",
+            report.summary.rounds,
+            report.summary.turns,
+            report.summary.successful_commands,
+            report.summary.refused_commands,
+            report.summary.ai_selection_count,
+            report.summary.movement_distance,
+            report.summary.movement_budget_used,
+            report.summary.casts,
+            report.summary.channels,
+            report.summary.strikes,
+            report.summary.idle_turns,
+            report.summary.raw_disables,
+            report.summary.prevented_disables,
+            report.summary.applied_disables,
+            report.summary.restored_cells,
+            report.summary.downings,
+            report.summary.revivals,
+            report.summary.no_progress_current,
+            report.summary.no_progress_max,
+            report.summary.events.len(),
+            report.summary.event_count,
+        ),
+        OutcomeReportMode::Units => {
+            let mut lines = vec!["UNITS · stable frozen roster order".to_owned()];
+            for (side, roster) in [
+                ("PLAYER", report.rosters.players.as_slice()),
+                ("HOSTILE", report.rosters.hostiles.as_slice()),
+            ] {
+                for entry in roster {
+                    let unit = UnitId(entry.unit_id);
+                    let summary = report.summary.units.get(&unit).cloned().unwrap_or_default();
+                    lines.push(format!(
+                        "{side} · {} · {}",
+                        entry.display_name,
+                        format_unit_statistics(unit, &summary)
+                    ));
+                }
+            }
+            lines.join("\n")
+        }
+        OutcomeReportMode::SpellsEffects => {
+            let casts = report
+                .summary
+                .casts_by_spell
+                .iter()
+                .map(|(spell, count)| format!("{spell} {count}"))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let effects = report
+                .summary
+                .delivered_effects
+                .iter()
+                .map(|(effect, count)| format!("{effect:?} {count}"))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            let mana = report
+                .summary
+                .channelled_mana
+                .iter()
+                .map(|(element, amount)| format!("{element} {amount}"))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            format!(
+                "SPELLS & EFFECTS\nCasts · {}\nDelivered · {}\nChannel mana · {}\nDisable flow · {} raw / {} prevented / {} applied · restorations {}",
+                if casts.is_empty() { "none" } else { &casts },
+                if effects.is_empty() { "none" } else { &effects },
+                if mana.is_empty() { "none" } else { &mana },
+                report.summary.raw_disables,
+                report.summary.prevented_disables,
+                report.summary.applied_disables,
+                report.summary.restored_cells,
+            )
+        }
+        OutcomeReportMode::Timeline => {
+            let retained = report.summary.events.len();
+            let shown = retained.min(18);
+            let skipped = retained.saturating_sub(shown);
+            let mut lines = vec![format!(
+                "TIMELINE · showing final {shown} of {} retained / {} total{}",
+                retained,
+                report.summary.event_count,
+                if u64::try_from(retained).unwrap_or(u64::MAX) < report.summary.event_count {
+                    " · OLDER EVENTS TRUNCATED"
+                } else {
+                    ""
+                }
+            )];
+            for (index, event) in report.summary.events.iter().skip(skipped).enumerate() {
+                lines.push(format!("{:04} · {event:?}", skipped + index + 1));
+            }
+            lines.join("\n")
+        }
+        OutcomeReportMode::Compare => {
+            let Some(store) = store else {
+                return "COMPARE\nSaved report history is unavailable.".to_owned();
+            };
+            let comparison = selected
+                .and_then(|id| store.history.reports.iter().find(|saved| saved.id == id))
+                .or_else(|| store.history.reports.last());
+            let Some(saved) = comparison else {
+                return "COMPARE\nSave a report, then select it here. Fixed fixtures do not read history until Compare is explicitly opened.".to_owned();
+            };
+            format_report_comparison(report, &saved.report, saved.id.0)
+        }
+    }
+}
+
+fn format_report_comparison(
+    current: &CombatLabReport,
+    saved: &CombatLabReport,
+    saved_id: u64,
+) -> String {
+    format!(
+        "COMPARE · THIS RUN ↔ REPORT {saved_id}\n\
+         THIS · {}\n\
+         SAVED · {}\n\
+         DELTAS (this − saved) · rounds {:+} · turns {:+} · successful {:+} · refused {:+}\n\
+         movement {:+} · Channel {:+} · applied disables {:+} · no-progress max {:+}",
+        outcome_frozen_header(current),
+        outcome_frozen_header(saved),
+        signed_report_delta(current.summary.rounds, saved.summary.rounds),
+        signed_report_delta(current.summary.turns, saved.summary.turns),
+        signed_report_delta(
+            current.summary.successful_commands,
+            saved.summary.successful_commands,
+        ),
+        signed_report_delta(
+            current.summary.refused_commands,
+            saved.summary.refused_commands,
+        ),
+        signed_report_delta(
+            current.summary.movement_distance,
+            saved.summary.movement_distance,
+        ),
+        signed_report_delta(current.summary.channels, saved.summary.channels),
+        signed_report_delta(
+            current.summary.applied_disables,
+            saved.summary.applied_disables,
+        ),
+        signed_report_delta(
+            current.summary.no_progress_max,
+            saved.summary.no_progress_max,
+        ),
+    )
+}
+
+fn outcome_frozen_header(report: &CombatLabReport) -> String {
+    let roster = |entries: &[crate::combat_reports::CombatLabReportRosterEntry]| {
+        entries
+            .iter()
+            .map(|entry| entry.display_name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{:?} · {} · rules [{}/{}/{}/{}/{}/{}] · P [{}] · H [{}]",
+        report.profile.preset,
+        report.map.scenario,
+        report.profile.movement_per_turn,
+        report.profile.strike_disables,
+        report.profile.engage_range,
+        report.profile.disengage_margin,
+        report.profile.levels_per_bonus_range,
+        report.profile.reveal_duration,
+        roster(&report.rosters.players),
+        roster(&report.rosters.hostiles),
+    )
+}
+
+fn signed_report_delta(left: u32, right: u32) -> i64 {
+    i64::from(left) - i64::from(right)
+}
+
 fn handle_outcome_actions(
     clicked: Query<(&Interaction, &OutcomeAction), Changed<Interaction>>,
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
     lab: Option<Res<CombatLabSession>>,
+    overlay: Option<Res<CreatorContentOverlay>>,
     current_report: Option<Res<CurrentCombatLabReport>>,
     mut report_store: Option<ResMut<CombatLabReportStore>>,
     paths: Option<Res<StoragePaths>>,
@@ -1108,6 +1527,32 @@ fn handle_outcome_actions(
                 next_screen.set(Screen::Loading);
             }
             (OutcomeAction::TuneAgain, _) => {
+                let Some(report) = current_report.as_deref() else {
+                    error!("cannot tune Lab run: frozen report state is unavailable");
+                    continue;
+                };
+                commands.insert_resource(CombatLabSandboxRequest {
+                    report: report.0.clone(),
+                    overlay: overlay.as_deref().cloned(),
+                });
+                next_screen.set(Screen::CombatLab);
+            }
+            (OutcomeAction::CopyToSandbox, _) => {
+                let Some(report) = current_report.as_deref() else {
+                    error!("cannot copy fixture: frozen report state is unavailable");
+                    continue;
+                };
+                if !matches!(
+                    report.0.origin,
+                    crate::combat_reports::CombatLabReportOrigin::FixedFixture { .. }
+                ) {
+                    error!("cannot copy non-fixture report to Sandbox");
+                    continue;
+                }
+                commands.insert_resource(CombatLabSandboxRequest {
+                    report: report.0.clone(),
+                    overlay: overlay.as_deref().cloned(),
+                });
                 next_screen.set(Screen::CombatLab);
             }
             (OutcomeAction::SaveReport, _) => {
@@ -1336,9 +1781,56 @@ mod tests {
     use bevy::state::app::StatesPlugin;
     use bevy::MinimalPlugins;
     use hex_assets::ScenarioLibrary;
-    use hex_core::ResolvedMapSeed;
+    use hex_core::{ResolvedMapSeed, TilePos};
 
     use super::*;
+
+    fn sample_report(rounds: u32) -> CombatLabReport {
+        let shipped = hex_assets::CombatSettings::default();
+        let mut summary = CombatSummary::default();
+        summary.rounds = rounds;
+        summary.turns = rounds.saturating_mul(3);
+        summary.no_progress_max = 2;
+        summary.outcome = Some(EncounterOutcome::Victory);
+        summary.units.insert(
+            UnitId(1),
+            UnitCombatSummary {
+                movement_distance: 3,
+                channels: 1,
+                ..default()
+            },
+        );
+        CombatLabReport::new(
+            hex_assets::CombatRulesProfile::shipped(&shipped),
+            crate::combat_reports::CombatLabReportOrigin::Sandbox,
+            crate::combat_reports::CombatLabReportMap {
+                catalog_id: "flat-arena".to_owned(),
+                scenario: "Ability Lab".to_owned(),
+                resolved_seed: None,
+            },
+            77,
+            crate::combat_reports::CombatLabReportRosters {
+                players: vec![crate::combat_reports::CombatLabReportRosterEntry {
+                    unit_id: 1,
+                    archetype: "hedge-mage".to_owned(),
+                    display_name: "Hedge Mage".to_owned(),
+                    controller: crate::combat_reports::CombatLabReportController::Human,
+                }],
+                hostiles: vec![crate::combat_reports::CombatLabReportRosterEntry {
+                    unit_id: 2,
+                    archetype: "raider".to_owned(),
+                    display_name: "Raider".to_owned(),
+                    controller: crate::combat_reports::CombatLabReportController::BaselineAi,
+                }],
+            },
+            crate::combat_reports::CombatLabReportDeployment {
+                players: vec![TilePos::new(HexCoord::ORIGIN, 1)],
+                hostiles: vec![TilePos::new(HexCoord::from_axial(1, 0), 1)],
+            },
+            EncounterOutcome::Victory,
+            summary,
+        )
+    }
 
     /// Every layer of the full-width HUD must let world picks pass through.
     ///
@@ -1431,32 +1923,48 @@ mod tests {
     }
 
     #[test]
-    fn live_lab_statistics_are_labelled_from_the_canonical_summary() {
-        let mut summary = CombatSummary::default();
-        summary.rounds = 4;
-        summary.successful_commands = 31;
-        summary.refused_commands = 3;
-        summary.movement_distance = 17;
-        summary.movement_budget_used = 22;
-        summary.channels = 4;
-        summary.raw_disables = 19;
-        summary.prevented_disables = 7;
-        summary.applied_disables = 12;
-        summary.channelled_mana.insert("Ember".to_owned(), 3);
-        let label = live_statistics_label(&summary);
-        for expected in [
-            "Round 4",
-            "31 successful / 3 refused",
-            "17 distance / 22 budget used",
-            "Channel 4",
-            "19 raw / 7 prevented / 12 applied",
-            "Ember 3",
-        ] {
-            assert!(
-                label.contains(expected),
-                "missing labelled total {expected:?}"
-            );
-        }
+    fn outcome_report_tabs_are_wired_controls_not_inert_buttons() {
+        let shipped = hex_assets::CombatSettings::default();
+        let report = sample_report(4);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(UiAssets {
+                display: Handle::default(),
+                body: Handle::default(),
+                hex_cell: Handle::default(),
+            })
+            .insert_resource(EncounterResolution(Some(EncounterOutcome::Victory)))
+            .insert_resource(report.summary.clone())
+            .insert_resource(CombatLabSession {
+                kind: super::super::combat_lab::CombatLabSessionKind::Sandbox,
+                return_to: Screen::CombatLab,
+                profile: report.profile.clone(),
+                shipped_combat: shipped,
+                report_map: report.map.clone(),
+                initial_state: None,
+            })
+            .insert_resource(CombatLabReportLaunch {
+                origin: report.origin.clone(),
+                map: report.map.clone(),
+                content_revision: report.content_revision,
+                rosters: report.rosters.clone(),
+                deployment: report.deployment.clone(),
+            })
+            .init_resource::<CombatLabReportStore>()
+            .init_resource::<OutcomeReportState>()
+            .add_systems(Update, sync_outcome_modal);
+        app.update();
+
+        let mut controls = app.world_mut().query::<&OutcomeReportControl>();
+        let modes = controls
+            .iter(app.world())
+            .filter(|control| matches!(control, OutcomeReportControl::Mode(_)))
+            .count();
+        assert_eq!(modes, OutcomeReportMode::ALL.len());
+        let mut body = app
+            .world_mut()
+            .query_filtered::<Entity, With<OutcomeReportBody>>();
+        assert_eq!(body.iter(app.world()).count(), 1);
     }
 
     #[test]

@@ -275,6 +275,7 @@ fn event_is_disclosed(
 ) -> bool {
     let unit = |id| unit_is_disclosed(viewer, id, registry, identities, spatial);
     match event {
+        CombatEvent::TurnAdvanced { unit: actor, .. } => unit(*actor),
         CombatEvent::Cast { caster, .. } => unit(*caster),
         CombatEvent::Channelled {
             unit: channeler, ..
@@ -401,6 +402,9 @@ fn format_event(
     spells: Option<&SpellBook>,
 ) -> Option<LogLine> {
     let line = match event {
+        // Turn boundaries are canonical report facts, but the ordinary combat log
+        // already communicates initiative and should not grow one line per turn.
+        CombatEvent::TurnAdvanced { .. } => return None,
         CombatEvent::Cast { caster, spell, .. } => LogLine {
             text: format!("{} cast {spell}", unit_name(*caster, registry, identities)),
             danger: false,

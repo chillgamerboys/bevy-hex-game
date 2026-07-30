@@ -22,6 +22,7 @@ use hex_core::{
     MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
     TraversalProfile,
 };
+use hex_lattice::SpellTable as _;
 use hex_units::{Archetype, Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
 
 use crate::combat_reports::{
@@ -44,7 +45,7 @@ use super::{despawn_screen, screen_root, screen_root_node};
 const MAX_ROSTER: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum LabTab {
+pub(crate) enum LabTab {
     #[default]
     Sandbox,
     Fixtures,
@@ -52,7 +53,7 @@ enum LabTab {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum SandboxStep {
+pub(crate) enum SandboxStep {
     #[default]
     Map,
     Rosters,
@@ -62,24 +63,29 @@ enum SandboxStep {
 const DEFAULT_SANDBOX_MAP: &str = "flat-arena";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RosterChoice {
+pub(crate) enum RosterChoice {
     Template(String),
     Custom(CustomCharacterId),
+    Packaged(CustomCharacterId),
 }
 
 #[derive(Resource, Debug)]
-struct CombatLabState {
-    tab: LabTab,
-    sandbox_step: SandboxStep,
-    map: String,
-    players: Vec<RosterChoice>,
-    hostiles: Vec<RosterChoice>,
-    fixture_filter: String,
-    creator_origin: bool,
-    rules: Option<CombatRulesProfile>,
-    pending_report_delete: Option<CombatLabReportId>,
-    notice: String,
-    revision: u64,
+pub(crate) struct CombatLabState {
+    pub(crate) tab: LabTab,
+    pub(crate) sandbox_step: SandboxStep,
+    pub(crate) map: String,
+    pub(crate) players: Vec<RosterChoice>,
+    pub(crate) hostiles: Vec<RosterChoice>,
+    pub(crate) fixture_filter: String,
+    pub(crate) creator_origin: bool,
+    pub(crate) rules: Option<CombatRulesProfile>,
+    pub(crate) preserved_deployment: Option<CombatLabReportDeployment>,
+    pub(crate) frozen_overlay: Option<CreatorContentOverlay>,
+    pub(crate) compare_left: Option<CombatLabReportId>,
+    pub(crate) compare_right: Option<CombatLabReportId>,
+    pub(crate) pending_report_delete: Option<CombatLabReportId>,
+    pub(crate) notice: String,
+    pub(crate) revision: u64,
 }
 
 impl Default for CombatLabState {
@@ -93,6 +99,10 @@ impl Default for CombatLabState {
             fixture_filter: String::new(),
             creator_origin: false,
             rules: None,
+            preserved_deployment: None,
+            frozen_overlay: None,
+            compare_left: None,
+            compare_right: None,
             pending_report_delete: None,
             notice: String::new(),
             revision: 1,
@@ -186,6 +196,8 @@ pub(crate) struct CombatLabSession {
     pub(crate) shipped_combat: CombatSettings,
     /// Stable map identity frozen before Loading.
     pub(crate) report_map: CombatLabReportMap,
+    /// Immutable pre-combat fixture mutation reapplied on every exact Retry.
+    pub(crate) initial_state: Option<FixedFixtureInitialState>,
 }
 
 /// Frozen report inputs captured at the instant active combat begins.
@@ -198,6 +210,13 @@ pub(crate) struct CombatLabReportLaunch {
     pub(crate) deployment: CombatLabReportDeployment,
 }
 
+/// Outcome-to-Sandbox handoff used by Tune and fixed-fixture copying.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct CombatLabSandboxRequest {
+    pub(crate) report: crate::combat_reports::CombatLabReport,
+    pub(crate) overlay: Option<CreatorContentOverlay>,
+}
+
 /// Whether a frozen Lab profile was admitted at the Loading boundary.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CombatLabRulesStatus {
@@ -205,6 +224,11 @@ pub(crate) enum CombatLabRulesStatus {
     Ready,
     /// The profile failed closed and gameplay must not start.
     Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixedFixtureInitialState {
+    ChannelAttrition,
 }
 
 /// Frozen human deployment state carried over the already-loaded terrain.
@@ -228,6 +252,7 @@ impl DeploymentSession {
         map_definition: CombatLabMapDefinition,
         players: Vec<RosterChoice>,
         hostiles: Vec<RosterChoice>,
+        preserved: Option<&CombatLabReportDeployment>,
     ) -> Self {
         let player_len = players.len();
         let hostile_len = hostiles.len();
@@ -235,8 +260,32 @@ impl DeploymentSession {
             map_definition,
             players,
             hostiles,
-            player_placements: vec![None; player_len],
-            hostile_placements: vec![None; hostile_len],
+            player_placements: preserved.map_or_else(
+                || vec![None; player_len],
+                |deployment| {
+                    deployment
+                        .players
+                        .iter()
+                        .copied()
+                        .map(Some)
+                        .chain(std::iter::repeat(None))
+                        .take(player_len)
+                        .collect()
+                },
+            ),
+            hostile_placements: preserved.map_or_else(
+                || vec![None; hostile_len],
+                |deployment| {
+                    deployment
+                        .hostiles
+                        .iter()
+                        .copied()
+                        .map(Some)
+                        .chain(std::iter::repeat(None))
+                        .take(hostile_len)
+                        .collect()
+                },
+            ),
             active_player: true,
             active_index: 0,
             undo: Vec::new(),
@@ -310,7 +359,9 @@ enum LabAction {
     AdjustRule(CombatRuleField, i8),
     ResetRules,
     PrepareDeployment,
-    StartFixture(String),
+    StartFixture(String, FixtureRulesVariant),
+    SelectCompareLeft(CombatLabReportId),
+    SelectCompareRight(CombatLabReportId),
     RequestReportDelete(CombatLabReportId),
     ConfirmReportDelete(CombatLabReportId),
     CancelReportDelete,
@@ -332,8 +383,17 @@ struct FixtureDefinition {
     tags: &'static str,
     description: &'static str,
     scenario: &'static str,
+    sandbox_map: &'static str,
     map_seed: &'static str,
     roster: &'static str,
+    profile_matrix: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixtureRulesVariant {
+    Shipped,
+    TacticalTwoStep,
+    CustomThreeStep,
 }
 
 const FIXTURES: [FixtureDefinition; 7] = [
@@ -343,8 +403,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "aiming reveal restore revival",
         description: "A flat 2v1 for aiming, friendly damage, reveal, restoration, and revival.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "2 Player · 1 Hostile",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "raider-mirror",
@@ -352,8 +414,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "identity defense enchantment",
         description: "Same archetype on both sides, with deterministic defensive enchantments.",
         scenario: "Raider Mirror",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "1 Player Raider · 1 Hostile Raider",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "creator-spell-matrix",
@@ -361,8 +425,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "creator disable burn reveal restore defense",
         description: "Creator-format spell delivery against the flat deterministic roster.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "Fixture Caster · Fixture Target",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "creator-roster-matrix",
@@ -370,8 +436,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "creator roster selection ordering",
         description: "Mixed roster selection, stable unit ordering, and multi-unit combat.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "2 Player · 2 Hostile creator records",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "occupancy-matrix",
@@ -379,8 +447,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "occupancy chokepoint endpoint route stacked interruption ai",
         description: "Party Trial on the authored Crossing for human/AI chokepoints, exact endpoints, route reservations, stacked bridge surfaces, and movement interruption.",
         scenario: "Party Trial",
+        sandbox_map: "the-crossing",
         map_seed: "The Crossing · authored",
         roster: "3 Player · 3 Hostile",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "channel-attrition",
@@ -388,8 +458,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "channel mana disabled enchantment full repeated ai downed",
         description: "Ability Lab's deterministic lattices for depleted/full mana, disabled cells, enchantment locks, repeated Channel, AI selection, and downed refusal.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
-        roster: "2 Player · 1 Hostile",
+        roster: "3 Player · 3 Hostile · preloaded lattice states",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "tempo-matrix",
@@ -397,8 +469,10 @@ const FIXTURES: [FixtureDefinition; 7] = [
         tags: "tempo profile shipped tactical custom party",
         description: "The frozen 3v3 Party Trial baseline used repeatedly under Shipped, Tactical two-step, and bounded Custom profiles.",
         scenario: "Party Trial",
+        sandbox_map: "the-crossing",
         map_seed: "The Crossing · authored",
         roster: "3 Player · 3 Hostile",
+        profile_matrix: true,
     },
 ];
 
@@ -409,6 +483,86 @@ pub(crate) fn fixture_scenario_name(id: &str) -> Option<&'static str> {
         .iter()
         .find(|fixture| fixture.id == id)
         .map(|fixture| fixture.scenario)
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn fixture_sandbox_map(id: &str) -> Option<&'static str> {
+    FIXTURES
+        .iter()
+        .find(|fixture| fixture.id == id)
+        .map(|fixture| fixture.sandbox_map)
+}
+
+pub(crate) fn fixture_profile(
+    variant: FixtureRulesVariant,
+    shipped: &CombatSettings,
+) -> CombatRulesProfile {
+    match variant {
+        FixtureRulesVariant::Shipped => CombatRulesProfile::shipped(shipped),
+        FixtureRulesVariant::TacticalTwoStep => CombatRulesProfile::tactical_two_step(shipped),
+        FixtureRulesVariant::CustomThreeStep => {
+            let mut profile =
+                CombatRulesProfile::custom_from(&CombatRulesProfile::shipped(shipped));
+            profile.movement_per_turn = 3;
+            profile
+        }
+    }
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn walk_fixture_profile(
+    name: Option<&str>,
+    shipped: &CombatSettings,
+) -> Result<CombatRulesProfile, String> {
+    let variant = match name.unwrap_or("shipped") {
+        "shipped" => FixtureRulesVariant::Shipped,
+        "tactical" => FixtureRulesVariant::TacticalTwoStep,
+        "custom-three-step" => FixtureRulesVariant::CustomThreeStep,
+        other => {
+            return Err(format!(
+            "unknown fixture profile {other:?}; expected shipped, tactical, or custom-three-step"
+        ))
+        }
+    };
+    Ok(fixture_profile(variant, shipped))
+}
+
+pub(crate) fn fixed_fixture_encounter(id: &str) -> Option<Encounter> {
+    let template = |name: &str| RosterChoice::Template(name.to_owned());
+    match id {
+        "occupancy-matrix" | "tempo-matrix" => Some(encounter_with_placements(
+            "Wave 7 Crossing Matrix",
+            &[template("raider"), template("wolf"), template("raider")],
+            &[template("raider"), template("wolf"), template("raider")],
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 2, z: -2 }),
+                spread: 2,
+            },
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: -2, z: 2 }),
+                spread: 2,
+            },
+        )),
+        "channel-attrition" => Some(encounter_with_placements(
+            "Wave 7 Channel Attrition",
+            &[template("hedge-mage"), template("raider"), template("wolf")],
+            &[template("hedge-mage"), template("raider"), template("wolf")],
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
+                spread: 2,
+            },
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
+                spread: 2,
+            },
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn walk_fixture_encounter(id: &str) -> Option<Encounter> {
+    fixed_fixture_encounter(id)
 }
 
 /// Frozen creator content and encounter behind an automation fixture, if it uses one.
@@ -425,17 +579,17 @@ pub(crate) fn creator_fixture_payload(
 ) -> Result<Option<(CreatorContentOverlay, Encounter)>, String> {
     let rosters = match id {
         "creator-spell-matrix" => Some((
-            vec![RosterChoice::Custom(CustomCharacterId(1001))],
-            vec![RosterChoice::Custom(CustomCharacterId(1002))],
+            vec![RosterChoice::Packaged(CustomCharacterId(1001))],
+            vec![RosterChoice::Packaged(CustomCharacterId(1002))],
         )),
         "creator-roster-matrix" => Some((
             vec![
-                RosterChoice::Custom(CustomCharacterId(1001)),
-                RosterChoice::Custom(CustomCharacterId(1003)),
+                RosterChoice::Packaged(CustomCharacterId(1001)),
+                RosterChoice::Packaged(CustomCharacterId(1003)),
             ],
             vec![
-                RosterChoice::Custom(CustomCharacterId(1002)),
-                RosterChoice::Custom(CustomCharacterId(1001)),
+                RosterChoice::Packaged(CustomCharacterId(1002)),
+                RosterChoice::Packaged(CustomCharacterId(1001)),
             ],
         )),
         _ => None,
@@ -477,6 +631,7 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             (
                 apply_creator_display_names.in_set(GameplaySetup::Restore),
+                apply_fixed_fixture_initial_state.in_set(GameplaySetup::Restore),
                 enter_deployment.in_set(GameplaySetup::Finalize),
                 capture_fixed_fixture_report_launch.in_set(GameplaySetup::Finalize),
             ),
@@ -501,18 +656,50 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::CombatLab), despawn_screen(Screen::CombatLab));
 }
 
-fn initialize_lab(
+pub(crate) fn initialize_lab(
     mut commands: Commands,
-    request: Option<Res<CreatorTestRequest>>,
+    creator_request: Option<Res<CreatorTestRequest>>,
+    sandbox_request: Option<Res<CombatLabSandboxRequest>>,
     mut state: ResMut<CombatLabState>,
     overlay: Option<Res<CreatorContentOverlay>>,
 ) {
+    let sandbox_request = sandbox_request.as_deref().cloned();
     restore_shipped_content(&mut commands, overlay.as_deref());
     commands.remove_resource::<CombatLabSession>();
     commands.remove_resource::<DeploymentSession>();
     commands.remove_resource::<CombatLabReportLaunch>();
     commands.insert_resource(GameplayPhase::Active);
-    if let Some(request) = request {
+    if let Some(request) = sandbox_request {
+        state.tab = LabTab::Sandbox;
+        state.sandbox_step = SandboxStep::Rules;
+        state.map = request.report.map.catalog_id.clone();
+        let packaged = matches!(
+            request.report.origin,
+            CombatLabReportOrigin::FixedFixture { ref stable_id }
+                if stable_id.starts_with("creator-")
+        );
+        state.players = request
+            .report
+            .rosters
+            .players
+            .iter()
+            .map(|entry| report_roster_choice(entry, packaged))
+            .collect();
+        state.hostiles = request
+            .report
+            .rosters
+            .hostiles
+            .iter()
+            .map(|entry| report_roster_choice(entry, packaged))
+            .collect();
+        state.rules = Some(request.report.profile.clone());
+        state.preserved_deployment = Some(request.report.deployment.clone());
+        state.frozen_overlay = request.overlay;
+        state.notice =
+            "Frozen map, rosters, profile, and exact deployment copied to Sandbox.".to_owned();
+        state.creator_origin = false;
+        commands.remove_resource::<CombatLabSandboxRequest>();
+    } else if let Some(request) = creator_request {
         state.tab = LabTab::Sandbox;
         state.sandbox_step = SandboxStep::Rosters;
         state.players = vec![RosterChoice::Custom(request.character)];
@@ -523,6 +710,33 @@ fn initialize_lab(
         state.creator_origin = false;
     }
     state.bump();
+}
+
+fn report_roster_choice(entry: &CombatLabReportRosterEntry, packaged: bool) -> RosterChoice {
+    entry
+        .archetype
+        .strip_prefix("custom-character-")
+        .and_then(|id| id.parse::<u64>().ok())
+        .map_or_else(
+            || RosterChoice::Template(entry.archetype.clone()),
+            |id| {
+                if packaged {
+                    RosterChoice::Packaged(CustomCharacterId(id))
+                } else {
+                    RosterChoice::Custom(CustomCharacterId(id))
+                }
+            },
+        )
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn roster_choice_key(choice: &RosterChoice) -> String {
+    match choice {
+        RosterChoice::Template(key) => key.clone(),
+        RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+            format!("custom-character-{}", id.0)
+        }
+    }
 }
 
 fn spawn_lab(
@@ -1324,7 +1538,7 @@ fn spawn_build_card(
     let ready = summary.ready()
         && match choice {
             RosterChoice::Template(_) => true,
-            RosterChoice::Custom(_) => {
+            RosterChoice::Custom(_) | RosterChoice::Packaged(_) => {
                 character_is_map_ready_optional(&character, &library, elements, spells)
             }
         };
@@ -1435,6 +1649,16 @@ fn choice_record(
             .find(|character| character.id == *id)
             .cloned()
             .map(|character| (character, store.file.clone(), "Custom")),
+        RosterChoice::Packaged(id) => {
+            let presets = presets?;
+            let library = presets.library_for(PresetAudience::AutomationFixture);
+            library
+                .characters
+                .iter()
+                .find(|character| character.id == *id)
+                .cloned()
+                .map(|character| (character, library, "Fixture"))
+        }
         RosterChoice::Template(name) => {
             let presets = presets?;
             let library = presets.library_for(PresetAudience::HumanTemplate);
@@ -1609,13 +1833,38 @@ fn spawn_fixture_selector(
                                     format!("{} · {}", fixture.map_seed, fixture.roster),
                                 ));
                                 card.spawn(blurb(assets, fixture.description));
-                                lab_button(
-                                    card,
-                                    assets,
-                                    "Run Fixture",
-                                    LabAction::StartFixture(fixture.id.to_owned()),
-                                    150.0,
-                                );
+                                if fixture.profile_matrix {
+                                    for (variant, label) in [
+                                        (FixtureRulesVariant::Shipped, "Run Shipped"),
+                                        (
+                                            FixtureRulesVariant::TacticalTwoStep,
+                                            "Run Tactical two-step",
+                                        ),
+                                        (
+                                            FixtureRulesVariant::CustomThreeStep,
+                                            "Run Custom three-step",
+                                        ),
+                                    ] {
+                                        lab_button(
+                                            card,
+                                            assets,
+                                            label,
+                                            LabAction::StartFixture(fixture.id.to_owned(), variant),
+                                            210.0,
+                                        );
+                                    }
+                                } else {
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Run Fixture",
+                                        LabAction::StartFixture(
+                                            fixture.id.to_owned(),
+                                            FixtureRulesVariant::Shipped,
+                                        ),
+                                        150.0,
+                                    );
+                                }
                             });
                     }
                 });
@@ -1709,6 +1958,32 @@ fn spawn_saved_reports(
                                         saved.report.summary.applied_disables,
                                     ),
                                 ));
+                                let left_selected = selected_compare_ids(state, store).0
+                                    == Some(saved.id);
+                                let right_selected = selected_compare_ids(state, store).1
+                                    == Some(saved.id);
+                                lab_button(
+                                    card,
+                                    assets,
+                                    if left_selected {
+                                        "LEFT · SELECTED"
+                                    } else {
+                                        "Use as Left"
+                                    },
+                                    LabAction::SelectCompareLeft(saved.id),
+                                    140.0,
+                                );
+                                lab_button(
+                                    card,
+                                    assets,
+                                    if right_selected {
+                                        "RIGHT · SELECTED"
+                                    } else {
+                                        "Use as Right"
+                                    },
+                                    LabAction::SelectCompareRight(saved.id),
+                                    140.0,
+                                );
                                 if state.pending_report_delete == Some(saved.id) {
                                     card.spawn(fine(
                                         assets,
@@ -1741,21 +2016,17 @@ fn spawn_saved_reports(
                             });
                     }
                 });
-            if let [.., left, right] = store.history.reports.as_slice() {
+            if let Some((left, right)) = selected_compare_reports(state, store) {
                 history_panel.spawn(heading(
                     assets,
-                    format!("compare reports {} → {}", left.id.0, right.id.0),
+                    format!("compare reports {} vs {}", left.id.0, right.id.0),
                 ));
                 history_panel.spawn(fine(
                     assets,
                     format!(
-                        "FROZEN HEADERS · {:?} P{}/H{} → {:?} P{}/H{}",
-                        left.report.profile.preset,
-                        left.report.rosters.players.len(),
-                        left.report.rosters.hostiles.len(),
-                        right.report.profile.preset,
-                        right.report.rosters.players.len(),
-                        right.report.rosters.hostiles.len(),
+                        "FROZEN LEFT · {}\nFROZEN RIGHT · {}",
+                        frozen_report_header(&left.report),
+                        frozen_report_header(&right.report),
                     ),
                 ));
                 history_panel.spawn((
@@ -1787,6 +2058,73 @@ fn spawn_saved_reports(
                 ));
             }
         });
+}
+
+fn frozen_report_header(report: &crate::combat_reports::CombatLabReport) -> String {
+    let roster = |entries: &[CombatLabReportRosterEntry]| {
+        entries
+            .iter()
+            .map(|entry| entry.display_name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{:?} [move {} · strike {} · engage {} · margin {} · levels {} · reveal {}] · P [{}] · H [{}]",
+        report.profile.preset,
+        report.profile.movement_per_turn,
+        report.profile.strike_disables,
+        report.profile.engage_range,
+        report.profile.disengage_margin,
+        report.profile.levels_per_bonus_range,
+        report.profile.reveal_duration,
+        roster(&report.rosters.players),
+        roster(&report.rosters.hostiles),
+    )
+}
+
+fn selected_compare_ids(
+    state: &CombatLabState,
+    store: &CombatLabReportStore,
+) -> (Option<CombatLabReportId>, Option<CombatLabReportId>) {
+    let first = store.history.reports.first().map(|saved| saved.id);
+    let last = store.history.reports.last().map(|saved| saved.id);
+    (
+        state
+            .compare_left
+            .filter(|id| store.history.reports.iter().any(|saved| saved.id == *id))
+            .or(first),
+        state
+            .compare_right
+            .filter(|id| store.history.reports.iter().any(|saved| saved.id == *id))
+            .or(last),
+    )
+}
+
+fn selected_compare_reports<'a>(
+    state: &CombatLabState,
+    store: &'a CombatLabReportStore,
+) -> Option<(
+    &'a crate::combat_reports::SavedCombatLabReport,
+    &'a crate::combat_reports::SavedCombatLabReport,
+)> {
+    let (left, right) = selected_compare_ids(state, store);
+    let left = left?;
+    let right = right?;
+    if left == right {
+        return None;
+    }
+    Some((
+        store
+            .history
+            .reports
+            .iter()
+            .find(|saved| saved.id == left)?,
+        store
+            .history
+            .reports
+            .iter()
+            .find(|saved| saved.id == right)?,
+    ))
 }
 
 fn signed_delta(right: u32, left: u32) -> i64 {
@@ -1843,32 +2181,47 @@ fn handle_lab_actions(
             }
             LabAction::SelectMap(map) => {
                 state.map = map.clone();
+                state.preserved_deployment = None;
             }
             LabAction::AddPlayerTemplate(name) => {
                 if state.players.len() < MAX_ROSTER {
                     state.players.push(RosterChoice::Template(name.clone()));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddHostileTemplate(name) => {
                 if state.hostiles.len() < MAX_ROSTER {
                     state.hostiles.push(RosterChoice::Template(name.clone()));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddPlayerCustom(id) => {
                 if state.players.len() < MAX_ROSTER {
                     state.players.push(RosterChoice::Custom(*id));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddHostileCustom(id) => {
                 if state.hostiles.len() < MAX_ROSTER {
                     state.hostiles.push(RosterChoice::Custom(*id));
+                    state.preserved_deployment = None;
                 }
             }
-            LabAction::RemovePlayer(index) => remove_at(&mut state.players, *index),
-            LabAction::RemoveHostile(index) => remove_at(&mut state.hostiles, *index),
-            LabAction::MovePlayer(index, delta) => move_at(&mut state.players, *index, *delta),
+            LabAction::RemovePlayer(index) => {
+                remove_at(&mut state.players, *index);
+                state.preserved_deployment = None;
+            }
+            LabAction::RemoveHostile(index) => {
+                remove_at(&mut state.hostiles, *index);
+                state.preserved_deployment = None;
+            }
+            LabAction::MovePlayer(index, delta) => {
+                move_at(&mut state.players, *index, *delta);
+                state.preserved_deployment = None;
+            }
             LabAction::MoveHostile(index, delta) => {
                 move_at(&mut state.hostiles, *index, *delta);
+                state.preserved_deployment = None;
             }
             LabAction::EditCustom(character) => {
                 commands.insert_resource(CreatorEditRequest {
@@ -1961,20 +2314,24 @@ fn handle_lab_actions(
                     state.bump();
                     continue;
                 };
-                let overlay = match build_creator_overlay(
-                    &state.players,
-                    &state.hostiles,
-                    &store.file,
-                    shipped_spell_file.as_deref(),
-                    base_lattice_file.as_deref(),
-                    elements.as_deref(),
-                    substances.as_deref(),
-                ) {
-                    Ok(overlay) => overlay,
-                    Err(error) => {
-                        state.notice = error;
-                        state.bump();
-                        continue;
+                let overlay = if let Some(overlay) = state.frozen_overlay.clone() {
+                    overlay
+                } else {
+                    match build_creator_overlay(
+                        &state.players,
+                        &state.hostiles,
+                        &store.file,
+                        shipped_spell_file.as_deref(),
+                        base_lattice_file.as_deref(),
+                        elements.as_deref(),
+                        substances.as_deref(),
+                    ) {
+                        Ok(overlay) => overlay,
+                        Err(error) => {
+                            state.notice = error;
+                            state.bump();
+                            continue;
+                        }
                     }
                 };
                 let encounter = sandbox_encounter(&state.players, &state.hostiles, map_definition);
@@ -1997,6 +2354,7 @@ fn handle_lab_actions(
                     map_definition.clone(),
                     state.players.clone(),
                     state.hostiles.clone(),
+                    state.preserved_deployment.as_ref(),
                 ));
                 commands.insert_resource(GameplayPhase::Preparing);
                 commands.insert_resource(CombatLabSession {
@@ -2013,6 +2371,7 @@ fn handle_lab_actions(
                         scenario: map_definition.scenario.clone(),
                         resolved_seed: resolved_seed.map(|seed| seed.0),
                     },
+                    initial_state: None,
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -2021,7 +2380,7 @@ fn handle_lab_actions(
                 });
                 next.set(Screen::Loading);
             }
-            LabAction::StartFixture(id) => {
+            LabAction::StartFixture(id, variant) => {
                 let Some(shipped_combat) = combat.as_deref() else {
                     state.notice = "Shipped combat rules are still loading.".to_owned();
                     state.bump();
@@ -2058,20 +2417,24 @@ fn handle_lab_actions(
                         continue;
                     }
                 };
-                let encounter_override = payload.map(|(overlay, encounter)| {
-                    commands.insert_resource(overlay);
-                    encounter
-                });
+                let encounter_override = payload
+                    .map(|(overlay, encounter)| {
+                        commands.insert_resource(overlay);
+                        encounter
+                    })
+                    .or_else(|| fixed_fixture_encounter(id));
                 commands.insert_resource(CombatLabSession {
                     kind: CombatLabSessionKind::FixedFixture(id.clone()),
                     return_to: Screen::CombatLab,
-                    profile: CombatRulesProfile::shipped(shipped_combat),
+                    profile: fixture_profile(*variant, shipped_combat),
                     shipped_combat: shipped_combat.clone(),
                     report_map: CombatLabReportMap {
-                        catalog_id: id.clone(),
+                        catalog_id: fixture.sandbox_map.to_owned(),
                         scenario: fixture.scenario.to_owned(),
                         resolved_seed: resolved_seed.map(|seed| seed.0),
                     },
+                    initial_state: (id == "channel-attrition")
+                        .then_some(FixedFixtureInitialState::ChannelAttrition),
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -2079,6 +2442,14 @@ fn handle_lab_actions(
                     encounter_override,
                 });
                 next.set(Screen::Loading);
+            }
+            LabAction::SelectCompareLeft(id) => {
+                state.compare_left = Some(*id);
+                state.notice = format!("Report {} selected as the left comparison.", id.0);
+            }
+            LabAction::SelectCompareRight(id) => {
+                state.compare_right = Some(*id);
+                state.notice = format!("Report {} selected as the right comparison.", id.0);
             }
             LabAction::RequestReportDelete(id) => {
                 state.pending_report_delete = Some(*id);
@@ -2133,7 +2504,9 @@ fn build_creator_overlay(
         .iter()
         .chain(hostiles)
         .filter_map(|choice| match choice {
-            RosterChoice::Custom(id) => library.characters.iter().find(|saved| saved.id == *id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+                library.characters.iter().find(|saved| saved.id == *id)
+            }
             RosterChoice::Template(_) => None,
         })
         .collect();
@@ -2192,7 +2565,9 @@ fn build_creator_overlay(
         .iter()
         .chain(hostiles)
         .filter_map(|choice| match choice {
-            RosterChoice::Custom(id) => library.characters.iter().find(|saved| saved.id == *id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+                library.characters.iter().find(|saved| saved.id == *id)
+            }
             RosterChoice::Template(_) => None,
         })
     {
@@ -2249,7 +2624,7 @@ fn build_creator_overlay(
             .iter()
             .chain(hostiles)
             .filter_map(|choice| match choice {
-                RosterChoice::Custom(id) => library
+                RosterChoice::Custom(id) | RosterChoice::Packaged(id) => library
                     .characters
                     .iter()
                     .find(|character| character.id == *id)
@@ -2319,7 +2694,7 @@ fn roster_entry(choice: &RosterChoice, placement: Option<EncounterPlacement>) ->
     RosterEntry {
         archetype: match choice {
             RosterChoice::Template(name) => name.clone(),
-            RosterChoice::Custom(id) => character_runtime_key(*id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => character_runtime_key(*id),
         },
         placement,
         ai_profile: None,
@@ -2336,6 +2711,7 @@ fn choice_name(choice: &RosterChoice, store: &CreationStore) -> String {
             .iter()
             .find(|saved| saved.id == *id)
             .map_or_else(|| format!("missing #{}", id.0), |saved| saved.name.clone()),
+        RosterChoice::Packaged(id) => format!("fixture character #{}", id.0),
     }
 }
 
@@ -2398,6 +2774,23 @@ fn placements_complete_exact(placements: &[Option<TilePos>], roster_len: usize) 
     placements.len() == roster_len
         && !placements.is_empty()
         && placements.iter().all(Option::is_some)
+}
+
+fn deployment_snapshot(session: &DeploymentSession) -> Option<CombatLabReportDeployment> {
+    session.complete().then(|| CombatLabReportDeployment {
+        players: session
+            .player_placements
+            .iter()
+            .copied()
+            .flatten()
+            .collect(),
+        hostiles: session
+            .hostile_placements
+            .iter()
+            .copied()
+            .flatten()
+            .collect(),
+    })
 }
 
 type DeploymentTileQuery<'w, 's> = Query<
@@ -2476,6 +2869,31 @@ fn enter_deployment(
         &footing,
         session.map_definition.hostile_region.radius,
     );
+    let mut occupied = std::collections::BTreeSet::new();
+    let mut dropped = 0;
+    for placements in [
+        session.player_placements.as_mut_slice(),
+        session.hostile_placements.as_mut_slice(),
+    ] {
+        for placement in placements {
+            if placement.is_some_and(|position| {
+                footing.at(position).is_none() || !occupied.insert(position)
+            }) {
+                *placement = None;
+                dropped += 1;
+            }
+        }
+    }
+    if dropped == 0 && session.complete() {
+        session.notice =
+            "Exact frozen deployment retained · select any row to reposition.".to_owned();
+    } else if dropped > 0 {
+        session.notice = format!(
+            "{dropped} frozen placement{} no longer valid; place the highlighted roster rows.",
+            if dropped == 1 { " is" } else { "s are" }
+        );
+        advance_deployment_cursor(session);
+    }
 
     let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
     let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
@@ -2647,7 +3065,7 @@ fn spawn_deployment_hud(
                         let selected =
                             session.active_player == player && session.active_index == index;
                         let text = format!(
-                            "{} [{}{}] {} · {}",
+                            "{} [{}{}] {}\n{}",
                             if selected { "SELECTED" } else { "SELECT" },
                             if player { "P" } else { "H" },
                             index + 1,
@@ -2655,7 +3073,7 @@ fn spawn_deployment_hud(
                             placement.map_or_else(
                                 || "choose surface".to_owned(),
                                 |pos| format!(
-                                    "({}, {}, {}) · elevation {}",
+                                    "({},{},{}) · elevation {}",
                                     pos.coord.x(),
                                     pos.coord.y(),
                                     pos.coord.z(),
@@ -2672,7 +3090,7 @@ fn spawn_deployment_hud(
                         } else {
                             Color::srgba(0.26, 0.29, 0.34, 0.9)
                         }))
-                        .with_child(label(assets, text));
+                        .with_child(fine(assets, text));
                     }
                 });
             }
@@ -2969,6 +3387,7 @@ struct DeploymentRuntime<'w, 's> {
 fn handle_deployment_actions(
     clicked: Query<(&Interaction, &DeploymentAction), Changed<Interaction>>,
     mut session: Option<ResMut<DeploymentSession>>,
+    mut lab_state: ResMut<CombatLabState>,
     mut phase: ResMut<GameplayPhase>,
     mut runtime: DeploymentRuntime,
     assets: Res<UiAssets>,
@@ -3067,6 +3486,10 @@ fn handle_deployment_actions(
                 advance_deployment_cursor(session);
             }
             DeploymentAction::Back => {
+                if let Some(deployment) = deployment_snapshot(session) {
+                    lab_state.preserved_deployment = Some(deployment);
+                    lab_state.bump();
+                }
                 *phase = GameplayPhase::Active;
                 next.set(
                     runtime
@@ -3206,7 +3629,8 @@ fn report_launch(
             .iter()
             .filter(|(_, side, ..)| *side == faction)
             .map(
-                |(_, _, archetype, display_name, _)| CombatLabReportRosterEntry {
+                |(id, _, archetype, display_name, _)| CombatLabReportRosterEntry {
+                    unit_id: id.0,
                     archetype: archetype.clone(),
                     display_name: display_name.clone(),
                     controller: if faction == Faction::Player {
@@ -3376,6 +3800,99 @@ fn apply_creator_display_names(
     }
 }
 
+fn apply_fixed_fixture_initial_state(
+    mut commands: Commands,
+    session: Option<Res<CombatLabSession>>,
+    content: Option<Res<ContentIndex>>,
+    elements: Option<Res<ElementCatalog>>,
+    mut units: Query<(
+        &Faction,
+        &Archetype,
+        &hex_lattice::LatticeSpec,
+        &mut hex_lattice::LatticeState,
+    )>,
+) {
+    let (Some(setup), Some(content), Some(elements)) = (
+        session.as_deref().and_then(|session| session.initial_state),
+        content.as_deref(),
+        elements.as_deref(),
+    ) else {
+        return;
+    };
+    match setup {
+        FixedFixtureInitialState::ChannelAttrition => {
+            let tables = content.tables(elements);
+            for (faction, archetype, spec, mut state) in &mut units {
+                match (*faction, archetype.0.as_str()) {
+                    // Both controllers begin with missing mana, so the human can
+                    // repeat Channel and baseline AI has the same canonical option.
+                    (Faction::Player | Faction::Hostile, "hedge-mage") => {
+                        if let Err(error) = apply_fixture_cast(spec, &mut state, &tables, false) {
+                            commands.insert_resource(GameplaySetupFailure::new(error));
+                            return;
+                        }
+                    }
+                    // Locked mana proves Channel does not refill funding already
+                    // committed to an enchantment.
+                    (Faction::Player, "raider") => {
+                        if let Err(error) = apply_fixture_cast(spec, &mut state, &tables, true) {
+                            commands.insert_resource(GameplaySetupFailure::new(error));
+                            return;
+                        }
+                    }
+                    // One live-but-damaged unit exercises disabled-cell exclusion.
+                    (Faction::Player, "wolf") => {
+                        if let Some((coord, _)) = spec.cells().next() {
+                            hex_lattice::apply_disables(&mut state, &[coord]);
+                        }
+                    }
+                    // One fully disabled body proves the downed-unit refusal path.
+                    (Faction::Hostile, "wolf") => {
+                        let cells = spec.cells().map(|(coord, _)| coord).collect::<Vec<_>>();
+                        hex_lattice::apply_disables(&mut state, &cells);
+                    }
+                    // The hostile raider remains completely full as the no-op
+                    // Channel/cap reference state.
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn apply_fixture_cast(
+    spec: &hex_lattice::LatticeSpec,
+    state: &mut hex_lattice::LatticeState,
+    tables: &hex_assets::ContentTables<'_>,
+    enchantment: bool,
+) -> Result<(), String> {
+    let plan = spec.cells().find_map(|(coord, kind)| {
+        if !matches!(kind, hex_lattice::CellKind::Spell { .. }) {
+            return None;
+        }
+        let plan = hex_lattice::castable(spec, state, coord, tables).ok()?;
+        let is_enchantment = matches!(
+            tables.casting(plan.spell),
+            hex_lattice::Casting::Enchantment { .. }
+        );
+        (is_enchantment == enchantment).then_some(plan)
+    });
+    let Some(plan) = plan else {
+        return Err(format!(
+            "Channel fixture could not find a castable {} spell.",
+            if enchantment {
+                "enchantment"
+            } else {
+                "non-enchantment"
+            }
+        ));
+    };
+    if !hex_lattice::apply_cast(state, &plan, tables) {
+        return Err("Channel fixture cast plan failed to apply atomically.".to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::ecs::world::CommandQueue;
@@ -3397,6 +3914,7 @@ mod tests {
                 scenario: "Flat Arena".to_owned(),
                 resolved_seed: Some(42),
             },
+            initial_state: None,
         }
     }
 
@@ -3572,6 +4090,20 @@ mod tests {
         assert_eq!(
             actions
                 .iter(&world)
+                .filter(|action| matches!(action, LabAction::SelectCompareLeft(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(|action| matches!(action, LabAction::SelectCompareRight(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
                 .filter(
                     |action| matches!(action, LabAction::ConfirmReportDelete(id) if *id == first)
                 )
@@ -3728,6 +4260,76 @@ mod tests {
         })
     }
 
+    #[test]
+    fn channel_attrition_materializes_every_declared_lattice_state() {
+        let fixture = content_fixture().expect("shipped content fixture should resolve");
+        let shipped = CombatSettings::default();
+        let session = CombatLabSession {
+            initial_state: Some(FixedFixtureInitialState::ChannelAttrition),
+            ..rules_session(CombatRulesProfile::shipped(&shipped), shipped)
+        };
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(fixture.shipped.content.clone())
+            .insert_resource(fixture.elements.clone())
+            .add_systems(Update, apply_fixed_fixture_initial_state);
+        for faction in [Faction::Player, Faction::Hostile] {
+            for name in ["hedge-mage", "raider", "wolf"] {
+                let archetype = fixture
+                    .shipped
+                    .lattices
+                    .get(name)
+                    .unwrap_or_else(|| panic!("missing shipped {name}"));
+                app.world_mut().spawn((
+                    faction,
+                    Archetype(name.to_owned()),
+                    archetype.spec.clone(),
+                    hex_lattice::LatticeState::new(&archetype.spec, &archetype.stats),
+                ));
+            }
+        }
+        app.update();
+
+        let mut units = app.world_mut().query::<(
+            &Faction,
+            &Archetype,
+            &hex_lattice::LatticeSpec,
+            &hex_lattice::LatticeState,
+        )>();
+        for (faction, archetype, spec, state) in units.iter(app.world()) {
+            match (*faction, archetype.0.as_str()) {
+                (Faction::Player | Faction::Hostile, "hedge-mage") => {
+                    let fresh = fixture
+                        .shipped
+                        .lattices
+                        .get("hedge-mage")
+                        .expect("fresh mage");
+                    let fresh = hex_lattice::LatticeState::new(&fresh.spec, &fresh.stats);
+                    assert!(state.total_gem_mana() < fresh.total_gem_mana());
+                }
+                (Faction::Player, "raider") => {
+                    assert_eq!(state.enchantment_count(), 1);
+                    assert!(state.total_locked_mana() > 0);
+                }
+                (Faction::Player, "wolf") => {
+                    let disabled = spec
+                        .cells()
+                        .filter(|(coord, _)| state.is_disabled(*coord))
+                        .count();
+                    assert_eq!(disabled, 1);
+                }
+                (Faction::Hostile, "wolf") => {
+                    assert!(spec.cells().all(|(coord, _)| state.is_disabled(coord)));
+                }
+                (Faction::Hostile, "raider") => {
+                    assert_eq!(state.enchantment_count(), 0);
+                    assert_eq!(state.total_locked_mana(), 0);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn app_with_content_fixture(fixture: &ContentFixture) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
@@ -3803,6 +4405,7 @@ mod tests {
                 RosterChoice::Template("hedge-mage".to_owned()),
             ],
             vec![RosterChoice::Template("raider".to_owned())],
+            None,
         );
         let player = TilePos::new(HexCoord::ORIGIN, 3);
         let hostile = TilePos::new(HexCoord::new_cubic(2, -2, 0), 7);
@@ -3825,6 +4428,14 @@ mod tests {
         assert!(
             session.complete(),
             "stacked surfaces at distinct elevations remain distinct"
+        );
+        assert_eq!(
+            deployment_snapshot(&session),
+            Some(CombatLabReportDeployment {
+                players: vec![player, second_player],
+                hostiles: vec![TilePos::new(player.coord, player.level + 1)],
+            }),
+            "leaving deployment must preserve the tester's latest exact surfaces"
         );
     }
 

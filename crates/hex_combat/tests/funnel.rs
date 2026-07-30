@@ -10,17 +10,11 @@
 //! sim's entire input is an ordered command sequence, and a sequence applied
 //! twice from the same spawn state must land the same world twice.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::BTreeMap;
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
-use hex_assets::{
-    ArtPalette, ElementCatalog, ElementFile, FormationCatalog, PaletteSwatch, PlayerSettings,
-    SrgbColor, Substance, SubstanceFile, SubstanceTable, SwatchId,
-};
+use hex_assets::{ElementCatalog, ElementFile, FormationCatalog, PlayerSettings, SubstanceTable};
 use hex_combat::{
     CombatData, CombatEvent, CombatSummary, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
 };
@@ -34,44 +28,36 @@ use hex_lattice::{
     apply_cast, castable, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
     Requirement, SpellTable,
 };
+use hex_test_support::{SyntheticArena, TestAppBuilder, STONE};
 use hex_units::{
     route, Body, Downed, Faction, Footing, OccupancyBlock, Party, Standing, StandsOn, UnitRegistry,
 };
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
-const STONE: SubstanceId = SubstanceId(1);
-
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new()
+        .with_arena(SyntheticArena::flat_radius(10, GROUND_LEVEL))
+        .expect("the shared synthetic arena must be valid");
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
-    app.insert_resource(substance_table());
     app.insert_resource(shipped_elements());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
     });
-    // A fixed tick makes every run take the same frames through the same
-    // animations — which the replay test depends on to mean anything.
-    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-        Duration::from_millis(100),
-    ));
-    app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     app.add_plugins((
         hex_anim::plugin,
         hex_units::movement::plugin,
         hex_combat::plugin,
     ));
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 fn shipped_elements() -> ElementCatalog {
@@ -102,44 +88,6 @@ impl SpellTable for ChannelTables {
     fn casting(&self, _spell: SpellId) -> Casting {
         Casting::Evocation
     }
-}
-
-/// Flat, walkable ground with plenty of headroom.
-fn spawn_terrain(mut commands: Commands) {
-    for coord in HexCoord::ORIGIN.within_radius(10) {
-        commands.spawn((
-            HexTile,
-            coord,
-            TilePos::new(coord, GROUND_LEVEL),
-            HexSpan::new(GROUND - 1.0, GROUND),
-            STONE,
-            Headroom(MAX_HEADROOM),
-        ));
-    }
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the test immediately"
-)]
-fn substance_table() -> SubstanceTable {
-    let stone_id = SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
-    let stone = PaletteSwatch::new(
-        "Stone",
-        SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
-        BTreeSet::from(["test".to_owned()]),
-    )
-    .expect("the fixture swatch should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
-        .expect("the fixture palette should be valid");
-    let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert("air".to_owned(), Substance::invisible(false, false));
-    substances.insert(
-        "stone".to_owned(),
-        Substance::from_swatch(stone_id, true, true),
-    );
-    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
-        .expect("the fixture substance should resolve through its palette")
 }
 
 /// A unit with an explicit, pre-registered id.

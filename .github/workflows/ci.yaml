@@ -158,7 +158,8 @@ jobs:
               --workspace \
               --all-features \
               --cargo-profile ci \
-              --profile ci
+              --profile ci \
+              -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))'
             # Nextest deliberately does not execute doctests.
             time cargo test --workspace --all-features --profile ci --doc
           } 2>&1 | tee test-timing.log
@@ -180,6 +181,76 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         env:
           RUSTDOCFLAGS: -D warnings
+
+  gameplay:
+    name: Gameplay partitions
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+      - uses: taiki-e/install-action@nextest
+        if: needs.changes.outputs.code == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Gameplay rules
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          set -o pipefail
+          time cargo nextest run \
+            --workspace \
+            --all-features \
+            --cargo-profile ci \
+            --profile gameplay-rules 2>&1 | tee gameplay-rules-timing.log
+      - name: Gameplay contracts
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          set -o pipefail
+          time cargo nextest run \
+            --workspace \
+            --all-features \
+            --cargo-profile ci \
+            --profile gameplay-contracts 2>&1 | tee gameplay-contracts-timing.log
+      - name: Gameplay simulation
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          set -o pipefail
+          time cargo nextest run \
+            --package hex_combat \
+            --test simulation \
+            --cargo-profile ci \
+            --profile gameplay-simulation 2>&1 | tee gameplay-simulation-timing.log
+      - name: Gameplay app
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          set -o pipefail
+          time cargo nextest run \
+            --package hex_game \
+            --features test-support \
+            --test gameplay_app \
+            --cargo-profile ci \
+            --profile gameplay-app 2>&1 | tee gameplay-app-timing.log
+      - name: Upload gameplay timing artifacts
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: gameplay-test-timings
+          path: |
+            gameplay-*-timing.log
+            target/nextest/gameplay-rules/junit.xml
+            target/nextest/gameplay-contracts/junit.xml
+            target/nextest/gameplay-simulation/junit.xml
+            target/nextest/gameplay-app/junit.xml
+          if-no-files-found: error
 
   # The three platforms we intend to ship. Catches target-specific breakage —
   # notably the Windows console subsystem attribute — before it reaches a release.

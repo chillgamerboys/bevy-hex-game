@@ -57,6 +57,13 @@ pub enum CombatLabReportController {
 /// One frozen ordered roster entry.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct CombatLabReportRosterEntry {
+    /// Stable session unit id used by per-unit summary projections.
+    ///
+    /// An all-zero roster is accepted only as the compatibility shape for
+    /// reports written before per-unit headers were added. In current reports,
+    /// zero is also the first valid canonical session id.
+    #[serde(default)]
+    pub unit_id: u64,
     /// Stable runtime archetype key.
     pub archetype: String,
     /// Player-facing name frozen at launch.
@@ -153,6 +160,19 @@ impl CombatLabReport {
         validate_text("scenario", &self.map.scenario)?;
         validate_roster("player", &self.rosters.players)?;
         validate_roster("hostile", &self.rosters.hostiles)?;
+        let unit_ids = self
+            .rosters
+            .players
+            .iter()
+            .chain(&self.rosters.hostiles)
+            .map(|entry| entry.unit_id)
+            .collect::<Vec<_>>();
+        if unit_ids.iter().any(|id| *id != 0) {
+            let mut unique = BTreeSet::new();
+            if unit_ids.iter().any(|id| !unique.insert(*id)) {
+                return Err("report roster unit ids must be unique when present".to_owned());
+            }
+        }
         if let CombatLabReportOrigin::FixedFixture { stable_id } = &self.origin {
             validate_text("fixture stable id", stable_id)?;
         }
@@ -452,11 +472,13 @@ mod tests {
             99,
             CombatLabReportRosters {
                 players: vec![CombatLabReportRosterEntry {
+                    unit_id: 1,
                     archetype: "hedge-mage".to_owned(),
                     display_name: "Hedge Mage".to_owned(),
                     controller: CombatLabReportController::Human,
                 }],
                 hostiles: vec![CombatLabReportRosterEntry {
+                    unit_id: 2,
                     archetype: "raider".to_owned(),
                     display_name: "Raider".to_owned(),
                     controller: CombatLabReportController::BaselineAi,
