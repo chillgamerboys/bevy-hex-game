@@ -3564,6 +3564,9 @@ const fn recipe_name(recipe: &V3RecipeSettings) -> &'static str {
         V3RecipeSettings::Waterfall(_) => "Waterfall",
         V3RecipeSettings::Forest(_) => "Forest",
         V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
@@ -3631,7 +3634,31 @@ mod tests {
             )),
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/snowy-old-growth.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/snowy-small-broadleaf.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/plant/snowy-tall-narrow.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/cave-lichen.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/cave-moss.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
                 "/../../assets/art/objects/prop/grass-tuft.ron"
+            )),
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/art/objects/prop/snowy-grass-tuft.ron"
             )),
             include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),

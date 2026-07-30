@@ -278,6 +278,9 @@ pub(crate) fn resolve_layout(
     let resolved = match &settings.layout {
         V3LayoutSettings::Single(patch) => resolve_single(grid_radius, patch)?,
         V3LayoutSettings::Ring7(ring) => resolve_ring(grid_radius, ring)?,
+        V3LayoutSettings::Ring19(_) => {
+            return Err(LayoutValidationError::one(LayoutIssue::Ring19Unavailable));
+        }
     };
     resolved.validate()?;
     Ok(resolved)
@@ -1460,6 +1463,7 @@ pub(crate) enum LayoutIssue {
     FootprintOutOfBounds,
     InvalidRingRadius(u32),
     InvalidRingFootprint,
+    Ring19Unavailable,
     PatchCount { expected: usize, actual: usize },
     DisconnectedPatch(PatchId),
     PatchOutsideFootprint(PatchId),
