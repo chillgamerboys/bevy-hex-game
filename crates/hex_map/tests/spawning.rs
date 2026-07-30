@@ -1058,6 +1058,7 @@ fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
     assert_eq!(metrics.gate_count, 2);
     assert_eq!(metrics.stair_count, 2);
     assert_eq!(metrics.tower_count, 6);
+    assert_eq!(metrics.battlement_columns, 22);
     assert_eq!(metrics.independent_gate_routes, 2);
     assert_eq!(metrics.curtain_height, 5);
     assert_eq!(metrics.keep_height, 8);
@@ -1092,7 +1093,9 @@ fn v3_fort_publishes_worked_stone_structures_and_access_metrics() {
         .any(|(_coord, column)| column.iter().any(|substance| substance == worked_stone)));
     assert!(app.world().resource::<TraversalBlockers>().is_empty());
     assert!(app.world().resource::<InteriorRegions>().is_empty());
-    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 23);
+    // Compact turrets release six alternating outer-ring cells back to the
+    // non-ordinary battlement pattern: 22 battlements plus seven keep-roof cells.
+    assert_eq!(app.world().resource::<SpecialMovementRegions>().len(), 29);
     assert!(app.world().resource::<MapViewHint>().is_valid());
 }
 
