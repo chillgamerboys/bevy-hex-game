@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
+use hex_core::{HexCoord, Level, MapViewHint, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
@@ -46,7 +46,6 @@ const APPROACH_HALF_LENGTH: i32 = 3;
 const RIVER_DEPTH: Level = 3;
 const SMALL_FALL_HEIGHT: Level = 3;
 const FROZEN_ICE_CAP_TARGET: usize = 5;
-pub(super) const FROZEN_ICE_REGION: SpecialMovementRegion = SpecialMovementRegion(2);
 
 /// Deterministic measurements for one admitted Hills plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -501,7 +500,7 @@ pub(crate) fn construct_patch_with_streams(
                 surfaces.insert(
                     ice_cap,
                     SurfaceMetadata {
-                        access: SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION),
+                        access: SurfaceAccess::NonStandable,
                         interior: None,
                     },
                 );
@@ -1802,10 +1801,10 @@ fn validate_frozen_ice_caps(
     }
     if ice_caps
         .iter()
-        .any(|(_, metadata)| metadata.access != SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION))
+        .any(|(_, metadata)| metadata.access != SurfaceAccess::NonStandable)
     {
         issues.push(recipe_issue(
-            "Frozen Hills ice caps must remain outside the ordinary walker network",
+            "Frozen Hills ice caps must be visible nonstandable solids outside every movement network",
         ));
     }
     let liquid_coords = plan
@@ -2264,10 +2263,17 @@ mod tests {
             .filter(|(position, metadata)| {
                 solid_material_at(&frozen.validated.plan.volume, **position)
                     == Some(SolidMaterialRole::Ice)
-                    && metadata.access == SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION)
+                    && metadata.access == SurfaceAccess::NonStandable
             })
             .count();
         assert_eq!(frozen_ice_caps, FROZEN_ICE_CAP_TARGET);
+        assert!(frozen
+            .validated
+            .plan
+            .volume
+            .surfaces
+            .values()
+            .all(|metadata| !matches!(metadata.access, SurfaceAccess::SpecialMovement(_))));
 
         let mut volcanic = settings();
         let V3LayoutSettings::Single(volcanic_patch) = &mut volcanic.layout else {

@@ -1203,7 +1203,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_sky_keeps_ground_ice_distinct_from_both_upper_regions() {
+    fn frozen_sky_keeps_ground_ice_outside_both_upper_regions() {
         let mut settings = settings();
         let V3LayoutSettings::Single(patch) = &mut settings.layout else {
             unreachable!("test uses Single")
@@ -1221,14 +1221,23 @@ mod tests {
             .surfaces
             .iter()
             .filter(|(position, metadata)| {
-                metadata.access == SurfaceAccess::SpecialMovement(hills::FROZEN_ICE_REGION)
+                metadata.access == SurfaceAccess::NonStandable
                     && upper_surface_material(&selected.validated.plan, **position)
                         == Some(SolidMaterialRole::Ice)
             })
             .count();
         assert_eq!(ice_caps, 5);
-        assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(0));
-        assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(1));
+        assert!(selected
+            .validated
+            .plan
+            .volume
+            .surfaces
+            .values()
+            .filter_map(|metadata| match metadata.access {
+                SurfaceAccess::SpecialMovement(region) => Some(region),
+                _ => None,
+            })
+            .all(|region| [SpecialMovementRegion(0), SpecialMovementRegion(1)].contains(&region)));
     }
 
     #[test]

@@ -319,6 +319,23 @@ fn v3_hills_app() -> App {
     app
 }
 
+fn v3_frozen_hills_app() -> App {
+    let mut app = v3_hills_app();
+    let mut settings = app.world_mut().resource_mut::<MapSettings>();
+    let TerrainSettings::Procedural(ProceduralSettings::V3(v3)) = &mut settings.terrain else {
+        unreachable!("V3 Hills fixture")
+    };
+    let V3LayoutSettings::Single(patch) = &mut v3.layout else {
+        unreachable!("Single Hills fixture")
+    };
+    patch.environment = V3EnvironmentSettings::Frozen;
+    let V3RecipeSettings::Hills(hills) = &mut patch.recipe else {
+        unreachable!("Hills fixture")
+    };
+    hills.max_relief = 12;
+    app
+}
+
 fn v3_waterfall_app() -> App {
     let mut app = procedural_app();
     app.insert_resource(MapSettings {
@@ -817,6 +834,37 @@ fn procedural_setup_publishes_validated_resources_and_exact_anchors() {
         "the hills recipe does not introduce optional regions yet"
     );
     assert!(app.world().resource::<InteriorRegions>().is_empty());
+}
+
+#[test]
+fn v3_frozen_hills_publishes_ice_without_an_optional_movement_region() {
+    let mut app = v3_frozen_hills_app();
+    enter_gameplay(&mut app);
+
+    assert!(
+        app.world().contains_resource::<TerrainReady>(),
+        "setup failed: {:?}",
+        app.world()
+            .get_resource::<GameplaySetupFailure>()
+            .map(|failure| failure.reason.as_str())
+    );
+    assert!(!app.world().contains_resource::<GameplaySetupFailure>());
+    assert!(
+        app.world().resource::<SpecialMovementRegions>().is_empty(),
+        "Frozen Hills ice is presentation geometry, not optional traversal authority"
+    );
+    let ice = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("ice")
+        .expect("Frozen Hills fixture should register ice");
+    assert!(
+        app.world()
+            .resource::<VoxelMap>()
+            .columns()
+            .any(|(_coord, column)| column.iter().any(|substance| substance == ice)),
+        "Frozen Hills dropped its visible shoreline ice caps"
+    );
 }
 
 #[test]
