@@ -41,7 +41,7 @@ const CURTAIN_HEIGHT: i32 = 5;
 const TOWER_APRON_RISE: i32 = 1;
 const TOWER_CORE_RISE: i32 = 2;
 const KEEP_HEIGHT: i32 = 8;
-const GATE_CLEAR_LEVELS: i32 = 3;
+const GATE_CLEAR_LEVELS: i32 = 4;
 const BATTLEMENT_REGION: SpecialMovementRegion = SpecialMovementRegion(20);
 const KEEP_ROOF_REGION: SpecialMovementRegion = SpecialMovementRegion(21);
 
@@ -530,7 +530,11 @@ impl FortTemplate {
         }
 
         for (index, tower_center) in tower_centers().into_iter().enumerate() {
-            for local in tower_center.within_radius(1) {
+            for local in tower_center
+                .within_radius(1)
+                .into_iter()
+                .filter(|local| local.distance(HexCoord::ORIGIN) == OUTER_WALL_RADIUS)
+            {
                 let rise = if local == tower_center {
                     TOWER_CORE_RISE
                 } else {
@@ -1517,7 +1521,31 @@ mod tests {
             assert!(plan
                 .volume
                 .surface_headroom(*floor)
-                .is_some_and(|headroom| headroom.0 >= 2));
+                .is_some_and(|headroom| headroom.0 >= GATE_CLEAR_LEVELS));
+        }
+    }
+
+    #[test]
+    fn six_small_turrets_keep_three_accessible_top_surfaces_each() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Fort should generate");
+        let plan = &selected.validated.plan;
+        let template = detect_template(plan).expect("Fort template should be detectable");
+        assert_eq!(template.tower_tops.len(), 18);
+
+        let graph = OrdinaryGraph::from_volume(&plan.volume, None);
+        let courtyard_access = graph.distances_from(template.hostile_start());
+        for center in tower_centers() {
+            let world_center = to_world(center, template.center, template.rotation);
+            let turret = template
+                .tower_tops
+                .iter()
+                .filter(|surface| surface.coord.distance(world_center) <= 1)
+                .copied()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(turret.len(), 3);
+            assert!(turret
+                .iter()
+                .all(|surface| courtyard_access.contains_key(surface)));
         }
     }
 
