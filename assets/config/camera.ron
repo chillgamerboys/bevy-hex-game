@@ -9,6 +9,9 @@
     character_radius: 7.0,
     // Terrain collision affects only Character mode. The camera snaps inward before
     // the closest public tile span, then restores smoothly once the view clears.
+    // The minimum is a preferred usable radius: a blocked ray first searches nearby
+    // yaw directions, while a complete enclosure may move closer rather than cross
+    // terrain.
     character_collision_margin: 0.35,
     character_min_effective_radius: 1.5,
     character_restoration_speed: 8.0,
