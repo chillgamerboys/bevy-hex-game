@@ -3025,17 +3025,20 @@ mod tests {
     use hex_assets::{ArtPalette, ObjectBlueprint, ObjectCatalogFile, VoxelStyleCatalog};
     use hex_core::SubstanceId;
 
-    const BEDROCK: SubstanceId = SubstanceId(1);
-    const STONE: SubstanceId = SubstanceId(2);
+    // `SubstanceTable` assigns stable ids from sorted authored names. Keep this
+    // materialization fixture aligned with that public runtime contract so its
+    // map fingerprint is directly comparable with gameplay publication.
+    const BASALT: SubstanceId = SubstanceId(1);
+    const BEDROCK: SubstanceId = SubstanceId(2);
     const DIRT: SubstanceId = SubstanceId(3);
     const GRASS: SubstanceId = SubstanceId(4);
     const GRAVEL: SubstanceId = SubstanceId(5);
-    const WATER: SubstanceId = SubstanceId(6);
-    const METAL: SubstanceId = SubstanceId(7);
-    const SNOW: SubstanceId = SubstanceId(8);
-    const ICE: SubstanceId = SubstanceId(9);
-    const BASALT: SubstanceId = SubstanceId(10);
-    const LAVA: SubstanceId = SubstanceId(11);
+    const ICE: SubstanceId = SubstanceId(6);
+    const LAVA: SubstanceId = SubstanceId(7);
+    const METAL: SubstanceId = SubstanceId(8);
+    const SNOW: SubstanceId = SubstanceId(9);
+    const STONE: SubstanceId = SubstanceId(10);
+    const WATER: SubstanceId = SubstanceId(11);
 
     fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
         static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
@@ -3529,7 +3532,14 @@ mod tests {
             selected.validated.semantic_fingerprint,
             16_803_101_637_412_033_592
         );
-        assert_eq!(build.report.map_fingerprint, 6_133_044_767_666_166_856);
+        assert_eq!(build.report.map_fingerprint, 2_816_539_634_225_236_468);
+        assert_eq!(build.map.len(), 469);
+        assert_eq!(
+            build.blockers.len(),
+            usize::try_from(selected.metrics.tree_blocker_surfaces).unwrap_or(usize::MAX)
+        );
+        assert!(build.special_regions.is_empty());
+        assert!(build.interiors.is_empty());
     }
 
     #[test]
