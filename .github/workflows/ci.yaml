@@ -274,8 +274,9 @@ jobs:
             target/nextest/gameplay-app/junit.xml
           if-no-files-found: error
 
-  # The three platforms we intend to ship. Catches target-specific breakage —
-  # notably the Windows console subsystem attribute — before it reaches a release.
+  # The two Unix platforms we intend to ship. Windows retains the same exact
+  # shipping build below, split only so a cold dependency cache can be published
+  # without crossing either job's 30-minute ceiling.
   build:
     name: Build (${{ matrix.os }})
     needs: changes
@@ -284,7 +285,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v5
         if: needs.changes.outputs.code == 'true'
@@ -300,24 +301,71 @@ jobs:
             libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # No --all-features and only the shipping package: this must not accidentally
       # validate a workspace-only development binary in place of the game.
-      #
-      # The Windows runner's MSVC linker spent more than ten minutes in the final
-      # ThinLTO link and crossed this job's 30-minute ceiling. The runner ships
-      # LLVM's MSVC-compatible linker; selecting it changes no Cargo profile or
-      # package input and keeps the exact shipping build inside the same budget.
+      - name: Build the shipping package
+        if: needs.changes.outputs.code == 'true'
+        run: cargo build --package hex_game --release
+
+  # A cold Windows cache consistently reached `hex_game` after about 15 minutes,
+  # then the release ThinLTO compile/link crossed the 30-minute job ceiling before
+  # rust-cache could publish its work. Prime the shipping dependency graph in one
+  # bounded job, then restore it into the unchanged exact package build below.
+  windows_dependencies:
+    name: Prime Windows shipping dependencies
+    needs: changes
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+        with:
+          shared-key: windows-shipping
       - name: Record the Windows shipping linker
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true'
         shell: pwsh
         run: |
           $linker = Get-Command lld-link.exe -ErrorAction Stop
           & $linker.Source --version
+      - name: Build the Windows shipping dependency graph
+        if: needs.changes.outputs.code == 'true'
+        run: >-
+          cargo build --release
+          --package hex_assets
+          --package hex_objects
+          --package hex_combat
+          --package hex_core
+          --package hex_lattice
+          --package hex_units
+          --package hex_map
+          --package hex_perception
+          --package hex_world
+
+  windows:
+    name: Build (windows-latest)
+    needs: [changes, windows_dependencies]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+        with:
+          shared-key: windows-shipping
+          save-if: false
+      # Keep the exact shipping validation command unchanged. The preceding job
+      # alters only cache availability, never the release profile or package input.
       - name: Build the Windows shipping package
-        if: runner.os == 'Windows' && needs.changes.outputs.code == 'true'
-        env:
-          CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
-        run: cargo build --package hex_game --release
-      - name: Build the shipping package
-        if: runner.os != 'Windows' && needs.changes.outputs.code == 'true'
+        if: needs.changes.outputs.code == 'true'
         run: cargo build --package hex_game --release
 
   coverage:
