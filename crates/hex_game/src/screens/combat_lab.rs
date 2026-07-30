@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
@@ -12,8 +13,8 @@ use hex_assets::{
     CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, ContentIndex,
     CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
     EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
-    PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary, SpellBook,
-    SpellFile, SpellReference, SubstanceTable,
+    PlayerSettings, PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary,
+    SpellBook, SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
     GameplayPhase, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors,
@@ -193,7 +194,7 @@ impl DeploymentSession {
             undo: Vec::new(),
             player_surfaces: Vec::new(),
             hostile_surfaces: Vec::new(),
-            notice: "Select a highlighted Player surface for unit 1.".to_owned(),
+            notice: "PLAYER 1 · Click a BLUE highlighted surface.".to_owned(),
         }
     }
 
@@ -211,6 +212,18 @@ struct DeploymentSurface {
 
 #[derive(Component)]
 struct DeploymentWorldEntity;
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct DeploymentPlacementMarker {
+    player: bool,
+    index: usize,
+}
+
+#[derive(Resource)]
+struct DeploymentMarkerMaterials {
+    player: Handle<StandardMaterial>,
+    hostile: Handle<StandardMaterial>,
+}
 
 #[derive(Component)]
 struct DeploymentHidden;
@@ -1746,6 +1759,10 @@ fn enter_deployment(
 
     let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
     let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
+    commands.insert_resource(DeploymentMarkerMaterials {
+        player: materials.add(deployment_marker_material(Color::srgb(0.10, 0.68, 1.0))),
+        hostile: materials.add(deployment_marker_material(Color::srgb(1.0, 0.20, 0.13))),
+    });
     for (player, positions, material) in [
         (true, session.player_surfaces.as_slice(), &player_material),
         (
@@ -1831,6 +1848,14 @@ fn deployment_material(color: Color) -> StandardMaterial {
     }
 }
 
+fn deployment_marker_material(color: Color) -> StandardMaterial {
+    StandardMaterial {
+        base_color: color,
+        unlit: true,
+        ..default()
+    }
+}
+
 fn spawn_deployment_hud(
     commands: &mut Commands,
     assets: &UiAssets,
@@ -1872,7 +1897,7 @@ fn spawn_deployment_hud(
                 summary.spawn(blurb(assets, session.notice.clone()));
                 summary.spawn(fine(
                     assets,
-                    "Blue = Player region · Red = Hostile region · labels remain in this HUD",
+                    "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
                 ));
             });
             for (title, roster, placements) in [
@@ -1900,7 +1925,8 @@ fn spawn_deployment_hud(
                         side.spawn(fine(
                             assets,
                             format!(
-                                "{}. {} · {}",
+                                "[{}{}] {} · {}",
+                                if title == "PLAYER" { "P" } else { "H" },
                                 index + 1,
                                 choice_name(choice, store),
                                 placement.map_or_else(
@@ -1919,8 +1945,11 @@ fn spawn_deployment_hud(
                 });
             }
             hud.spawn(Node {
-                width: Val::Px(170.0),
-                flex_direction: FlexDirection::Column,
+                width: Val::Px(340.0),
+                flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
+                align_content: AlignContent::FlexStart,
+                column_gap: Val::Px(5.0),
                 row_gap: Val::Px(5.0),
                 ..default()
             })
@@ -1976,6 +2005,7 @@ fn on_deployment_surface_clicked(
     mut commands: Commands,
     assets: Res<UiAssets>,
     store: Res<CreationStore>,
+    markers: DeploymentMarkerRuntime,
 ) {
     if click.button != PointerButton::Primary {
         return;
@@ -1988,12 +2018,14 @@ fn on_deployment_surface_clicked(
     };
     if surface.player != session.active_player {
         session.notice = format!(
-            "Place the current {} unit inside its labeled region.",
+            "{} {} · Click a {} highlighted surface.",
             if session.active_player {
-                "Player"
+                "PLAYER"
             } else {
-                "Hostile"
-            }
+                "HOSTILE"
+            },
+            session.active_index + 1,
+            if session.active_player { "BLUE" } else { "RED" }
         );
         rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
         return;
@@ -2021,6 +2053,7 @@ fn on_deployment_surface_clicked(
             .push((session.active_player, session.active_index, previous));
     }
     advance_deployment_cursor(session);
+    rebuild_deployment_markers(&mut commands, &markers, session);
     rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
 }
 
@@ -2028,19 +2061,15 @@ fn advance_deployment_cursor(session: &mut DeploymentSession) {
     if let Some(index) = session.player_placements.iter().position(Option::is_none) {
         session.active_player = true;
         session.active_index = index;
-        session.notice = format!(
-            "Select a highlighted Player surface for unit {}.",
-            index + 1
-        );
+        session.notice = format!("PLAYER {} · Click a BLUE highlighted surface.", index + 1);
     } else if let Some(index) = session.hostile_placements.iter().position(Option::is_none) {
         session.active_player = false;
         session.active_index = index;
-        session.notice = format!(
-            "Select a highlighted Hostile surface for unit {}.",
-            index + 1
-        );
+        session.notice = format!("HOSTILE {} · Click a RED highlighted surface.", index + 1);
     } else {
-        session.notice = "Deployment complete. Start Combat or reposition with Undo.".to_owned();
+        session.notice =
+            "DEPLOYMENT COMPLETE · Solid blue/red tokens mark the resolved surfaces. Start Combat or reposition with Undo."
+                .to_owned();
     }
 }
 
@@ -2058,10 +2087,101 @@ fn rebuild_deployment_hud(
 }
 
 #[derive(SystemParam)]
-struct DeploymentRuntime<'w, 's> {
+struct DeploymentMarkerRuntime<'w, 's> {
     tiles: DeploymentTileQuery<'w, 's>,
     table: Option<Res<'w, SubstanceTable>>,
     blockers: Option<Res<'w, TraversalBlockers>>,
+    game_assets: Res<'w, GameAssets>,
+    player_settings: Res<'w, PlayerSettings>,
+    materials: Option<Res<'w, DeploymentMarkerMaterials>>,
+    entities: Query<'w, 's, Entity, With<DeploymentPlacementMarker>>,
+}
+
+fn rebuild_deployment_markers(
+    commands: &mut Commands,
+    runtime: &DeploymentMarkerRuntime,
+    session: &DeploymentSession,
+) {
+    for entity in &runtime.entities {
+        commands.entity(entity).despawn();
+    }
+    let (Some(table), Some(materials)) = (runtime.table.as_deref(), runtime.materials.as_deref())
+    else {
+        return;
+    };
+    let footing = deployment_footing(&runtime.tiles, table, runtime.blockers.as_deref());
+    let scale = runtime.player_settings.scale * 1.08;
+    let child_transform = Transform {
+        translation: Vec3::new(-scale, -scale, -10.0 * scale),
+        scale: Vec3::splat(scale),
+        ..default()
+    };
+    for (player, index, pos) in resolved_deployment_markers(session) {
+        let Some(standing) = footing.at(pos) else {
+            continue;
+        };
+        let material = if player {
+            materials.player.clone()
+        } else {
+            materials.hostile.clone()
+        };
+        let [mesh_a, mesh_b] = runtime.game_assets.player_pieces.clone();
+        commands
+            .spawn((
+                Name::new(format!(
+                    "{} Placement {}",
+                    if player { "Player" } else { "Hostile" },
+                    index + 1
+                )),
+                DeploymentWorldEntity,
+                DeploymentPlacementMarker { player, index },
+                Transform::from_translation(standing.world_position()),
+                Visibility::default(),
+                Pickable::IGNORE,
+            ))
+            .with_children(|marker| {
+                marker.spawn((
+                    Mesh3d(runtime.game_assets.hex_tile.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform {
+                        translation: Vec3::new(0.0, 0.045, 0.0),
+                        scale: Vec3::new(0.52, 0.08, 0.52),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                ));
+                for mesh in [mesh_a, mesh_b] {
+                    marker.spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(material.clone()),
+                        child_transform,
+                        Pickable::IGNORE,
+                    ));
+                }
+            });
+    }
+}
+
+fn resolved_deployment_markers(
+    session: &DeploymentSession,
+) -> impl Iterator<Item = (bool, usize, TilePos)> + '_ {
+    session
+        .player_placements
+        .iter()
+        .enumerate()
+        .filter_map(|(index, placement)| placement.map(|pos| (true, index, pos)))
+        .chain(
+            session
+                .hostile_placements
+                .iter()
+                .enumerate()
+                .filter_map(|(index, placement)| placement.map(|pos| (false, index, pos))),
+        )
+}
+
+#[derive(SystemParam)]
+struct DeploymentRuntime<'w, 's> {
+    markers: DeploymentMarkerRuntime<'w, 's>,
     units: Query<
         'w,
         's,
@@ -2166,7 +2286,7 @@ fn handle_deployment_actions(
                 continue;
             }
             DeploymentAction::StartCombat => {
-                let Some(table) = runtime.table.as_deref() else {
+                let Some(table) = runtime.markers.table.as_deref() else {
                     session.notice = "Terrain rules are still loading.".to_owned();
                     continue;
                 };
@@ -2174,8 +2294,11 @@ fn handle_deployment_actions(
                     session.notice = "Every roster entry needs one unique surface.".to_owned();
                     continue;
                 }
-                let footing =
-                    deployment_footing(&runtime.tiles, table, runtime.blockers.as_deref());
+                let footing = deployment_footing(
+                    &runtime.markers.tiles,
+                    table,
+                    runtime.markers.blockers.as_deref(),
+                );
                 let mut players = runtime
                     .units
                     .iter_mut()
@@ -2222,10 +2345,12 @@ fn handle_deployment_actions(
                     commands.entity(entity).despawn();
                 }
                 commands.remove_resource::<DeploymentSession>();
+                commands.remove_resource::<DeploymentMarkerMaterials>();
                 *phase = GameplayPhase::Active;
                 continue;
             }
         }
+        rebuild_deployment_markers(&mut commands, &runtime.markers, session);
         rebuild_deployment_hud(&mut commands, &runtime.hud, &assets, session, &store);
     }
 }
@@ -2276,6 +2401,7 @@ fn clear_deployment_world(
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<DeploymentSession>();
+    commands.remove_resource::<DeploymentMarkerMaterials>();
 }
 
 /// Installs the frozen combined namespace before the accepted-revision publisher.
@@ -2474,6 +2600,44 @@ mod tests {
         assert!(!placements_complete_exact(&placements, 2));
         *placements.get_mut(1).expect("second placement") = Some(second);
         assert!(placements_complete_exact(&placements, 2));
+    }
+
+    #[test]
+    fn placement_markers_keep_faction_roster_number_and_exact_elevation() {
+        let map_definition = CombatLabMapDefinition {
+            id: "marker-test".to_owned(),
+            display_name: "Marker Test".to_owned(),
+            description: String::new(),
+            tags: Vec::new(),
+            preview: String::new(),
+            scenario: "Flat Arena".to_owned(),
+            fixed_seed: Some(1),
+            player_region: CombatLabDeploymentRegion {
+                center: CombatLabRegionCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 0, z: 0 }),
+                radius: 1,
+            },
+            hostile_region: CombatLabDeploymentRegion {
+                center: CombatLabRegionCenter::Fixed(hex_assets::CubeCoord { x: 2, y: -2, z: 0 }),
+                radius: 1,
+            },
+        };
+        let mut session = DeploymentSession::new(
+            map_definition,
+            vec![
+                RosterChoice::Template("wolf".to_owned()),
+                RosterChoice::Template("hedge-mage".to_owned()),
+            ],
+            vec![RosterChoice::Template("raider".to_owned())],
+        );
+        let player = TilePos::new(HexCoord::ORIGIN, 3);
+        let hostile = TilePos::new(HexCoord::new_cubic(2, -2, 0), 7);
+        session.player_placements = vec![None, Some(player)];
+        session.hostile_placements = vec![Some(hostile)];
+
+        assert_eq!(
+            resolved_deployment_markers(&session).collect::<Vec<_>>(),
+            vec![(true, 1, player), (false, 0, hostile)]
+        );
     }
 
     #[test]
