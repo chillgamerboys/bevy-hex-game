@@ -23,7 +23,9 @@ pair without introducing a river. Caves places a varied rocky surface above a
 two-wide entrance and a dense, height-validated underground chamber network with
 exact opaque cutaway roofs.
 
-V3 now has three complete recipe lanes. Waterfall authors deterministic
+V3 now has seven complete recipe variants: Hills, Sky Islands, Mountains, Caves,
+Waterfall, Forest, and Fort. The Ring7 composition places all seven in one connected
+radius-33 world. Waterfall authors deterministic
 directed liquid topology from calm inlet through rapids, a contiguous fall, plunge
 basin, outlet, and redundant land routes; an opaque animated renderer consumes the
 same exact flow facts. Forest plans rolling terrain and clearings, places its denser
@@ -53,8 +55,10 @@ sources publish fixed local gameplay lights directly into this headless pipeline
 World observation gates the gameplay-owned hostile lattice view, every cast anchor,
 and AI identities, effects, turn order, traversal, and legal commands. AI can traverse
 only Observed or Remembered terrain and cannot use Unknown truth. Fog/picking
-presentation, visible cave crystals and physical lights, unknown-frontier routing,
-engagement, ordinary-attack targeting, and lost-contact search are not wired yet.
+presentation, unknown-frontier routing, engagement, ordinary-attack targeting, and
+lost-contact search are not wired yet. Authored emissive cave crystals and restrained
+physical point lights now present every fixed cave gameplay-light source without
+becoming gameplay authority.
 
 Fort adds the first complete V3 structure recipe and the canonical worked-stone
 substance. A five-level, two-wide curtain surrounds a gravel courtyard and offset
@@ -169,10 +173,11 @@ combat validation. Immutable human templates are duplicable; automation-only
 creator-format records are isolated from local saves. Separate Character Creator and
 Spell Creator navigation leads to focused libraries and workspaces; the character
 workspace retains a direct spell-management link. The Character Creator provides a
-contiguous 64-cell lattice editor, manual stats, undo/redo, ordered spell effects, and
-an unsaved local mechanics test.
+contiguous 64-cell lattice editor, manual stats, undo/redo, and an unsaved local
+mechanics test. The Spell Creator provides ordered repeatable effects, targeting,
+range, requirements, and permanent Draft/Ready diagnostics.
 
-Combat Lab owns transient Sandbox setup for all eleven distinct supported shipped
+Combat Lab owns transient Sandbox setup for all thirteen distinct supported shipped
 maps, with deterministic renderer previews, tactical descriptions and tags, complete
 ordered one-to-six rosters, deterministic deployment, and creator-origin return routing.
 Its searchable fixture selector replaces individual title cards and adds packaged
@@ -225,8 +230,9 @@ review exemplars cover six-, twelve-, and eighteen-level trees, a nonblocking gr
 tuft, and three nonblocking emissive crystal silhouettes. Terrain substances, liquids,
 construction metal, and unit presentation resolve exact palette swatches. Forest
 publishes its generated vegetation as shared `ObjectInstance`s while retaining exact
-rotated blockers and composable canopy cutaway. Cave-light placement and procedural
-plant synthesis have not landed yet.
+rotated blockers and composable canopy cutaway. Caves publishes authored crystal
+`ObjectInstance`s with presentation-only point-light children at its gameplay-light
+sites. Procedural plant synthesis has not landed yet.
 
 ## What is provisional
 

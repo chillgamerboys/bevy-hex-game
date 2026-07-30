@@ -80,8 +80,9 @@ the liquid graph.
 
 V3 implementation and delivery are specified in
 [world-generation-v3.md](../systems/world-generation-v3.md). V3 now publishes biome
-membership and feature blockers; generated gameplay-light entities remain pending
-the cave-light retrofit.
+membership, feature blockers, and generated cave gameplay-light entities. Authored
+crystal objects and restrained physical lights present those sources without changing
+their headless authority.
 
 ## Shared presentation is a third role, not a loophole
 
@@ -89,10 +90,8 @@ the cave-light retrofit.
 objects are validated, edited, and drawn, but they own no world or gameplay semantics.
 The split for a Forest tree is therefore explicit:
 
-- the current Forest publishes exact roots in `TraversalBlockers` and uses a
-  root-keyed `CanopyOccluder` as its temporary camera-cutaway marker;
-- future authored adoption may publish an `ObjectInstance` plus a separately reviewed
-  exact canopy-mask adapter sourced from authored canopy chunks;
+- Forest publishes its authored `ObjectInstance`, exact rotated roots in
+  `TraversalBlockers`, and a root-keyed `CanopyOccluder` through separate projections;
 - `hex_objects` renders the object and never derives either projection from object
   parts;
 - gameplay consumes the blocker and knowledge projections, never the renderer.

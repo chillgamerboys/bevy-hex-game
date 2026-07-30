@@ -9,9 +9,10 @@ compile against one boundary without reaching into one another's crates.
 > Unknown/Remembered/Observed map knowledge are live in `hex_perception`.
 > V3 Caves publishes fixed local gameplay lights into that live pipeline.
 > Casting anchors, hostile lattice disclosure, and AI observation/traversal now
-> consume that authority. Fog/picking presentation, visible cave crystals and
-> physical-light presentation, unknown-frontier movement, engagement, and
-> lost-contact search remain later isolated work.
+> consume that authority. Authored cave crystals and restrained physical lights
+> present those sources without becoming gameplay authority. Fog/picking presentation,
+> unknown-frontier movement, engagement, and lost-contact search remain later isolated
+> work.
 
 ## Four facts, not one
 
@@ -73,9 +74,9 @@ volumes. Overlapping sources take the maximum level rather than adding brightnes
 
 V3 Caves places fixed Bright sources with radii from four through seven. They cover
 the entrance, required route, and critical chambers while preserving dark optional
-branches. Authored emissive crystal meshes and restrained physical lights will
-communicate the rule after the object-renderer stack lands, but they never implement
-gameplay illumination.
+branches. Authored emissive crystal meshes and restrained physical point lights
+communicate the rule at those exact sites, but they never implement gameplay
+illumination.
 
 ## Sight
 

@@ -57,7 +57,8 @@ cargo editor -- --project-root /path/to/bevy-hex-game
 
 The title screen should have three lanes: **Maps**, **Demos**, and **Actions**.
 Party Trial must not appear in either development lane. On a fresh data directory,
-Continue should clearly report that no exploration resume exists.
+Continue should clearly report that no exploration resume exists. Demos should contain
+only **Character Creator**, **Spell Creator**, and **Combat Lab**.
 
 Choose **New Game**. It resolves the hidden Party Trial default through the loading
 screen. You should see the Crossing's hex-prism terrain, sky, a three-member player
@@ -80,7 +81,7 @@ party, and a matching hostile party approaching from the opposite bank.
 | `H` | Hide or show ordinary readouts; an active damage choice stays visible |
 | Click lattice cells, then `ENTER` | Choose and confirm which cells incoming damage disables |
 | `ESC` | Pause, or leave the title screen |
-| `BACKSPACE` | Return to the title screen |
+| `BACKSPACE` | Return to the owning Creator, Combat Lab setup, or title screen |
 | New Game | Start the hidden Party Trial default without changing the resume slot |
 | Continue | Restore the compatible exploration slot through Loading |
 
