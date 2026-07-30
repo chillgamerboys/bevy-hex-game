@@ -46,7 +46,7 @@ const APPROACH_HALF_LENGTH: i32 = 3;
 const RIVER_DEPTH: Level = 3;
 const SMALL_FALL_HEIGHT: Level = 3;
 const FROZEN_ICE_CAP_TARGET: usize = 5;
-const FROZEN_ICE_REGION: SpecialMovementRegion = SpecialMovementRegion(0);
+pub(super) const FROZEN_ICE_REGION: SpecialMovementRegion = SpecialMovementRegion(2);
 
 /// Deterministic measurements for one admitted Hills plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1000,8 +1000,9 @@ fn river_column(
     ];
     let crossing = if ford {
         let surface = TilePos::new(coord, valley);
+        let support_bottom = liquid_position.level.saturating_add(1);
         elements.push(VolumeElement::Solid(SolidMass {
-            levels: LevelInterval::new(surface.level, surface.level.saturating_add(1)),
+            levels: LevelInterval::new(support_bottom, surface.level.saturating_add(1)),
             material: causeway_material(environment),
             cutaway_for: None,
         }));
@@ -1572,6 +1573,7 @@ fn validate_hills_inner(
         ));
     }
     validate_barrier_surfaces(plan, &fill_coords, bridge, alternate, &mut issues);
+    validate_alternate_support(plan, &fill_coords, alternate, &mut issues);
     let frozen = ordinary
         .positions()
         .any(|position| solid_material_at(&plan.volume, position) == Some(SolidMaterialRole::Snow));
@@ -1990,6 +1992,53 @@ fn validate_barrier_surfaces(
     }
 }
 
+fn validate_alternate_support(
+    plan: &GeneratedWorldPlan,
+    fill_coords: &BTreeSet<HexCoord>,
+    alternate: &ProtectedFeatureRoute,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    for surface in alternate
+        .surfaces
+        .iter()
+        .filter(|surface| fill_coords.contains(&surface.coord))
+    {
+        if !surface_has_contiguous_support_from_fill(&plan.volume, *surface) {
+            issues.push(recipe_issue(format!(
+                "Hills alternate passage has an unsupported vertical gap below {surface:?}"
+            )));
+        }
+    }
+}
+
+fn surface_has_contiguous_support_from_fill(volume: &VolumePlan, surface: TilePos) -> bool {
+    let Some(column) = volume.columns.get(&surface.coord) else {
+        return false;
+    };
+    let Some(fill_top) = column
+        .elements
+        .iter()
+        .filter_map(|element| {
+            let VolumeElement::Fill(fill) = element else {
+                return None;
+            };
+            Some(fill.levels.top)
+        })
+        .max()
+    else {
+        return false;
+    };
+    fill_top <= surface.level
+        && (fill_top..=surface.level).all(|level| {
+            column.elements.iter().any(|element| {
+                let VolumeElement::Solid(mass) = element else {
+                    return false;
+                };
+                mass.levels.bottom <= level && level < mass.levels.top
+            })
+        })
+}
+
 fn solid_material_at(volume: &VolumePlan, position: TilePos) -> Option<SolidMaterialRole> {
     volume.columns.get(&position.coord).and_then(|column| {
         column.elements.iter().find_map(|element| {
@@ -2169,6 +2218,26 @@ mod tests {
                 .count(),
             1
         );
+        let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+        let alternate = plan
+            .features
+            .protected_routes
+            .get(FORD_ROUTE)
+            .expect("Hills should retain the alternate passage");
+        assert!(alternate
+            .surfaces
+            .iter()
+            .filter(|surface| {
+                plan.volume
+                    .fill_runs_by_top()
+                    .keys()
+                    .any(|fill| fill.coord == surface.coord)
+            })
+            .all(|surface| surface_has_contiguous_support_from_fill(&plan.volume, *surface)));
+        assert!(alternate
+            .centerline
+            .windows(2)
+            .all(|pair| ordinary.admits(pair[0], pair[1])));
     }
 
     #[test]
