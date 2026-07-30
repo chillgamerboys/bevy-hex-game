@@ -120,6 +120,14 @@
             encounter: "config/encounters/anchored-skirmish.ron",
         ),
         (
+            name: "Prairie",
+            category: Map,
+            blurb: "Open rolling grassland covered in tall authored grass, without trees or a constructed road.",
+            world: "config/worlds/procedural-prairie.ron",
+            generation_seed: Some(1592598566),
+            encounter: "config/encounters/anchored-skirmish.ron",
+        ),
+        (
             name: "Fort",
             category: Map,
             blurb: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",

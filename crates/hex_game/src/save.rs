@@ -505,6 +505,7 @@ fn scenario_digest(scenario: &Scenario) -> u64 {
         include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
         include_str!("../../../assets/config/worlds/procedural-hills.ron"),
         include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
+        include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
         include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
         include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
         include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),

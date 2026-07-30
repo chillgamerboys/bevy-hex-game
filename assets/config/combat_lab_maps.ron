@@ -191,6 +191,23 @@
             ),
         ),
         (
+            id: "prairie",
+            display_name: "Prairie",
+            description: "Open rolling grassland provides long sightlines and dense nonblocking vegetation.",
+            tags: ["Open", "Grassland", "Rolling"],
+            preview: "ui/combat-lab/prairie.png",
+            scenario: "Prairie",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
+        (
             id: "fort",
             display_name: "Fort",
             description: "A worked-stone stronghold with two gates, broad wall walks, towers, stairs, and a central keep.",

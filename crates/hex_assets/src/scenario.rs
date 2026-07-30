@@ -181,7 +181,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::collections::BTreeMap;
 
     use super::*;
 
@@ -313,13 +313,15 @@ mod tests {
         assert!(error.contains("generaton_seed"), "{error}");
     }
 
-    /// Generated scenarios own distinct reproducible seeds and name an encounter file.
+    /// Generated scenarios own intentional reproducible seeds and name an encounter file.
     ///
     /// Whether that encounter places its units through generated *anchors* is a
     /// cross-file fact — the encounter is a separate asset — so it is checked in
     /// `hex_game`, which is allowed to open both. This crate can only see the path.
+    /// Procedural Hills and the additive vegetation biomes deliberately share the
+    /// canonical review seed so their visual differences are directly comparable.
     #[test]
-    fn procedural_scenarios_use_distinct_seeds_and_name_an_encounter() {
+    fn procedural_scenarios_use_only_the_intended_shared_seed_and_name_an_encounter() {
         let library: ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))
                 .expect("the shipped scenarios should parse");
@@ -331,17 +333,27 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            10,
-            "the scenario library should include all ten generated maps"
+            11,
+            "the scenario library should include all eleven generated maps"
         );
-        let seeds: HashSet<u64> = generated
-            .iter()
-            .filter_map(|scenario| scenario.generation_seed)
+        let mut by_seed = BTreeMap::<u64, Vec<&str>>::new();
+        for scenario in &generated {
+            let seed = scenario
+                .generation_seed
+                .expect("the generated scenario should retain its seed");
+            by_seed
+                .entry(seed)
+                .or_default()
+                .push(scenario.name.as_str());
+        }
+        let duplicate_seeds: BTreeMap<_, _> = by_seed
+            .into_iter()
+            .filter(|(_seed, names)| names.len() > 1)
             .collect();
         assert_eq!(
-            seeds.len(),
-            generated.len(),
-            "generated scenarios should not start on the same configured seed"
+            duplicate_seeds,
+            BTreeMap::from([(1_592_598_566, vec!["Procedural Hills", "Prairie"],)]),
+            "only the approved directly comparable maps may share a configured seed"
         );
 
         for scenario in generated {

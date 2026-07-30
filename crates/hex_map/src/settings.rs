@@ -3275,6 +3275,10 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-forest.ron"),
                 3,
             ),
+            (
+                include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
+                3,
+            ),
             (V3_RING7_RON, 3),
         ] {
             let settings: MapSettings =

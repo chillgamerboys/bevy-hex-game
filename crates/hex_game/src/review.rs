@@ -1102,6 +1102,9 @@ fn persist_screenshot(image: &Image, path: &Path) -> Result<(), String> {
         ));
     }
     let stats = write_png(image, path)?;
+    if stats.brightest <= 8 {
+        return Err("renderer output is effectively black; rejected PNG was preserved".to_owned());
+    }
     if !stats.has_coverage {
         return Err(
             "renderer output lacks meaningful visual coverage; rejected PNG was preserved"

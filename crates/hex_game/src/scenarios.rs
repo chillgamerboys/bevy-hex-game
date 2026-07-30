@@ -2322,9 +2322,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
-        let mut app = procedural_gameplay_app("Forest");
+    fn assert_vegetation_scenario_reenters_with_the_same_art(scenario_name: &str) {
+        let mut app = procedural_gameplay_app(scenario_name);
         let art_fingerprint = app
             .world()
             .resource::<RuntimeArtCatalog>()
@@ -2337,12 +2336,12 @@ mod tests {
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("party_start"))
-            .expect("Forest should publish party_start");
+            .unwrap_or_else(|| panic!("{scenario_name} should publish party_start"));
         let first_hostile = app
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("hostile_start"))
-            .expect("Forest should publish hostile_start");
+            .unwrap_or_else(|| panic!("{scenario_name} should publish hostile_start"));
         let first_features = app
             .world_mut()
             .query_filtered::<Entity, With<ObjectInstance>>()
@@ -2350,7 +2349,7 @@ mod tests {
             .count();
         assert!(
             first_features > 0,
-            "Forest should publish authored object instances"
+            "{scenario_name} should publish authored object instances"
         );
 
         enter_screen(&mut app, Screen::Title);
@@ -2368,7 +2367,7 @@ mod tests {
                 .iter(app.world())
                 .count(),
             0,
-            "Forest teardown left authored feature instances alive"
+            "{scenario_name} teardown left authored feature instances alive"
         );
 
         enter_screen(&mut app, Screen::Gameplay);
@@ -2385,8 +2384,18 @@ mod tests {
                 .iter(app.world())
                 .count(),
             first_features,
-            "Forest re-entry changed its authored feature instance count"
+            "{scenario_name} re-entry changed its authored feature instance count"
         );
+    }
+
+    #[test]
+    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Forest");
+    }
+
+    #[test]
+    fn prairie_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Prairie");
     }
 
     #[test]
@@ -2433,6 +2442,7 @@ mod tests {
             "Caves",
             "Waterfall",
             "Forest",
+            "Prairie",
         ] {
             let scenario = library()
                 .scenarios
@@ -2480,6 +2490,7 @@ mod tests {
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
                 "Waterfall" => &["fall_overlook", "basin_overlook"],
                 "Forest" => &["forest_clearing", "prairie_overlook"],
+                "Prairie" => &["prairie_overlook"],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
