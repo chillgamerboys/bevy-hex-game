@@ -24,8 +24,8 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::vegetation::{
-    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationMetrics,
-    LandformVegetationSet,
+    append_landform_vegetation, validate_landform_vegetation, LandformVegetationDomain,
+    LandformVegetationMetrics, LandformVegetationSet,
 };
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
@@ -216,7 +216,7 @@ impl V3Recipe for WaterfallRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_waterfall(plan)
+        validate_waterfall(plan, &self.vegetation)
     }
 
     fn repair(
@@ -1567,6 +1567,7 @@ fn waterfall_route_centres(
 }
 
 fn validate_waterfall_vegetation(
+    vegetation_objects: &LandformVegetationSet,
     volume: &VolumePlan,
     liquids: &LiquidPlan,
     features: &FeaturePlan,
@@ -1576,24 +1577,6 @@ fn validate_waterfall_vegetation(
     protected_centres: impl IntoIterator<Item = HexCoord>,
     issues: &mut Vec<WorldValidationIssue>,
 ) -> (LandformVegetationMetrics, u32) {
-    let vegetation = match landform_vegetation_metrics(
-        "Waterfall",
-        V3EnvironmentSettings::TemperateGrassland,
-        features.by_id.values(),
-    ) {
-        Ok(metrics) => metrics,
-        Err(error) => {
-            issues.push(recipe_issue(error));
-            LandformVegetationMetrics { trees: 0, grass: 0 }
-        }
-    };
-    if !(2..=5).contains(&vegetation.trees) {
-        issues.push(recipe_issue(format!(
-            "Waterfall has {} authored trees; expected 2 through 5",
-            vegetation.trees
-        )));
-    }
-
     let ordinary_surfaces = volume
         .surfaces
         .iter()
@@ -1618,6 +1601,30 @@ fn validate_waterfall_vegetation(
     {
         reserved.extend(coord.within_radius(2));
     }
+    let no_nonvegetation_blockers = BTreeSet::new();
+    let vegetation = match validate_landform_vegetation(
+        "Waterfall",
+        vegetation_objects,
+        &[LandformVegetationDomain {
+            surfaces: &ordinary_surfaces,
+            reserved: &reserved,
+        }],
+        features,
+        &no_nonvegetation_blockers,
+        blockers,
+    ) {
+        Ok(metrics) => metrics,
+        Err(errors) => {
+            issues.extend(errors.into_iter().map(recipe_issue));
+            LandformVegetationMetrics { trees: 0, grass: 0 }
+        }
+    };
+    if !(2..=5).contains(&vegetation.trees) {
+        issues.push(recipe_issue(format!(
+            "Waterfall has {} authored trees; expected 2 through 5",
+            vegetation.trees
+        )));
+    }
     let eligible_dry = ordinary_surfaces
         .keys()
         .filter(|coord| !reserved.contains(coord))
@@ -1637,16 +1644,6 @@ fn validate_waterfall_vegetation(
             )));
         }
     }
-    let authored_blockers = features
-        .by_id
-        .values()
-        .flat_map(|feature| feature.blocker_footprint.iter().copied())
-        .collect::<BTreeSet<_>>();
-    if authored_blockers != *blockers {
-        issues.push(recipe_issue(
-            "Waterfall blockers must exactly equal its authored tree footprints",
-        ));
-    }
     let grass_percent = count_u32(vegetation.grass)
         .saturating_mul(100)
         .checked_div(count_u32(eligible_dry.len()))
@@ -1662,7 +1659,16 @@ fn validate_waterfall_vegetation(
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     plan: &GeneratedPatchPlan,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<()> {
+    let vegetation = match LandformVegetationSet::resolve(
+        catalog,
+        V3EnvironmentSettings::TemperateGrassland,
+        "Waterfall",
+    ) {
+        Ok(vegetation) => vegetation,
+        Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
+    };
     let mut issues = validate_patch_walker_seams(&patch, &plan.volume);
     let rotation = match waterfall_rotation(&patch) {
         Ok(rotation) => rotation,
@@ -1713,6 +1719,7 @@ pub(crate) fn validate_patch(
     };
     protected_centres.extend(patch.protected_approaches());
     validate_waterfall_vegetation(
+        &vegetation,
         &plan.volume,
         &plan.liquids,
         &plan.features,
@@ -2563,7 +2570,10 @@ fn ordinary_components(ordinary: &OrdinaryGraph) -> Vec<BTreeSet<TilePos>> {
     components
 }
 
-pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMetrics> {
+fn validate_waterfall(
+    plan: &GeneratedWorldPlan,
+    vegetation_objects: &LandformVegetationSet,
+) -> WorldValidation<WaterfallMetrics> {
     let mut issues = Vec::new();
     let low_water_level = if plan.layout.kind.is_composite() {
         COMPOSITE_LOW_WATER_LEVEL
@@ -2776,6 +2786,7 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
         }
     };
     let (vegetation, grass_surface_percent) = validate_waterfall_vegetation(
+        vegetation_objects,
         &plan.volume,
         &plan.liquids,
         &plan.features,

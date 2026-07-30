@@ -212,6 +212,172 @@ pub(super) struct LandformVegetationMetrics {
     pub(super) grass: usize,
 }
 
+/// One independently validated support layer and its horizontally reserved columns.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct LandformVegetationDomain<'a> {
+    pub(super) surfaces: &'a BTreeMap<HexCoord, TilePos>,
+    pub(super) reserved: &'a BTreeSet<HexCoord>,
+}
+
+/// Reprojects every accepted authored object instead of trusting stored footprints.
+///
+/// Recipes remain responsible for their semantic density and root-eligibility
+/// policies. This shared boundary proves the lower-level spatial invariants common
+/// to every landform: exact support, complete visual clearance, reserved-column
+/// clearance, pairwise object separation, and blocker equality.
+pub(super) fn validate_landform_vegetation(
+    recipe: &str,
+    objects: &LandformVegetationSet,
+    domains: &[LandformVegetationDomain<'_>],
+    features: &FeaturePlan,
+    nonvegetation_blockers: &BTreeSet<TilePos>,
+    blockers: &BTreeSet<TilePos>,
+) -> Result<LandformVegetationMetrics, Vec<String>> {
+    let mut issues = Vec::new();
+    let mut metrics = LandformVegetationMetrics { trees: 0, grass: 0 };
+    let mut roots = BTreeSet::new();
+    let mut occupied_visual = BTreeSet::new();
+    let mut projected_blockers = BTreeSet::new();
+
+    for (id, feature) in &features.by_id {
+        let Some(object) = objects.object(&feature.object_id) else {
+            issues.push(format!(
+                "{recipe} feature {id:?} uses unsupported authored object '{}'",
+                feature.object_id
+            ));
+            continue;
+        };
+        let expected_kind = if object.id == objects.grass_tuft.id {
+            metrics.grass = metrics.grass.saturating_add(1);
+            FeatureKind::TallGrass
+        } else {
+            metrics.trees = metrics.trees.saturating_add(1);
+            FeatureKind::Tree
+        };
+        if feature.kind != expected_kind {
+            issues.push(format!(
+                "{recipe} feature {id:?} publishes {:?} for object '{}'; expected {expected_kind:?}",
+                feature.kind, feature.object_id
+            ));
+        }
+        if !roots.insert(feature.root) {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' reuses authored root {:?}",
+                feature.object_id, feature.root
+            ));
+        }
+
+        let mut matching_domains = domains.iter().filter(|domain| {
+            domain.surfaces.get(&feature.root.coord).copied() == Some(feature.root)
+        });
+        let Some(domain) = matching_domains.next() else {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' root {:?} is not exact support in any accepted landform layer",
+                feature.object_id, feature.root
+            ));
+            continue;
+        };
+        if matching_domains.next().is_some() {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' root {:?} ambiguously belongs to multiple support layers",
+                feature.object_id, feature.root
+            ));
+            continue;
+        }
+
+        let Some(volume) = object.project_visual_volume(feature.root, feature.rotation) else {
+            issues.push(format!(
+                "{recipe} feature {id:?} cannot project object '{}' at {:?}",
+                feature.object_id, feature.root
+            ));
+            continue;
+        };
+        if let Some(cell) = volume
+            .cells
+            .iter()
+            .find(|cell| domain.reserved.contains(&cell.coord))
+        {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' enters reserved column {:?} at {cell:?}",
+                feature.object_id, cell.coord
+            ));
+        }
+        if let Some(cell) = volume.cells.iter().find(|cell| {
+            domain
+                .surfaces
+                .get(&cell.coord)
+                .is_none_or(|support| cell.level <= support.level)
+        }) {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' leaves or intersects its support layer at {cell:?}",
+                feature.object_id
+            ));
+        }
+        if let Some(cell) = volume.cells.intersection(&occupied_visual).next() {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' overlaps neighboring authored vegetation at {cell:?}",
+                feature.object_id
+            ));
+        }
+        occupied_visual.extend(volume.cells);
+
+        let Some(exact_blockers) =
+            object.project_blockers(feature.root, feature.rotation, domain.surfaces)
+        else {
+            issues.push(format!(
+                "{recipe} feature {id:?} cannot project the exact blocker footprint for object '{}'",
+                feature.object_id
+            ));
+            continue;
+        };
+        if exact_blockers != feature.blocker_footprint {
+            issues.push(format!(
+                "{recipe} feature {id:?} stores blocker footprint {:?}, but object '{}' projects {:?}",
+                feature.blocker_footprint, feature.object_id, exact_blockers
+            ));
+        }
+        if let Some(blocker) = exact_blockers
+            .iter()
+            .find(|blocker| domain.reserved.contains(&blocker.coord))
+        {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' blocker {blocker:?} enters a reserved column",
+                feature.object_id
+            ));
+        }
+        if let Some(blocker) = exact_blockers.intersection(&projected_blockers).next() {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' blocker {blocker:?} overlaps a neighboring authored object",
+                feature.object_id
+            ));
+        }
+        if let Some(blocker) = exact_blockers.intersection(nonvegetation_blockers).next() {
+            issues.push(format!(
+                "{recipe} feature {id:?} object '{}' projects blocker {blocker:?} over non-vegetation blocker authority",
+                feature.object_id
+            ));
+        }
+        projected_blockers.extend(exact_blockers);
+    }
+
+    let expected_blockers = projected_blockers
+        .union(nonvegetation_blockers)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if expected_blockers != *blockers {
+        issues.push(format!(
+            "{recipe} blockers differ from the independently projected authored vegetation plus \
+             declared non-vegetation authority (vegetation {projected_blockers:?}, \
+             non-vegetation {nonvegetation_blockers:?}, published {blockers:?})"
+        ));
+    }
+    if issues.is_empty() {
+        Ok(metrics)
+    } else {
+        Err(issues)
+    }
+}
+
 pub(super) fn landform_vegetation_metrics<'a>(
     recipe: &str,
     environment: V3EnvironmentSettings,
@@ -872,5 +1038,117 @@ pub(crate) mod tests {
             assert!(cells.cells.contains(&TilePos::new(root.coord, 13)));
             assert!(cells.cells.iter().any(|cell| cell.level == 14));
         }
+    }
+
+    #[test]
+    fn snowy_validation_reprojects_reserved_overlap_and_blocker_authority() {
+        let objects = LandformVegetationSet::resolve(
+            runtime_art_catalog(),
+            V3EnvironmentSettings::Frozen,
+            "Frozen validation fixture",
+        )
+        .expect("tracked snowy set should resolve");
+        let root = TilePos::new(HexCoord::ORIGIN, 0);
+        let rotation = HexObjectRotation::new(0).expect("zero rotation");
+        let surfaces = HexCoord::ORIGIN
+            .within_radius(3)
+            .into_iter()
+            .map(|coord| (coord, TilePos::new(coord, 0)))
+            .collect::<BTreeMap<_, _>>();
+        let blockers = objects
+            .small_broadleaf
+            .project_blockers(root, rotation, &surfaces)
+            .expect("snowy tree blockers should project");
+        let feature = PlannedFeature {
+            root,
+            kind: FeatureKind::Tree,
+            object_id: objects.small_broadleaf.id.clone(),
+            rotation,
+            blocker_footprint: blockers.clone(),
+        };
+        let mut features = FeaturePlan::default();
+        features.by_id.insert(FeatureId(0), feature.clone());
+        let empty_reserved = BTreeSet::new();
+        let empty_blockers = BTreeSet::new();
+        let metrics = validate_landform_vegetation(
+            "Frozen validation fixture",
+            &objects,
+            &[LandformVegetationDomain {
+                surfaces: &surfaces,
+                reserved: &empty_reserved,
+            }],
+            &features,
+            &empty_blockers,
+            &blockers,
+        )
+        .expect("the exact snowy feature should validate");
+        assert_eq!(metrics, LandformVegetationMetrics { trees: 1, grass: 0 });
+
+        let reserved_coord = objects
+            .small_broadleaf
+            .project_visual_volume(root, rotation)
+            .expect("snowy tree volume should project")
+            .cells
+            .iter()
+            .find(|cell| cell.coord != root.coord)
+            .map(|cell| cell.coord)
+            .expect("snowy tree canopy should leave its root column");
+        let reserved = BTreeSet::from([reserved_coord]);
+        let reserved_errors = validate_landform_vegetation(
+            "Frozen validation fixture",
+            &objects,
+            &[LandformVegetationDomain {
+                surfaces: &surfaces,
+                reserved: &reserved,
+            }],
+            &features,
+            &empty_blockers,
+            &blockers,
+        )
+        .expect_err("a snowy canopy entering a reserved column must fail");
+        assert!(reserved_errors.iter().any(|error| {
+            error.contains(SNOWY_SMALL_BROADLEAF_ID) && error.contains("reserved column")
+        }));
+
+        let mut overlapping = features.clone();
+        overlapping.by_id.insert(FeatureId(1), feature);
+        let overlap_errors = validate_landform_vegetation(
+            "Frozen validation fixture",
+            &objects,
+            &[LandformVegetationDomain {
+                surfaces: &surfaces,
+                reserved: &empty_reserved,
+            }],
+            &overlapping,
+            &empty_blockers,
+            &blockers,
+        )
+        .expect_err("neighboring authored volumes may not overlap");
+        assert!(overlap_errors
+            .iter()
+            .any(|error| error.contains("overlaps neighboring authored vegetation")));
+
+        let mut stale_footprint = features;
+        stale_footprint
+            .by_id
+            .get_mut(&FeatureId(0))
+            .expect("fixture feature should remain present")
+            .blocker_footprint
+            .clear();
+        let blocker_errors = validate_landform_vegetation(
+            "Frozen validation fixture",
+            &objects,
+            &[LandformVegetationDomain {
+                surfaces: &surfaces,
+                reserved: &empty_reserved,
+            }],
+            &stale_footprint,
+            &empty_blockers,
+            &blockers,
+        )
+        .expect_err("stored blockers must equal the accepted authored projection");
+        assert!(blocker_errors
+            .iter()
+            .any(|error| error.contains("stores blocker footprint")));
     }
 }

@@ -17,7 +17,8 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::vegetation::{
-    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+    append_landform_vegetation, landform_vegetation_metrics, validate_landform_vegetation,
+    LandformVegetationDomain, LandformVegetationSet,
 };
 use super::volume::{
     LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeElement,
@@ -128,7 +129,7 @@ impl V3Recipe for SkyRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_sky(plan, &self.settings, self.environment)
+        validate_sky(plan, &self.settings, self.environment, &self.vegetation)
     }
 
     fn repair(
@@ -957,12 +958,20 @@ const fn surface_material(environment: V3EnvironmentSettings) -> SolidMaterialRo
     }
 }
 
-pub(crate) fn validate_sky(
+fn validate_sky(
     plan: &GeneratedWorldPlan,
     settings: &V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
+    vegetation: &LandformVegetationSet,
 ) -> WorldValidation<SkyMetrics> {
-    validate_sky_inner(plan, settings, environment, false, &BTreeSet::new())
+    validate_sky_inner(
+        plan,
+        settings,
+        environment,
+        vegetation,
+        false,
+        &BTreeSet::new(),
+    )
 }
 
 pub(crate) fn validate_patch(
@@ -970,7 +979,12 @@ pub(crate) fn validate_patch(
     fragment: &GeneratedPatchPlan,
     settings: &V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<SkyMetrics> {
+    let vegetation = match LandformVegetationSet::resolve(catalog, environment, "Sky Islands") {
+        Ok(vegetation) => vegetation,
+        Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
+    };
     let frame =
         match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
             Ok(frame) => frame,
@@ -1002,6 +1016,7 @@ pub(crate) fn validate_patch(
                 &plan,
                 settings,
                 environment,
+                &vegetation,
                 patch.layout().kind.is_composite(),
                 &protected_approaches,
             )
@@ -1016,6 +1031,7 @@ fn validate_sky_inner(
     plan: &GeneratedWorldPlan,
     settings: &V3SkyIslandsSettings,
     environment: V3EnvironmentSettings,
+    vegetation_objects: &LandformVegetationSet,
     composite_layout: bool,
     additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<SkyMetrics> {
@@ -1267,16 +1283,37 @@ fn validate_sky_inner(
             "SkyIslands upper vegetation leaves a primary island or bridge, landing, or seam clearance",
         ));
     }
-    let authored_blockers = plan
-        .features
-        .by_id
-        .values()
-        .flat_map(|feature| feature.blocker_footprint.iter().copied())
-        .collect::<BTreeSet<_>>();
-    if authored_blockers != plan.blockers {
-        issues.push(recipe_issue(
-            "SkyIslands blockers must exactly equal its authored tree footprints",
-        ));
+    let ordinary_ground_surfaces = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let upper_support_surfaces = primary
+        .difference(&metal_primary_surfaces)
+        .map(|position| (position.coord, *position))
+        .collect::<BTreeMap<_, _>>();
+    let no_nonvegetation_blockers = BTreeSet::new();
+    if let Err(errors) = validate_landform_vegetation(
+        "Sky Islands",
+        vegetation_objects,
+        &[
+            LandformVegetationDomain {
+                surfaces: &ordinary_ground_surfaces,
+                reserved: &ground_reserved,
+            },
+            LandformVegetationDomain {
+                surfaces: &upper_support_surfaces,
+                reserved: &upper_reserved,
+            },
+        ],
+        &plan.features,
+        &no_nonvegetation_blockers,
+        &plan.blockers,
+    ) {
+        issues.extend(errors.into_iter().map(recipe_issue));
     }
     let upper_grass_percent = percentage(upper_vegetation.grass, eligible_upper.len());
     if !(15..=35).contains(&upper_grass_percent) {

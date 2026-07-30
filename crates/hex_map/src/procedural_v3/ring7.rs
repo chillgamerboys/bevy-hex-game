@@ -265,7 +265,7 @@ impl Ring7Recipe<'_> {
                             })
                             .collect::<Vec<_>>()
                     })?;
-            validate_fragment(patch, spec, &fragment).map_err(|issues| {
+            validate_fragment(patch, spec, &fragment, self.art_catalog).map_err(|issues| {
                 issues
                     .into_iter()
                     .map(|issue| {
@@ -470,6 +470,7 @@ fn validate_fragment(
     patch: PatchRecipeContext<'_>,
     spec: &PatchSpec,
     fragment: &GeneratedPatchPlan,
+    art_catalog: &RuntimeArtCatalog,
 ) -> Result<(), Vec<WorldValidationIssue>> {
     let common = fragment.validate_against(patch.layout());
     if !common.is_empty() {
@@ -485,20 +486,24 @@ fn validate_fragment(
     }
 
     let validation = match &spec.recipe {
-        V3RecipeSettings::Waterfall(_) => waterfall::validate_patch(patch, fragment).map(|_| ()),
+        V3RecipeSettings::Waterfall(_) => {
+            waterfall::validate_patch(patch, fragment, art_catalog).map(|_| ())
+        }
         V3RecipeSettings::Forest(_) => forest::validate_patch(patch, fragment).map(|_| ()),
         V3RecipeSettings::Hills(settings) => {
-            hills::validate_patch(patch, fragment, settings, spec.environment).map(|_| ())
+            hills::validate_patch(patch, fragment, settings, spec.environment, art_catalog)
+                .map(|_| ())
         }
         V3RecipeSettings::Mountains(settings) => {
-            mountains::validate_patch(patch, fragment, settings).map(|_| ())
+            mountains::validate_patch(patch, fragment, settings, art_catalog).map(|_| ())
         }
         V3RecipeSettings::Fort(_) => validate_canonical(patch, fragment, fort::validate_fort),
         V3RecipeSettings::Caves(settings) => {
             caves::validate_caves_with_surface_sink(patch, fragment, settings).map(|_| ())
         }
         V3RecipeSettings::SkyIslands(settings) => {
-            sky::validate_patch(patch, fragment, settings, spec.environment).map(|_| ())
+            sky::validate_patch(patch, fragment, settings, spec.environment, art_catalog)
+                .map(|_| ())
         }
         V3RecipeSettings::Volcano(_)
         | V3RecipeSettings::DeepForest(_)

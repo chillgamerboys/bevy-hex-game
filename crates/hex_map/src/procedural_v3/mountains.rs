@@ -24,7 +24,8 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::vegetation::{
-    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+    append_landform_vegetation, validate_landform_vegetation, LandformVegetationDomain,
+    LandformVegetationSet,
 };
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
@@ -159,7 +160,7 @@ impl V3Recipe for MountainsRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_mountains(plan, &self.settings)
+        validate_mountains(plan, &self.settings, &self.vegetation)
     }
 
     fn repair(
@@ -1378,13 +1379,15 @@ fn route_membership(
     })
 }
 
-pub(crate) fn validate_mountains(
+fn validate_mountains(
     plan: &GeneratedWorldPlan,
     settings: &V3MountainsSettings,
+    vegetation: &LandformVegetationSet,
 ) -> WorldValidation<MountainsMetrics> {
     validate_mountains_inner(
         plan,
         settings,
+        vegetation,
         settings.base_level.saturating_add(settings.relief / 2),
         1,
         &BTreeSet::new(),
@@ -1395,7 +1398,13 @@ pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     fragment: &GeneratedPatchPlan,
     settings: &V3MountainsSettings,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<MountainsMetrics> {
+    let vegetation =
+        match LandformVegetationSet::resolve(catalog, V3EnvironmentSettings::Frozen, "Mountains") {
+            Ok(vegetation) => vegetation,
+            Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
+        };
     let seam_approaches = patch.protected_approaches();
     let available_rise = fragment
         .features
@@ -1452,6 +1461,7 @@ pub(crate) fn validate_patch(
     validate_mountains_inner(
         &local,
         settings,
+        &vegetation,
         settings.base_level.saturating_add(available_rise),
         patch
             .shared_edges()
@@ -1467,6 +1477,7 @@ pub(crate) fn validate_patch(
 fn validate_mountains_inner(
     plan: &GeneratedWorldPlan,
     settings: &V3MountainsSettings,
+    vegetation_objects: &LandformVegetationSet,
     required_saddle: Level,
     expected_streams: usize,
     additional_vegetation_protected: &BTreeSet<HexCoord>,
@@ -1594,21 +1605,6 @@ fn validate_mountains_inner(
         issues.push(recipe_issue("Mountains contains no deliberate cliff edges"));
     }
     validate_shared_approaches(plan, &ordinary, &mut issues);
-    let vegetation = landform_vegetation_metrics(
-        "Mountains",
-        V3EnvironmentSettings::Frozen,
-        plan.features.by_id.values(),
-    )
-    .unwrap_or_else(|error| {
-        issues.push(recipe_issue(error));
-        super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
-    });
-    if !(1..=2).contains(&vegetation.trees) || vegetation.grass != 0 {
-        issues.push(recipe_issue(format!(
-            "Mountains has {} frozen trees and {} grass tufts; expected 1 through 2 trees and no grass",
-            vegetation.trees, vegetation.grass
-        )));
-    }
     let mut vegetation_reserved = plan
         .liquids
         .bodies
@@ -1623,6 +1619,38 @@ fn validate_mountains_inner(
             .chain(plan.anchors.values().map(|anchor| anchor.coord))
             .chain(additional_vegetation_protected.iter().copied()),
     );
+    let ordinary_surfaces = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let no_nonvegetation_blockers = BTreeSet::new();
+    let vegetation = match validate_landform_vegetation(
+        "Mountains",
+        vegetation_objects,
+        &[LandformVegetationDomain {
+            surfaces: &ordinary_surfaces,
+            reserved: &vegetation_reserved,
+        }],
+        &plan.features,
+        &no_nonvegetation_blockers,
+        &plan.blockers,
+    ) {
+        Ok(metrics) => metrics,
+        Err(errors) => {
+            issues.extend(errors.into_iter().map(recipe_issue));
+            super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+        }
+    };
+    if !(1..=2).contains(&vegetation.trees) || vegetation.grass != 0 {
+        issues.push(recipe_issue(format!(
+            "Mountains has {} frozen trees and {} grass tufts; expected 1 through 2 trees and no grass",
+            vegetation.trees, vegetation.grass
+        )));
+    }
     if plan
         .features
         .by_id
@@ -1631,17 +1659,6 @@ fn validate_mountains_inner(
     {
         issues.push(recipe_issue(
             "Mountains frozen trees leave dry terrain or a protected route, anchor, seam, or stream clearance",
-        ));
-    }
-    let authored_blockers = plan
-        .features
-        .by_id
-        .values()
-        .flat_map(|feature| feature.blocker_footprint.iter().copied())
-        .collect::<BTreeSet<_>>();
-    if authored_blockers != plan.blockers {
-        issues.push(recipe_issue(
-            "Mountains blockers must exactly equal its authored tree footprints",
         ));
     }
     if !issues.is_empty() {
@@ -2200,7 +2217,14 @@ mod tests {
         let source_node = body.nodes.remove(&source).expect("source node");
         let low_source = TilePos::new(source.coord, mountain_settings.base_level.saturating_add(2));
         assert!(body.nodes.insert(low_source, source_node).is_none());
-        let WorldValidation::Invalid(issues) = validate_mountains(&corrupted, mountain_settings)
+        let vegetation = LandformVegetationSet::resolve(
+            super::super::vegetation::tests::runtime_art_catalog(),
+            V3EnvironmentSettings::Frozen,
+            "Mountains",
+        )
+        .expect("accepted snowy vegetation");
+        let WorldValidation::Invalid(issues) =
+            validate_mountains(&corrupted, mountain_settings, &vegetation)
         else {
             panic!("low foothill spring corruption was accepted");
         };
