@@ -613,8 +613,10 @@ fn apply_terrain_edits(
 
     if let Some(presentation) = presentation.as_deref_mut() {
         presentation.retain_features(|feature| {
-            if feature.kind != procedural_v3::FeatureKind::TallGrass
-                || !changed_coords.contains(&feature.root.coord)
+            if !matches!(
+                feature.kind,
+                procedural_v3::FeatureKind::TallGrass | procedural_v3::FeatureKind::CaveVegetation
+            ) || !changed_coords.contains(&feature.root.coord)
             {
                 return true;
             }

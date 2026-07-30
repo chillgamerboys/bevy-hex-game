@@ -220,6 +220,8 @@ fn runtime_art_catalog_without(omitted_object: Option<&str>) -> RuntimeArtCatalo
         include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
         include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
         include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+        include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
+        include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
         include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
         include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
@@ -1462,6 +1464,9 @@ fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
     let Some(ProceduralRecipeMetrics::Caves(CavesReportMetrics {
         chamber_count,
         gameplay_lights,
+        moss_roots,
+        lichen_roots,
+        vegetation_visual_voxels,
         optional_dark_floors,
         minimum_roof_thickness,
         ..
@@ -1470,9 +1475,33 @@ fn v3_caves_publish_exact_interiors_lights_anchors_and_cutaway_roofs() {
         panic!("V3 Caves should publish exact recipe metrics");
     };
     assert_eq!(chamber_count, 12);
+    assert_eq!(moss_roots, 2);
+    assert_eq!(lichen_roots, 2);
+    assert_eq!(vegetation_visual_voxels, 14);
     assert!(gameplay_lights > 0);
     assert!(optional_dark_floors > 0);
     assert!(minimum_roof_thickness >= 3);
+    assert!(app.world().resource::<TraversalBlockers>().is_empty());
+    let vegetation = cave_vegetation_instances(&mut app);
+    assert_eq!(vegetation.len(), 4);
+    assert_eq!(
+        vegetation
+            .values()
+            .filter(|(object, _rotation)| object == "prop/cave-moss")
+            .count(),
+        2
+    );
+    assert_eq!(
+        vegetation
+            .values()
+            .filter(|(object, _rotation)| object == "prop/cave-lichen")
+            .count(),
+        2
+    );
+    assert!(
+        vegetation.values().all(|(_object, rotation)| *rotation < 6),
+        "cave vegetation published an invalid authored rotation"
+    );
 
     let anchors = app.world().resource::<MapAnchors>();
     for name in [
@@ -1963,6 +1992,46 @@ fn cave_crystal_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
     snapshots
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid generated cave vegetation is a broken integration-test fixture"
+)]
+fn cave_vegetation_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
+    let world = app.world_mut();
+    let mut query = world.query::<(
+        &Name,
+        &ObjectInstance,
+        Option<&HexTile>,
+        Option<&CanopyOccluder>,
+    )>();
+    query
+        .iter(world)
+        .filter(|(name, _instance, _tile, _canopy)| name.as_str() == "GeneratedCaveVegetation")
+        .map(|(_name, instance, tile, canopy)| {
+            assert!(
+                tile.is_none(),
+                "cave vegetation roots must not become terrain tiles"
+            );
+            assert!(
+                canopy.is_none(),
+                "grounded cave vegetation must not publish canopy occlusion"
+            );
+            let origin = instance.origin();
+            let floor_level = origin
+                .level
+                .checked_sub(1)
+                .expect("cave vegetation should sit one level above its exact footing");
+            (
+                TilePos::new(origin.coord, floor_level),
+                (
+                    instance.object_id().as_str().to_owned(),
+                    instance.rotation().steps(),
+                ),
+            )
+        })
+        .collect()
+}
+
 fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
     let world = app.world_mut();
     let mut query = world.query::<(Entity, &Name, &ChildOf, &Pickable, Option<&HexTile>)>();
@@ -1992,7 +2061,10 @@ fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
     query
         .iter(world)
         .filter(|(_entity, name, _instance, _parent, _tile)| {
-            matches!(name.as_str(), "GeneratedTree" | "GeneratedTallGrass")
+            matches!(
+                name.as_str(),
+                "GeneratedTree" | "GeneratedTallGrass" | "GeneratedCaveVegetation"
+            )
         })
         .map(|(entity, name, instance, parent, tile)| {
             assert!(
@@ -2004,7 +2076,7 @@ fn feature_roots(app: &mut App) -> Vec<(Entity, String, TilePos, Entity)> {
             let level = visual_origin
                 .level
                 .checked_sub(1)
-                .expect("Forest visual origins should sit above their exact footing");
+                .expect("generated visual origins should sit above their exact footing");
             (
                 entity,
                 name.as_str().to_owned(),
@@ -3304,6 +3376,46 @@ fn v3_caves_missing_crystal_asset_fails_before_any_world_publication() {
 }
 
 #[test]
+fn v3_caves_missing_vegetation_asset_fails_before_any_world_publication() {
+    let mut app = v3_caves_app_without_art_catalog();
+    app.insert_resource(runtime_art_catalog_without(Some("prop/cave-moss")));
+    enter_gameplay(&mut app);
+
+    assert!(!app.world().contains_resource::<TerrainReady>());
+    assert!(!app.world().contains_resource::<VoxelMap>());
+    assert!(!app.world().contains_resource::<MapAnchors>());
+    assert!(!app.world().contains_resource::<InteriorRegions>());
+    assert_eq!(tile_count(&mut app), 0);
+    assert!(cave_crystal_instances(&mut app).is_empty());
+    assert!(cave_vegetation_instances(&mut app).is_empty());
+    assert!(app
+        .world()
+        .resource::<GameplaySetupFailure>()
+        .reason
+        .contains("prop/cave-moss"));
+}
+
+#[test]
+fn terrain_edits_retire_cave_vegetation_with_invalidated_support() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let target = *before
+        .keys()
+        .next()
+        .expect("Caves should publish sparse vegetation");
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: target });
+    app.update();
+    app.update();
+
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&target));
+}
+
+#[test]
 fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
     let mut app = v3_caves_app();
     enter_gameplay(&mut app);
@@ -3343,11 +3455,13 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .collect()
     };
     let first_crystals = cave_crystal_instances(&mut app);
+    let first_vegetation = cave_vegetation_instances(&mut app);
 
     assert!(!first_floors.is_empty());
     assert!(!first_roofs.is_empty());
     assert!(!first_lights.is_empty());
     assert_eq!(first_crystals.len(), first_lights.len());
+    assert_eq!(first_vegetation.len(), 4);
     assert!(
         first_crystals
             .keys()
@@ -3376,6 +3490,7 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
     };
     assert_eq!(light_count_after_exit, 0);
     assert!(cave_crystal_instances(&mut app).is_empty());
+    assert!(cave_vegetation_instances(&mut app).is_empty());
     let point_light_count_after_exit = {
         let world = app.world_mut();
         let mut lights = world.query::<&PointLight>();
@@ -3432,11 +3547,13 @@ fn v3_caves_teardown_and_reentry_preserve_exact_interiors_and_lights() {
             .collect()
     };
     let second_crystals = cave_crystal_instances(&mut app);
+    let second_vegetation = cave_vegetation_instances(&mut app);
     assert_eq!(second_anchors, first_anchors);
     assert_eq!(second_floors, first_floors);
     assert_eq!(second_roofs, first_roofs);
     assert_eq!(second_lights, first_lights);
     assert_eq!(second_crystals, first_crystals);
+    assert_eq!(second_vegetation, first_vegetation);
 }
 
 #[test]

@@ -23,6 +23,7 @@ pub(crate) struct FeatureId(pub(crate) u32);
 pub(crate) enum FeatureKind {
     Tree,
     TallGrass,
+    CaveVegetation,
 }
 
 /// One exact surface feature placement.
@@ -437,7 +438,7 @@ impl GeneratedWorldPlan {
             }
             let expected_category = match feature.kind {
                 FeatureKind::Tree => ObjectCategory::Plant,
-                FeatureKind::TallGrass => ObjectCategory::Prop,
+                FeatureKind::TallGrass | FeatureKind::CaveVegetation => ObjectCategory::Prop,
             };
             if let Err(error) = feature.object_id.validate_for_category(expected_category) {
                 issues.push(WorldValidationIssue::new(
@@ -462,13 +463,17 @@ impl GeneratedWorldPlan {
                         ));
                     }
                 }
-                FeatureKind::TallGrass if !feature.blocker_footprint.is_empty() => {
+                FeatureKind::TallGrass | FeatureKind::CaveVegetation
+                    if !feature.blocker_footprint.is_empty() =>
+                {
                     issues.push(WorldValidationIssue::new(
                         WorldIssueCode::Blocker,
-                        format!("tall-grass feature {id:?} must remain presentation-only"),
+                        format!(
+                            "presentation-only feature {id:?} must keep an empty blocker footprint"
+                        ),
                     ));
                 }
-                FeatureKind::TallGrass => {}
+                FeatureKind::TallGrass | FeatureKind::CaveVegetation => {}
             }
             for blocker in &feature.blocker_footprint {
                 if let Some(previous) = blocker_owners.insert(*blocker, *id) {

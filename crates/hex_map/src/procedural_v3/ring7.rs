@@ -21,6 +21,7 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::CaveVegetationSet;
 use super::world::{GeneratedWorldPlan, WorldIssueCode, WorldValidationIssue};
 use super::{caves, forest, fort, hills, mountains, sky, waterfall, V3GenerationError};
 use crate::procedural::Ring7Metrics as Ring7ReportMetrics;
@@ -49,6 +50,7 @@ struct Ring7Recipe<'a> {
     layout: ResolvedLayoutPlan,
     settings: &'a V3Ring7Settings,
     art_catalog: &'a RuntimeArtCatalog,
+    cave_vegetation: CaveVegetationSet,
     #[cfg(test)]
     _reject_candidates: bool,
 }
@@ -99,6 +101,8 @@ fn generate_with_options(
         )));
     }
     validate_resolved_hydrology(&layout)?;
+    let cave_vegetation = CaveVegetationSet::resolve(art_catalog, "Ring7 Caves")
+        .map_err(V3GenerationError::RecipeContract)?;
 
     run_recipe(
         &Ring7Recipe {
@@ -106,6 +110,7 @@ fn generate_with_options(
             layout,
             settings: ring,
             art_catalog,
+            cave_vegetation,
             #[cfg(test)]
             _reject_candidates,
         },
@@ -249,23 +254,29 @@ impl Ring7Recipe<'_> {
         for (id, spec) in specs {
             let patch = PatchRecipeContext::resolve(&self.layout, id)
                 .map_err(|error| vec![recipe_issue(error.to_string())])?;
-            let fragment =
-                construct_fragment(patch, spec, self.level_height, mode, self.art_catalog)
-                    .map_err(|issues| {
-                        issues
-                            .into_iter()
-                            .map(|issue| {
-                                recipe_issue(format!(
-                                    "patch {} {} construction {:?}: {}",
-                                    id.0,
-                                    recipe_name(&spec.recipe),
-                                    issue.code,
-                                    issue.detail
-                                ))
-                            })
-                            .collect::<Vec<_>>()
-                    })?;
-            validate_fragment(patch, spec, &fragment).map_err(|issues| {
+            let fragment = construct_fragment(
+                patch,
+                spec,
+                self.level_height,
+                mode,
+                self.art_catalog,
+                &self.cave_vegetation,
+            )
+            .map_err(|issues| {
+                issues
+                    .into_iter()
+                    .map(|issue| {
+                        recipe_issue(format!(
+                            "patch {} {} construction {:?}: {}",
+                            id.0,
+                            recipe_name(&spec.recipe),
+                            issue.code,
+                            issue.detail
+                        ))
+                    })
+                    .collect::<Vec<_>>()
+            })?;
+            validate_fragment(patch, spec, &fragment, &self.cave_vegetation).map_err(|issues| {
                 issues
                     .into_iter()
                     .map(|issue| {
@@ -410,6 +421,7 @@ fn construct_fragment(
     level_height: f32,
     mode: PatchBuildMode,
     art_catalog: &RuntimeArtCatalog,
+    cave_vegetation: &CaveVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     match &spec.recipe {
         V3RecipeSettings::Hills(settings) => {
@@ -433,7 +445,7 @@ fn construct_fragment(
             fort::construct_patch(patch, settings, level_height, mode)
         }
         V3RecipeSettings::Caves(settings) => {
-            caves::construct_patch(patch, settings, level_height, mode)
+            caves::construct_patch(patch, settings, level_height, mode, cave_vegetation)
         }
         V3RecipeSettings::SkyIslands(settings) => {
             sky::construct_patch(patch, settings, spec.environment, level_height, mode)
@@ -451,6 +463,7 @@ fn validate_fragment(
     patch: PatchRecipeContext<'_>,
     spec: &PatchSpec,
     fragment: &GeneratedPatchPlan,
+    cave_vegetation: &CaveVegetationSet,
 ) -> Result<(), Vec<WorldValidationIssue>> {
     let common = fragment.validate_against(patch.layout());
     if !common.is_empty() {
@@ -476,7 +489,8 @@ fn validate_fragment(
         }
         V3RecipeSettings::Fort(_) => validate_canonical(patch, fragment, fort::validate_fort),
         V3RecipeSettings::Caves(settings) => {
-            caves::validate_caves_with_surface_sink(patch, fragment, settings).map(|_| ())
+            caves::validate_caves_with_surface_sink(patch, fragment, settings, cave_vegetation)
+                .map(|_| ())
         }
         V3RecipeSettings::SkyIslands(settings) => {
             validate_canonical(patch, fragment, |plan| sky::validate_sky(plan, settings))
@@ -1112,6 +1126,8 @@ mod tests {
             layout,
             settings: validate_recipe_settings(settings).expect("Ring7 settings should validate"),
             art_catalog: runtime_art_catalog(),
+            cave_vegetation: CaveVegetationSet::resolve(runtime_art_catalog(), "Ring7 test Caves")
+                .expect("tracked cave vegetation should resolve"),
             _reject_candidates: false,
         };
         let mut fragment = recipe

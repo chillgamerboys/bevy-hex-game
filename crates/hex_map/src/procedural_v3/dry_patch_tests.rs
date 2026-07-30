@@ -152,7 +152,12 @@ fn construct_dry_plans(
         )?,
         mountains::construct_patch(patch(layout, 1)?, &recipes.mountains, LEVEL_HEIGHT, mode)?,
         fort::construct_patch(patch(layout, 4)?, &V3FortSettings, LEVEL_HEIGHT, mode)?,
-        caves::construct_patch(patch(layout, 5)?, &recipes.caves, LEVEL_HEIGHT, mode)?,
+        caves::construct_patch_without_vegetation(
+            patch(layout, 5)?,
+            &recipes.caves,
+            LEVEL_HEIGHT,
+            mode,
+        )?,
         sky::construct_patch(
             patch(layout, 6)?,
             &recipes.sky,

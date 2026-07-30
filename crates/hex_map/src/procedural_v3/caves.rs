@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use hex_assets::{
-    ConnectivityPolicy, ObjectAssetId, ObjectBlueprint, ObjectCategory, RuntimeArtCatalog,
-    SrgbColor, VoxelStyleId, VoxelSurfaceMode,
+    ConnectivityPolicy, HexObjectRotation, ObjectAssetId, ObjectBlueprint, ObjectCategory,
+    RuntimeArtCatalog, SrgbColor, VoxelStyleId, VoxelSurfaceMode,
 };
 use hex_core::{HexCoord, IlluminationLevel, InteriorRegionId, MapViewHint, TilePos};
 
@@ -25,15 +25,16 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
+use super::vegetation::{CaveVegetationSet, VegetationObjectSpec, CAVE_LICHEN_ID, CAVE_MOSS_ID};
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
     SurfaceMetadata, VolumeColumn, VolumeElement, VolumePlan,
 };
 use super::world::{
-    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeatureClearing, FeaturePlan,
-    GeneratedWorldPlan, InteriorPlan, LightId, PlannedGameplayLight, PlannedInterior,
-    PlannedLightPresentation, ProtectedFeatureRoute, StructurePlan, WorldIssueCode,
-    WorldValidationIssue,
+    CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeatureClearing, FeatureId,
+    FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan, LightId, PlannedFeature,
+    PlannedGameplayLight, PlannedInterior, PlannedLightPresentation, ProtectedFeatureRoute,
+    StructurePlan, WorldIssueCode, WorldValidationIssue,
 };
 use super::V3GenerationError;
 use crate::settings::{
@@ -277,6 +278,9 @@ pub(crate) struct CavesMetrics {
     pub(crate) critical_floors: u32,
     pub(crate) optional_dark_floors: u32,
     pub(crate) gameplay_lights: u32,
+    pub(crate) moss_roots: u32,
+    pub(crate) lichen_roots: u32,
+    pub(crate) vegetation_visual_voxels: u32,
     pub(crate) minimum_roof_thickness: i32,
     pub(crate) minimum_clearance: i32,
     pub(crate) maximum_clearance: i32,
@@ -294,6 +298,7 @@ struct CavesRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
     settings: V3CavesSettings,
+    vegetation: CaveVegetationSet,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -308,6 +313,9 @@ struct CaveStreams<'a> {
     lights: SeedStream<'a>,
     light_kinds: SeedStream<'a>,
     light_rotations: SeedStream<'a>,
+    vegetation_sites: SeedStream<'a>,
+    vegetation_kinds: SeedStream<'a>,
+    vegetation_rotations: SeedStream<'a>,
 }
 
 #[derive(Debug, Clone)]
@@ -331,6 +339,8 @@ struct CaveTopology {
     entrance: CaveRoute,
     floor_levels: BTreeMap<HexCoord, i32>,
     clearances: BTreeMap<HexCoord, i32>,
+    chamber_coords: BTreeSet<HexCoord>,
+    connector_coords: BTreeSet<HexCoord>,
     critical_coords: BTreeSet<HexCoord>,
     optional_coords: BTreeSet<HexCoord>,
     deepest_critical: usize,
@@ -339,8 +349,18 @@ struct CaveTopology {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DerivedCaveTargets {
     critical: BTreeSet<TilePos>,
+    critical_lighting: BTreeSet<TilePos>,
     optional: BTreeSet<TilePos>,
     centerline: Vec<TilePos>,
+    connector_floors: BTreeSet<TilePos>,
+}
+
+#[derive(Debug, Clone)]
+struct CaveVegetationPlacement {
+    root: TilePos,
+    object_id: ObjectAssetId,
+    rotation: HexObjectRotation,
+    cells: BTreeSet<TilePos>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -370,12 +390,17 @@ pub(crate) fn generate(
     level_height: f32,
     settings: &ProceduralV3Settings,
     seed: u64,
+    art_catalog: &RuntimeArtCatalog,
 ) -> Result<ValidatedWorldSelection<CavesMetrics>, V3GenerationError> {
     if !level_height.is_finite() || level_height <= 0.0 {
         return Err(V3GenerationError::RecipeContract(
             "Caves level height must be positive and finite".to_owned(),
         ));
     }
+    CaveCrystalObjectSet::resolve(art_catalog)
+        .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
+    let vegetation = CaveVegetationSet::resolve(art_catalog, "Caves")
+        .map_err(V3GenerationError::RecipeContract)?;
     let cave_settings = validate_recipe_settings(settings)?;
     let layout = resolve_layout(grid_radius, settings)
         .map_err(|error| V3GenerationError::RecipeContract(error.to_string()))?;
@@ -386,6 +411,7 @@ pub(crate) fn generate(
             level_height,
             layout,
             settings: cave_settings.clone(),
+            vegetation,
             #[cfg(test)]
             reject_candidates: false,
         },
@@ -430,6 +456,7 @@ impl V3Recipe for CavesRecipe {
                 world_seed: context.seed,
                 candidate: context.candidate,
             },
+            &self.vegetation,
         )
         .map_err(CandidateAttemptError::Rejected)?;
         compose_single_patch(self.layout.clone(), fragment).map_err(|error| {
@@ -444,7 +471,7 @@ impl V3Recipe for CavesRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_caves(plan, &self.settings)
+        validate_caves(plan, &self.settings, &self.vegetation)
     }
 
     fn repair(
@@ -490,6 +517,7 @@ impl V3Recipe for CavesRecipe {
             &self.settings,
             self.level_height,
             PatchBuildMode::CanonicalFallback,
+            &self.vegetation,
         )
         .map_err(|issues| {
             V3GenerationError::RecipeContract(
@@ -585,6 +613,7 @@ pub(crate) fn construct_patch(
     settings: &V3CavesSettings,
     level_height: f32,
     mode: PatchBuildMode,
+    vegetation: &CaveVegetationSet,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     let streams = mode.seed_streams(&patch);
     construct_patch_with_streams(
@@ -599,8 +628,41 @@ pub(crate) fn construct_patch(
             lights: streams.stage("caves.lights"),
             light_kinds: streams.stage("caves.lights.visual.kind"),
             light_rotations: streams.stage("caves.lights.visual.rotation"),
+            vegetation_sites: streams.stage("caves.vegetation.sites"),
+            vegetation_kinds: streams.stage("caves.vegetation.kinds"),
+            vegetation_rotations: streams.stage("caves.vegetation.rotations"),
         }),
         level_height,
+        Some(vegetation),
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn construct_patch_without_vegetation(
+    patch: PatchRecipeContext<'_>,
+    settings: &V3CavesSettings,
+    level_height: f32,
+    mode: PatchBuildMode,
+) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+    let streams = mode.seed_streams(&patch);
+    construct_patch_with_streams(
+        patch,
+        settings,
+        streams.map(|streams| CaveStreams {
+            orientation: streams.stage("caves.orientation"),
+            floors: streams.stage("caves.floors"),
+            clearances: streams.stage("caves.clearances"),
+            surface: streams.stage("caves.surface"),
+            materials: streams.stage("caves.materials"),
+            lights: streams.stage("caves.lights"),
+            light_kinds: streams.stage("caves.lights.visual.kind"),
+            light_rotations: streams.stage("caves.lights.visual.rotation"),
+            vegetation_sites: streams.stage("caves.vegetation.sites"),
+            vegetation_kinds: streams.stage("caves.vegetation.kinds"),
+            vegetation_rotations: streams.stage("caves.vegetation.rotations"),
+        }),
+        level_height,
+        None,
     )
 }
 
@@ -609,6 +671,7 @@ fn construct_patch_with_streams(
     settings: &V3CavesSettings,
     streams: Option<CaveStreams<'_>>,
     level_height: f32,
+    vegetation: Option<&CaveVegetationSet>,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     validate_patch_capacity(&patch, settings)
         .map_err(|error| vec![recipe_issue(error.to_string())])?;
@@ -786,6 +849,26 @@ fn construct_patch_with_streams(
             .into_iter()
             .map(|coord| TilePos::new(coord, 0)),
     );
+    let (cave_features, cave_visual_cells) = if let Some(vegetation) = vegetation {
+        plan_cave_vegetation(
+            &volume,
+            &topology,
+            &anchors,
+            &critical_centerline,
+            &roof_voxels,
+            vegetation,
+            streams,
+            settings.chamber_count,
+        )?
+    } else {
+        (BTreeMap::new(), BTreeSet::new())
+    };
+    let cave_feature_roots = cave_features
+        .values()
+        .map(|feature| feature.root)
+        .collect::<BTreeSet<_>>();
+    protected_positions.extend(cave_feature_roots.iter().copied());
+    protected_positions.extend(cave_visual_cells);
     let lights = plan_lights(
         &volume,
         &critical_targets,
@@ -811,6 +894,16 @@ fn construct_patch_with_streams(
     critical_targets.extend(critical_centerline.iter().copied());
     optional_targets = exact_interior_positions(&volume, &topology.optional_coords);
     optional_targets.retain(|position| !critical_targets.contains(position));
+    if critical_centerline
+        .iter()
+        .any(|position| cave_feature_roots.contains(position))
+    {
+        return Err(vec![recipe_issue(
+            "Caves crystal carving rerouted the required walker path through cave vegetation",
+        )]);
+    }
+    critical_targets.retain(|position| !cave_feature_roots.contains(position));
+    optional_targets.retain(|position| !cave_feature_roots.contains(position));
     let biome_regions = volume
         .surfaces
         .keys()
@@ -856,7 +949,7 @@ fn construct_patch_with_streams(
                 .collect(),
         },
         features: FeaturePlan {
-            by_id: BTreeMap::new(),
+            by_id: cave_features,
             protected_routes: BTreeMap::from([(
                 REQUIRED_LIGHT_ROUTE.to_owned(),
                 ProtectedFeatureRoute {
@@ -1369,6 +1462,15 @@ fn build_topology(
         &floor_levels,
         streams.map(|streams| streams.clearances),
     );
+    let chamber_coords = chamber_footprints
+        .iter()
+        .flat_map(|footprint| footprint.iter().copied())
+        .collect();
+    let connector_coords = routes
+        .iter()
+        .flat_map(CaveRoute::coords)
+        .chain(ramp_coords.iter().copied())
+        .collect();
     let optional_count = usize::from(settings.chamber_count >= 9).saturating_add(1);
     let critical_count = chamber_centres.len().saturating_sub(optional_count).max(1);
     let critical_coords: BTreeSet<_> = routes
@@ -1410,6 +1512,8 @@ fn build_topology(
         entrance,
         floor_levels,
         clearances,
+        chamber_coords,
+        connector_coords,
         critical_coords,
         optional_coords,
         deepest_critical,
@@ -1456,7 +1560,8 @@ fn cave_target_coordinates(
     orientation: u8,
     settings: &V3CavesSettings,
     entrance: &CaveRoute,
-) -> Result<(BTreeSet<HexCoord>, BTreeSet<HexCoord>), Vec<WorldValidationIssue>> {
+) -> Result<(BTreeSet<HexCoord>, BTreeSet<HexCoord>, BTreeSet<HexCoord>), Vec<WorldValidationIssue>>
+{
     let chamber_centres = chamber_centres(mask, frame, orientation, settings.chamber_count)?;
     let footprints = chamber_footprints(mask, &chamber_centres, entrance)?;
     let ramp_end = entrance
@@ -1514,7 +1619,12 @@ fn cave_target_coordinates(
         .flat_map(|footprint| footprint.iter().copied())
         .filter(|coord| !critical.contains(coord))
         .collect();
-    Ok((critical, optional))
+    let connectors = routes
+        .iter()
+        .flat_map(CaveRoute::coords)
+        .chain(entrance.coords())
+        .collect();
+    Ok((critical, optional, connectors))
 }
 
 fn patch_frame(mask: &BTreeSet<HexCoord>) -> Result<PatchFrame, Vec<WorldValidationIssue>> {
@@ -2114,6 +2224,271 @@ fn build_surface_heights(
     Ok(heights)
 }
 
+fn plan_cave_vegetation(
+    volume: &VolumePlan,
+    topology: &CaveTopology,
+    anchors: &BTreeMap<String, TilePos>,
+    critical_centerline: &[TilePos],
+    roof_voxels: &BTreeSet<TilePos>,
+    objects: &CaveVegetationSet,
+    streams: Option<CaveStreams<'_>>,
+    chamber_count: u8,
+) -> Result<(BTreeMap<FeatureId, PlannedFeature>, BTreeSet<TilePos>), Vec<WorldValidationIssue>> {
+    let (moss_target, lichen_target) = cave_vegetation_targets(chamber_count);
+    let mut forbidden_visual_cells =
+        walker_reservation(volume, topology.connector_coords.iter().copied());
+    forbidden_visual_cells.extend(walker_reservation(
+        volume,
+        critical_centerline.iter().map(|position| position.coord),
+    ));
+    for anchor in anchors.values() {
+        for coord in anchor.coord.within_radius(1) {
+            for offset in 0..=2 {
+                forbidden_visual_cells
+                    .insert(TilePos::new(coord, anchor.level.saturating_add(offset)));
+            }
+        }
+    }
+
+    let site_stream = streams.map(|streams| streams.vegetation_sites);
+    let kind_stream = streams.map(|streams| streams.vegetation_kinds);
+    let rotation_stream = streams.map(|streams| streams.vegetation_rotations);
+    let mut candidates = volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.interior.is_some()
+                && topology.chamber_coords.contains(&position.coord)
+                && !topology.connector_coords.contains(&position.coord)
+                && anchors
+                    .values()
+                    .all(|anchor| anchor.coord.distance(position.coord) > 1))
+            .then_some(*position)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|position| {
+        (
+            cave_vegetation_sample(site_stream, position.coord, 0),
+            *position,
+        )
+    });
+    let mut options = [Vec::new(), Vec::new()];
+    for (kind_index, (object, kind_options)) in [&objects.moss, &objects.lichen]
+        .into_iter()
+        .zip(options.iter_mut())
+        .enumerate()
+    {
+        let mut kind_candidates = candidates.clone();
+        kind_candidates.sort_unstable_by_key(|root| {
+            (
+                cave_vegetation_sample(
+                    kind_stream,
+                    root.coord,
+                    10_u64.saturating_add(u64::try_from(kind_index).unwrap_or(u64::MAX)),
+                ),
+                cave_vegetation_sample(site_stream, root.coord, 0),
+                *root,
+            )
+        });
+        for root in kind_candidates {
+            let first_rotation =
+                u8::try_from(cave_vegetation_sample(rotation_stream, root.coord, 2) % 6)
+                    .unwrap_or_default();
+            for offset in 0..6 {
+                let rotation = HexObjectRotation::new(first_rotation.wrapping_add(offset) % 6)
+                    .map_err(|error| {
+                        vec![recipe_issue(format!(
+                            "Caves vegetation at {root:?} has invalid rotation: {error}"
+                        ))]
+                    })?;
+                let Some(visual_cells) = project_cave_vegetation(
+                    volume,
+                    root,
+                    object,
+                    rotation,
+                    &forbidden_visual_cells,
+                    roof_voxels,
+                    &BTreeSet::new(),
+                ) else {
+                    continue;
+                };
+                kind_options.push(CaveVegetationPlacement {
+                    root,
+                    object_id: object.id.clone(),
+                    rotation,
+                    cells: visual_cells,
+                });
+            }
+        }
+    }
+    let viable_roots = options.each_ref().map(|kind_options| {
+        kind_options
+            .iter()
+            .map(|placement| placement.root)
+            .collect::<BTreeSet<_>>()
+            .len()
+    });
+    let mut occupied_visual_cells = BTreeSet::new();
+    let mut selected = Vec::with_capacity(moss_target.saturating_add(lichen_target));
+    if !select_cave_vegetation(
+        &options,
+        [moss_target, lichen_target],
+        0,
+        0,
+        moss_target,
+        &mut occupied_visual_cells,
+        &mut selected,
+    ) {
+        return Err(vec![recipe_issue(format!(
+            "Caves cannot select a non-overlapping set of {moss_target} moss and {lichen_target} \
+             lichen instances outside protected walker and presentation volumes (independently \
+             viable roots: moss {}, lichen {})",
+            viable_roots[0], viable_roots[1],
+        ))]);
+    }
+    let mut planned = selected
+        .into_iter()
+        .map(
+            |CaveVegetationPlacement {
+                 root,
+                 rotation,
+                 object_id,
+                 ..
+             }| PlannedFeature {
+                root,
+                kind: FeatureKind::CaveVegetation,
+                object_id,
+                rotation,
+                blocker_footprint: BTreeSet::new(),
+            },
+        )
+        .collect::<Vec<_>>();
+    planned.sort_unstable_by_key(|feature| (feature.root, feature.object_id.clone()));
+    let by_id = planned
+        .into_iter()
+        .enumerate()
+        .map(|(index, feature)| (FeatureId(u32::try_from(index).unwrap_or(u32::MAX)), feature))
+        .collect();
+    Ok((by_id, occupied_visual_cells))
+}
+
+fn cave_vegetation_targets(chamber_count: u8) -> (usize, usize) {
+    match chamber_count {
+        12.. => (2, 2),
+        10..=11 => (1, 1),
+        _ => (0, 1),
+    }
+}
+
+fn select_cave_vegetation(
+    options: &[Vec<CaveVegetationPlacement>; 2],
+    targets: [usize; 2],
+    kind: usize,
+    start: usize,
+    remaining: usize,
+    occupied: &mut BTreeSet<TilePos>,
+    selected: &mut Vec<CaveVegetationPlacement>,
+) -> bool {
+    if remaining == 0 {
+        let Some(next_kind) = kind.checked_add(1).filter(|next| *next < options.len()) else {
+            return true;
+        };
+        let Some(next_target) = targets.get(next_kind).copied() else {
+            return false;
+        };
+        return select_cave_vegetation(
+            options,
+            targets,
+            next_kind,
+            0,
+            next_target,
+            occupied,
+            selected,
+        );
+    }
+    let Some(kind_options) = options.get(kind) else {
+        return false;
+    };
+    for (index, placement) in kind_options.iter().enumerate().skip(start) {
+        if kind_options.len().saturating_sub(index) < remaining {
+            break;
+        }
+        if !placement.cells.is_disjoint(occupied) {
+            continue;
+        }
+        occupied.extend(placement.cells.iter().copied());
+        selected.push(placement.clone());
+        if select_cave_vegetation(
+            options,
+            targets,
+            kind,
+            index.saturating_add(1),
+            remaining.saturating_sub(1),
+            occupied,
+            selected,
+        ) {
+            return true;
+        }
+        selected.pop();
+        for cell in &placement.cells {
+            occupied.remove(cell);
+        }
+    }
+    false
+}
+
+fn walker_reservation(
+    volume: &VolumePlan,
+    coordinates: impl IntoIterator<Item = HexCoord>,
+) -> BTreeSet<TilePos> {
+    coordinates
+        .into_iter()
+        .filter_map(|coord| interior_floor_at(volume, coord))
+        .flat_map(|floor| {
+            (0..=2).map(move |offset| TilePos::new(floor.coord, floor.level.saturating_add(offset)))
+        })
+        .collect()
+}
+
+fn project_cave_vegetation(
+    volume: &VolumePlan,
+    root: TilePos,
+    object: &VegetationObjectSpec,
+    rotation: HexObjectRotation,
+    forbidden_visual_cells: &BTreeSet<TilePos>,
+    roof_voxels: &BTreeSet<TilePos>,
+    occupied_visual_cells: &BTreeSet<TilePos>,
+) -> Option<BTreeSet<TilePos>> {
+    let projection = object.project_visual_volume(root, rotation)?;
+    if !projection.cells.is_disjoint(forbidden_visual_cells)
+        || !projection.cells.is_disjoint(roof_voxels)
+        || !projection.cells.is_disjoint(occupied_visual_cells)
+        || projection.cells.iter().any(|position| {
+            volume_occupied(volume, *position)
+                || interior_floor_at(volume, position.coord)
+                    .is_none_or(|floor| floor.level != root.level || position.level <= floor.level)
+        })
+    {
+        return None;
+    }
+    Some(projection.cells)
+}
+
+fn cave_vegetation_sample(stream: Option<SeedStream<'_>>, coord: HexCoord, salt: u64) -> u64 {
+    stream.map_or_else(
+        || {
+            let mut bytes = Vec::with_capacity(64);
+            bytes.extend_from_slice(b"bevy-hex-game/v3/caves/fallback-vegetation");
+            bytes.extend_from_slice(&coord.x().to_le_bytes());
+            bytes.extend_from_slice(&coord.y().to_le_bytes());
+            bytes.extend_from_slice(&coord.z().to_le_bytes());
+            bytes.extend_from_slice(&salt.to_le_bytes());
+            xxhash_rust::xxh3::xxh3_64(&bytes)
+        },
+        |stream| stream.sample_coord(coord, salt),
+    )
+}
+
 fn plan_lights(
     volume: &VolumePlan,
     critical: &BTreeSet<TilePos>,
@@ -2589,20 +2964,26 @@ pub(crate) fn validate_caves_with_surface_sink(
     patch: PatchRecipeContext<'_>,
     fragment: &GeneratedPatchPlan,
     settings: &V3CavesSettings,
+    vegetation: &CaveVegetationSet,
 ) -> WorldValidation<CavesMetrics> {
     let expected = match cave_liquid_sinks(&patch) {
         Ok(expected) => expected,
         Err(issues) => return WorldValidation::Invalid(issues),
     };
     let mut sink_issues = validate_cave_liquid_sinks(&patch, fragment, &expected);
-    let expected_targets =
-        match derive_patch_cave_targets(&patch, &fragment.volume, &fragment.anchors, settings) {
-            Ok(targets) => targets,
-            Err(issue) => {
-                sink_issues.push(issue);
-                return WorldValidation::Invalid(sink_issues);
-            }
-        };
+    let expected_targets = match derive_patch_cave_targets(
+        &patch,
+        &fragment.volume,
+        &fragment.features,
+        &fragment.anchors,
+        settings,
+    ) {
+        Ok(targets) => targets,
+        Err(issue) => {
+            sink_issues.push(issue);
+            return WorldValidation::Invalid(sink_issues);
+        }
+    };
     let frame =
         match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
             Ok(frame) => frame,
@@ -2637,26 +3018,40 @@ pub(crate) fn validate_caves_with_surface_sink(
     };
     let expected_targets = match (
         project_set(expected_targets.critical),
+        project_set(expected_targets.critical_lighting),
         project_set(expected_targets.optional),
         expected_targets
             .centerline
             .into_iter()
             .map(|position| frame.position_to_local(position))
             .collect::<Result<Vec<_>, _>>(),
+        project_set(expected_targets.connector_floors),
     ) {
-        (Ok(critical), Ok(optional), Ok(centerline)) => DerivedCaveTargets {
+        (
+            Ok(critical),
+            Ok(critical_lighting),
+            Ok(optional),
+            Ok(centerline),
+            Ok(connector_floors),
+        ) => DerivedCaveTargets {
             critical,
+            critical_lighting,
             optional,
             centerline,
+            connector_floors,
         },
-        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+        (Err(error), _, _, _, _)
+        | (_, Err(error), _, _, _)
+        | (_, _, Err(error), _, _)
+        | (_, _, _, Err(error), _)
+        | (_, _, _, _, Err(error)) => {
             sink_issues.push(recipe_issue(format!(
                 "Caves validation target projection failed: {error}"
             )));
             return WorldValidation::Invalid(sink_issues);
         }
     };
-    match validate_caves_inner(&local, settings, true, expected_targets) {
+    match validate_caves_inner(&local, settings, true, expected_targets, vegetation) {
         WorldValidation::Valid(metrics) if sink_issues.is_empty() => {
             WorldValidation::Valid(metrics)
         }
@@ -2671,6 +3066,7 @@ pub(crate) fn validate_caves_with_surface_sink(
 pub(crate) fn validate_caves(
     plan: &GeneratedWorldPlan,
     settings: &V3CavesSettings,
+    vegetation: &CaveVegetationSet,
 ) -> WorldValidation<CavesMetrics> {
     let patch = match PatchRecipeContext::resolve(&plan.layout, PatchId(0)) {
         Ok(patch) => patch,
@@ -2678,7 +3074,13 @@ pub(crate) fn validate_caves(
             return WorldValidation::Invalid(vec![recipe_issue(error.to_string())]);
         }
     };
-    let targets = match derive_patch_cave_targets(&patch, &plan.volume, &plan.anchors, settings) {
+    let targets = match derive_patch_cave_targets(
+        &patch,
+        &plan.volume,
+        &plan.features,
+        &plan.anchors,
+        settings,
+    ) {
         Ok(targets) => targets,
         Err(issue) => return WorldValidation::Invalid(vec![issue]),
     };
@@ -2687,6 +3089,7 @@ pub(crate) fn validate_caves(
         settings,
         plan.layout.kind != super::layout::LayoutKind::Single,
         targets,
+        vegetation,
     )
 }
 
@@ -2695,17 +3098,22 @@ fn validate_caves_inner(
     settings: &V3CavesSettings,
     allow_surface_liquid: bool,
     expected_targets: DerivedCaveTargets,
+    vegetation: &CaveVegetationSet,
 ) -> WorldValidation<CavesMetrics> {
     let mut issues = plan.validate();
     if !allow_surface_liquid && !plan.liquids.bodies.is_empty() {
         issues.push(recipe_issue("Single Caves must not contain liquids"));
     }
-    if !plan.features.by_id.is_empty()
+    if plan
+        .features
+        .by_id
+        .values()
+        .any(|feature| feature.kind != FeatureKind::CaveVegetation)
         || !plan.structures.by_id.is_empty()
         || !plan.blockers.is_empty()
     {
         issues.push(recipe_issue(
-            "Caves must not contain surface features, structures, or blockers",
+            "Caves may contain only nonblocking cave vegetation, never structures or blockers",
         ));
     }
     let Some((region, interior)) = plan.interiors.by_id.first_key_value() else {
@@ -3023,9 +3431,21 @@ fn validate_caves_inner(
     });
     let DerivedCaveTargets {
         critical,
+        critical_lighting,
         optional,
         centerline: expected_centerline,
+        connector_floors,
     } = expected_targets;
+    let (moss_roots, lichen_roots, vegetation_visual_voxels, vegetation_issues) =
+        validate_cave_vegetation(
+            plan,
+            interior,
+            &expected_centerline,
+            &connector_floors,
+            vegetation,
+            settings.chamber_count,
+        );
+    issues.extend(vegetation_issues);
     let published_centerline = plan
         .features
         .protected_routes
@@ -3051,7 +3471,7 @@ fn validate_caves_inner(
             "Caves exact light-target metadata leaves its interior floor domain",
         ));
     }
-    let uncovered: Vec<_> = critical
+    let uncovered: Vec<_> = critical_lighting
         .iter()
         .filter(|target| {
             !plan
@@ -3123,9 +3543,12 @@ fn validate_caves_inner(
                 .len()
                 .saturating_sub(interior.entrances.len()),
         ),
-        critical_floors: count_u32(critical.len()),
+        critical_floors: count_u32(critical_lighting.len()),
         optional_dark_floors: count_u32(optional_dark_floors),
         gameplay_lights: count_u32(plan.lights.len()),
+        moss_roots: count_u32(moss_roots),
+        lichen_roots: count_u32(lichen_roots),
+        vegetation_visual_voxels: count_u32(vegetation_visual_voxels),
         minimum_roof_thickness,
         minimum_clearance,
         maximum_clearance,
@@ -3143,6 +3566,148 @@ fn validate_caves_inner(
     WorldValidation::Valid(metrics)
 }
 
+fn validate_cave_vegetation(
+    plan: &GeneratedWorldPlan,
+    interior: &PlannedInterior,
+    required_centerline: &[TilePos],
+    connector_floors: &BTreeSet<TilePos>,
+    objects: &CaveVegetationSet,
+    chamber_count: u8,
+) -> (usize, usize, usize, Vec<WorldValidationIssue>) {
+    let mut issues = Vec::new();
+    let mut moss_roots = 0;
+    let mut lichen_roots = 0;
+    let mut visual_cells = BTreeSet::new();
+    let mut walker_cells = connector_floors
+        .iter()
+        .chain(required_centerline)
+        .flat_map(|floor| {
+            (0..=2).map(move |offset| TilePos::new(floor.coord, floor.level.saturating_add(offset)))
+        })
+        .collect::<BTreeSet<_>>();
+    for anchor in plan.anchors.values() {
+        for coord in anchor.coord.within_radius(1) {
+            for offset in 0..=2 {
+                walker_cells.insert(TilePos::new(coord, anchor.level.saturating_add(offset)));
+            }
+        }
+    }
+    let crystal_cells = plan
+        .lights
+        .values()
+        .flat_map(|light| {
+            let height = match light.presentation {
+                Some(PlannedLightPresentation::CaveCrystal(crystal)) => {
+                    crystal_alcove_height(crystal.kind)
+                }
+                None => 0,
+            };
+            light
+                .origin
+                .coord
+                .within_radius(1)
+                .into_iter()
+                .flat_map(move |coord| {
+                    (0..=height).map(move |offset| {
+                        TilePos::new(coord, light.origin.level.saturating_add(offset))
+                    })
+                })
+        })
+        .collect::<BTreeSet<_>>();
+
+    for (index, (id, feature)) in plan.features.by_id.iter().enumerate() {
+        if id.0 != u32::try_from(index).unwrap_or(u32::MAX) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation IDs must be contiguous from zero; found {id:?} at index {index}"
+            )));
+        }
+        if feature.kind != FeatureKind::CaveVegetation {
+            continue;
+        }
+        match feature.object_id.as_str() {
+            CAVE_MOSS_ID => moss_roots += 1,
+            CAVE_LICHEN_ID => lichen_roots += 1,
+            unsupported => {
+                issues.push(recipe_issue(format!(
+                    "Caves vegetation {id:?} uses unsupported object {unsupported:?}"
+                )));
+                continue;
+            }
+        }
+        if !feature.blocker_footprint.is_empty() {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} became a traversal blocker"
+            )));
+        }
+        if plan
+            .anchors
+            .values()
+            .any(|anchor| anchor.coord.distance(feature.root.coord) <= 1)
+        {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} overlaps an actor or review anchor"
+            )));
+        }
+        if connector_floors.contains(&feature.root) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} occupies a chamber connector floor"
+            )));
+        }
+        let Some(object) = objects.object(&feature.object_id) else {
+            continue;
+        };
+        let Some(projected) = object.project_visual_volume(feature.root, feature.rotation) else {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} cannot project its complete authored volume"
+            )));
+            continue;
+        };
+        if !projected.cells.is_disjoint(&walker_cells) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} intersects a required walker volume"
+            )));
+        }
+        if !projected.cells.is_disjoint(&crystal_cells) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} intersects a crystal root or visual reservation"
+            )));
+        }
+        if !projected.cells.is_disjoint(&interior.roof_voxels) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} intersects a cutaway-critical roof voxel"
+            )));
+        }
+        if !projected.cells.is_disjoint(&visual_cells) {
+            issues.push(recipe_issue(format!(
+                "Caves vegetation {id:?} overlaps another authored vegetation volume"
+            )));
+        }
+        for position in &projected.cells {
+            if volume_occupied(&plan.volume, *position) {
+                issues.push(recipe_issue(format!(
+                    "Caves vegetation {id:?} intersects semantic occupancy at {position:?}"
+                )));
+            }
+            if interior_floor_at(&plan.volume, position.coord)
+                .is_none_or(|floor| floor.level != feature.root.level)
+            {
+                issues.push(recipe_issue(format!(
+                    "Caves vegetation {id:?} lacks same-tier interior support at {position:?}"
+                )));
+            }
+        }
+        visual_cells.extend(projected.cells);
+    }
+    let (expected_moss, expected_lichen) = cave_vegetation_targets(chamber_count);
+    if moss_roots != expected_moss || lichen_roots != expected_lichen {
+        issues.push(recipe_issue(format!(
+            "Caves vegetation count is moss {moss_roots}/{expected_moss}, lichen \
+             {lichen_roots}/{expected_lichen}"
+        )));
+    }
+    (moss_roots, lichen_roots, visual_cells.len(), issues)
+}
+
 #[cfg(test)]
 fn cave_target_sets(
     plan: &GeneratedWorldPlan,
@@ -3151,8 +3716,14 @@ fn cave_target_sets(
 ) -> Result<(BTreeSet<TilePos>, BTreeSet<TilePos>), WorldValidationIssue> {
     let patch = PatchRecipeContext::resolve(&plan.layout, PatchId(0))
         .map_err(|error| recipe_issue(error.to_string()))?;
-    derive_patch_cave_targets(&patch, &plan.volume, &plan.anchors, settings)
-        .map(|targets| (targets.critical, targets.optional))
+    derive_patch_cave_targets(
+        &patch,
+        &plan.volume,
+        &plan.features,
+        &plan.anchors,
+        settings,
+    )
+    .map(|targets| (targets.critical_lighting, targets.optional))
 }
 
 fn exact_cave_target_sets(
@@ -3194,6 +3765,7 @@ fn exact_cave_target_sets(
 fn derive_patch_cave_targets(
     patch: &PatchRecipeContext<'_>,
     volume: &VolumePlan,
+    features: &FeaturePlan,
     anchors: &BTreeMap<String, TilePos>,
     settings: &V3CavesSettings,
 ) -> Result<DerivedCaveTargets, WorldValidationIssue> {
@@ -3233,17 +3805,27 @@ fn derive_patch_cave_targets(
         );
         break;
     }
-    let (critical_coords, optional_coords) = coordinate_targets.ok_or_else(|| {
-        recipe_issue("Caves target derivation cannot recover its entrance orientation")
-    })?;
+    let (critical_coords, optional_coords, connector_coords) =
+        coordinate_targets.ok_or_else(|| {
+            recipe_issue("Caves target derivation cannot recover its entrance orientation")
+        })?;
     let centerline = shortest_ordinary_route(volume, party, hostile).ok_or_else(|| {
         recipe_issue("Caves target derivation cannot recover its party-to-hostile route")
     })?;
-    let mut critical = exact_interior_positions(volume, &critical_coords);
-    critical.extend(centerline.iter().copied());
-    critical.extend([party, hostile, conflict]);
+    let mut critical_lighting = exact_interior_positions(volume, &critical_coords);
+    critical_lighting.extend(centerline.iter().copied());
+    critical_lighting.extend([party, hostile, conflict]);
+    let mut critical = critical_lighting.clone();
     let mut optional = exact_interior_positions(volume, &optional_coords);
     optional.retain(|position| !critical.contains(position));
+    let vegetation_roots = features
+        .by_id
+        .values()
+        .filter(|feature| feature.kind == FeatureKind::CaveVegetation)
+        .map(|feature| feature.root)
+        .collect::<BTreeSet<_>>();
+    critical.retain(|position| !vegetation_roots.contains(position));
+    optional.retain(|position| !vegetation_roots.contains(position));
     if optional.len() < usize::from(settings.chamber_count) {
         return Err(recipe_issue(format!(
             "Caves independently derived optional branch is too small: {}/{} floors",
@@ -3253,8 +3835,10 @@ fn derive_patch_cave_targets(
     }
     Ok(DerivedCaveTargets {
         critical,
+        critical_lighting,
         optional,
         centerline,
+        connector_floors: exact_interior_positions(volume, &connector_coords),
     })
 }
 
@@ -3605,6 +4189,42 @@ mod tests {
         CATALOG.get_or_init(|| runtime_art_catalog_with(|_| {}))
     }
 
+    fn cave_vegetation() -> CaveVegetationSet {
+        CaveVegetationSet::resolve(runtime_art_catalog(), "Caves test")
+            .expect("tracked cave vegetation should resolve")
+    }
+
+    fn generate(
+        grid_radius: u32,
+        level_height: f32,
+        settings: &ProceduralV3Settings,
+        seed: u64,
+    ) -> Result<ValidatedWorldSelection<CavesMetrics>, V3GenerationError> {
+        super::generate(
+            grid_radius,
+            level_height,
+            settings,
+            seed,
+            runtime_art_catalog(),
+        )
+    }
+
+    fn construct_patch(
+        patch: PatchRecipeContext<'_>,
+        settings: &V3CavesSettings,
+        level_height: f32,
+        mode: PatchBuildMode,
+    ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
+        super::construct_patch(patch, settings, level_height, mode, &cave_vegetation())
+    }
+
+    fn validate_caves(
+        plan: &GeneratedWorldPlan,
+        settings: &V3CavesSettings,
+    ) -> WorldValidation<CavesMetrics> {
+        super::validate_caves(plan, settings, &cave_vegetation())
+    }
+
     fn runtime_art_catalog_with(
         mutate: impl FnOnce(&mut BTreeMap<ObjectAssetId, ObjectBlueprint>),
     ) -> RuntimeArtCatalog {
@@ -3907,10 +4527,29 @@ mod tests {
         assert!(selected.metrics.covered_floors > 100);
         assert!(selected.metrics.gameplay_lights > 0);
         assert!(selected.metrics.optional_dark_floors > 0);
+        assert_eq!(selected.metrics.moss_roots, 2);
+        assert_eq!(selected.metrics.lichen_roots, 2);
+        assert_eq!(selected.metrics.vegetation_visual_voxels, 14);
         assert!(selected.metrics.minimum_clearance >= 3);
         assert!(selected.metrics.maximum_clearance >= 4);
         assert!(selected.metrics.minimum_roof_thickness >= 3);
         assert_eq!(selected.validated.plan.validate(), Vec::new());
+        assert!(
+            selected
+                .validated
+                .plan
+                .features
+                .by_id
+                .iter()
+                .enumerate()
+                .all(|(index, (id, feature))| {
+                    id.0 == u32::try_from(index).unwrap_or(u32::MAX)
+                        && feature.kind == FeatureKind::CaveVegetation
+                        && feature.rotation.steps() < 6
+                        && feature.blocker_footprint.is_empty()
+                }),
+            "Caves vegetation must retain contiguous IDs, valid rotations, and no blockers"
+        );
     }
 
     #[test]
@@ -4148,6 +4787,7 @@ mod tests {
                 },
                 _ => unreachable!(),
             },
+            vegetation: cave_vegetation(),
             reject_candidates: true,
         };
         let selected = run_recipe(&recipe, &settings, 12, 9).expect("fallback should remain valid");
@@ -4418,6 +5058,156 @@ mod tests {
     }
 
     #[test]
+    fn validator_rejects_cave_vegetation_reservation_and_volume_corruption() {
+        let settings = settings();
+        let V3LayoutSettings::Single(spec) = &settings.layout else {
+            unreachable!();
+        };
+        let V3RecipeSettings::Caves(cave_settings) = &spec.recipe else {
+            unreachable!();
+        };
+        let selected = generate(12, 0.4, &settings, 33).expect("Caves should generate");
+        let vegetation = cave_vegetation();
+        let patch = PatchRecipeContext::resolve(&selected.validated.plan.layout, PatchId(0))
+            .expect("Single Caves patch should resolve");
+        let targets = derive_patch_cave_targets(
+            &patch,
+            &selected.validated.plan.volume,
+            &selected.validated.plan.features,
+            &selected.validated.plan.anchors,
+            cave_settings,
+        )
+        .expect("validated Caves should recover its independent targets");
+        let feature_id = *selected
+            .validated
+            .plan
+            .features
+            .by_id
+            .keys()
+            .next()
+            .expect("Caves should publish vegetation");
+
+        let mut connector_overlap = selected.validated.plan.clone();
+        let connector = targets
+            .connector_floors
+            .iter()
+            .copied()
+            .find(|floor| {
+                connector_overlap
+                    .anchors
+                    .values()
+                    .all(|anchor| anchor.coord.distance(floor.coord) > 1)
+            })
+            .expect("Caves should retain a connector away from its anchors");
+        connector_overlap
+            .features
+            .by_id
+            .get_mut(&feature_id)
+            .expect("Caves should retain the selected vegetation")
+            .root = connector;
+        let WorldValidation::Invalid(connector_issues) =
+            validate_caves(&connector_overlap, cave_settings)
+        else {
+            panic!("vegetation rooted on a connector must fail");
+        };
+        assert!(connector_issues
+            .iter()
+            .any(|issue| issue.detail.contains("connector floor")));
+
+        let mut crystal_overlap = selected.validated.plan.clone();
+        let crystal = crystal_overlap
+            .lights
+            .values()
+            .next()
+            .map(|light| light.origin)
+            .expect("Caves should publish a crystal light");
+        crystal_overlap
+            .features
+            .by_id
+            .get_mut(&feature_id)
+            .expect("Caves should retain the selected vegetation")
+            .root = crystal;
+        let WorldValidation::Invalid(crystal_issues) =
+            validate_caves(&crystal_overlap, cave_settings)
+        else {
+            panic!("vegetation rooted in a crystal reservation must fail");
+        };
+        assert!(crystal_issues
+            .iter()
+            .any(|issue| issue.detail.contains("crystal root or visual reservation")));
+
+        let feature = selected
+            .validated
+            .plan
+            .features
+            .by_id
+            .get(&feature_id)
+            .expect("Caves should retain the selected vegetation");
+        let object = vegetation
+            .object(&feature.object_id)
+            .expect("Caves should use a supported vegetation object");
+        let visual_cell = object
+            .project_visual_volume(feature.root, feature.rotation)
+            .and_then(|projection| projection.cells.into_iter().next())
+            .expect("Caves vegetation should project its full authored volume");
+
+        let mut roof_overlap = selected.validated.plan.clone();
+        let region = *roof_overlap
+            .interiors
+            .by_id
+            .keys()
+            .next()
+            .expect("Caves should retain its interior");
+        roof_overlap
+            .interiors
+            .by_id
+            .get_mut(&region)
+            .expect("Caves should retain its interior")
+            .roof_voxels
+            .insert(visual_cell);
+        let WorldValidation::Invalid(roof_issues) = validate_caves(&roof_overlap, cave_settings)
+        else {
+            panic!("vegetation intersecting a cutaway-critical roof must fail");
+        };
+        assert!(roof_issues
+            .iter()
+            .any(|issue| issue.detail.contains("cutaway-critical roof voxel")));
+
+        let mut occupied_visual = selected.validated.plan.clone();
+        occupied_visual
+            .volume
+            .columns
+            .get_mut(&visual_cell.coord)
+            .expect("Caves vegetation should remain inside the generated volume")
+            .elements
+            .push(solid(
+                visual_cell.level,
+                visual_cell.level.saturating_add(1),
+                SolidMaterialRole::Stone,
+                None,
+            ));
+        let WorldValidation::Invalid(volume_issues) =
+            validate_caves(&occupied_visual, cave_settings)
+        else {
+            panic!("vegetation intersecting semantic occupancy must fail");
+        };
+        assert!(volume_issues
+            .iter()
+            .any(|issue| issue.detail.contains("intersects semantic occupancy")));
+
+        let mut missing_instance = selected.validated.plan;
+        missing_instance.features.by_id.remove(&feature_id);
+        let WorldValidation::Invalid(count_issues) =
+            validate_caves(&missing_instance, cave_settings)
+        else {
+            panic!("missing deterministic cave vegetation must fail");
+        };
+        assert!(count_issues
+            .iter()
+            .any(|issue| issue.detail.contains("vegetation count")));
+    }
+
+    #[test]
     fn fixed_seed_corpus_remains_valid_without_fallbacks() {
         for seed in [0, 1, 17, 33, 41, 42, 178, 445, 808, 2_026, 736_283_041] {
             let selected =
@@ -4438,27 +5228,27 @@ mod tests {
         let expected: [(u64, Option<u8>, u64, u64); 4] = [
             (
                 33,
-                Some(0),
-                1_387_812_274_059_204_685,
-                9_574_413_140_216_521_519,
+                Some(3),
+                13_842_144_353_430_332_248,
+                15_850_501_573_409_094_398,
             ),
             (
                 178,
-                Some(5),
-                7_924_704_747_275_977_174,
-                2_269_552_231_048_453_154,
+                Some(7),
+                14_168_412_014_574_509_207,
+                13_478_648_456_912_244_065,
             ),
             (
                 445,
                 Some(5),
-                13_163_355_458_505_174_168,
-                10_935_244_680_947_485_329,
+                9_027_652_621_212_775_064,
+                2_367_967_299_278_267_157,
             ),
             (
                 736_283_041,
-                Some(1),
-                5_342_132_791_533_712_567,
-                13_720_716_990_910_912_966,
+                Some(2),
+                9_872_102_088_628_657_537,
+                7_197_727_506_014_504_743,
             ),
         ];
         let mut crystal_kinds = BTreeSet::new();
@@ -4508,6 +5298,23 @@ mod tests {
                 CaveCrystalSiteKind::EntranceLanding,
             ])
         );
+    }
+
+    #[test]
+    #[ignore = "128-seed release corpus for changed V3 Caves presentation"]
+    fn one_hundred_twenty_eight_seed_corpus_keeps_exact_sparse_vegetation() {
+        for seed in 0..128_u64 {
+            let selected =
+                generate(12, 0.4, &settings(), seed).expect("release Caves seed should generate");
+            assert!(
+                !selected.used_fallback,
+                "seed {seed} used fallback: {:?}",
+                selected.notes
+            );
+            assert_eq!(selected.metrics.moss_roots, 2, "seed {seed}");
+            assert_eq!(selected.metrics.lichen_roots, 2, "seed {seed}");
+            assert_eq!(selected.metrics.vegetation_visual_voxels, 14, "seed {seed}");
+        }
     }
 
     #[test]
