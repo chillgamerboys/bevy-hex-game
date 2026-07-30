@@ -140,8 +140,12 @@ require the exact anchor to be Observed. An authorized area may still spill into
 hidden space without revealing the result. The `1`-casts-something placeholder that
 made the damage loop playable before any of this existed is gone.
 
-Bodies are one hex wide; there is no footprint for anything larger, and units do not
-obstruct each other — so a route may be drawn straight through another piece.
+Bodies are one hex wide; there is no footprint for anything larger. Exact `TilePos`
+occupancy now makes those bodies real: movement preview, path construction, command
+validation, party routes, baseline AI, encounter placement, and Combat Lab deployment
+all prevent occupied endpoints and pass-through routes without collapsing stacked
+elevations. In-flight paths reserve their surfaces, command refusals distinguish route
+from endpoint conflicts, and downed bodies retain their surface for revival.
 
 **Complete-party combat is live.** The stable party rail selects up to six members,
 number keys and camera focus follow that roster, and combat hands selection to the

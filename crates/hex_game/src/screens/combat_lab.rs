@@ -22,7 +22,7 @@ use hex_core::{
     MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
     TraversalProfile,
 };
-use hex_units::{Body, Faction, Footing, Reach, StandsOn};
+use hex_units::{Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
 
 use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
@@ -218,6 +218,7 @@ impl DeploymentSession {
     fn complete(&self) -> bool {
         placements_complete_exact(&self.player_placements, self.players.len())
             && placements_complete_exact(&self.hostile_placements, self.hostiles.len())
+            && !deployment_occupancy(self).has_overlaps()
     }
 }
 
@@ -2073,11 +2074,8 @@ fn on_deployment_surface_clicked(
         rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
         return;
     }
-    let occupied = session
-        .player_placements
-        .iter()
-        .chain(&session.hostile_placements)
-        .any(|placement| *placement == Some(surface.pos));
+    let active = deployment_unit_id(session.active_player, session.active_index);
+    let occupied = deployment_occupancy(session).is_occupied(surface.pos, Some(active));
     if occupied {
         session.notice = "That exact surface is already occupied.".to_owned();
         rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
@@ -2098,6 +2096,32 @@ fn on_deployment_surface_clicked(
     advance_deployment_cursor(session);
     rebuild_deployment_markers(&mut commands, &markers, session);
     rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
+}
+
+fn deployment_unit_id(player: bool, index: usize) -> hex_core::UnitId {
+    let side = if player {
+        0
+    } else {
+        u64::try_from(MAX_ROSTER).unwrap_or(u64::MAX)
+    };
+    hex_core::UnitId(side.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)))
+}
+
+fn deployment_occupancy(session: &DeploymentSession) -> UnitOccupancy {
+    UnitOccupancy::from_positions(
+        session
+            .player_placements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, placement)| {
+                placement.map(|position| (deployment_unit_id(true, index), position))
+            })
+            .chain(session.hostile_placements.iter().enumerate().filter_map(
+                |(index, placement)| {
+                    placement.map(|position| (deployment_unit_id(false, index), position))
+                },
+            )),
+    )
 }
 
 fn advance_deployment_cursor(session: &mut DeploymentSession) {
@@ -2771,6 +2795,19 @@ mod tests {
         assert_eq!(
             resolved_deployment_markers(&session).collect::<Vec<_>>(),
             vec![(true, 1, player), (false, 0, hostile)]
+        );
+
+        let second_player = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        session.player_placements = vec![Some(player), Some(second_player)];
+        session.hostile_placements = vec![Some(player)];
+        assert!(
+            !session.complete(),
+            "deployment uses the shared exact-surface overlap rule"
+        );
+        session.hostile_placements = vec![Some(TilePos::new(player.coord, player.level + 1))];
+        assert!(
+            session.complete(),
+            "stacked surfaces at distinct elevations remain distinct"
         );
     }
 

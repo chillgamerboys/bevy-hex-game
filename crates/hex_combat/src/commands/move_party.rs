@@ -5,11 +5,11 @@ use std::collections::BTreeSet;
 use bevy::prelude::*;
 use hex_anim::Transformation;
 use hex_core::{Busy, PartyMovementMode, PartyPath, Sextant, TilePos, UnitId};
-use hex_units::{HexPathingLine, MovingTo, Standing};
+use hex_units::{HexPathingLine, MovingTo, Standing, UnitOccupancy};
 
 use crate::{CombatData, CombatEvent, CommandRefusal, PartyMoveRefusal, UnitData};
 
-use super::{ActorQuery, TileQuery, Verb};
+use super::{current_occupancy, ActorQuery, TileQuery, Verb};
 
 struct PreparedPath {
     entity: Entity,
@@ -40,6 +40,8 @@ pub(super) fn apply(
             data: CombatData::SubstanceTable,
         });
     };
+    let occupancy =
+        current_occupancy(ctx.occupancy, ctx.reserved).without(ctx.party.members.iter().copied());
 
     let mut named = BTreeSet::new();
     let mut destinations = BTreeSet::new();
@@ -102,6 +104,9 @@ pub(super) fn apply(
                 member: path.member,
             }));
         };
+        occupancy
+            .validate_route(&path.path, path.member)
+            .map_err(|block| party_refusal(PartyMoveRefusal::Occupied { block }))?;
         let Some(destination) = steps.last().map(|standing| standing.pos) else {
             return Err(party_refusal(PartyMoveRefusal::InvalidMemberPath {
                 member: path.member,
@@ -122,6 +127,21 @@ pub(super) fn apply(
         .find(|member| !named.contains(member))
     {
         return Err(party_refusal(PartyMoveRefusal::MissingMember { member }));
+    }
+
+    UnitOccupancy::validate_group_routes(paths)
+        .map_err(|block| party_refusal(PartyMoveRefusal::Occupied { block }))?;
+
+    for prepared_path in &prepared {
+        if let Some(destination) = prepared_path.steps.last() {
+            let Some(unit) = ctx.registry.id_of(prepared_path.entity) else {
+                return Err(CommandRefusal::MissingUnitData {
+                    unit: anchor,
+                    data: UnitData::EntityRecord,
+                });
+            };
+            ctx.reserved.insert(unit, destination.pos);
+        }
     }
 
     for prepared_path in prepared {

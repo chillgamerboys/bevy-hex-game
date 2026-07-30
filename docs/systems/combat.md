@@ -42,7 +42,7 @@ The HUD is mode-aware:
 - Exploring shows the party rail, selected-ally lattice, formation editor, Group/Solo,
   presets, Rest, and the exploration hint. Combat-only spell actions are absent.
 - A player turn shows the compact initiative rail, party rail, active ally lattice,
-  movement and action budget, spells, and a visible End Turn button.
+  movement and action budget, spells, and visible Channel and End Turn buttons.
 - A hostile turn says `ENEMY TURN`, keeps a labeled `SELECTED ALLY` lattice for
   inspection, and replaces action buttons with `PLAYER COMMANDS LOCKED`.
 - A damage or restoration decision replaces ordinary actions with its exact role,
@@ -457,6 +457,29 @@ exact-path `MoveParty` is validated in full before any member receives presentat
 and interruption reconciles every in-flight member before initiative is built.
 Rotation, bottleneck compression, reformation, and Solo behavior are specified in
 [party.md](party.md).
+
+### Bodies occupy exact surfaces
+
+`hex_units::UnitOccupancy` is the one gameplay projection from stable `UnitId` to
+exact `TilePos`. Elevation is identity: a body on the ground does not block the bridge
+surface above it. The projection includes each unit's current `StandsOn` and every
+surface reserved by an in-flight `MovingTo` route. A downed unit remains a body and
+continues to own its surface so revival cannot create an overlap; despawn/removal
+removes it with the entity.
+
+`Reach`, click path construction, the movement preview, authoritative `MoveAlong`,
+baseline AI legal actions and traversal, whole-party planning/application, encounter
+placement, and Combat Lab deployment all consume this projection. A route may neither
+finish on nor pass through another body. The command refusal preserves that
+distinction as `OccupancyBlock::Destination` or `OccupancyBlock::Route`, including
+the exact surface and stable occupant. Commands drained in one frame reserve their
+endpoints before the next command validates, so deferred ECS insertion cannot create
+a same-frame overlap.
+
+Group movement excludes the moving party's own starting surfaces while retaining
+external bodies, then continues to require unique member destinations. This preserves
+the existing atomic compression/trailing behavior without allowing a formation to
+route through a nonparty body or letting two members swap directly across one edge.
 
 ## The high ground
 

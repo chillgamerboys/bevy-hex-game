@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::Message;
 use hex_core::{GameCommand, LatticeCoord, PartyPath, PlayerSeat, TilePos, UnitId};
-use hex_units::Faction;
+use hex_units::{Faction, OccupancyBlock};
 use serde::{Deserialize, Serialize};
 
 /// A runtime dependency the command applier needed but could not read.
@@ -86,6 +86,11 @@ pub enum PartyMoveRefusal {
     InvalidMemberPath {
         /// Member with the invalid path.
         member: UnitId,
+    },
+    /// A member route conflicts with an external body or another member route.
+    Occupied {
+        /// Exact endpoint or pass-through conflict.
+        block: OccupancyBlock,
     },
     /// Two members would finish on the same surface.
     DuplicateDestination {
@@ -176,6 +181,11 @@ pub enum CommandRefusal {
     Busy,
     /// The supplied movement path was not a complete walkable route from the unit.
     InvalidPath,
+    /// The supplied route conflicts with another body's exact surface.
+    Occupied {
+        /// Exact endpoint or pass-through conflict.
+        block: OccupancyBlock,
+    },
     /// The route cost more movement than remained.
     MovementBudgetExceeded {
         /// The validated route cost.
@@ -534,6 +544,18 @@ mod tests {
             },
             CommandRefusal::Busy,
             CommandRefusal::InvalidPath,
+            CommandRefusal::Occupied {
+                block: OccupancyBlock::Route {
+                    position: target,
+                    occupant: UnitId(7),
+                },
+            },
+            CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: target,
+                    occupant: UnitId(7),
+                },
+            },
             CommandRefusal::MovementBudgetExceeded {
                 cost: 5,
                 remaining: 4,
@@ -592,6 +614,14 @@ mod tests {
             CommandRefusal::RestUnavailable,
             CommandRefusal::PartyMove {
                 reason: PartyMoveRefusal::WrongAnchor,
+            },
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Destination {
+                        position: target,
+                        occupant: UnitId(7),
+                    },
+                },
             },
             CommandRefusal::Restoration {
                 reason: RestorationRefusal::NoDecision,

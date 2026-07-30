@@ -32,6 +32,8 @@
 //! commands too. Validation is what differs by [`Mode`] — free movement in
 //! real time, turn ownership and budgets in combat.
 
+use std::collections::BTreeMap;
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -42,10 +44,10 @@ use hex_assets::{
 };
 use hex_core::{
     AppSystems, Busy, CommandQueue, ControlOwner, GameCommand, IssuedCommand, Mode, PartyFormation,
-    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn,
+    PausableSystems, PendingDecision, Screen, TilePos, TraversalBlockers, Turn, UnitId,
 };
 use hex_perception::FactionMapKnowledge;
-use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitRegistry};
+use hex_units::{Body, Downed, Faction, MovingTo, Party, StandsOn, UnitOccupancy, UnitRegistry};
 
 use crate::outcomes::{CombatEvent, CommandRefusal};
 use crate::turns::TurnOrder;
@@ -139,10 +141,14 @@ struct Verb<'a> {
     formations: Option<&'a FormationCatalog>,
     /// Exact world-space obstacles excluded from footing for movement and reach.
     blockers: Option<&'a TraversalBlockers>,
+    /// Live exact surfaces plus every committed route in flight at drain start.
+    occupancy: &'a UnitOccupancy,
     /// Units this drain already committed presentation for. `Busy` lands via
     /// `Commands` and is not queryable until the next sync point, so within one
     /// drain this set is the truth.
     committed: &'a mut Vec<Entity>,
+    /// Exact endpoints committed earlier in this same queue drain.
+    reserved: &'a mut BTreeMap<UnitId, TilePos>,
     in_combat: bool,
 }
 
@@ -170,6 +176,15 @@ struct UnitStores<'w, 's> {
     actors: ActorQuery<'w, 's>,
     lattices: cast::LatticeQuery<'w, 's>,
     lattice_stats: Query<'w, 's, &'static hex_lattice::LatticeStats>,
+    occupants: Query<
+        'w,
+        's,
+        (
+            &'static UnitId,
+            &'static StandsOn,
+            Option<&'static MovingTo>,
+        ),
+    >,
 }
 
 pub(crate) fn plugin(app: &mut App) {
@@ -280,8 +295,19 @@ fn apply_commands(
     mut party_stores: PartyStores,
 ) {
     let mut committed: Vec<Entity> = Vec::new();
+    let mut reserved = BTreeMap::new();
     let mut emitted: Vec<CombatEvent> = Vec::new();
     let in_combat = *mode.get() == Mode::Combat;
+    let occupancy = UnitOccupancy::from_positions(units.occupants.iter().flat_map(
+        |(unit, standing, moving)| {
+            std::iter::once((*unit, standing.0.pos)).chain(
+                moving
+                    .into_iter()
+                    .flat_map(|moving| moving.path.iter())
+                    .map(|step| (*unit, step.pos)),
+            )
+        },
+    ));
 
     while let Some(issued) = queue.pop() {
         if let Some(refusal) = modal_refusal(&stores.pending, &issued.command) {
@@ -337,7 +363,9 @@ fn apply_commands(
             formation: &mut party_stores.formation,
             formations: party_stores.formations.as_deref(),
             blockers: blockers.as_deref(),
+            occupancy: &occupancy,
             committed: &mut committed,
+            reserved: &mut reserved,
             in_combat,
         };
 
@@ -428,6 +456,14 @@ fn apply_commands(
         }
     }
     stores.events.write_batch(emitted);
+}
+
+fn current_occupancy(base: &UnitOccupancy, reserved: &BTreeMap<UnitId, TilePos>) -> UnitOccupancy {
+    let mut occupancy = base.clone();
+    for (&unit, &destination) in reserved {
+        occupancy.relocate(unit, destination);
+    }
+    occupancy
 }
 
 /// While resolution is waiting on a defender, the answer is the whole command

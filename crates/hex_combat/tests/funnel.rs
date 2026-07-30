@@ -34,7 +34,9 @@ use hex_lattice::{
     apply_cast, castable, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
     Requirement, SpellTable,
 };
-use hex_units::{route, Body, Downed, Faction, Footing, Party, Standing, StandsOn, UnitRegistry};
+use hex_units::{
+    route, Body, Downed, Faction, Footing, OccupancyBlock, Party, Standing, StandsOn, UnitRegistry,
+};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
@@ -368,6 +370,159 @@ fn command_grounding_rejects_generated_feature_blockers() {
 }
 
 #[test]
+fn occupied_endpoints_and_route_steps_are_refused_exactly() {
+    let cases = [
+        (
+            HexCoord::from_axial(1, 0),
+            vec![HexCoord::ORIGIN, HexCoord::from_axial(1, 0)],
+            OccupancyBlock::Destination {
+                position: TilePos::new(HexCoord::from_axial(1, 0), GROUND_LEVEL),
+                occupant: UnitId(2),
+            },
+        ),
+        (
+            HexCoord::from_axial(1, 0),
+            vec![
+                HexCoord::ORIGIN,
+                HexCoord::from_axial(1, 0),
+                HexCoord::from_axial(2, 0),
+            ],
+            OccupancyBlock::Route {
+                position: TilePos::new(HexCoord::from_axial(1, 0), GROUND_LEVEL),
+                occupant: UnitId(2),
+            },
+        ),
+    ];
+
+    for (blocker, coords, block) in cases {
+        let mut app = test_app();
+        spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+        spawn_unit(&mut app, Faction::Player, blocker, 10, 2);
+        enter_gameplay(&mut app);
+        let command = GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: path(&coords),
+        };
+        push(&mut app, command.clone());
+        app.update();
+        assert_eq!(
+            take_events(&mut app),
+            vec![CombatEvent::CommandRefused {
+                command,
+                refusal: CommandRefusal::Occupied { block },
+            }]
+        );
+    }
+}
+
+#[test]
+fn a_body_on_a_lower_stacked_surface_does_not_block_the_upper_route() {
+    let mut app = test_app();
+    let destination = HexCoord::from_axial(1, 0);
+    let mover = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(&mut app, Faction::Player, destination, 10, 2);
+    for coord in [HexCoord::ORIGIN, destination] {
+        app.world_mut().spawn((
+            HexTile,
+            coord,
+            TilePos::new(coord, 3),
+            HexSpan::new(3.0, 4.0),
+            STONE,
+            Headroom(MAX_HEADROOM),
+        ));
+    }
+    let high = Standing {
+        pos: TilePos::new(HexCoord::ORIGIN, 3),
+        span: HexSpan::new(3.0, 4.0),
+    };
+    app.world_mut().entity_mut(mover).insert((
+        StandsOn(high),
+        Transform::from_translation(high.world_position()),
+    ));
+    enter_gameplay(&mut app);
+
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: vec![high.pos, TilePos::new(destination, 3)],
+        },
+    );
+    settle(&mut app);
+    assert_eq!(
+        standing_of(&mut app, mover),
+        Some(TilePos::new(destination, 3))
+    );
+}
+
+#[test]
+fn a_downed_body_still_owns_its_surface_until_removed() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let destination = HexCoord::from_axial(1, 0);
+    let blocker = spawn_unit(&mut app, Faction::Player, destination, 10, 2);
+    app.world_mut().entity_mut(blocker).insert(Downed);
+    enter_gameplay(&mut app);
+
+    let command = GameCommand::MoveAlong {
+        unit: UnitId(1),
+        path: path(&[HexCoord::ORIGIN, destination]),
+    };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: TilePos::new(destination, GROUND_LEVEL),
+                    occupant: UnitId(2),
+                },
+            },
+        }]
+    );
+}
+
+#[test]
+fn an_in_flight_route_reserves_its_endpoint() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let destination = HexCoord::from_axial(2, 0);
+    spawn_unit(&mut app, Faction::Player, HexCoord::from_axial(3, 0), 10, 2);
+    enter_gameplay(&mut app);
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: path(&[HexCoord::ORIGIN, HexCoord::from_axial(1, 0), destination]),
+        },
+    );
+    app.update();
+
+    let command = GameCommand::MoveAlong {
+        unit: UnitId(2),
+        path: path(&[HexCoord::from_axial(3, 0), destination]),
+    };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app)
+            .into_iter()
+            .find(|event| matches!(event, CombatEvent::CommandRefused { .. })),
+        Some(CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: TilePos::new(destination, GROUND_LEVEL),
+                    occupant: UnitId(1),
+                },
+            },
+        })
+    );
+}
+
+#[test]
 fn an_atomic_party_move_commits_every_member() {
     let (mut app, anchor, rear) = pair_party_app();
     let destination = HexCoord::from_axial(1, 0);
@@ -474,6 +629,24 @@ fn every_party_validation_failure_is_atomic() {
             party_command(
                 UnitId(1),
                 vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(-1, 0)]),
+                    (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Route {
+                        position: TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL),
+                        occupant: UnitId(1),
+                    },
+                },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
                     (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
                     (
                         UnitId(2),
@@ -539,6 +712,44 @@ fn a_wrongly_owned_party_member_rejects_the_whole_move() {
             refusal: CommandRefusal::WrongSeat {
                 issued_by: PlayerSeat(0),
                 owned_by: PlayerSeat(1),
+            },
+        }]
+    );
+    assert_eq!(
+        standing_of(&mut app, anchor),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL))
+    );
+    assert_eq!(
+        standing_of(&mut app, rear),
+        Some(TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL))
+    );
+}
+
+#[test]
+fn a_party_route_cannot_enter_a_nonparty_body() {
+    let (mut app, anchor, rear) = pair_party_app();
+    let destination = HexCoord::from_axial(1, 0);
+    spawn_unit(&mut app, Faction::Player, destination, 5, 3);
+    let command = party_command(
+        UnitId(1),
+        vec![
+            (UnitId(1), &[HexCoord::ORIGIN, destination]),
+            (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+        ],
+    );
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Destination {
+                        position: TilePos::new(destination, GROUND_LEVEL),
+                        occupant: UnitId(3),
+                    },
+                },
             },
         }]
     );

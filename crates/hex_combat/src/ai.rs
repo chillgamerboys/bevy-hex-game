@@ -28,7 +28,7 @@ use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
     targeting, volumes, Body, Downed, Enemy, Faction, Footing, Player, Reach, StandsOn,
-    UnitRegistry,
+    UnitOccupancy, UnitRegistry,
 };
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -308,9 +308,18 @@ fn drive_ai(
         .as_deref()
         .map(|knowledge| knowledge.faction(*actor.4));
     let footing = spatial.map(|knowledge| authorized_footing(knowledge, table, *actor.3));
+    let authorized = spatial
+        .map(|knowledge| authorized_unit_ids(actor, &units, knowledge))
+        .unwrap_or_default();
+    let occupancy = UnitOccupancy::from_positions(
+        units
+            .iter()
+            .filter(|unit| authorized.contains(unit.1))
+            .map(|unit| (*unit.1, unit.2 .0.pos)),
+    );
     let reach = footing
         .as_ref()
-        .map(|footing| Reach::from(actor.2 .0, footing, None));
+        .map(|footing| Reach::with_occupancy(actor.2 .0, footing, None, &occupancy, *actor.1));
     let (commands, cell_choices) = match kind {
         AiDecisionKind::TurnAction => {
             match (spatial, footing.as_ref(), reach.as_ref()) {
@@ -469,6 +478,38 @@ fn authorized_footing(knowledge: &FactionKnowledge, table: &SubstanceTable, body
     )
 }
 
+fn authorized_unit_ids(
+    actor: (
+        Entity,
+        &UnitId,
+        &StandsOn,
+        &Body,
+        &Faction,
+        Option<&Turn>,
+        bool,
+        bool,
+        Option<&ControlOwner>,
+        Option<&AiController>,
+        Option<&LatticeSpec>,
+        Option<&LatticeState>,
+        Option<&LatticeStats>,
+        bool,
+    ),
+    units: &UnitQuery,
+    spatial: &FactionKnowledge,
+) -> BTreeSet<UnitId> {
+    let observed_hostiles = spatial
+        .units()
+        .filter(|(_, unit)| actor.4.is_hostile_to(unit.faction))
+        .map(|(id, _)| id);
+    units
+        .iter()
+        .filter(|unit| *unit.4 == *actor.4)
+        .map(|unit| *unit.1)
+        .chain(observed_hostiles)
+        .collect()
+}
+
 fn resolve_selection(
     request: &DecisionRequest,
     selected: &AiSelection,
@@ -613,7 +654,6 @@ fn enumerate_turn_actions(
                 || reach
                     .cost(surface.pos)
                     .is_none_or(|cost| cost > turn.movement_left)
-                || occupied(surface.pos, units, Some(id), &authorized_units)
             {
                 continue;
             }
@@ -709,17 +749,6 @@ fn enumerate_turn_actions(
         }
     }
     commands
-}
-
-fn occupied(
-    pos: TilePos,
-    units: &UnitQuery,
-    except: Option<UnitId>,
-    authorized: &BTreeSet<UnitId>,
-) -> bool {
-    units
-        .iter()
-        .any(|unit| authorized.contains(unit.1) && Some(*unit.1) != except && unit.2 .0.pos == pos)
 }
 
 fn damages_downed(
@@ -854,8 +883,9 @@ fn build_observation(
         .zip(reach)
         .into_iter()
         .flat_map(|((spatial, footing), reach)| {
-            reach
-                .surfaces()
+            footing
+                .standings()
+                .into_iter()
                 .map(|standing| {
                     let mut neighbors: Vec<TilePos> = standing
                         .pos
@@ -864,14 +894,13 @@ fn build_observation(
                         .into_iter()
                         .flat_map(|coord| footing.steps_from(standing, coord))
                         .map(|next| next.pos)
-                        .filter(|position| reach.cost(*position).is_some())
                         .collect();
                     neighbors.sort_unstable();
                     neighbors.dedup();
                     AiTraversalObservation {
                         position: standing.pos,
                         knowledge: spatial.state(standing.pos),
-                        standable: true,
+                        standable: reach.cost(standing.pos).is_some(),
                         neighbors,
                     }
                 })

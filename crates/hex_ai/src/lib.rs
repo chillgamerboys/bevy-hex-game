@@ -684,8 +684,17 @@ impl<'a> ReverseTraversal<'a> {
             .collect();
         let mut predecessors = vec![Vec::new(); surfaces.len()];
         for (source_index, surface) in surfaces.iter().enumerate() {
+            if !surface.standable {
+                continue;
+            }
             for &neighbor in &surface.neighbors {
                 if let Some(&neighbor_index) = index_by_position.get(&neighbor) {
+                    if !surfaces
+                        .get(neighbor_index)
+                        .is_some_and(|candidate| candidate.standable)
+                    {
+                        continue;
+                    }
                     if let Some(incoming) = predecessors.get_mut(neighbor_index) {
                         incoming.push(source_index);
                     }
@@ -719,7 +728,7 @@ impl<'a> ReverseTraversal<'a> {
             .filter(|&index| {
                 self.surfaces
                     .get(index)
-                    .is_some_and(|surface| surface.neighbors.contains(&target))
+                    .is_some_and(|surface| surface.standable && surface.neighbors.contains(&target))
             })
             .collect();
         goals.sort_unstable();

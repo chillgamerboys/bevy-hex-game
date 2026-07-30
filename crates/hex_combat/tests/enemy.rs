@@ -666,6 +666,36 @@ fn a_depleted_enemy_channels_only_from_its_canonical_legal_actions() {
     assert_eq!(app.world().resource::<CombatSummary>().channels, 1);
 }
 
+#[test]
+fn enemy_legal_routes_never_enter_an_allied_occupied_surface() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let actor = spawn_unit(&mut app, Faction::Hostile, HexCoord::from_axial(3, 0), 10);
+    let blocker = spawn_unit(&mut app, Faction::Hostile, HexCoord::from_axial(2, 0), 5);
+    enter_gameplay(&mut app);
+
+    end_turn(&mut app);
+
+    let actor_id = unit_id(&app, actor);
+    let blocked = app
+        .world()
+        .get::<StandsOn>(blocker)
+        .map(|standing| standing.0.pos);
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let Some(trace) = traces.entries.last() else {
+        panic!("the acting enemy should produce a decision trace")
+    };
+    assert_eq!(trace.actor, actor_id);
+    assert!(trace.legal_actions.actions().iter().all(|action| {
+        match &action.command {
+            GameCommand::MoveAlong { path, .. } => {
+                !path.iter().any(|position| Some(*position) == blocked)
+            }
+            _ => true,
+        }
+    }));
+}
+
 /// A hostile strike can park resolution on a human defender choice. The AI must not
 /// prequeue its end-turn beside that strike — the modal gate correctly refuses every
 /// command except the matching answer — but it must still end the spent turn once the

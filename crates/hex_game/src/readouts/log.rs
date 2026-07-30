@@ -705,6 +705,10 @@ fn refusal_label(refusal: &CommandRefusal) -> &'static str {
         CommandRefusal::MissingUnitData { .. } => "unit data unavailable",
         CommandRefusal::Busy => "still busy",
         CommandRefusal::InvalidPath => "invalid path",
+        CommandRefusal::Occupied { block } => match block {
+            hex_units::OccupancyBlock::Destination { .. } => "destination occupied",
+            hex_units::OccupancyBlock::Route { .. } => "route occupied",
+        },
         CommandRefusal::MovementBudgetExceeded { .. } => "not enough movement",
         CommandRefusal::UnknownTarget { .. } => "unknown target",
         CommandRefusal::TargetDowned { .. } => "target is already down",
