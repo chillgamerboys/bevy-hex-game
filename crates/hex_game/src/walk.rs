@@ -353,6 +353,7 @@ struct WalkContent<'w> {
     base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
     elements: Option<Res<'w, hex_assets::ElementCatalog>>,
     substances: Option<Res<'w, hex_assets::SubstanceTable>>,
+    combat: Option<Res<'w, hex_assets::CombatSettings>>,
 }
 
 #[derive(SystemParam)]
@@ -882,6 +883,9 @@ fn run_walk(
             state.advance();
         }
         WalkStep::StartFixture { ref id } => {
+            let Some(combat_settings) = content.combat.as_deref() else {
+                return;
+            };
             let Some(library) = content.library.as_deref() else {
                 return;
             };
@@ -906,6 +910,8 @@ fn run_walk(
             commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
                 kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
                 return_to: Screen::CombatLab,
+                profile: hex_assets::CombatRulesProfile::shipped(combat_settings),
+                shipped_combat: combat_settings.clone(),
             });
             let payload = match crate::screens::combat_lab::creator_fixture_payload(
                 id,

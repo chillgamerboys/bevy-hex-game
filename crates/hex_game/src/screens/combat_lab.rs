@@ -10,15 +10,17 @@ use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
     character_lattice_file, character_runtime_key, combined_spell_file, CombatLabDeploymentRegion,
-    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, ContentIndex,
-    CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
-    EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
-    PlayerSettings, PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary,
-    SpellBook, SpellFile, SpellReference, SubstanceTable,
+    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, CombatRulesProfile,
+    CombatSettings, ContentIndex, CreationCellKind, CreationPresetCatalog, CustomCharacterId,
+    ElementCatalog, Encounter, EncounterFaction, EncounterPlacement, FormationCenter, GameAssets,
+    LatticeFile, LatticeLibrary, PlayerSettings, PresetAudience, Roster, RosterEntry,
+    SavedCharacter, Scenario, ScenarioLibrary, SpellBook, SpellFile, SpellReference,
+    SubstanceTable,
 };
 use hex_core::{
-    GameplayPhase, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors,
-    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
+    GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
+    TraversalProfile,
 };
 use hex_units::{Body, Faction, Footing, Reach, StandsOn};
 
@@ -29,7 +31,7 @@ use crate::menus::widgets::{
     blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
     DANGER, FUSION_COLOR,
 };
-use crate::scenarios::ScenarioToLoad;
+use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
 
 use super::{despawn_screen, screen_root, screen_root_node};
 
@@ -58,6 +60,7 @@ struct CombatLabState {
     hostiles: Vec<RosterChoice>,
     fixture_filter: String,
     creator_origin: bool,
+    rules: Option<CombatRulesProfile>,
     notice: String,
     revision: u64,
 }
@@ -71,6 +74,7 @@ impl Default for CombatLabState {
             hostiles: vec![RosterChoice::Template("raider".to_owned())],
             fixture_filter: String::new(),
             creator_origin: false,
+            rules: None,
             notice: String::new(),
             revision: 1,
         }
@@ -157,6 +161,19 @@ pub(crate) enum CombatLabSessionKind {
 pub(crate) struct CombatLabSession {
     pub(crate) kind: CombatLabSessionKind,
     pub(crate) return_to: Screen,
+    /// Frozen validated profile reused by Retry.
+    pub(crate) profile: CombatRulesProfile,
+    /// Authored settings restored whenever the Lab session leaves gameplay.
+    pub(crate) shipped_combat: CombatSettings,
+}
+
+/// Whether a frozen Lab profile was admitted at the Loading boundary.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CombatLabRulesStatus {
+    /// The effective settings were validated and installed.
+    Ready,
+    /// The profile failed closed and gameplay must not start.
+    Invalid,
 }
 
 /// Frozen human deployment state carried over the already-loaded terrain.
@@ -399,6 +416,7 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_observer(on_deployment_surface_clicked)
         .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
+        .add_systems(OnExit(Screen::Gameplay), restore_shipped_combat_rules)
         .add_systems(
             OnEnter(Screen::CombatLab),
             (initialize_lab, spawn_lab).chain(),
@@ -1225,6 +1243,7 @@ fn handle_lab_actions(
     substances: Option<Res<SubstanceTable>>,
     presets: Option<Res<CreationPresetCatalog>>,
     map_catalog: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -1273,6 +1292,11 @@ fn handle_lab_actions(
                 next.set(Screen::CharacterCreator);
             }
             LabAction::PrepareDeployment => {
+                let Some(shipped_combat) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
                 let Some(map_definition) = map_catalog
                     .as_deref()
                     .and_then(|catalog| catalog.get(&state.map))
@@ -1313,6 +1337,16 @@ fn handle_lab_actions(
                     .fixed_seed
                     .or(scenario.generation_seed)
                     .map(ResolvedMapSeed);
+                let profile = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped_combat));
+                if let Err(error) = profile.validate(shipped_combat) {
+                    state.notice = format!("Rules profile refused: {error}");
+                    state.bump();
+                    continue;
+                }
+                state.rules = Some(profile.clone());
                 commands.insert_resource(overlay);
                 commands.insert_resource(DeploymentSession::new(
                     map_definition.clone(),
@@ -1327,6 +1361,8 @@ fn handle_lab_actions(
                     } else {
                         Screen::CombatLab
                     },
+                    profile,
+                    shipped_combat: shipped_combat.clone(),
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -1336,6 +1372,11 @@ fn handle_lab_actions(
                 next.set(Screen::Loading);
             }
             LabAction::StartFixture(id) => {
+                let Some(shipped_combat) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
                 let Some(fixture) = FIXTURES.iter().find(|fixture| fixture.id == id) else {
                     state.notice = format!("Unknown fixture {id:?}.");
                     state.bump();
@@ -1374,6 +1415,8 @@ fn handle_lab_actions(
                 commands.insert_resource(CombatLabSession {
                     kind: CombatLabSessionKind::FixedFixture(id.clone()),
                     return_to: Screen::CombatLab,
+                    profile: CombatRulesProfile::shipped(shipped_combat),
+                    shipped_combat: shipped_combat.clone(),
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -2418,6 +2461,47 @@ pub(crate) fn apply_creator_content_overlay(world: &mut World) {
     active.insert_into_world(world);
 }
 
+/// Validates and installs the frozen effective Lab rules before gameplay admission.
+pub(crate) fn apply_combat_rules_profile(world: &mut World) {
+    let Some(session) = world.get_resource::<CombatLabSession>().cloned() else {
+        world.remove_resource::<CombatLabRulesStatus>();
+        return;
+    };
+    if world
+        .get_resource::<CombatLabRulesStatus>()
+        .is_some_and(|status| *status == CombatLabRulesStatus::Ready)
+    {
+        return;
+    }
+    match session.profile.effective_settings(&session.shipped_combat) {
+        Ok(effective) => {
+            world.insert_resource(effective);
+            world.insert_resource(CombatLabRulesStatus::Ready);
+        }
+        Err(error) => {
+            if world
+                .get_resource::<CombatLabRulesStatus>()
+                .is_none_or(|status| *status != CombatLabRulesStatus::Invalid)
+            {
+                error!("Combat Lab rules profile refused before gameplay: {error}");
+            }
+            world.remove_resource::<CombatSettings>();
+            world.insert_resource(GameplaySetupFailure::new(format!(
+                "Combat Lab rules profile was refused: {error}"
+            )));
+            world.insert_resource(ScenarioContractStatus::Invalid);
+            world.insert_resource(CombatLabRulesStatus::Invalid);
+        }
+    }
+}
+
+fn restore_shipped_combat_rules(mut commands: Commands, session: Option<Res<CombatLabSession>>) {
+    if let Some(session) = session {
+        commands.insert_resource(session.shipped_combat.clone());
+    }
+    commands.remove_resource::<CombatLabRulesStatus>();
+}
+
 /// Restores the base namespace after a creator session froze combined ids.
 pub(crate) fn restore_shipped_content(
     commands: &mut Commands,
@@ -2453,6 +2537,56 @@ mod tests {
     };
 
     use super::*;
+
+    fn rules_session(profile: CombatRulesProfile, shipped: CombatSettings) -> CombatLabSession {
+        CombatLabSession {
+            kind: CombatLabSessionKind::Sandbox,
+            return_to: Screen::CombatLab,
+            profile,
+            shipped_combat: shipped,
+        }
+    }
+
+    #[test]
+    fn loading_installs_a_frozen_tactical_profile_without_changing_shipped_snapshot() {
+        let shipped = CombatSettings::default();
+        let profile = CombatRulesProfile::tactical_two_step(&shipped);
+        let mut app = App::new();
+        app.insert_resource(shipped.clone());
+        app.insert_resource(rules_session(profile.clone(), shipped.clone()));
+
+        apply_combat_rules_profile(app.world_mut());
+
+        assert_eq!(
+            app.world().resource::<CombatSettings>().movement_per_turn,
+            2
+        );
+        let session = app.world().resource::<CombatLabSession>();
+        assert_eq!(session.profile, profile);
+        assert_eq!(session.shipped_combat, shipped);
+        assert_eq!(
+            *app.world().resource::<CombatLabRulesStatus>(),
+            CombatLabRulesStatus::Ready
+        );
+    }
+
+    #[test]
+    fn loading_fails_closed_on_a_profile_that_lies_about_preset_identity() {
+        let shipped = CombatSettings::default();
+        let mut profile = CombatRulesProfile::shipped(&shipped);
+        profile.movement_per_turn = 3;
+        let mut app = App::new();
+        app.insert_resource(shipped.clone());
+        app.insert_resource(rules_session(profile, shipped));
+
+        apply_combat_rules_profile(app.world_mut());
+
+        assert!(!app.world().contains_resource::<CombatSettings>());
+        assert_eq!(
+            *app.world().resource::<CombatLabRulesStatus>(),
+            CombatLabRulesStatus::Invalid
+        );
+    }
 
     struct ContentFixture {
         element_file: ElementFile,

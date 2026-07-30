@@ -3315,6 +3315,8 @@ dependencies = [
  "hex_world",
  "ron",
  "serde",
+ "serde_json",
+ "xxhash-rust",
 ]
 
 [[package]]

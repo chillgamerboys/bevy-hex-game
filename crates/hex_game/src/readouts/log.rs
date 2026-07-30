@@ -276,6 +276,9 @@ fn event_is_disclosed(
     let unit = |id| unit_is_disclosed(viewer, id, registry, identities, spatial);
     match event {
         CombatEvent::Cast { caster, .. } => unit(*caster),
+        CombatEvent::Channelled {
+            unit: channeler, ..
+        } => unit(*channeler),
         CombatEvent::Strike { target, .. } => unit(*target),
         CombatEvent::DecisionOpened { decider, .. } => unit(*decider),
         CombatEvent::DamagePrevented { target, .. }
@@ -402,6 +405,25 @@ fn format_event(
             text: format!("{} cast {spell}", unit_name(*caster, registry, identities)),
             danger: false,
         },
+        CombatEvent::Channelled { unit, restored } => {
+            let detail = restored
+                .iter()
+                .map(|(element, amount)| format!("{element} +{amount}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let suffix = if detail.is_empty() {
+                "no mana restored".to_owned()
+            } else {
+                detail
+            };
+            LogLine {
+                text: format!(
+                    "{} channelled ({suffix})",
+                    unit_name(*unit, registry, identities)
+                ),
+                danger: false,
+            }
+        }
         CombatEvent::Strike { attacker, target } => LogLine {
             text: format!(
                 "{} struck {}",

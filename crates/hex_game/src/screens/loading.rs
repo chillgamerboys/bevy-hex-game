@@ -30,6 +30,7 @@ pub(super) fn plugin(app: &mut App) {
         PostUpdate,
         (
             crate::scenarios::validate_loaded_scenario,
+            super::combat_lab::apply_combat_rules_profile,
             enter_gameplay_when_ready,
         )
             .chain()
@@ -129,7 +130,6 @@ fn enter_gameplay_when_ready(
         }
         _ => false,
     };
-
     if assets.is_ready(&asset_server)
         && settings.all_loaded()
         && substances_are_current

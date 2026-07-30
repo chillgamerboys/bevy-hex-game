@@ -144,7 +144,12 @@ AI dispatch traces (profile, algorithm, observation, canonical legal actions,
 fingerprint, selection, and emitted command); aggregate moves, casts, strikes,
 decisions, and explicit end turns; raw, prevented, and applied disables; restored
 cells, revivals, and downings; the ordered structured event stream; and the final
-outcome. It resets with the gameplay session.
+outcome. Wave 7 extends that same authority with refused-command counts, movement
+distance and budget use, casts by stable spell name, delivered-effect categories,
+Channel actions, and mana restored by stable element name. A versioned deterministic
+summary fingerprint covers the aggregates plus both bounded detail windows; their
+rolling fingerprints continue to cover facts that aged out. It resets with the
+gameplay session.
 
 The automated UI suite deliberately does not use the authored Crossing:
 

@@ -5,6 +5,8 @@
 //! Presentation consumes these messages, but owns all wording and disclosure policy.
 //! No variant stores an `Entity`, a session-local `SpellId`, or a preformatted line.
 
+use std::collections::BTreeMap;
+
 use bevy::prelude::Message;
 use hex_core::{GameCommand, LatticeCoord, PartyPath, PlayerSeat, TilePos, UnitId};
 use hex_units::Faction;
@@ -329,6 +331,13 @@ pub enum CombatEvent {
         /// The spell's positional anchor.
         target: TilePos,
     },
+    /// A unit spent its action to restore mana by element.
+    Channelled {
+        /// Unit that channelled.
+        unit: UnitId,
+        /// Exact mana restored under stable element names in lexical order.
+        restored: BTreeMap<String, u16>,
+    },
     /// A melee strike committed.
     Strike {
         /// The attacking unit.
@@ -615,6 +624,10 @@ mod tests {
                 caster: source,
                 spell: "Ember".to_owned(),
                 target,
+            },
+            CombatEvent::Channelled {
+                unit: source,
+                restored: BTreeMap::from([("Air".to_owned(), 1), ("Fire".to_owned(), 2)]),
             },
             CombatEvent::Strike {
                 attacker: source,

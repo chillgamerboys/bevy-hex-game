@@ -12,6 +12,8 @@ use crate::{AiDecisionTraces, CombatEvent, CombatSystems, EncounterOutcome, Turn
 
 /// Maximum compact AI records and structured events retained by [`CombatSummary`].
 pub const MAX_COMBAT_SUMMARY_DETAILS: usize = 4_096;
+/// Stable schema domain for deterministic summary fingerprints.
+pub const COMBAT_SUMMARY_FINGERPRINT_VERSION: u16 = 1;
 
 /// Stable command categories used by aggregate reporting.
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -34,6 +36,21 @@ pub enum CommandKind {
     ChooseRestores,
     /// The exploring party restored all eligible cells.
     Rest,
+}
+
+/// Stable delivered-effect categories used by aggregate reporting.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeliveredEffectKind {
+    /// Incoming disable demand opened a defender choice.
+    Disable,
+    /// A persistent Burn was attached.
+    Burn,
+    /// Divination revealed lattice facts.
+    Reveal,
+    /// Disabled cells were restored by a spell.
+    Restore,
+    /// A defensive enchantment absorbed incoming disables.
+    Prevention,
 }
 
 impl CommandKind {
@@ -59,6 +76,15 @@ pub struct CombatSummary {
     pub rounds: u32,
     /// Successful commands by stable unit and semantic kind.
     pub commands: BTreeMap<UnitId, BTreeMap<CommandKind, u32>>,
+    /// Refused commands by stable unit and semantic kind.
+    #[serde(default)]
+    pub refusals: BTreeMap<UnitId, BTreeMap<CommandKind, u32>>,
+    /// Total successful commands.
+    #[serde(default)]
+    pub successful_commands: u32,
+    /// Total refused commands.
+    #[serde(default)]
+    pub refused_commands: u32,
     /// Most recent compact algorithm dispatches in selection order.
     pub ai_selections: VecDeque<AiDecisionRecord>,
     /// Total algorithm dispatches, including records outside the retained window.
@@ -69,8 +95,26 @@ pub struct CombatSummary {
     pub ai_selection_fingerprint: u64,
     /// Successful moves, including atomic party moves.
     pub moves: u32,
+    /// Exact surface edges committed across individual and party paths.
+    #[serde(default)]
+    pub movement_distance: u32,
+    /// Movement budget spent; currently one per committed surface edge.
+    #[serde(default)]
+    pub movement_budget_used: u32,
     /// Successful casts.
     pub casts: u32,
+    /// Successful casts under stable spell names.
+    #[serde(default)]
+    pub casts_by_spell: BTreeMap<String, u32>,
+    /// Successfully delivered mechanical outcomes by semantic category.
+    #[serde(default)]
+    pub delivered_effects: BTreeMap<DeliveredEffectKind, u32>,
+    /// Successful Channel actions.
+    #[serde(default)]
+    pub channels: u32,
+    /// Mana restored by stable element name.
+    #[serde(default)]
+    pub channelled_mana: BTreeMap<String, u32>,
     /// Successful strikes.
     pub strikes: u32,
     /// Successful exact-cell answers.
@@ -105,21 +149,47 @@ pub struct CombatSummary {
 }
 
 impl CombatSummary {
+    /// Deterministic identity of every serialized aggregate and retained detail.
+    ///
+    /// Runtime cursors are serde-skipped, so collection timing cannot affect the
+    /// artifact. Count and rolling-fingerprint fields continue to cover details that
+    /// aged out of the bounded windows.
+    #[must_use]
+    pub fn fingerprint(&self) -> u64 {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"hex-combat-summary-v1");
+        bytes.extend_from_slice(&COMBAT_SUMMARY_FINGERPRINT_VERSION.to_le_bytes());
+        if serde_json::to_writer(&mut bytes, self).is_err() {
+            bytes.extend_from_slice(b"<serialization-error>");
+        }
+        xxh3_64(&bytes)
+    }
+
     pub(crate) fn record_command(&mut self, command: &GameCommand) {
         let kind = CommandKind::of(command);
+        self.successful_commands = self.successful_commands.saturating_add(1);
         *self
             .commands
             .entry(command.unit())
             .or_default()
             .entry(kind)
             .or_default() += 1;
+        let movement = command_movement_distance(command);
+        self.movement_distance = self.movement_distance.saturating_add(movement);
+        self.movement_budget_used = self.movement_budget_used.saturating_add(movement);
         match kind {
             CommandKind::Move | CommandKind::MoveParty => self.moves += 1,
             CommandKind::Strike => self.strikes += 1,
             CommandKind::EndTurn => self.idle_turns += 1,
-            CommandKind::Cast => self.casts += 1,
+            CommandKind::Cast => {
+                self.casts += 1;
+                if let GameCommand::Cast { spell, .. } = command {
+                    *self.casts_by_spell.entry(spell.clone()).or_default() += 1;
+                }
+            }
             CommandKind::ChooseDisables | CommandKind::ChooseRestores => self.decisions += 1,
-            CommandKind::Channel | CommandKind::Rest => {}
+            CommandKind::Channel => self.channels += 1,
+            CommandKind::Rest => {}
         }
     }
 
@@ -127,16 +197,57 @@ impl CombatSummary {
         match event {
             CombatEvent::DecisionOpened { count, .. } => {
                 self.raw_disables += u32::from(*count);
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Disable)
+                    .or_default() += 1;
             }
             CombatEvent::DamagePrevented { amount, .. } => {
                 self.raw_disables += u32::from(*amount);
                 self.prevented_disables += u32::from(*amount);
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Prevention)
+                    .or_default() += 1;
             }
             CombatEvent::HexesDisabled { cells, .. } => {
                 self.applied_disables += u32::try_from(cells.len()).unwrap_or(u32::MAX);
             }
             CombatEvent::HexesRestored { cells, .. } | CombatEvent::Rested { cells, .. } => {
                 self.restored_cells += u32::try_from(cells.len()).unwrap_or(u32::MAX);
+                if matches!(event, CombatEvent::HexesRestored { .. }) {
+                    *self
+                        .delivered_effects
+                        .entry(DeliveredEffectKind::Restore)
+                        .or_default() += 1;
+                }
+            }
+            CombatEvent::BurnApplied { .. } => {
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Burn)
+                    .or_default() += 1;
+            }
+            CombatEvent::Revealed { .. } => {
+                *self
+                    .delivered_effects
+                    .entry(DeliveredEffectKind::Reveal)
+                    .or_default() += 1;
+            }
+            CombatEvent::Channelled { restored, .. } => {
+                for (element, amount) in restored {
+                    let total = self.channelled_mana.entry(element.clone()).or_default();
+                    *total = total.saturating_add(u32::from(*amount));
+                }
+            }
+            CombatEvent::CommandRefused { command, .. } => {
+                self.refused_commands = self.refused_commands.saturating_add(1);
+                *self
+                    .refusals
+                    .entry(command.unit())
+                    .or_default()
+                    .entry(CommandKind::of(command))
+                    .or_default() += 1;
             }
             CombatEvent::Revived { .. } => self.revivals += 1,
             CombatEvent::Downed { .. } => self.downings += 1,
@@ -164,6 +275,20 @@ impl CombatSummary {
         self.ai_selection_count = self.ai_selection_count.saturating_add(1);
         self.ai_trace_cursor = trace.sequence.saturating_add(1);
         push_bounded(&mut self.ai_selections, record);
+    }
+}
+
+fn command_movement_distance(command: &GameCommand) -> u32 {
+    match command {
+        GameCommand::MoveAlong { path, .. } => {
+            u32::try_from(path.len().saturating_sub(1)).unwrap_or(u32::MAX)
+        }
+        GameCommand::MoveParty { paths, .. } => paths.iter().fold(0_u32, |total, member| {
+            total.saturating_add(
+                u32::try_from(member.path.len().saturating_sub(1)).unwrap_or(u32::MAX),
+            )
+        }),
+        _ => 0,
     }
 }
 
@@ -418,6 +543,20 @@ mod tests {
         let encoded = serde_json::to_string(&summary).expect("summary serializes");
         let decoded: CombatSummary = serde_json::from_str(&encoded).expect("summary deserializes");
         assert_eq!(decoded, summary);
+        assert_eq!(decoded.fingerprint(), summary.fingerprint());
+    }
+
+    #[test]
+    fn summary_fingerprint_changes_with_canonical_combat_truth() {
+        let mut first = CombatSummary::default();
+        let mut second = CombatSummary::default();
+        assert_eq!(first.fingerprint(), second.fingerprint());
+
+        second.record_command(&GameCommand::EndTurn { unit: UnitId(1) });
+        assert_ne!(first.fingerprint(), second.fingerprint());
+
+        first.record_command(&GameCommand::EndTurn { unit: UnitId(1) });
+        assert_eq!(first.fingerprint(), second.fingerprint());
     }
 
     #[test]

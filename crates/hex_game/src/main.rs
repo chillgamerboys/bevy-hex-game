@@ -29,6 +29,7 @@ use hex_core::{
 #[cfg(any(feature = "map-review", feature = "visual-walk"))]
 mod capture;
 mod casting;
+pub mod combat_reports;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod creation_presentation;

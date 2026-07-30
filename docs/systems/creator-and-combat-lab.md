@@ -13,6 +13,22 @@ This document owns the creation-library, creator, sandbox, deployment, fixture, 
 launch-snapshot contracts. `hex_assets` owns serializable content, `hex_combat` owns
 the fail-closed deployability decision, and `hex_game` owns persistence and UI.
 
+Wave 7 adds a versioned `CombatRulesProfile` without changing that ownership. Shipped
+values are copied from validated `combat.ron`; Tactical two-step changes only movement
+per turn; Custom edits remain inside published numeric bounds. The profile exposes
+only movement per turn, strike disables, engage range, disengage margin, levels per
+bonus range, and Reveal duration. Loading validates and installs an effective
+session-local copy before gameplay, Retry retains it exactly, and leaving the Lab
+restores the authored settings. Invalid profiles fail closed and never edit
+`combat.ron`.
+
+One versioned `CombatLabReport` combines that frozen profile with map and resolved
+seed, accepted content fingerprint, ordered rosters, exact `TilePos` deployment,
+Sandbox or stable fixture origin, final outcome, and the gameplay-owned
+`CombatSummary`. Its deterministic summary fingerprint is validated on read. Local
+report history is a separate bounded schema from Creator creations and Continue;
+fixed fixtures never consult it.
+
 ## Saved creation library
 
 `creations.ron` is one versioned local library containing custom characters and
