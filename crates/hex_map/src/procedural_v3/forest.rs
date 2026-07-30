@@ -232,7 +232,7 @@ impl V3Recipe for ForestRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_forest(plan)
+        validate_forest(plan, &self.objects)
     }
 
     fn repair(
@@ -726,7 +726,12 @@ fn build_feature_plan(
 pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     plan: &GeneratedPatchPlan,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<ForestMetrics> {
+    let objects = match TemperateVegetationSet::resolve(catalog, "Forest") {
+        Ok(objects) => objects,
+        Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
+    };
     let approach_depth = patch
         .shared_edges()
         .map(|edge| edge.contract.approach_depth)
@@ -742,20 +747,24 @@ pub(crate) fn validate_patch(
             }
         };
     match frame.canonical_local_world(plan) {
-        Ok(plan) => validate_forest_inner(&plan, Some(approach_depth)),
+        Ok(plan) => validate_forest_inner(&plan, Some(approach_depth), &objects),
         Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
             "Forest validation projection failed: {error}"
         ))]),
     }
 }
 
-pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
-    validate_forest_inner(plan, None)
+fn validate_forest(
+    plan: &GeneratedWorldPlan,
+    objects: &TemperateVegetationSet,
+) -> WorldValidation<ForestMetrics> {
+    validate_forest_inner(plan, None, objects)
 }
 
 fn validate_forest_inner(
     plan: &GeneratedWorldPlan,
     stitched_approach_depth: Option<u32>,
+    objects: &TemperateVegetationSet,
 ) -> WorldValidation<ForestMetrics> {
     let stitched_patch = stitched_approach_depth.is_some();
     let mut issues = Vec::new();
@@ -912,6 +921,7 @@ fn validate_forest_inner(
             )));
         }
     }
+    validate_authored_vegetation(plan, objects, &mut issues);
     let tree_root_coords: BTreeSet<_> = tree_roots.iter().map(|root| root.coord).collect();
     if tree_root_coords.iter().any(|root| {
         root.neighbors()
@@ -1080,6 +1090,111 @@ fn validate_forest_inner(
         woodland_prairie_high_ground_difference: elevation.woodland_prairie_high_ground_difference,
         critical_route_steps,
     })
+}
+
+fn validate_authored_vegetation(
+    plan: &GeneratedWorldPlan,
+    objects: &TemperateVegetationSet,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let mut surface_by_coord = BTreeMap::new();
+    for surface in plan.volume.surfaces.keys().copied() {
+        if let Some(existing) = surface_by_coord.get(&surface.coord) {
+            issues.push(recipe_issue(format!(
+                "Forest authored vegetation requires exactly one exposed surface per coordinate, \
+                 but {:?} contains both {existing:?} and {surface:?}",
+                surface.coord
+            )));
+            return;
+        }
+        surface_by_coord.insert(surface.coord, surface);
+    }
+    let protected_walker_volume = plan
+        .features
+        .protected_routes
+        .values()
+        .flat_map(|route| route.surfaces.iter().copied())
+        .chain(
+            plan.features
+                .clearings
+                .values()
+                .flat_map(|clearing| clearing.surfaces.iter().copied()),
+        )
+        .chain(plan.anchors.values().copied())
+        .flat_map(|surface| {
+            [1, 2].map(|offset| TilePos::new(surface.coord, surface.level.saturating_add(offset)))
+        })
+        .collect::<BTreeSet<_>>();
+    let mut claimed_blockers = BTreeSet::new();
+    let mut claimed_structural_cells = BTreeSet::new();
+
+    for feature in plan.features.by_id.values() {
+        let Some(object) = objects.forest_object(feature.object_id.as_str()) else {
+            continue;
+        };
+        let expected_blockers =
+            object.project_blockers(feature.root, feature.rotation, &surface_by_coord);
+        if expected_blockers.as_ref() != Some(&feature.blocker_footprint) {
+            issues.push(recipe_issue(format!(
+                "Forest object '{}' at {:?} does not publish its exact rotated catalog blocker \
+                 footprint",
+                feature.object_id, feature.root
+            )));
+        }
+        if !feature.blocker_footprint.is_disjoint(&claimed_blockers) {
+            issues.push(recipe_issue(format!(
+                "Forest object '{}' at {:?} overlaps a neighboring blocker footprint",
+                feature.object_id, feature.root
+            )));
+        }
+        claimed_blockers.extend(feature.blocker_footprint.iter().copied());
+
+        let Some(projected) = object.project_visual_volume(feature.root, feature.rotation) else {
+            issues.push(recipe_issue(format!(
+                "Forest object '{}' at {:?} cannot project its complete rotated catalog volume",
+                feature.object_id, feature.root
+            )));
+            continue;
+        };
+        if !projected
+            .structural_cells
+            .is_disjoint(&claimed_structural_cells)
+        {
+            issues.push(recipe_issue(format!(
+                "Forest object '{}' at {:?} overlaps neighboring structural vegetation",
+                feature.object_id, feature.root
+            )));
+        }
+        for visual in &projected.cells {
+            let Some(support) = surface_by_coord.get(&visual.coord).copied() else {
+                issues.push(recipe_issue(format!(
+                    "Forest object '{}' at {:?} leaves generated terrain at {visual:?}",
+                    feature.object_id, feature.root
+                )));
+                continue;
+            };
+            if visual.level <= support.level {
+                issues.push(recipe_issue(format!(
+                    "Forest object '{}' at {:?} intersects terrain at {visual:?}",
+                    feature.object_id, feature.root
+                )));
+            }
+            if protected_walker_volume.contains(visual) {
+                issues.push(recipe_issue(format!(
+                    "Forest object '{}' at {:?} enters a protected route, clearing, or anchor \
+                     walker volume at {visual:?}",
+                    feature.object_id, feature.root
+                )));
+            }
+        }
+        claimed_structural_cells.extend(projected.structural_cells);
+    }
+
+    if claimed_blockers != plan.blockers {
+        issues.push(recipe_issue(
+            "Forest global blockers must exactly equal the rotated catalog footprints",
+        ));
+    }
 }
 
 fn validate_review_anchors(
@@ -3224,6 +3339,12 @@ mod tests {
         generate_with_objects(grid_radius, level_height, settings, seed, objects)
     }
 
+    fn validate_plan(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
+        let objects = TemperateVegetationSet::resolve(runtime_art_catalog(), "Forest")
+            .expect("tracked Forest objects should resolve");
+        validate_forest(plan, &objects)
+    }
+
     fn settings() -> ProceduralV3Settings {
         ProceduralV3Settings {
             layout: V3LayoutSettings::Single(PatchSpec {
@@ -3419,6 +3540,179 @@ mod tests {
             let selected = generate(12, 0.4, &settings(), seed).expect("Forest should generate");
             assert_complete_authored_vegetation_bounds(&selected.validated.plan);
         }
+    }
+
+    #[test]
+    fn validator_rejects_stacked_surface_coordinates_before_catalog_projection() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let mut plan = selected.validated.plan;
+        let (surface, metadata) = plan
+            .volume
+            .surfaces
+            .iter()
+            .next()
+            .map(|(surface, metadata)| (*surface, *metadata))
+            .expect("the Forest fixture should contain an exposed surface");
+        let stacked = TilePos::new(surface.coord, surface.level.saturating_add(1));
+        assert_ne!(stacked, surface);
+        assert!(
+            plan.volume.surfaces.insert(stacked, metadata).is_none(),
+            "the Forest fixture should not already contain a stacked surface"
+        );
+
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
+            panic!("stacked surfaces must fail Forest authored-vegetation validation");
+        };
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("exactly one exposed surface per coordinate")
+        }));
+    }
+
+    #[test]
+    fn validator_rederives_exact_catalog_blocker_footprints() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let mut plan = selected.validated.plan;
+        let (rotation, _) =
+            detect_orientation(&plan).expect("Forest should expose its exact orientation");
+        let reserved = plan
+            .features
+            .protected_routes
+            .values()
+            .flat_map(|route| route.surfaces.iter().copied())
+            .chain(
+                plan.features
+                    .clearings
+                    .values()
+                    .flat_map(|clearing| clearing.surfaces.iter().copied()),
+            )
+            .chain(plan.anchors.values().copied())
+            .collect::<BTreeSet<_>>();
+        let (feature_id, root) = plan
+            .features
+            .by_id
+            .iter()
+            .find(|(_, feature)| {
+                feature.kind == FeatureKind::Tree
+                    && feature.object_id.as_str() == SMALL_BROADLEAF_ID
+            })
+            .map(|(id, feature)| (*id, feature.root))
+            .expect("the Forest fixture should contain a small broadleaf");
+        let extra = root
+            .coord
+            .neighbors()
+            .into_iter()
+            .filter(|coord| is_woodland(*coord, rotation))
+            .filter_map(|coord| {
+                plan.volume
+                    .surfaces
+                    .keys()
+                    .find(|surface| surface.coord == coord)
+                    .copied()
+            })
+            .find(|surface| !plan.blockers.contains(surface) && !reserved.contains(surface))
+            .expect("one neighboring woodland surface should remain available");
+
+        plan.features
+            .by_id
+            .get_mut(&feature_id)
+            .expect("the selected feature should remain present")
+            .blocker_footprint
+            .insert(extra);
+        plan.blockers.insert(extra);
+        assert_eq!(
+            plan.validate(),
+            Vec::new(),
+            "the common plan accepts a coherent extra blocker; the catalog validator must not"
+        );
+
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
+            panic!("a catalog-invented extra blocker must fail Forest validation");
+        };
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("exact rotated catalog blocker footprint")
+        }));
+    }
+
+    #[test]
+    fn validator_rejects_catalog_volumes_inside_routes_and_anchors() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let baseline = selected.validated.plan;
+        let (rotation, _) =
+            detect_orientation(&baseline).expect("Forest should expose its exact orientation");
+        let route_surface = baseline
+            .features
+            .protected_routes
+            .get(ROAD_ROUTE)
+            .expect("Forest should publish its protected road")
+            .surfaces
+            .iter()
+            .copied()
+            .find(|surface| !is_woodland(surface.coord, rotation))
+            .expect("the Forest road should taper into the prairie");
+        let anchor_surface = baseline
+            .anchors
+            .get(PRAIRIE_OVERLOOK)
+            .copied()
+            .expect("Forest should publish its prairie review anchor");
+
+        for (kind, protected) in [("route", route_surface), ("anchor", anchor_surface)] {
+            let mut plan = baseline.clone();
+            let grass = plan
+                .features
+                .by_id
+                .values_mut()
+                .find(|feature| feature.kind == FeatureKind::TallGrass && feature.root != protected)
+                .expect("the Forest fixture should contain movable grass");
+            grass.root = protected;
+
+            let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
+                panic!("grass moved into a protected {kind} must fail Forest validation");
+            };
+            assert!(
+                issues.iter().any(|issue| {
+                    issue
+                        .detail
+                        .contains("enters a protected route, clearing, or anchor walker volume")
+                }),
+                "the catalog volume validator did not identify the protected {kind}: {issues:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validator_rejects_neighboring_structural_vegetation_overlap() {
+        let selected = generate(12, 0.4, &settings(), 91).expect("Forest should generate");
+        let mut plan = selected.validated.plan;
+        let mut grass = plan
+            .features
+            .by_id
+            .iter()
+            .filter(|(_, feature)| feature.kind == FeatureKind::TallGrass)
+            .map(|(id, feature)| (*id, feature.root));
+        let (moving_id, moving_root) = grass
+            .next()
+            .expect("the Forest fixture should contain first grass");
+        let (_, occupied_root) = grass
+            .find(|(_, root)| *root != moving_root)
+            .expect("the Forest fixture should contain distinct neighboring vegetation");
+        plan.features
+            .by_id
+            .get_mut(&moving_id)
+            .expect("the selected grass feature should remain present")
+            .root = occupied_root;
+
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
+            panic!("two authored props occupying one structural cell must fail");
+        };
+        assert!(issues.iter().any(|issue| {
+            issue
+                .detail
+                .contains("overlaps neighboring structural vegetation")
+        }));
     }
 
     #[test]
@@ -3648,7 +3942,7 @@ mod tests {
         }
         assert!(replaced > 0, "the valid fixture must start with Old-Growth");
 
-        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
             panic!("removing every exact Old-Growth instance must fail");
         };
         assert!(issues.iter().any(|issue| {
@@ -3679,7 +3973,7 @@ mod tests {
         let last = *road.centerline.last().expect("road has an end");
         road.centerline = vec![first, last];
 
-        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
             panic!("a disconnected straight-line replacement must fail");
         };
         assert!(issues.iter().any(|issue| {
@@ -3726,7 +4020,7 @@ mod tests {
             Vec::new(),
             "the common plan remains valid so the recipe must enforce its exact road endpoints"
         );
-        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
             panic!("a road on a different row from the actor landings must fail");
         };
         assert!(issues.iter().any(|issue| {
@@ -3752,7 +4046,7 @@ mod tests {
                 Vec::new(),
                 "the common plan deliberately permits recipe-specific anchor sets"
             );
-            let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+            let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
                 panic!("missing Forest review anchor {missing:?} must fail");
             };
             assert!(issues.iter().any(|issue| issue.detail.contains(missing)));
@@ -3767,7 +4061,7 @@ mod tests {
         misplaced_clearing
             .anchors
             .insert(FOREST_CLEARING.to_owned(), party);
-        let WorldValidation::Invalid(issues) = validate_forest(&misplaced_clearing) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&misplaced_clearing) else {
             panic!("a clearing anchor outside forest_clearing_0 must fail");
         };
         assert!(issues
@@ -3783,7 +4077,7 @@ mod tests {
         misplaced_overlook
             .anchors
             .insert(PRAIRIE_OVERLOOK.to_owned(), hostile);
-        let WorldValidation::Invalid(issues) = validate_forest(&misplaced_overlook) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&misplaced_overlook) else {
             panic!("a prairie overlook away from its exact review surface must fail");
         };
         assert!(issues
@@ -3800,7 +4094,7 @@ mod tests {
                 .expect("Forest should publish party_start"),
         );
         assert!(
-            matches!(validate_forest(&extended), WorldValidation::Valid(_)),
+            matches!(validate_plan(&extended), WorldValidation::Valid(_)),
             "recipe validation must preserve the open generated-anchor vocabulary"
         );
     }
@@ -3824,7 +4118,7 @@ mod tests {
             Vec::new(),
             "the common feature vocabulary permits recipe-owned clearing topology"
         );
-        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
             panic!("overlapping Forest clearings must fail");
         };
         assert!(issues
@@ -3877,7 +4171,7 @@ mod tests {
             Vec::new(),
             "the common plan remains valid so the recipe must enforce its road shape"
         );
-        let WorldValidation::Invalid(issues) = validate_forest(&plan) else {
+        let WorldValidation::Invalid(issues) = validate_plan(&plan) else {
             panic!("stray disconnected gravel must fail Forest validation");
         };
         assert!(issues.iter().any(|issue| {

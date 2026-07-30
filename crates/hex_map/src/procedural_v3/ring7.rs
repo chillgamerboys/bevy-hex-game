@@ -265,7 +265,7 @@ impl Ring7Recipe<'_> {
                             })
                             .collect::<Vec<_>>()
                     })?;
-            validate_fragment(patch, spec, &fragment).map_err(|issues| {
+            validate_fragment(patch, spec, &fragment, self.art_catalog).map_err(|issues| {
                 issues
                     .into_iter()
                     .map(|issue| {
@@ -451,6 +451,7 @@ fn validate_fragment(
     patch: PatchRecipeContext<'_>,
     spec: &PatchSpec,
     fragment: &GeneratedPatchPlan,
+    art_catalog: &RuntimeArtCatalog,
 ) -> Result<(), Vec<WorldValidationIssue>> {
     let common = fragment.validate_against(patch.layout());
     if !common.is_empty() {
@@ -467,7 +468,9 @@ fn validate_fragment(
 
     let validation = match &spec.recipe {
         V3RecipeSettings::Waterfall(_) => waterfall::validate_patch(patch, fragment).map(|_| ()),
-        V3RecipeSettings::Forest(_) => forest::validate_patch(patch, fragment).map(|_| ()),
+        V3RecipeSettings::Forest(_) => {
+            forest::validate_patch(patch, fragment, art_catalog).map(|_| ())
+        }
         V3RecipeSettings::Hills(settings) => {
             hills::validate_patch(patch, fragment, settings).map(|_| ())
         }
