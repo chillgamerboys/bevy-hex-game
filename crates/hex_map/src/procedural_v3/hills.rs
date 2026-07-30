@@ -22,7 +22,8 @@ use super::selection::{
 };
 use super::traversal::OrdinaryGraph;
 use super::vegetation::{
-    append_landform_vegetation, landform_vegetation_metrics, LandformVegetationSet,
+    append_landform_vegetation, landform_vegetation_metrics, validate_landform_vegetation,
+    LandformVegetationDomain, LandformVegetationSet,
 };
 use super::volume::{
     FillMaterialRole, LevelInterval, NonSolidFill, SolidMass, SolidMaterialRole, SurfaceAccess,
@@ -164,7 +165,12 @@ impl V3Recipe for HillsRecipe {
         _settings: &Self::Settings,
         plan: &GeneratedWorldPlan,
     ) -> WorldValidation<Self::Metrics> {
-        validate_hills(plan, &self.settings, self.environment)
+        validate_hills(
+            plan,
+            &self.settings,
+            self.environment,
+            self.vegetation.as_ref(),
+        )
     }
 
     fn repair(
@@ -1553,12 +1559,21 @@ fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColu
     }
 }
 
-pub(crate) fn validate_hills(
+fn validate_hills(
     plan: &GeneratedWorldPlan,
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
+    vegetation: Option<&LandformVegetationSet>,
 ) -> WorldValidation<HillsMetrics> {
-    validate_hills_inner(plan, settings, environment, true, false, &BTreeSet::new())
+    validate_hills_inner(
+        plan,
+        settings,
+        environment,
+        vegetation,
+        true,
+        false,
+        &BTreeSet::new(),
+    )
 }
 
 pub(crate) fn validate_patch(
@@ -1566,7 +1581,19 @@ pub(crate) fn validate_patch(
     fragment: &GeneratedPatchPlan,
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<HillsMetrics> {
+    let vegetation = if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) {
+        match LandformVegetationSet::resolve(catalog, environment, "Hills") {
+            Ok(vegetation) => Some(vegetation),
+            Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
+        }
+    } else {
+        None
+    };
     let frame =
         match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
             Ok(frame) => frame,
@@ -1590,6 +1617,7 @@ pub(crate) fn validate_patch(
             &plan,
             settings,
             environment,
+            vegetation.as_ref(),
             false,
             patch.layout().kind.is_composite(),
             &protected_approaches,
@@ -1604,6 +1632,7 @@ fn validate_hills_inner(
     plan: &GeneratedWorldPlan,
     settings: &V3HillsSettings,
     environment: V3EnvironmentSettings,
+    vegetation_objects: Option<&LandformVegetationSet>,
     validate_common: bool,
     composite_layout: bool,
     additional_vegetation_protected: &BTreeSet<HexCoord>,
@@ -1716,33 +1745,6 @@ fn validate_hills_inner(
         .any(|position| solid_material_at(&plan.volume, position) == Some(SolidMaterialRole::Snow));
     validate_frozen_ice_caps(plan, frozen, &protected_surfaces, &mut issues);
     validate_small_fall(plan, validate_common, &mut issues);
-    let vegetation = landform_vegetation_metrics(
-        if environment == V3EnvironmentSettings::Frozen {
-            "Frozen Hills"
-        } else {
-            "Hills"
-        },
-        environment,
-        plan.features.by_id.values(),
-    )
-    .map_err(recipe_issue);
-    let vegetation = match vegetation {
-        Ok(metrics) => metrics,
-        Err(issue) => {
-            issues.push(issue);
-            super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
-        }
-    };
-    if matches!(
-        environment,
-        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
-    ) && !(2..=5).contains(&vegetation.trees)
-    {
-        issues.push(recipe_issue(format!(
-            "Hills has {} authored trees; expected 2 through 5",
-            vegetation.trees
-        )));
-    }
     let mut vegetation_reserved = fill_coords.clone();
     for coord in protected_surfaces
         .iter()
@@ -1760,27 +1762,73 @@ fn validate_hills_inner(
     {
         vegetation_reserved.extend(coord.within_radius(2));
     }
-    let eligible_valley = plan
+    let ordinary_surfaces = plan
         .volume
         .surfaces
         .iter()
         .filter_map(|(position, metadata)| {
-            (metadata.access == SurfaceAccess::Ordinary
-                && position.level <= vegetation_valley_ceiling(settings, composite_layout)
-                && !vegetation_reserved.contains(&position.coord))
-            .then_some(position.coord)
+            (metadata.access == SurfaceAccess::Ordinary).then_some((position.coord, *position))
         })
-        .collect::<BTreeSet<_>>();
-    let eligible_dry = plan
-        .volume
-        .surfaces
-        .iter()
-        .filter_map(|(position, metadata)| {
-            (metadata.access == SurfaceAccess::Ordinary
-                && !vegetation_reserved.contains(&position.coord))
-            .then_some(position.coord)
+        .collect::<BTreeMap<_, _>>();
+    let eligible_valley = ordinary_surfaces
+        .values()
+        .filter(|position| {
+            position.level <= vegetation_valley_ceiling(settings, composite_layout)
+                && !vegetation_reserved.contains(&position.coord)
         })
+        .map(|position| position.coord)
         .collect::<BTreeSet<_>>();
+    let eligible_dry = ordinary_surfaces
+        .keys()
+        .filter(|coord| !vegetation_reserved.contains(coord))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let recipe_name = if environment == V3EnvironmentSettings::Frozen {
+        "Frozen Hills"
+    } else {
+        "Hills"
+    };
+    let vegetation = if let Some(objects) = vegetation_objects {
+        let no_nonvegetation_blockers = BTreeSet::new();
+        match validate_landform_vegetation(
+            recipe_name,
+            objects,
+            &[LandformVegetationDomain {
+                surfaces: &ordinary_surfaces,
+                reserved: &vegetation_reserved,
+            }],
+            &plan.features,
+            &no_nonvegetation_blockers,
+            &plan.blockers,
+        ) {
+            Ok(metrics) => metrics,
+            Err(errors) => {
+                issues.extend(errors.into_iter().map(recipe_issue));
+                super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+            }
+        }
+    } else {
+        if !plan.blockers.is_empty() {
+            issues.push(recipe_issue(
+                "Hills without authored vegetation has undeclared blocker authority",
+            ));
+        }
+        landform_vegetation_metrics(recipe_name, environment, plan.features.by_id.values())
+            .unwrap_or_else(|error| {
+                issues.push(recipe_issue(error));
+                super::vegetation::LandformVegetationMetrics { trees: 0, grass: 0 }
+            })
+    };
+    if matches!(
+        environment,
+        V3EnvironmentSettings::TemperateGrassland | V3EnvironmentSettings::Frozen
+    ) && !(2..=5).contains(&vegetation.trees)
+    {
+        issues.push(recipe_issue(format!(
+            "Hills has {} authored trees; expected 2 through 5",
+            vegetation.trees
+        )));
+    }
     if plan
         .features
         .by_id
@@ -1792,17 +1840,6 @@ fn validate_hills_inner(
     {
         issues.push(recipe_issue(
             "Hills authored vegetation leaves eligible dry terrain, the grass valley, or its protected clearances",
-        ));
-    }
-    let authored_blockers = plan
-        .features
-        .by_id
-        .values()
-        .flat_map(|feature| feature.blocker_footprint.iter().copied())
-        .collect::<BTreeSet<_>>();
-    if authored_blockers != plan.blockers {
-        issues.push(recipe_issue(
-            "Hills blockers must exactly equal its authored tree footprints",
         ));
     }
     let valley_grass_percent = percent(vegetation.grass, eligible_valley.len());
@@ -2664,6 +2701,84 @@ mod tests {
                 "three-level cliff transitions: {three_level}"
             );
         }
+    }
+
+    #[test]
+    fn validator_reprojects_complete_tree_volume_after_root_and_blocker_corruption() {
+        let mut revised = settings();
+        let V3LayoutSettings::Single(patch) = &mut revised.layout else {
+            unreachable!("test uses Single")
+        };
+        let V3RecipeSettings::Hills(hills) = &mut patch.recipe else {
+            unreachable!("test uses Hills")
+        };
+        hills.max_relief = 12;
+        let hills = hills.clone();
+        let catalog = super::super::vegetation::tests::runtime_art_catalog();
+        let selected = generate(12, 0.4, &revised, 1_592_598_566, catalog)
+            .expect("revised Hills should generate");
+        let mut corrupted = selected.validated.plan;
+        let target = TilePos::new(HexCoord::from_axial(-12, 3), 21);
+        assert_eq!(
+            corrupted
+                .volume
+                .surfaces
+                .get(&target)
+                .map(|metadata| metadata.access),
+            Some(SurfaceAccess::Ordinary),
+            "the corruption must retain a superficially valid ordinary root"
+        );
+        let feature_id = corrupted
+            .features
+            .by_id
+            .iter()
+            .find_map(|(id, feature)| (feature.kind == FeatureKind::Tree).then_some(*id))
+            .expect("Hills should contain one tree feature");
+        let old_blockers = corrupted
+            .features
+            .by_id
+            .get(&feature_id)
+            .expect("selected tree should remain present")
+            .blocker_footprint
+            .clone();
+        for blocker in old_blockers {
+            corrupted.blockers.remove(&blocker);
+        }
+        let feature = corrupted
+            .features
+            .by_id
+            .get_mut(&feature_id)
+            .expect("selected tree should remain mutable");
+        feature.root = target;
+        feature.object_id =
+            hex_assets::ObjectAssetId::new(super::super::vegetation::SMALL_BROADLEAF_ID)
+                .expect("tracked object id");
+        feature.rotation = hex_assets::HexObjectRotation::new(0).expect("zero rotation");
+        feature.blocker_footprint = BTreeSet::from([target]);
+        corrupted.blockers.insert(target);
+
+        let vegetation = LandformVegetationSet::resolve(
+            catalog,
+            V3EnvironmentSettings::TemperateGrassland,
+            "Hills",
+        )
+        .expect("accepted temperate vegetation");
+        let WorldValidation::Invalid(issues) = validate_hills(
+            &corrupted,
+            &hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            Some(&vegetation),
+        ) else {
+            panic!("a tree whose complete authored volume leaves valid support was accepted");
+        };
+        assert!(
+            issues.iter().any(|issue| {
+                issue.detail.contains("plant/small-broadleaf")
+                    && (issue.detail.contains("leaves or intersects")
+                        || issue.detail.contains("reserved column"))
+            }),
+            "missing independently projected authored-volume issue: {issues:#?}"
+        );
     }
 
     #[test]

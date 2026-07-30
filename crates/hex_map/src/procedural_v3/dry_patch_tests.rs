@@ -75,6 +75,7 @@ fn stitched_sky_rejects_corrupted_upper_bridge_structures_after_local_projection
         &baseline,
         &recipes.sky,
         V3EnvironmentSettings::TemperateGrassland,
+        catalog,
     ) {
         super::selection::WorldValidation::Valid(metrics) => metrics,
         super::selection::WorldValidation::Invalid(issues) => {
@@ -115,6 +116,7 @@ fn stitched_sky_rejects_corrupted_upper_bridge_structures_after_local_projection
             &missing,
             &recipes.sky,
             V3EnvironmentSettings::TemperateGrassland,
+            catalog,
         ),
         "requires exactly two upper bridge structures",
     );
@@ -140,6 +142,7 @@ fn stitched_sky_rejects_corrupted_upper_bridge_structures_after_local_projection
             &overlapping,
             &recipes.sky,
             V3EnvironmentSettings::TemperateGrassland,
+            catalog,
         ),
         "upper bridge structures overlap",
     );
@@ -165,6 +168,7 @@ fn stitched_sky_rejects_corrupted_upper_bridge_structures_after_local_projection
             &narrowed,
             &recipes.sky,
             V3EnvironmentSettings::TemperateGrassland,
+            catalog,
         ),
         "is not a two-wide span",
     );
