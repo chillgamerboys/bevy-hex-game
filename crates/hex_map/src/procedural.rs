@@ -94,6 +94,14 @@ pub enum ProceduralRecipeMetrics {
     Caves(CavesMetrics),
     /// Whole-world traversal, seam, and semantic-content measurements.
     Ring7(Ring7Metrics),
+    /// Volcanic massif, lava, bridge, and route measurements.
+    Volcano(VolcanoMetrics),
+    /// Dense woodland, clearings, trail, and blocker measurements.
+    DeepForest(DeepForestMetrics),
+    /// Open grassland, ground-cover, and route measurements.
+    Prairie(PrairieMetrics),
+    /// Whole-world topology, hydrology, and content measurements for Two Rings.
+    Ring19(Ring19Metrics),
 }
 
 /// Exact deterministic measurements of one selected V3 Hills plan.
@@ -317,6 +325,118 @@ pub struct Ring7Metrics {
     /// Exact directed liquid crossings installed across patch seams.
     pub directed_liquid_seams: u32,
     /// Unique horizontal coordinates occupied by liquid anywhere in the world.
+    pub liquid_cells: u32,
+    /// Authored surface-feature instances across the complete world.
+    pub feature_instances: u32,
+    /// Authored semantic structures across the complete world.
+    pub structures: u32,
+    /// Public gameplay-light sources across the complete world.
+    pub gameplay_lights: u32,
+    /// Exact interior domains across the complete world.
+    pub interiors: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Volcano plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VolcanoMetrics {
+    /// Ordinary walker surfaces in the connected dry network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations reachable by ordinary movement.
+    pub reachable_elevation_levels: u32,
+    /// Crater-rim height above the surrounding base.
+    pub summit_relief: Level,
+    /// Horizontal cells occupied by the primary massif.
+    pub massif_surfaces: u32,
+    /// Percentage of the patch occupied by the primary massif.
+    pub massif_coverage_percent: u32,
+    /// Exact lava topology nodes.
+    pub lava_nodes: u32,
+    /// Lava nodes authored as vertical falls.
+    pub fall_nodes: u32,
+    /// Tallest contiguous lava fall.
+    pub maximum_fall_height: Level,
+    /// Exact ordinary surfaces in the elevated bridge deck.
+    pub bridge_surfaces: u32,
+    /// Minimum vertical separation between bridge deck and lava.
+    pub bridge_clearance: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Deep Forest plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DeepForestMetrics {
+    /// Exact authored tree instances.
+    pub tree_roots: u32,
+    /// Exact ordinary surfaces occupied by blocking root footprints.
+    pub tree_blocker_surfaces: u32,
+    /// Percentage of eligible ordinary surfaces occupied by blocking roots.
+    pub blocker_coverage_percent: u32,
+    /// Exact protected irregular clearings.
+    pub clearing_count: u32,
+    /// Total surface cells inside authored clearings.
+    pub clearing_surfaces: u32,
+    /// Exact surfaces protected for the winding trail.
+    pub protected_trail_surfaces: u32,
+    /// Ordinary walker surfaces in the connected unblocked network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Prairie plan.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PrairieMetrics {
+    /// Exact nonblocking grass roots.
+    pub grass_roots: u32,
+    /// Surfaces eligible for grass after route and anchor exclusions.
+    pub eligible_grass_surfaces: u32,
+    /// Percentage of eligible surfaces carrying grass.
+    pub grass_coverage_percent: u32,
+    /// Ordinary walker surfaces in the connected network.
+    pub ordinary_surfaces: u32,
+    /// Distinct elevations in the ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+}
+
+/// Exact deterministic measurements of one selected V3 Ring19 world.
+#[derive(Reflect, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Ring19Metrics {
+    /// Exact horizontal columns in the radius-55 footprint.
+    pub world_columns: u32,
+    /// Exact semantic biome regions.
+    pub biome_regions: u32,
+    /// Exact reciprocal internal region seams.
+    pub reciprocal_seams: u32,
+    /// Exact outer boundary sides.
+    pub boundary_sides: u32,
+    /// Ordinary walker surfaces in the complete world.
+    pub ordinary_surfaces: u32,
+    /// Ordinary surfaces reachable from the required party anchor.
+    pub reachable_surfaces: u32,
+    /// Distinct elevations in the reachable ordinary network.
+    pub reachable_elevation_levels: u32,
+    /// Highest reachable ordinary surface minus the lowest.
+    pub relief: Level,
+    /// Shortest ordinary route between the required actor anchors.
+    pub critical_route_steps: u32,
+    /// Open patch-to-patch links in the validated macro graph.
+    pub macro_edges: u32,
+    /// Regions retaining a route after removal of any one open walker seam.
+    pub redundant_regions: u32,
+    /// Exact directed liquid crossings across internal seams.
+    pub directed_liquid_seams: u32,
+    /// Exact directed liquid exits through the world boundary.
+    pub boundary_liquid_outlets: u32,
+    /// Unique horizontal coordinates occupied by liquid.
     pub liquid_cells: u32,
     /// Authored surface-feature instances across the complete world.
     pub feature_instances: u32,
