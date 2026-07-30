@@ -1167,4 +1167,33 @@ mod tests {
         assert_eq!(first.metrics.primary_islands, 3);
         assert_eq!(first.metrics.satellites, 1);
     }
+
+    #[test]
+    fn frozen_sky_keeps_ground_ice_distinct_from_both_upper_regions() {
+        let mut settings = settings();
+        let V3LayoutSettings::Single(patch) = &mut settings.layout else {
+            unreachable!("test uses Single")
+        };
+        patch.environment = V3EnvironmentSettings::Frozen;
+        let selected =
+            generate(12, 0.4, &settings, 1_592_598_566).expect("valid Frozen Sky Islands");
+        assert_eq!(selected.metrics.primary_islands, 3);
+        assert_eq!(selected.metrics.satellites, 1);
+
+        let ice_caps = selected
+            .validated
+            .plan
+            .volume
+            .surfaces
+            .iter()
+            .filter(|(position, metadata)| {
+                metadata.access == SurfaceAccess::SpecialMovement(hills::FROZEN_ICE_REGION)
+                    && upper_surface_material(&selected.validated.plan, **position)
+                        == Some(SolidMaterialRole::Ice)
+            })
+            .count();
+        assert_eq!(ice_caps, 5);
+        assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(0));
+        assert_ne!(hills::FROZEN_ICE_REGION, SpecialMovementRegion(1));
+    }
 }

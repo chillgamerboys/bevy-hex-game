@@ -2232,8 +2232,8 @@ impl V3HillsSettings {
         if self.valley_level < 5 {
             return Err("V3 Hills valley_level must leave room for bedrock and strata".to_owned());
         }
-        if !(1..=8).contains(&self.max_relief) {
-            return Err("V3 Hills max_relief must be between 1 and 8".to_owned());
+        if !(1..=12).contains(&self.max_relief) {
+            return Err("V3 Hills max_relief must be between 1 and 12".to_owned());
         }
         let Some(highest_surface) = self.valley_level.checked_add(self.max_relief) else {
             return Err("V3 Hills level relationship overflows Level".to_owned());
