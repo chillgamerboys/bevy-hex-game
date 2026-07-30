@@ -1183,6 +1183,18 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
         .collect::<BTreeSet<_>>();
     assert_eq!(terminals.len(), 3);
+    assert!(terminal_coords_are_connected(&terminals));
+    assert_eq!(
+        terminals
+            .iter()
+            .map(|position| position.level)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([volcano_settings
+            .base_level
+            .saturating_add(3)
+            .saturating_sub(volcano_settings.bridge_clearance)
+            .max(3),])
+    );
     assert!(terminals.iter().all(|position| !context
         .mask()
         .contains(&HexSide::West.neighbor(position.coord))));
@@ -1212,8 +1224,8 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         .state = LiquidFlowState::Current;
     assert_validation_rejects_with(validate(&moving_terminal), "is not Still");
 
-    let mut internal_terminal = baseline.clone();
-    let flowing = internal_terminal
+    let mut extra_terminal = baseline.clone();
+    let flowing = extra_terminal
         .liquids
         .bodies
         .get(&body_id)
@@ -1222,7 +1234,7 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         .iter()
         .find_map(|(position, node)| node.downstream.is_some().then_some(*position))
         .expect("one flowing lava node");
-    let flowing_node = internal_terminal
+    let flowing_node = extra_terminal
         .liquids
         .bodies
         .get_mut(&body_id)
@@ -1232,7 +1244,89 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         .expect("flowing node");
     flowing_node.state = LiquidFlowState::Still;
     flowing_node.downstream = None;
-    assert_validation_rejects_with(validate(&internal_terminal), "expected exactly 3");
+    assert_validation_rejects_with(validate(&extra_terminal), "expected exactly 3");
+
+    let mut wrong_terminal_level = baseline.clone();
+    let shifted_terminal = TilePos::new(terminal.coord, terminal.level.saturating_add(1));
+    let terminal_node = wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .remove(&terminal)
+        .expect("terminal node");
+    let terminal_predecessor = wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .values_mut()
+        .find(|node| node.downstream == Some(terminal))
+        .expect("terminal predecessor");
+    terminal_predecessor.downstream = Some(shifted_terminal);
+    assert!(wrong_terminal_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("lava body")
+        .nodes
+        .insert(shifted_terminal, terminal_node)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&wrong_terminal_level),
+        "exact contiguous three-lane western outlet positions",
+    );
+
+    let mut relocated_terminals = baseline.clone();
+    for terminal in &terminals {
+        reverse_lava_terminal_tail(
+            relocated_terminals
+                .liquids
+                .bodies
+                .get_mut(&body_id)
+                .expect("lava body"),
+            *terminal,
+            1,
+        );
+    }
+    let relocated_positions = lava_terminals(
+        relocated_terminals
+            .liquids
+            .bodies
+            .get(&body_id)
+            .expect("lava body"),
+    );
+    assert_eq!(relocated_positions.len(), terminals.len());
+    assert_ne!(relocated_positions, terminals);
+    assert!(terminal_coords_are_connected(&relocated_positions));
+    assert_validation_rejects_with(
+        validate(&relocated_terminals),
+        "exact contiguous three-lane western outlet positions",
+    );
+
+    let noncontiguous_terminals = (2..=6)
+        .find_map(|steps| {
+            let mut corrupted = baseline.clone();
+            reverse_lava_terminal_tail(
+                corrupted
+                    .liquids
+                    .bodies
+                    .get_mut(&body_id)
+                    .expect("lava body"),
+                terminal,
+                steps,
+            );
+            let relocated =
+                lava_terminals(corrupted.liquids.bodies.get(&body_id).expect("lava body"));
+            (!terminal_coords_are_connected(&relocated)).then_some(corrupted)
+        })
+        .expect("moving one terminal inward must break the exact contiguous lane set");
+    assert_validation_rejects_with(
+        validate(&noncontiguous_terminals),
+        "exact contiguous three-lane western outlet positions",
+    );
 
     let bridge_id = baseline
         .structures
@@ -1258,7 +1352,7 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         .remove(&bridge_voxel);
     assert_validation_rejects_with(
         validate(&missing_bridge_membership),
-        "six rederived deck surfaces",
+        "exact oriented 2-by-3 deck authority",
     );
 
     let stair_id = baseline
@@ -1355,6 +1449,65 @@ fn western_composite_volcano_revalidates_its_exact_outlet_authority() {
         volcano::validate_patch(wet_context, &baseline, &volcano_settings),
         "separate from stitched liquid ports",
     );
+}
+
+fn lava_terminals(body: &super::liquid::LiquidBodyPlan) -> BTreeSet<TilePos> {
+    body.nodes
+        .iter()
+        .filter_map(|(position, node)| node.downstream.is_none().then_some(*position))
+        .collect()
+}
+
+fn reverse_lava_terminal_tail(
+    body: &mut super::liquid::LiquidBodyPlan,
+    terminal: TilePos,
+    steps: usize,
+) {
+    let mut reversed = vec![terminal];
+    for _ in 0..steps {
+        let current = *reversed.last().expect("terminal tail");
+        let predecessor = body
+            .nodes
+            .iter()
+            .find_map(|(position, node)| (node.downstream == Some(current)).then_some(*position))
+            .expect("lava terminal predecessor");
+        reversed.push(predecessor);
+    }
+    for pair in reversed.windows(2) {
+        let [from, to] = pair else {
+            unreachable!("windows are exact pairs");
+        };
+        let node = body.nodes.get_mut(from).expect("reversed lava node");
+        node.state = LiquidFlowState::Current;
+        node.downstream = Some(*to);
+    }
+    let relocated = *reversed.last().expect("relocated terminal");
+    let node = body
+        .nodes
+        .get_mut(&relocated)
+        .expect("relocated lava terminal");
+    node.state = LiquidFlowState::Still;
+    node.downstream = None;
+}
+
+fn terminal_coords_are_connected(terminals: &BTreeSet<TilePos>) -> bool {
+    let coords = terminals
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let Some(start) = coords.first().copied() else {
+        return false;
+    };
+    let mut reachable = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(coord) = frontier.pop_front() {
+        for neighbor in coord.neighbors() {
+            if coords.contains(&neighbor) && reachable.insert(neighbor) {
+                frontier.push_back(neighbor);
+            }
+        }
+    }
+    reachable.len() == coords.len()
 }
 
 fn assert_validation_rejects_with<T>(

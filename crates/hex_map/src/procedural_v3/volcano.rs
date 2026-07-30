@@ -619,26 +619,7 @@ fn plan_geometry(
         surfaces.insert(*coord, settings.base_level.saturating_add(rise));
     }
 
-    let east_delta = rotate(HexCoord::from_axial(1, 0), orientation);
-    let mut lanes = Vec::new();
-    for lane in LAVA_LANES {
-        let mut path = Vec::new();
-        let mut coord = rotate(HexCoord::from_axial(crater_x, lane), orientation);
-        while mask.contains(&coord) {
-            path.push(coord);
-            let next = shift(coord, east_delta);
-            if !mask.contains(&next) {
-                break;
-            }
-            coord = next;
-        }
-        if path.len() < 8 {
-            return Err(vec![recipe_issue(
-                "Volcano cannot route three lava lanes from crater to boundary",
-            )]);
-        }
-        lanes.push(path);
-    }
+    let lanes = lava_lane_paths(mask, scale, orientation)?;
 
     let low_lava_level = settings
         .base_level
@@ -796,6 +777,37 @@ fn plan_geometry(
         anchors,
         low_lava_level,
     })
+}
+
+fn lava_lane_paths(
+    mask: &BTreeSet<HexCoord>,
+    scale: u32,
+    orientation: u8,
+) -> Result<Vec<Vec<HexCoord>>, Vec<WorldValidationIssue>> {
+    let radius = i32::try_from(scale)
+        .map_err(|error| vec![recipe_issue(format!("Volcano radius exceeds i32: {error}"))])?;
+    let crater_x = -(radius / 2);
+    let flow_delta = rotate(HexCoord::from_axial(1, 0), orientation);
+    let mut lanes = Vec::with_capacity(LAVA_LANES.len());
+    for lane in LAVA_LANES {
+        let mut path = Vec::new();
+        let mut coord = rotate(HexCoord::from_axial(crater_x, lane), orientation);
+        while mask.contains(&coord) {
+            path.push(coord);
+            let next = shift(coord, flow_delta);
+            if !mask.contains(&next) {
+                break;
+            }
+            coord = next;
+        }
+        if path.len() < 8 {
+            return Err(vec![recipe_issue(
+                "Volcano cannot route three lava lanes from crater to boundary",
+            )]);
+        }
+        lanes.push(path);
+    }
+    Ok(lanes)
 }
 
 fn geometry_to_world(
@@ -1009,7 +1021,7 @@ pub(crate) fn validate_patch(
         })
         .collect::<Vec<_>>();
     issues.extend(validate_patch_walker_seams(&patch, &fragment.volume));
-    issues.extend(validate_composite_outlet(&patch, fragment));
+    issues.extend(validate_composite_outlet(&patch, fragment, settings));
     if !issues.is_empty() {
         return WorldValidation::Invalid(issues);
     }
@@ -1033,6 +1045,7 @@ pub(crate) fn validate_patch(
 fn validate_composite_outlet(
     patch: &PatchRecipeContext<'_>,
     fragment: &GeneratedPatchPlan,
+    settings: &V3VolcanoSettings,
 ) -> Vec<WorldValidationIssue> {
     if !patch.layout().kind.is_composite() {
         return Vec::new();
@@ -1062,11 +1075,30 @@ fn validate_composite_outlet(
             })
         })
         .collect::<Vec<_>>();
+    let expected_terminals = match expected_composite_terminal_positions(patch, settings) {
+        Ok(expected) => Some(expected),
+        Err(expected_issues) => {
+            issues.extend(expected_issues);
+            None
+        }
+    };
     if terminals.len() != LAVA_LANES.len() {
         issues.push(recipe_issue(format!(
             "composite Volcano has {} lava terminals; expected exactly {}",
             terminals.len(),
             LAVA_LANES.len()
+        )));
+    }
+    let terminal_positions = terminals
+        .iter()
+        .map(|(position, _)| *position)
+        .collect::<BTreeSet<_>>();
+    if expected_terminals
+        .as_ref()
+        .is_some_and(|expected| terminal_positions != *expected)
+    {
+        issues.push(recipe_issue(format!(
+            "composite Volcano terminals do not match the exact contiguous three-lane western outlet positions (actual {terminal_positions:?}, expected {expected_terminals:?})"
         )));
     }
     for (position, node) in &terminals {
@@ -1086,6 +1118,151 @@ fn validate_composite_outlet(
         }
     }
     issues
+}
+
+fn expected_composite_terminal_positions(
+    patch: &PatchRecipeContext<'_>,
+    settings: &V3VolcanoSettings,
+) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+        .map_err(|error| {
+            vec![recipe_issue(format!(
+                "Volcano outlet validation frame failed: {error}"
+            ))]
+        })?;
+    let local_mask = frame.local_mask(patch.mask()).map_err(|error| {
+        vec![recipe_issue(format!(
+            "Volcano outlet validation mask failed: {error}"
+        ))]
+    })?;
+    let terminals = lava_lane_paths(&local_mask, frame.scale(), 3)?
+        .into_iter()
+        .map(|path| {
+            path.last().copied().ok_or_else(|| {
+                vec![recipe_issue(
+                    "Volcano authoritative western lava lane is empty",
+                )]
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|coord| {
+            frame
+                .to_world(coord)
+                .map(|coord| {
+                    TilePos::new(
+                        coord,
+                        settings
+                            .base_level
+                            .saturating_add(3)
+                            .saturating_sub(settings.bridge_clearance)
+                            .max(3),
+                    )
+                })
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Volcano outlet validation conversion failed: {error}"
+                    ))]
+                })
+        })
+        .collect::<Result<BTreeSet<_>, _>>()?;
+    let terminal_coords = terminals
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let connected = terminal_coords.first().is_some_and(|start| {
+        let mut reachable = BTreeSet::from([*start]);
+        let mut frontier = vec![*start];
+        while let Some(coord) = frontier.pop() {
+            for neighbor in coord.neighbors() {
+                if terminal_coords.contains(&neighbor) && reachable.insert(neighbor) {
+                    frontier.push(neighbor);
+                }
+            }
+        }
+        reachable.len() == terminal_coords.len()
+    });
+    if terminals.len() != LAVA_LANES.len()
+        || !connected
+        || terminals.iter().any(|position| {
+            patch
+                .layout()
+                .footprint
+                .contains(&HexSide::West.neighbor(position.coord))
+        })
+    {
+        return Err(vec![recipe_issue(
+            "Volcano authoritative geometry does not yield three contiguous world-West terminal lanes",
+        )]);
+    }
+    Ok(terminals)
+}
+
+fn rederive_bridge_deck(
+    lava: &LiquidBodyPlan,
+    settings: &V3VolcanoSettings,
+) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let orientation = lava_flow_orientation(lava)?;
+    let low_lava_level = settings
+        .base_level
+        .saturating_add(3)
+        .saturating_sub(settings.bridge_clearance)
+        .max(3);
+    let bridge_level = low_lava_level.saturating_add(settings.bridge_clearance);
+    let mut expected = BTreeSet::new();
+    for x in BRIDGE_FLOW_ROWS {
+        for y in LAVA_LANES {
+            let coord = rotate(HexCoord::from_axial(x, y), orientation);
+            let matching = lava
+                .nodes
+                .keys()
+                .filter(|position| position.coord == coord)
+                .copied()
+                .collect::<Vec<_>>();
+            let [lava_position] = matching.as_slice() else {
+                return Err(vec![recipe_issue(format!(
+                    "Volcano exact bridge coordinate {coord:?} has {} lava nodes; expected one",
+                    matching.len()
+                ))]);
+            };
+            if lava_position.level != low_lava_level {
+                return Err(vec![recipe_issue(format!(
+                    "Volcano exact bridge coordinate {coord:?} has lava at level {}; expected {low_lava_level}",
+                    lava_position.level
+                ))]);
+            }
+            expected.insert(TilePos::new(coord, bridge_level));
+        }
+    }
+    Ok(expected)
+}
+
+fn lava_flow_orientation(lava: &LiquidBodyPlan) -> Result<u8, Vec<WorldValidationIssue>> {
+    let mut orientations = BTreeSet::new();
+    for (position, node) in &lava.nodes {
+        let Some(downstream) = node.downstream else {
+            continue;
+        };
+        let orientation = (0..6).find(|orientation| {
+            shift(
+                position.coord,
+                rotate(HexCoord::from_axial(1, 0), *orientation),
+            ) == downstream.coord
+        });
+        let Some(orientation) = orientation else {
+            return Err(vec![recipe_issue(format!(
+                "Volcano lava step {position:?} -> {downstream:?} leaves one exact horizontal flow direction"
+            ))]);
+        };
+        orientations.insert(orientation);
+    }
+    let orientations = orientations.into_iter().collect::<Vec<_>>();
+    let [orientation] = orientations.as_slice() else {
+        return Err(vec![recipe_issue(
+            "Volcano lava does not have one authoritative flow orientation",
+        )]);
+    };
+    Ok(*orientation)
 }
 
 pub(crate) fn validate_volcano(
@@ -1189,6 +1366,19 @@ fn validate_volcano_inner(
         )));
     }
 
+    let expected_low_lava = settings
+        .base_level
+        .saturating_add(3)
+        .saturating_sub(settings.bridge_clearance)
+        .max(3);
+    let expected_bridge_level = expected_low_lava.saturating_add(settings.bridge_clearance);
+    let expected_bridge = match rederive_bridge_deck(lava, settings) {
+        Ok(expected) => Some(expected),
+        Err(bridge_issues) => {
+            issues.extend(bridge_issues);
+            None
+        }
+    };
     let bridge_structures = plan
         .structures
         .by_id
@@ -1209,7 +1399,7 @@ fn validate_volcano_inner(
             BRIDGE_FLOW_ROWS.len().saturating_mul(LAVA_LANES.len())
         )));
     }
-    let expected_bridge = plan
+    let metal_over_lava = plan
         .volume
         .surfaces
         .iter()
@@ -1220,11 +1410,13 @@ fn validate_volcano_inner(
             .then_some(*surface)
         })
         .collect::<BTreeSet<_>>();
-    if bridge.voxels != expected_bridge {
-        issues.push(recipe_issue(format!(
-            "Volcano bridge structure does not exactly match its six rederived deck surfaces (structure {:?}, expected {expected_bridge:?})",
-            bridge.voxels
-        )));
+    if let Some(expected_bridge) = &expected_bridge {
+        if bridge.voxels != *expected_bridge || metal_over_lava != *expected_bridge {
+            issues.push(recipe_issue(format!(
+                "Volcano bridge does not match the exact oriented 2-by-3 deck authority (structure {:?}, metal {metal_over_lava:?}, expected {expected_bridge:?})",
+                bridge.voxels
+            )));
+        }
     }
     let bridge_clearances = bridge
         .voxels
@@ -1270,12 +1462,6 @@ fn validate_volcano_inner(
         .difference(&centerline_surfaces)
         .copied()
         .collect::<BTreeSet<_>>();
-    let expected_low_lava = settings
-        .base_level
-        .saturating_add(3)
-        .saturating_sub(settings.bridge_clearance)
-        .max(3);
-    let expected_bridge_level = expected_low_lava.saturating_add(settings.bridge_clearance);
     let expected_stair_steps = expected_bridge_level.saturating_sub(settings.base_level);
     let expected_centerline = usize::try_from(
         expected_stair_steps
@@ -1605,6 +1791,139 @@ mod tests {
             1
         );
         assert_eq!(plan.features.protected_routes.len(), 1);
+    }
+
+    #[test]
+    fn validator_rejects_moved_and_reshaped_metal_bridge_decks() {
+        let settings = settings(12);
+        let selected = generate(12, 0.4, &settings, HERO_SEED).expect("valid Volcano");
+        let V3LayoutSettings::Single(spec) = &settings.layout else {
+            unreachable!("fixture is Single");
+        };
+        let V3RecipeSettings::Volcano(volcano) = &spec.recipe else {
+            unreachable!("fixture is Volcano");
+        };
+        let lava = selected
+            .validated
+            .plan
+            .liquids
+            .bodies
+            .values()
+            .find(|body| body.material == FillMaterialRole::Lava)
+            .expect("lava body");
+        let orientation = lava_flow_orientation(lava).expect("one flow orientation");
+        let shapes: [(&str, &[(i32, i32)]); 4] = [
+            (
+                "moved 2-by-3",
+                &[(2, -1), (2, 0), (2, 1), (3, -1), (3, 0), (3, 1)],
+            ),
+            (
+                "reshaped",
+                &[(2, -1), (2, 0), (2, 1), (3, 0), (3, 1), (4, 1)],
+            ),
+            ("T", &[(2, -1), (2, 0), (2, 1), (3, 0), (4, 0), (5, 0)]),
+            ("1-by-6", &[(2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)]),
+        ];
+        for (name, local_shape) in shapes {
+            let coords = local_shape
+                .iter()
+                .map(|(x, y)| rotate(HexCoord::from_axial(*x, *y), orientation))
+                .collect::<BTreeSet<_>>();
+            let mut corrupted = selected.validated.plan.clone();
+            replace_bridge_deck(&mut corrupted, &coords);
+            let WorldValidation::Invalid(issues) = validate_volcano(&corrupted, volcano) else {
+                panic!("{name} bridge corruption unexpectedly validated");
+            };
+            assert!(
+                issues.iter().any(|issue| issue
+                    .detail
+                    .contains("exact oriented 2-by-3 deck authority")),
+                "{name} corruption did not reach the exact bridge authority: {issues:?}"
+            );
+        }
+    }
+
+    fn replace_bridge_deck(plan: &mut GeneratedWorldPlan, coords: &BTreeSet<HexCoord>) {
+        let bridge_id = plan
+            .structures
+            .by_id
+            .iter()
+            .find_map(|(id, structure)| (structure.kind == StructureKind::Bridge).then_some(*id))
+            .expect("bridge structure");
+        let old_deck = plan
+            .structures
+            .by_id
+            .get(&bridge_id)
+            .expect("bridge structure")
+            .voxels
+            .clone();
+        let bridge_level = old_deck
+            .first()
+            .map(|position| position.level)
+            .expect("bridge deck level");
+        for surface in &old_deck {
+            let metal = plan
+                .volume
+                .columns
+                .get_mut(&surface.coord)
+                .expect("old bridge column")
+                .elements
+                .iter_mut()
+                .find_map(|element| match element {
+                    VolumeElement::Solid(solid)
+                        if solid.material == SolidMaterialRole::Metal
+                            && solid.levels.bottom <= surface.level
+                            && surface.level < solid.levels.top =>
+                    {
+                        Some(solid)
+                    }
+                    _ => None,
+                })
+                .expect("old bridge metal");
+            metal.material = SolidMaterialRole::Basalt;
+        }
+        let biome = plan
+            .biome_regions
+            .values()
+            .next()
+            .copied()
+            .expect("Volcano biome");
+        let new_deck = coords
+            .iter()
+            .copied()
+            .map(|coord| {
+                let position = TilePos::new(coord, bridge_level);
+                assert!(!plan.volume.surfaces.contains_key(&position));
+                plan.volume
+                    .columns
+                    .get_mut(&coord)
+                    .expect("replacement bridge lava column")
+                    .elements
+                    .push(VolumeElement::Solid(SolidMass {
+                        levels: LevelInterval::new(bridge_level, bridge_level.saturating_add(1)),
+                        material: SolidMaterialRole::Metal,
+                        cutaway_for: None,
+                    }));
+                assert!(plan
+                    .volume
+                    .surfaces
+                    .insert(
+                        position,
+                        SurfaceMetadata {
+                            access: SurfaceAccess::Ordinary,
+                            interior: None,
+                        },
+                    )
+                    .is_none());
+                assert!(plan.biome_regions.insert(position, biome).is_none());
+                position
+            })
+            .collect::<BTreeSet<_>>();
+        plan.structures
+            .by_id
+            .get_mut(&bridge_id)
+            .expect("bridge structure")
+            .voxels = new_deck;
     }
 
     #[test]
