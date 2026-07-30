@@ -7,6 +7,25 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 24 — feat(map): biome expansion and Two Rings (2026-07-30)
+
+- **PR**: #144 — `wave/alberto-biome-expansion`
+- **Outcome**: draft — documentation reconciled; combined automation and mandatory
+  human visual/play approval remain pending
+- **Lenses triggered**: D1, D3, D4
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| D1, D3 | `docs/systems/world-generation-v3.md` | SHIP-BLOCKER | fixed — the V3 contract now includes the additive Volcano, Deep Forest, Prairie, and Ring19 paths instead of claiming only two layouts and seven recipe variants |
+| D1, D3 | `docs/systems/creator-and-combat-lab.md`, `docs/planning/status.md`, `docs/planning/roadmap.md`, `README.md` | SHIP-BLOCKER | fixed — the published catalog is sixteen distinct maps and includes Deep Forest, Prairie, and Two Rings |
+| D3, D4 | `docs/systems/world-generation-v3.md`, `docs/planning/boundary.md` | SHIP-BLOCKER | fixed — Ring19 records its fixed 19-region roster, radius-55/9,241-column footprint, 42 seams, 30 boundary sides, exact water graph, separate lava outlet, physical seam redundancy, and layout-specific namespace without turning the composite into a streaming contract |
+
+**Notes**: Ring19 keeps Single/Ring7 numeric identities unchanged and uses a
+5-bit patch / 27-bit local namespace for slots 16–18. Two Rings is selectable beside
+Seven Regions, but the draft wave is not release-ready until its combined gate,
+captures, scripted walks, and human visual/play review pass. This entry does not
+record those pending checks as green.
+
 ## Wave 23 — chore(release): v0.4.0 (2026-07-30)
 
 - **PR**: #141 — `chore/release-v0.4.0`

@@ -28,6 +28,41 @@ pub(crate) const MAX_SEAM_PORT_WIDTH: u32 = 4;
 pub const V3_RING19_REGION_COUNT: usize = 19;
 const RING19_RADIUS: u32 = 55;
 const RING19_RECIPE_VALIDATION_RADIUS: u32 = 40;
+const TWO_RINGS_REGIONS: [(V3EnvironmentSettings, &str, u8); V3_RING19_REGION_COUNT] = [
+    (V3EnvironmentSettings::TemperateGrassland, "Hills", 0),
+    (V3EnvironmentSettings::Frozen, "Hills", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Forest", 4),
+    (V3EnvironmentSettings::TemperateGrassland, "Prairie", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Hills", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Waterfall", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Waterfall", 5),
+    (V3EnvironmentSettings::TemperateGrassland, "SkyIslands", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "DeepForest", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "DeepForest", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Forest", 4),
+    (V3EnvironmentSettings::TemperateGrassland, "Prairie", 0),
+    (V3EnvironmentSettings::TemperateGrassland, "Waterfall", 5),
+    (V3EnvironmentSettings::TemperateGrassland, "Fort", 0),
+    (V3EnvironmentSettings::Rocky, "Caves", 0),
+    (V3EnvironmentSettings::Volcanic, "Volcano", 3),
+    (V3EnvironmentSettings::Frozen, "Mountains", 0),
+    (V3EnvironmentSettings::Frozen, "Mountains", 0),
+    (V3EnvironmentSettings::Frozen, "Mountains", 0),
+];
+const TWO_RINGS_INTERNAL_HYDROLOGY: [(u8, u8, u32, Level); 8] = [
+    (16, 5, 3, 29),
+    (5, 0, 3, 16),
+    (17, 6, 3, 29),
+    (6, 0, 3, 16),
+    (18, 1, 3, 16),
+    (1, 0, 3, 16),
+    (0, 4, 3, 16),
+    (4, 12, 3, 16),
+];
+const TWO_RINGS_BOUNDARY_HYDROLOGY: [(u8, Ring19BoundarySide, u32, Level); 2] = [
+    (12, Ring19BoundarySide::SouthEast, 3, 3),
+    (15, Ring19BoundarySide::West, 3, 14),
+];
 const CUBE_NEIGHBORS: [(i32, i32, i32); 6] = [
     (1, -1, 0),
     (1, 0, -1),
@@ -208,8 +243,8 @@ pub enum TerrainSettings {
 ///
 /// V1 remains a frozen compatibility contract. V2 gives each topology an honest
 /// recipe payload instead of allowing landform/tactical combinations which cannot
-/// be generated. V3 composes one or seven independently specified patches behind a
-/// separate wire contract.
+/// be generated. V3 composes one focused patch or a fixed seven- or nineteen-patch
+/// world behind a separate wire contract.
 #[expect(
     clippy::large_enum_variant,
     reason = "Bevy 0.19 reflection cannot derive these designer settings through Box"
@@ -734,7 +769,7 @@ pub enum V3OverlaySettings {
 pub enum PatchMaskSettings {
     /// The complete world footprint. Valid only for `Single`.
     WholeWorld,
-    /// A deterministic region resolved by the `Ring7` world planner.
+    /// A deterministic region resolved by a composite world planner.
     GeneratedRegion,
     /// An authored connected set of cube coordinates.
     Explicit(Vec<CubeCoord>),
@@ -1593,6 +1628,10 @@ impl V3Ring7Settings {
 
 impl V3Ring19Settings {
     fn validate(&self) -> Result<(), String> {
+        self.validate_two_rings_contract()
+    }
+
+    fn validate_structure(&self) -> Result<(), String> {
         if self.regions.len() != V3_RING19_REGION_COUNT {
             return Err(format!(
                 "V3 Ring19 requires exactly {V3_RING19_REGION_COUNT} regions, got {}",
@@ -1727,6 +1766,126 @@ impl V3Ring19Settings {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn validate_two_rings_contract(&self) -> Result<(), String> {
+        self.validate_structure()?;
+
+        for (index, (actual, (environment, recipe, rotation_turns))) in
+            self.regions.iter().zip(TWO_RINGS_REGIONS).enumerate()
+        {
+            if actual.environment != environment
+                || ring19_recipe_name(&actual.recipe) != recipe
+                || actual.rotation_turns != rotation_turns
+            {
+                return Err(format!(
+                    "V3 Ring19 Two Rings slot {index} requires {environment:?} {recipe} at \
+                     rotation {rotation_turns}, got {:?} {} at rotation {}",
+                    actual.environment,
+                    ring19_recipe_name(&actual.recipe),
+                    actual.rotation_turns
+                ));
+            }
+            if index == 14 {
+                match actual.overlays.as_slice() {
+                    [overlay]
+                        if overlay.name == "cave_crystals"
+                            && overlay.kind == V3OverlaySettings::Lighting => {}
+                    _ => {
+                        return Err(
+                            "V3 Ring19 Two Rings Caves slot requires exactly the cave_crystals \
+                             Lighting overlay"
+                                .to_owned(),
+                        );
+                    }
+                }
+            } else if !actual.overlays.is_empty() {
+                return Err(format!(
+                    "V3 Ring19 Two Rings slot {index} does not admit overlays"
+                ));
+            }
+        }
+
+        if self.seam_defaults.elevation
+            != (EdgeElevationSettings {
+                preferred: 17,
+                min: 16,
+                max: 18,
+            })
+            || self.seam_defaults.walker != (WalkerPortSettings { count: 2, width: 2 })
+            || !matches!(self.seam_defaults.liquid, EdgeLiquidSettings::Dry)
+            || self.seam_defaults.approach_depth != 3
+        {
+            return Err(
+                "V3 Ring19 Two Rings seam defaults require elevation 16..=18 (preferred 17), \
+                 two width-two walker ports, Dry liquid, and approach depth three"
+                    .to_owned(),
+            );
+        }
+
+        let actual_internal = self
+            .liquid_connections
+            .iter()
+            .map(|connection| {
+                (
+                    connection.source_region,
+                    connection.sink_region,
+                    connection.width,
+                    connection.level,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let expected_internal = TWO_RINGS_INTERNAL_HYDROLOGY
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if self.liquid_connections.len() != TWO_RINGS_INTERNAL_HYDROLOGY.len()
+            || actual_internal != expected_internal
+        {
+            return Err(format!(
+                "V3 Ring19 Two Rings internal hydrology must be exactly \
+                 {expected_internal:?}, got {actual_internal:?}"
+            ));
+        }
+
+        let actual_boundary = self
+            .boundary_outlets
+            .iter()
+            .map(|outlet| {
+                (
+                    outlet.source_region,
+                    outlet.side,
+                    outlet.width,
+                    outlet.level,
+                )
+            })
+            .collect::<BTreeSet<_>>();
+        let expected_boundary = TWO_RINGS_BOUNDARY_HYDROLOGY
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if self.boundary_outlets.len() != TWO_RINGS_BOUNDARY_HYDROLOGY.len()
+            || actual_boundary != expected_boundary
+        {
+            return Err(format!(
+                "V3 Ring19 Two Rings boundary hydrology must be exactly \
+                 {expected_boundary:?}, got {actual_boundary:?}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+const fn ring19_recipe_name(recipe: &V3RecipeSettings) -> &'static str {
+    match recipe {
+        V3RecipeSettings::Hills(_) => "Hills",
+        V3RecipeSettings::SkyIslands(_) => "SkyIslands",
+        V3RecipeSettings::Mountains(_) => "Mountains",
+        V3RecipeSettings::Caves(_) => "Caves",
+        V3RecipeSettings::Waterfall(_) => "Waterfall",
+        V3RecipeSettings::Forest(_) => "Forest",
+        V3RecipeSettings::Fort(_) => "Fort",
+        V3RecipeSettings::Volcano(_) => "Volcano",
+        V3RecipeSettings::DeepForest(_) => "DeepForest",
+        V3RecipeSettings::Prairie(_) => "Prairie",
     }
 }
 
@@ -1867,7 +2026,7 @@ fn ring19_side_is_world_boundary(region: u8, side: Ring19BoundarySide) -> bool {
     cube_tuple_radius((x + dx, y + dy, z + dz)) > 2
 }
 
-fn ring19_region_coord(region: u8) -> Option<(i32, i32, i32)> {
+pub(crate) fn ring19_region_coord(region: u8) -> Option<(i32, i32, i32)> {
     const COORDS: [(i32, i32, i32); V3_RING19_REGION_COUNT] = [
         (0, 0, 0),
         (1, -1, 0),
@@ -2986,6 +3145,8 @@ mod tests {
     const WORLD_RON: &str = include_str!("../../../assets/config/world.ron");
     const V3_FORT_RON: &str = include_str!("../../../assets/config/worlds/procedural-fort.ron");
     const V3_RING7_RON: &str = include_str!("../../../assets/config/worlds/procedural-ring7.ron");
+    const V3_RING19_RON: &str =
+        include_str!("../../../assets/config/worlds/procedural-two-rings.ron");
     const V1_HILLS_RON: &str = r#"
 (
     grid_radius: 12,
@@ -3189,6 +3350,38 @@ mod tests {
         }
     }
 
+    fn shipped_ring19_settings() -> MapSettings {
+        ron::from_str(V3_RING19_RON).expect("the shipped Two Rings settings should parse")
+    }
+
+    fn ring19_mut(settings: &mut MapSettings) -> &mut V3Ring19Settings {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(ring),
+        })) = &mut settings.terrain
+        else {
+            panic!("the shipped Two Rings settings should use V3 Ring19");
+        };
+        ring
+    }
+
+    fn assert_two_rings_contract_rejected(settings: &MapSettings, expected: &str) {
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(ring),
+        })) = &settings.terrain
+        else {
+            panic!("the mutated Two Rings settings should retain V3 Ring19");
+        };
+        ring.validate_structure()
+            .expect("the mutation should remain structurally valid");
+        let error = settings
+            .validate()
+            .expect_err("the fixed Two Rings contract should reject the mutation");
+        assert!(
+            error.contains(expected),
+            "expected {expected:?} in validation error {error:?}"
+        );
+    }
+
     fn valid_explicit_ring7() -> V3Ring7Settings {
         const RADIUS: u32 = 33;
         const OFFSET: i32 = 22;
@@ -3320,6 +3513,7 @@ mod tests {
             ),
             (V3_FORT_RON, 3),
             (V3_RING7_RON, 3),
+            (V3_RING19_RON, 3),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
@@ -3432,22 +3626,15 @@ mod tests {
     }
 
     #[test]
-    fn v3_ring19_shell_enforces_slots_rotation_and_liquid_topology() {
-        let settings = ProceduralV3Settings {
-            layout: V3LayoutSettings::Ring19(valid_ring19()),
-        };
-        settings
-            .validate(RING19_RADIUS)
+    fn v3_ring19_structure_enforces_slots_rotation_and_liquid_topology() {
+        valid_ring19()
+            .validate_structure()
             .expect("the structural Ring19 contract should validate");
-        assert!(
-            settings.validate(RING19_RADIUS - 1).is_err(),
-            "Ring19 keeps its exact radius"
-        );
 
         let mut wrong_count = valid_ring19();
         wrong_count.regions.pop();
         assert!(
-            wrong_count.validate().is_err(),
+            wrong_count.validate_structure().is_err(),
             "Ring19 requires exactly nineteen semantic slots"
         );
 
@@ -3458,7 +3645,7 @@ mod tests {
             .expect("the fixture has nineteen regions")
             .rotation_turns = 6;
         assert!(
-            wrong_rotation.validate().is_err(),
+            wrong_rotation.validate_structure().is_err(),
             "region-local rotation is bounded to six exact turns"
         );
 
@@ -3469,7 +3656,7 @@ mod tests {
             .expect("the fixture has one liquid connection")
             .sink_region = 13;
         assert!(
-            non_adjacent.validate().is_err(),
+            non_adjacent.validate_structure().is_err(),
             "liquid handoffs must use an actual internal seam"
         );
 
@@ -3480,7 +3667,7 @@ mod tests {
             .expect("the fixture has one boundary outlet")
             .side = Ring19BoundarySide::SouthWest;
         assert!(
-            interior_outlet.validate().is_err(),
+            interior_outlet.validate_structure().is_err(),
             "a boundary outlet must name an exact outer side"
         );
 
@@ -3492,7 +3679,7 @@ mod tests {
                 .expect("the fixture has one liquid connection")
                 .level = invalid_level;
             assert!(
-                invalid_connection_level.validate().is_err(),
+                invalid_connection_level.validate_structure().is_err(),
                 "internal liquid level {invalid_level} must fail closed"
             );
 
@@ -3503,7 +3690,7 @@ mod tests {
                 .expect("the fixture has one boundary outlet")
                 .level = invalid_level;
             assert!(
-                invalid_outlet_level.validate().is_err(),
+                invalid_outlet_level.validate_structure().is_err(),
                 "boundary liquid level {invalid_level} must fail closed"
             );
         }
@@ -3516,14 +3703,14 @@ mod tests {
         outlet.source_region = 9;
         outlet.side = Ring19BoundarySide::East;
         assert!(
-            dangling.validate().is_err(),
+            dangling.validate_structure().is_err(),
             "every internal liquid component must terminate at a boundary outlet"
         );
 
         let mut boundary_only = valid_ring19();
         boundary_only.liquid_connections.clear();
         boundary_only
-            .validate()
+            .validate_structure()
             .expect("an independent boundary-only Volcano outlet is valid");
 
         let mut cycle = valid_ring19();
@@ -3548,9 +3735,82 @@ mod tests {
             },
         ];
         assert!(
-            cycle.validate().is_err(),
+            cycle.validate_structure().is_err(),
             "the directed liquid graph must remain acyclic"
         );
+    }
+
+    #[test]
+    fn shipped_two_rings_contract_rejects_structurally_valid_drift() {
+        let shipped = shipped_ring19_settings();
+        shipped
+            .validate()
+            .expect("the shipped Two Rings settings should validate");
+        assert_eq!(shipped.grid_radius, RING19_RADIUS);
+
+        let mut wrong_radius = shipped_ring19_settings();
+        wrong_radius.grid_radius = RING19_RADIUS - 1;
+        assert_two_rings_contract_rejected(&wrong_radius, "radius exactly 55");
+
+        let mut wrong_recipe = shipped_ring19_settings();
+        let forest_recipe = {
+            let ring = ring19_mut(&mut wrong_recipe);
+            ring.regions
+                .get(2)
+                .expect("the shipped fixture has slot 2")
+                .recipe
+                .clone()
+        };
+        ring19_mut(&mut wrong_recipe)
+            .regions
+            .get_mut(3)
+            .expect("the shipped fixture has slot 3")
+            .recipe = forest_recipe;
+        assert_two_rings_contract_rejected(&wrong_recipe, "slot 3");
+
+        let mut wrong_rotation = shipped_ring19_settings();
+        ring19_mut(&mut wrong_rotation)
+            .regions
+            .get_mut(2)
+            .expect("the shipped fixture has slot 2")
+            .rotation_turns = 3;
+        assert_two_rings_contract_rejected(&wrong_rotation, "slot 2");
+
+        let mut missing_cave_overlay = shipped_ring19_settings();
+        ring19_mut(&mut missing_cave_overlay)
+            .regions
+            .get_mut(14)
+            .expect("the shipped fixture has the Caves slot")
+            .overlays
+            .clear();
+        assert_two_rings_contract_rejected(&missing_cave_overlay, "Caves slot");
+
+        let mut wrong_seam = shipped_ring19_settings();
+        ring19_mut(&mut wrong_seam)
+            .seam_defaults
+            .elevation
+            .preferred = 16;
+        assert_two_rings_contract_rejected(&wrong_seam, "seam defaults");
+
+        let mut narrow_connection = shipped_ring19_settings();
+        ring19_mut(&mut narrow_connection)
+            .liquid_connections
+            .get_mut(0)
+            .expect("the shipped fixture has an internal liquid connection")
+            .width = 2;
+        assert_two_rings_contract_rejected(&narrow_connection, "internal hydrology");
+
+        let mut missing_connection = shipped_ring19_settings();
+        ring19_mut(&mut missing_connection)
+            .liquid_connections
+            .remove(0);
+        assert_two_rings_contract_rejected(&missing_connection, "internal hydrology");
+
+        let mut missing_lava_outlet = shipped_ring19_settings();
+        ring19_mut(&mut missing_lava_outlet)
+            .boundary_outlets
+            .retain(|outlet| outlet.source_region != 15);
+        assert_two_rings_contract_rejected(&missing_lava_outlet, "boundary hydrology");
     }
 
     #[test]

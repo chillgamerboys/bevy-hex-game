@@ -29,6 +29,7 @@ use world::WorldValidationIssue;
 
 mod caves;
 pub(crate) use caves::{CaveCrystalAssetError, CaveCrystalObjectSet};
+mod composite_patch;
 mod composition;
 mod deep_forest;
 #[cfg(test)]
@@ -55,7 +56,9 @@ pub(crate) use materialize::MapPresentationProjection;
 mod mountains;
 mod patch;
 mod prairie;
+mod ring19;
 mod ring7;
+mod routing;
 mod seam;
 mod seed;
 #[cfg_attr(
@@ -202,7 +205,7 @@ pub(crate) fn ensure_recipe_available(
             &patch.recipe,
         ))),
         V3LayoutSettings::Ring7(_) => Ok(()),
-        V3LayoutSettings::Ring19(_) => Err(V3GenerationError::RecipeUnavailable("Ring19")),
+        V3LayoutSettings::Ring19(_) => Ok(()),
     }
 }
 
@@ -448,8 +451,44 @@ pub(crate) fn build(
                 |metrics| ProceduralRecipeMetrics::Ring7(ring7_recipe_metrics(metrics)),
             )
         }
-        V3LayoutSettings::Ring19(_) => Err(V3GenerationError::RecipeUnavailable("Ring19")),
+        V3LayoutSettings::Ring19(_) => {
+            let art_catalog = art_catalog.ok_or_else(|| {
+                V3GenerationError::RecipeContract(
+                    "Ring19 requires the accepted runtime art catalog".to_owned(),
+                )
+            })?;
+            finish_build(
+                ring19::generate(grid_radius, level_height, settings, seed, art_catalog)?,
+                grid_radius,
+                level_height,
+                settings,
+                seed,
+                palette,
+                is_solid,
+                started,
+                ring19_report_metrics,
+                |metrics| ProceduralRecipeMetrics::Ring19(ring19_recipe_metrics(metrics)),
+            )
+        }
     }
+}
+
+fn ring19_report_metrics(metrics: &ring19::Ring19Metrics) -> TacticalMetrics {
+    TacticalMetrics {
+        relief: metrics.report.relief,
+        barrier_cells: metrics.report.liquid_cells,
+        critical_route_steps: metrics.report.critical_route_steps,
+        reachable_surfaces: metrics.report.reachable_surfaces,
+        reachable_elevation_levels: metrics.report.reachable_elevation_levels,
+        environment_signature_percent: 0,
+        ..Default::default()
+    }
+}
+
+const fn ring19_recipe_metrics(
+    metrics: &ring19::Ring19Metrics,
+) -> crate::procedural::Ring19Metrics {
+    metrics.report
 }
 
 fn ring7_report_metrics(metrics: &ring7::Ring7Metrics) -> TacticalMetrics {

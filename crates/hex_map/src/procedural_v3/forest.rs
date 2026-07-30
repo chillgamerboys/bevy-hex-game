@@ -14,7 +14,6 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
-use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
@@ -372,8 +371,9 @@ fn construct_patch_with_objects(
             "Forest requires the TemperateGrassland environment",
         )]);
     }
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
-        .map_err(|error| vec![recipe_issue(error)])?;
+    let frame = patch
+        .local_frame()
+        .map_err(|error| vec![recipe_issue(error.to_string())])?;
     let stitched_patch = patch.layout().kind.is_composite();
     let mask = frame
         .local_mask(patch.mask())
@@ -393,9 +393,13 @@ fn construct_patch_with_objects(
         grass: streams.stage("forest.grass"),
         grass_rotations: streams.stage("forest.grass-rotations"),
     });
-    let rotation = streams.map_or(0, |streams| {
-        u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
-    });
+    let rotation = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        0
+    } else {
+        streams.map_or(0, |streams| {
+            u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
+        })
+    };
     let route_offset = match streams {
         Some(streams) => streams
             .routes
@@ -504,9 +508,27 @@ fn construct_patch_with_objects(
             FeatureClearing { surfaces },
         );
     }
+    let ring19_reserved_road = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        Some(plan_road(
+            rotation,
+            route_offset,
+            party_coord,
+            &ordinary_coords,
+            &ordinary_surface_by_coord,
+            &BTreeSet::new(),
+            &clearings,
+            streams.map(|streams| streams.routes),
+            stitched_patch,
+        )?)
+    } else {
+        None
+    };
 
     let mut tree_exclusions = clearing_coords.iter().copied().collect::<BTreeSet<_>>();
     tree_exclusions.extend(local_protected.iter().copied());
+    if let Some(road) = &ring19_reserved_road {
+        tree_exclusions.extend(road.surfaces.iter().copied());
+    }
     if stitched_patch {
         tree_exclusions.extend(
             (0..=PRAIRIE_TAPER_DEPTH)
@@ -531,8 +553,22 @@ fn construct_patch_with_objects(
         &ordinary_surface_by_coord,
         streams.map(|streams| streams.trees),
     );
-    let tree_target = woodland.len().saturating_mul(TREE_DENSITY_PERCENT) / 100;
-    let minimum_tree_count = woodland.len().saturating_mul(20).div_ceil(100);
+    let eligible_tree_woodland = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        woodland
+            .difference(&tree_exclusions)
+            .copied()
+            .collect::<BTreeSet<_>>()
+    } else {
+        woodland.clone()
+    };
+    let tree_target = eligible_tree_woodland
+        .len()
+        .saturating_mul(TREE_DENSITY_PERCENT)
+        / 100;
+    let minimum_tree_count = eligible_tree_woodland
+        .len()
+        .saturating_mul(20)
+        .div_ceil(100);
     let (tree_features, tree_visual_cells) = plan_tree_features(
         tree_root_candidates,
         tree_target,
@@ -553,17 +589,21 @@ fn construct_patch_with_objects(
                 .map(|_| position.coord)
         })
         .collect();
-    let road = plan_road(
-        rotation,
-        route_offset,
-        party_coord,
-        &ordinary_coords,
-        &ordinary_surface_by_coord,
-        &tree_route_obstructions,
-        &clearings,
-        streams.map(|streams| streams.routes),
-        stitched_patch,
-    )?;
+    let road = if let Some(road) = ring19_reserved_road {
+        road
+    } else {
+        plan_road(
+            rotation,
+            route_offset,
+            party_coord,
+            &ordinary_coords,
+            &ordinary_surface_by_coord,
+            &tree_route_obstructions,
+            &clearings,
+            streams.map(|streams| streams.routes),
+            stitched_patch,
+        )?
+    };
 
     let mut columns = BTreeMap::new();
     for (coord, position) in &surface_by_coord {
@@ -732,17 +772,30 @@ pub(crate) fn validate_patch(
         .map(|edge| edge.contract.approach_depth)
         .max()
         .unwrap_or_default();
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "Forest validation frame failed: {error}"
-                ))]);
-            }
-        };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Forest validation frame failed: {error}"
+            ))]);
+        }
+    };
+    let protected_approaches = match patch
+        .protected_approaches()
+        .into_iter()
+        .map(|coord| frame.to_local(coord).map_err(recipe_issue))
+        .collect::<Result<BTreeSet<_>, _>>()
+    {
+        Ok(protected) => protected,
+        Err(issue) => return WorldValidation::Invalid(vec![issue]),
+    };
     match frame.canonical_local_world(plan) {
-        Ok(plan) => validate_forest_inner(&plan, Some(approach_depth)),
+        Ok(plan) => validate_forest_inner(
+            &plan,
+            Some(approach_depth),
+            &protected_approaches,
+            patch.layout().kind == super::layout::LayoutKind::Ring19,
+        ),
         Err(error) => WorldValidation::Invalid(vec![recipe_issue(format!(
             "Forest validation projection failed: {error}"
         ))]),
@@ -750,12 +803,14 @@ pub(crate) fn validate_patch(
 }
 
 pub(crate) fn validate_forest(plan: &GeneratedWorldPlan) -> WorldValidation<ForestMetrics> {
-    validate_forest_inner(plan, None)
+    validate_forest_inner(plan, None, &BTreeSet::new(), false)
 }
 
 fn validate_forest_inner(
     plan: &GeneratedWorldPlan,
     stitched_approach_depth: Option<u32>,
+    stitched_protected_approaches: &BTreeSet<HexCoord>,
+    ring19_patch: bool,
 ) -> WorldValidation<ForestMetrics> {
     let stitched_patch = stitched_approach_depth.is_some();
     let mut issues = Vec::new();
@@ -923,13 +978,50 @@ fn validate_forest_inner(
             "Forest tree roots violate deterministic Poisson spacing",
         ));
     }
-    if tree_roots.len().saturating_mul(100) < woodland.len().saturating_mul(20)
-        || tree_roots.len().saturating_mul(100) > woodland.len().saturating_mul(24)
+    let mut tree_density_exclusions = plan
+        .features
+        .clearings
+        .values()
+        .flat_map(|clearing| clearing.surfaces.iter().map(|surface| surface.coord))
+        .chain(stitched_protected_approaches.iter().copied())
+        .collect::<BTreeSet<_>>();
+    if stitched_patch {
+        tree_density_exclusions.extend(
+            (0..=PRAIRIE_TAPER_DEPTH)
+                .map(|x| rotate(HexCoord::from_axial(x, route_offset), rotation)),
+        );
+    }
+    if ring19_patch {
+        tree_density_exclusions.extend(road.surfaces.iter().map(|surface| surface.coord));
+    }
+    for anchor in [PARTY_START, HOSTILE_START]
+        .into_iter()
+        .filter_map(|name| plan.anchors.get(name))
+    {
+        tree_density_exclusions.extend(
+            anchor
+                .coord
+                .within_radius(1)
+                .into_iter()
+                .filter(|coord| plan.layout.footprint.contains(coord)),
+        );
+    }
+    let eligible_tree_woodland = if ring19_patch {
+        woodland
+            .iter()
+            .filter(|surface| !tree_density_exclusions.contains(&surface.coord))
+            .copied()
+            .collect::<BTreeSet<_>>()
+    } else {
+        woodland.clone()
+    };
+    if tree_roots.len().saturating_mul(100) < eligible_tree_woodland.len().saturating_mul(20)
+        || tree_roots.len().saturating_mul(100) > eligible_tree_woodland.len().saturating_mul(24)
     {
         issues.push(recipe_issue(format!(
-            "Forest tree density is outside 20-24% of woodland: {}/{}",
+            "Forest tree density is outside 20-24% of eligible woodland: {}/{}",
             tree_roots.len(),
-            woodland.len()
+            eligible_tree_woodland.len()
         )));
     }
     if grass_roots.len().saturating_mul(100) < prairie.len().saturating_mul(65)

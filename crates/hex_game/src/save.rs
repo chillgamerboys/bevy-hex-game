@@ -33,6 +33,62 @@ const SHIPPED_RESUME_INPUTS: &[(&str, &str)] = &[
         include_str!("../../../assets/config/scenarios.ron"),
     ),
     (
+        "art/object_catalog.ron",
+        include_str!("../../../assets/art/object_catalog.ron"),
+    ),
+    (
+        "art/objects/plant/old-growth.ron",
+        include_str!("../../../assets/art/objects/plant/old-growth.ron"),
+    ),
+    (
+        "art/objects/plant/small-broadleaf.ron",
+        include_str!("../../../assets/art/objects/plant/small-broadleaf.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-old-growth.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-old-growth.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-small-broadleaf.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-small-broadleaf.ron"),
+    ),
+    (
+        "art/objects/plant/snowy-tall-narrow.ron",
+        include_str!("../../../assets/art/objects/plant/snowy-tall-narrow.ron"),
+    ),
+    (
+        "art/objects/plant/tall-narrow.ron",
+        include_str!("../../../assets/art/objects/plant/tall-narrow.ron"),
+    ),
+    (
+        "art/objects/prop/cave-lichen.ron",
+        include_str!("../../../assets/art/objects/prop/cave-lichen.ron"),
+    ),
+    (
+        "art/objects/prop/cave-moss.ron",
+        include_str!("../../../assets/art/objects/prop/cave-moss.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-branched.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-branched.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-low-cluster.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-low-cluster.ron"),
+    ),
+    (
+        "art/objects/prop/crystal-spire.ron",
+        include_str!("../../../assets/art/objects/prop/crystal-spire.ron"),
+    ),
+    (
+        "art/objects/prop/grass-tuft.ron",
+        include_str!("../../../assets/art/objects/prop/grass-tuft.ron"),
+    ),
+    (
+        "art/objects/prop/snowy-grass-tuft.ron",
+        include_str!("../../../assets/art/objects/prop/snowy-grass-tuft.ron"),
+    ),
+    (
         "config/formations.ron",
         include_str!("../../../assets/config/formations.ron"),
     ),
@@ -119,6 +175,10 @@ const SHIPPED_RESUME_INPUTS: &[(&str, &str)] = &[
     (
         "config/worlds/procedural-ring7.ron",
         include_str!("../../../assets/config/worlds/procedural-ring7.ron"),
+    ),
+    (
+        "config/worlds/procedural-two-rings.ron",
+        include_str!("../../../assets/config/worlds/procedural-two-rings.ron"),
     ),
     (
         "config/worlds/procedural-sky-islands.ron",
@@ -735,6 +795,22 @@ mod tests {
                     scenario.name
                 );
             }
+        }
+
+        let objects: hex_assets::ObjectCatalogFile =
+            ron::from_str(include_str!("../../../assets/art/object_catalog.ron"))
+                .expect("the shipped object catalog should parse");
+        assert!(
+            included.contains("art/object_catalog.ron"),
+            "the object manifest itself must invalidate resumable worlds"
+        );
+        for id in objects.ids() {
+            let path = format!("art/objects/{id}.ron");
+            assert!(
+                included.contains(path.as_str()),
+                "object blueprint {path:?} can change generated blockers and must invalidate \
+                 resumable worlds"
+            );
         }
     }
 }

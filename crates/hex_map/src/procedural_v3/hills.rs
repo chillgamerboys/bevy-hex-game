@@ -335,7 +335,8 @@ pub(crate) fn construct_patch_with_streams(
     streams: Option<HillsStreams<'_>>,
     vegetation: Option<&LandformVegetationSet>,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    let frame = LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
+    let frame = patch
+        .local_frame()
         .map_err(|error| vec![recipe_issue(format!("Hills local frame failed: {error}"))])?;
     let local_mask = frame.local_mask(patch.mask()).map_err(|error| {
         vec![recipe_issue(format!(
@@ -370,6 +371,20 @@ pub(crate) fn construct_patch_with_streams(
         .difference(&liquid_approaches)
         .copied()
         .collect::<BTreeSet<_>>();
+    let crossing_route_exclusions = if patch.layout().kind == super::layout::LayoutKind::Ring19 {
+        patch
+            .shared_edges()
+            .flat_map(|edge| edge.boundary_pairs().into_iter().map(|(local, _)| local))
+            .map(|coord| frame.to_local(coord))
+            .collect::<Result<BTreeSet<_>, _>>()
+            .map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Hills shared-boundary conversion failed: {error}"
+                ))]
+            })?
+    } else {
+        BTreeSet::new()
+    };
     let lateral_offsets: &[i32] = if patch.layout().kind == super::layout::LayoutKind::Single {
         &[0]
     } else {
@@ -378,9 +393,9 @@ pub(crate) fn construct_patch_with_streams(
     let river_level = settings.valley_level.saturating_sub(1);
     let single_patch_fall =
         (patch.layout().kind == super::layout::LayoutKind::Single).then_some(SMALL_FALL_HEIGHT);
-    let confluence = liquid_ports.iter().filter(|port| !port.source).count() > 1;
-    let (orientation, river_offset, local_crossings, local_river_nodes) = if confluence {
-        confluence_hydrology(
+    let flow_shape = HillsFlowShape::resolve(&liquid_ports);
+    let (orientation, river_offset, local_crossings, local_river_nodes) = match flow_shape {
+        HillsFlowShape::Confluence => confluence_hydrology(
             &local_mask,
             frame.scale(),
             requested_orientation,
@@ -388,9 +403,17 @@ pub(crate) fn construct_patch_with_streams(
             river_level,
             &liquid_ports,
             &river_exclusions,
-        )?
-    } else {
-        (0..6)
+        )?,
+        HillsFlowShape::Bent => bent_hydrology(
+            &local_mask,
+            frame.scale(),
+            requested_orientation,
+            lateral_offsets,
+            river_level,
+            &liquid_ports,
+            &river_exclusions,
+        )?,
+        HillsFlowShape::Straight => (0..6)
             .flat_map(|turn| {
                 lateral_offsets.iter().copied().map(move |river_offset| {
                     (requested_orientation.saturating_add(turn) % 6, river_offset)
@@ -401,6 +424,9 @@ pub(crate) fn construct_patch_with_streams(
                     .ok()
                     .filter(|crossings| {
                         crossings.river.is_disjoint(&river_exclusions)
+                            && crossings
+                                .protected
+                                .is_disjoint(&crossing_route_exclusions)
                             && liquid_ports
                                 .iter()
                                 .all(|port| port.approach.is_subset(&crossings.river))
@@ -430,11 +456,11 @@ pub(crate) fn construct_patch_with_streams(
                 vec![recipe_issue(
                     "Hills cannot align its liquid barrier with the resolved liquid and walker seams",
                 )]
-            })?
+            })?,
     };
     let mut excluded = protected.clone();
     excluded.extend(local_crossings.protected.iter().copied());
-    if confluence {
+    if flow_shape.is_branched() {
         excluded.extend(local_crossings.river.iter().copied());
     }
     let centres = select_hill_centres(
@@ -485,7 +511,14 @@ pub(crate) fn construct_patch_with_streams(
         );
     }
     let local_ice_caps = if environment == V3EnvironmentSettings::Frozen {
-        frozen_ice_caps(&local_crossings, orientation, river_offset)?
+        frozen_ice_caps(
+            &local_crossings,
+            orientation,
+            river_offset,
+            &local_mask,
+            &local_river_nodes,
+            flow_shape,
+        )?
     } else {
         BTreeSet::new()
     };
@@ -543,7 +576,7 @@ pub(crate) fn construct_patch_with_streams(
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
     let seam_shape = shape_walker_seams(&patch, &mut surface_by_coord)?;
-    if confluence && settings.max_relief >= 10 {
+    if flow_shape.is_branched() && settings.max_relief >= 10 {
         let authored_surface_by_coord = authored_surface_by_local
             .into_iter()
             .map(|(coord, level)| {
@@ -868,6 +901,33 @@ struct LocalLiquidPort {
     maximum_level: Level,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HillsFlowShape {
+    Straight,
+    Bent,
+    Confluence,
+}
+
+impl HillsFlowShape {
+    fn resolve(ports: &[LocalLiquidPort]) -> Self {
+        let inlets = ports.iter().filter(|port| !port.source).collect::<Vec<_>>();
+        let outlets = ports.iter().filter(|port| port.source).collect::<Vec<_>>();
+        if inlets.len() > 1 {
+            return Self::Confluence;
+        }
+        if let ([inlet], [outlet]) = (inlets.as_slice(), outlets.as_slice()) {
+            if inlet.side != outlet.side.opposite() {
+                return Self::Bent;
+            }
+        }
+        Self::Straight
+    }
+
+    const fn is_branched(self) -> bool {
+        matches!(self, Self::Bent | Self::Confluence)
+    }
+}
+
 impl LocalLiquidPort {
     fn accepts_nodes(&self, nodes: &BTreeMap<TilePos, LiquidNode>, level: Level) -> bool {
         self.boundary.iter().all(|coord| {
@@ -993,7 +1053,53 @@ fn frozen_ice_caps(
     crossings: &CrossingGeometry,
     orientation: u8,
     river_offset: i32,
+    mask: &BTreeSet<HexCoord>,
+    nodes: &BTreeMap<TilePos, LiquidNode>,
+    flow_shape: HillsFlowShape,
 ) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
+    if flow_shape == HillsFlowShape::Bent {
+        let mut candidates = crossings
+            .river
+            .iter()
+            .copied()
+            .filter(|coord| {
+                !crossings.protected.contains(coord)
+                    && coord.neighbors().iter().any(|neighbor| {
+                        mask.contains(neighbor) && !crossings.river.contains(neighbor)
+                    })
+                    && nodes
+                        .keys()
+                        .copied()
+                        .filter(|position| position.coord == *coord)
+                        .any(|position| {
+                            liquid_path_reaches(nodes, position, |downstream| {
+                                crossings.bridge_deck.contains(&downstream.coord)
+                            })
+                        })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        let mut selected = BTreeSet::new();
+        for candidate in candidates {
+            if selected
+                .iter()
+                .all(|ice: &HexCoord| ice.distance(candidate) > 1)
+            {
+                selected.insert(candidate);
+                if selected.len() == FROZEN_ICE_CAP_TARGET {
+                    break;
+                }
+            }
+        }
+        if selected.len() < 3 {
+            return Err(vec![recipe_issue(format!(
+                "Frozen Hills bent river can place only {} isolated upstream shoreline ice caps",
+                selected.len()
+            ))]);
+        }
+        return Ok(selected);
+    }
+
     let minimum_y = crossings
         .river
         .iter()
@@ -1130,6 +1236,253 @@ fn crossing_geometry(
         protected,
         fall_target_y: (ford_y / 2).max(1),
     })
+}
+
+fn bent_hydrology(
+    mask: &BTreeSet<HexCoord>,
+    grid_radius: u32,
+    requested_orientation: u8,
+    lateral_offsets: &[i32],
+    river_level: Level,
+    ports: &[LocalLiquidPort],
+    river_exclusions: &BTreeSet<HexCoord>,
+) -> Result<(u8, i32, CrossingGeometry, BTreeMap<TilePos, LiquidNode>), Vec<WorldValidationIssue>> {
+    let inlets = ports.iter().filter(|port| !port.source).collect::<Vec<_>>();
+    let outlets = ports.iter().filter(|port| port.source).collect::<Vec<_>>();
+    let ([inlet], [outlet]) = (inlets.as_slice(), outlets.as_slice()) else {
+        return Err(vec![recipe_issue(format!(
+            "Hills bent river requires exactly one inlet and one outlet; found {} inlets and {} outlets",
+            inlets.len(),
+            outlets.len()
+        ))]);
+    };
+    if ports
+        .iter()
+        .any(|port| river_level < port.minimum_level || river_level > port.maximum_level)
+    {
+        return Err(vec![recipe_issue(format!(
+            "Hills bent-river level {river_level} leaves a resolved liquid elevation band"
+        ))]);
+    }
+    if !inlet.approach.is_disjoint(&outlet.approach) {
+        return Err(vec![recipe_issue(
+            "Hills bent-river inlet and outlet approaches overlap",
+        )]);
+    }
+
+    let mut rejection_counts = BTreeMap::<String, usize>::new();
+    for turn in 0..6 {
+        let orientation = requested_orientation.saturating_add(turn) % 6;
+        for river_offset in lateral_offsets {
+            match bent_hydrology_candidate(
+                mask,
+                grid_radius,
+                orientation,
+                *river_offset,
+                river_level,
+                inlet,
+                outlet,
+                ports,
+                river_exclusions,
+            ) {
+                Ok((crossings, nodes)) => {
+                    return Ok((orientation, *river_offset, crossings, nodes));
+                }
+                Err(issues) => {
+                    let detail = issues.first().map_or_else(
+                        || "unknown rejection".to_owned(),
+                        |issue| issue.detail.clone(),
+                    );
+                    *rejection_counts.entry(detail).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    Err(vec![recipe_issue(format!(
+        "Hills cannot turn its resolved inlet into one deterministic outlet: {rejection_counts:?}"
+    ))])
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one bent-river candidate is checked against every resolved geometric authority"
+)]
+fn bent_hydrology_candidate(
+    mask: &BTreeSet<HexCoord>,
+    grid_radius: u32,
+    orientation: u8,
+    river_offset: i32,
+    river_level: Level,
+    inlet: &LocalLiquidPort,
+    outlet: &LocalLiquidPort,
+    ports: &[LocalLiquidPort],
+    river_exclusions: &BTreeSet<HexCoord>,
+) -> Result<(CrossingGeometry, BTreeMap<TilePos, LiquidNode>), Vec<WorldValidationIssue>> {
+    let mut crossings = crossing_geometry(mask, orientation, grid_radius, river_offset)?;
+    if !outlet.approach.is_subset(&crossings.river) || !inlet.approach.is_subset(mask) {
+        return Err(vec![recipe_issue(
+            "Hills bent-river candidate leaves its resolved routing domain",
+        )]);
+    }
+    let main_trunk = crossings.river.clone();
+    let crossing_rows = crossings
+        .bridge_deck
+        .union(&crossings.ford_deck)
+        .filter(|coord| main_trunk.contains(coord))
+        .map(|coord| unrotate(*coord, orientation).y())
+        .collect::<BTreeSet<_>>();
+    let Some(first_crossing_row) = crossing_rows.first().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills bent river does not intersect its bridge",
+        )]);
+    };
+    let Some(last_crossing_row) = crossing_rows.last().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills bent river does not intersect its alternate crossing",
+        )]);
+    };
+    let safe_trunk = main_trunk
+        .iter()
+        .copied()
+        .filter(|coord| {
+            let row = unrotate(*coord, orientation).y();
+            row < first_crossing_row || row > last_crossing_row
+        })
+        .collect::<BTreeSet<_>>();
+    let crossing_exclusions = crossings
+        .protected
+        .difference(&main_trunk)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let forbidden = river_exclusions
+        .union(&crossing_exclusions)
+        .copied()
+        .chain(outlet.approach.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let path = shortest_branch_path(mask, &inlet.approach, &safe_trunk, &forbidden)?;
+    let Some(attachment) = path.last().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills bent-river branch has no trunk attachment",
+        )]);
+    };
+    let attachment_row = unrotate(attachment, orientation).y();
+    let outlet_rows = outlet
+        .approach
+        .iter()
+        .map(|coord| unrotate(*coord, orientation).y())
+        .collect::<BTreeSet<_>>();
+    let Some(outlet_first_row) = outlet_rows.first().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills bent-river outlet has no approach row",
+        )]);
+    };
+    let Some(outlet_last_row) = outlet_rows.last().copied() else {
+        return Err(vec![recipe_issue(
+            "Hills bent-river outlet has no terminal row",
+        )]);
+    };
+    let retained_first = attachment_row.min(outlet_first_row);
+    let retained_last = attachment_row.max(outlet_last_row);
+    let retained_trunk = main_trunk
+        .iter()
+        .copied()
+        .filter(|coord| {
+            let row = unrotate(*coord, orientation).y();
+            retained_first <= row && row <= retained_last
+        })
+        .collect::<BTreeSet<_>>();
+    if crossings
+        .bridge_deck
+        .intersection(&retained_trunk)
+        .next()
+        .is_none()
+        || crossings
+            .ford_deck
+            .intersection(&retained_trunk)
+            .next()
+            .is_none()
+    {
+        return Err(vec![recipe_issue(
+            "Hills bent river does not retain both reviewed crossings",
+        )]);
+    }
+
+    let new_spine = path
+        .iter()
+        .copied()
+        .filter(|coord| !retained_trunk.contains(coord) && !inlet.approach.contains(coord))
+        .collect::<BTreeSet<_>>();
+    let mut river = retained_trunk;
+    river.extend(inlet.approach.iter().copied());
+    river.extend(path);
+    let mask_boundary = mask
+        .iter()
+        .copied()
+        .filter(|coord| {
+            coord
+                .neighbors()
+                .iter()
+                .any(|neighbor| !mask.contains(neighbor))
+        })
+        .collect::<BTreeSet<_>>();
+    let reservation_overlap = river
+        .intersection(river_exclusions)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !reservation_overlap.is_disjoint(&mask_boundary) {
+        return Err(vec![recipe_issue(format!(
+            "Hills bent river orientation {orientation} offset {river_offset} overlaps non-liquid \
+             seam boundary reservations {:?}",
+            reservation_overlap.iter().take(8).collect::<Vec<_>>()
+        ))]);
+    }
+    let declared_boundary = inlet
+        .boundary
+        .union(&outlet.boundary)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let wet_boundary = river
+        .intersection(&mask_boundary)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if wet_boundary != declared_boundary {
+        return Err(vec![recipe_issue(
+            "Hills bent river does not end exactly at its two declared seam ports",
+        )]);
+    }
+
+    let auxiliary_candidates = new_spine
+        .union(&reservation_overlap)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let mut auxiliary = necessary_auxiliary_fords(
+        mask,
+        &river,
+        &crossings.bridge_deck,
+        &crossings.ford_deck,
+        &auxiliary_candidates,
+    )?;
+    auxiliary.extend(reservation_overlap);
+    crossings.river = river;
+    crossings.auxiliary_fords = auxiliary.clone();
+    crossings.protected.extend(auxiliary);
+    let nodes = confluence_river_nodes(&crossings.river, river_level, &outlet.boundary)?;
+    if !ports
+        .iter()
+        .all(|port| port.accepts_nodes(&nodes, river_level))
+        || inlet.boundary.iter().any(|coord| {
+            nodes
+                .get(&TilePos::new(*coord, river_level))
+                .is_none_or(|node| node.downstream.is_none())
+        })
+        || !all_nodes_drain_to_sources(&nodes, &outlet.boundary)
+    {
+        return Err(vec![recipe_issue(
+            "Hills bent river does not drain every inlet lane to its outlet",
+        )]);
+    }
+    Ok((crossings, nodes))
 }
 
 fn confluence_hydrology(
@@ -1544,6 +1897,99 @@ fn rederive_confluence_auxiliary_crossings(
         )]),
         alternatives => Err(vec![recipe_issue(format!(
             "Hills auxiliary tributary crossing authority is ambiguous across {} exact geometries",
+            alternatives.len()
+        ))]),
+    }
+}
+
+fn rederive_bent_auxiliary_crossings(
+    plan: &GeneratedWorldPlan,
+    ports: &[LocalLiquidPort],
+    protected_approaches: &BTreeSet<HexCoord>,
+    scale: u32,
+    valley_level: Level,
+) -> Result<BTreeSet<TilePos>, Vec<WorldValidationIssue>> {
+    let inlets = ports.iter().filter(|port| !port.source).collect::<Vec<_>>();
+    let outlets = ports.iter().filter(|port| port.source).collect::<Vec<_>>();
+    let ([inlet], [outlet]) = (inlets.as_slice(), outlets.as_slice()) else {
+        return Err(vec![recipe_issue(
+            "Hills cannot rederive a bent river without exactly one inlet and one outlet",
+        )]);
+    };
+    let Some(bridge) = plan.features.protected_routes.get(BRIDGE_ROUTE) else {
+        return Err(vec![recipe_issue(
+            "Hills cannot rederive its bent river without the bridge route",
+        )]);
+    };
+    let Some(alternate) = plan.features.protected_routes.get(FORD_ROUTE) else {
+        return Err(vec![recipe_issue(
+            "Hills cannot rederive its bent river without the alternate route",
+        )]);
+    };
+    let bridge_coords = bridge
+        .surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    let alternate_coords = alternate
+        .surfaces
+        .iter()
+        .map(|surface| surface.coord)
+        .collect::<BTreeSet<_>>();
+    let fill_coords = plan
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let liquid_approaches = ports
+        .iter()
+        .flat_map(|port| port.approach.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let river_exclusions = protected_approaches
+        .difference(&liquid_approaches)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let river_level = valley_level.saturating_sub(1);
+    let mut matches = BTreeSet::new();
+
+    for orientation in 0..6 {
+        for river_offset in [0, -4, 4, -6, 6, -2, 2] {
+            let Ok((geometry, _nodes)) = bent_hydrology_candidate(
+                &plan.layout.footprint,
+                scale,
+                orientation,
+                river_offset,
+                river_level,
+                inlet,
+                outlet,
+                ports,
+                &river_exclusions,
+            ) else {
+                continue;
+            };
+            if geometry.bridge_route == bridge_coords
+                && geometry.ford_route == alternate_coords
+                && geometry.river == fill_coords
+            {
+                matches.insert(
+                    geometry
+                        .auxiliary_fords
+                        .into_iter()
+                        .map(|coord| TilePos::new(coord, valley_level))
+                        .collect::<BTreeSet<_>>(),
+                );
+            }
+        }
+    }
+
+    match matches.into_iter().collect::<Vec<_>>().as_slice() {
+        [expected] => Ok(expected.clone()),
+        [] => Err(vec![recipe_issue(
+            "Hills cannot rederive its exact bent river and auxiliary crossings",
+        )]),
+        alternatives => Err(vec![recipe_issue(format!(
+            "Hills bent-river authority is ambiguous across {} exact geometries",
             alternatives.len()
         ))]),
     }
@@ -2141,16 +2587,8 @@ fn confluence_bank_authority_is_valid(
         }
         component_count = component_count.saturating_add(1);
     }
-    let authorities = [bridge, alternate]
-        .into_iter()
-        .chain(
-            crossings
-                .auxiliary_fords
-                .iter()
-                .copied()
-                .map(|coord| BTreeSet::from([coord])),
-        )
-        .collect::<Vec<_>>();
+    let mut authorities = vec![bridge, alternate];
+    authorities.extend(connected_coord_groups(&crossings.auxiliary_fords));
     let mut edges = Vec::with_capacity(authorities.len());
     for authority in authorities {
         let banks = authority
@@ -2382,7 +2820,7 @@ fn validate_hills(
         vegetation,
         true,
         false,
-        false,
+        HillsFlowShape::Straight,
         None,
         &BTreeSet::new(),
     )
@@ -2391,7 +2829,7 @@ fn validate_hills(
 fn validate_resolved_liquid_ports(
     patch: &PatchRecipeContext<'_>,
     fragment: &GeneratedPatchPlan,
-    confluence: bool,
+    flow_shape: HillsFlowShape,
 ) -> Vec<WorldValidationIssue> {
     let nodes = fragment
         .liquids
@@ -2488,9 +2926,20 @@ fn validate_resolved_liquid_ports(
         .difference(&liquid_approaches)
         .copied()
         .collect::<BTreeSet<_>>();
-    if !walker_only.is_disjoint(&wet_coords) {
+    let wet_walker_approaches = walker_only
+        .intersection(&wet_coords)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if !wet_walker_approaches.is_empty()
+        && (flow_shape != HillsFlowShape::Bent
+            || wet_walker_approaches.iter().any(|coord| {
+                !fragment.volume.surfaces.iter().any(|(position, metadata)| {
+                    position.coord == *coord && metadata.access == SurfaceAccess::Ordinary
+                })
+            }))
+    {
         issues.push(recipe_issue(
-            "Hills confluence overlaps a non-liquid protected seam approach",
+            "Hills liquid overlaps a non-liquid seam approach without an exact ordinary causeway",
         ));
     }
     let undeclared_boundary = shared_boundary
@@ -2504,13 +2953,18 @@ fn validate_resolved_liquid_ports(
         )));
     }
 
-    if confluence {
-        if inlet_count < 2 || outlet_count != 1 {
+    if flow_shape.is_branched() {
+        let expected_inlets = if flow_shape == HillsFlowShape::Confluence {
+            2
+        } else {
+            1
+        };
+        if inlet_count < expected_inlets || outlet_count != 1 {
             issues.push(recipe_issue(format!(
-                "Hills confluence has {inlet_count} inlet edges and {outlet_count} outlet edges"
+                "Hills branched river has {inlet_count} inlet edges and {outlet_count} outlet edges"
             )));
         }
-        if !has_flow_merge(&nodes) {
+        if flow_shape == HillsFlowShape::Confluence && !has_flow_merge(&nodes) {
             issues.push(recipe_issue(
                 "Hills multi-inlet river has no actual flow merge",
             ));
@@ -2530,7 +2984,7 @@ fn validate_resolved_liquid_ports(
             })
         }) {
             issues.push(recipe_issue(
-                "Hills confluence contains an internal terminal or cycle",
+                "Hills branched river contains an internal terminal or cycle",
             ));
         }
     }
@@ -2546,7 +3000,7 @@ pub(crate) fn validate_patch(
 ) -> WorldValidation<HillsMetrics> {
     let liquid_ports = match local_liquid_ports(
         &patch,
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
+        match patch.local_frame() {
             Ok(frame) => frame,
             Err(error) => {
                 return WorldValidation::Invalid(vec![recipe_issue(format!(
@@ -2558,14 +3012,14 @@ pub(crate) fn validate_patch(
         Ok(ports) => ports,
         Err(issues) => return WorldValidation::Invalid(issues),
     };
-    let confluence = liquid_ports.iter().filter(|port| !port.source).count() > 1;
-    if confluence {
+    let flow_shape = HillsFlowShape::resolve(&liquid_ports);
+    if flow_shape == HillsFlowShape::Confluence {
         match confluence_main_ports(&liquid_ports) {
             Ok(_) => {}
             Err(issues) => return WorldValidation::Invalid(issues),
         }
     }
-    let liquid_issues = validate_resolved_liquid_ports(&patch, fragment, confluence);
+    let liquid_issues = validate_resolved_liquid_ports(&patch, fragment, flow_shape);
     if !liquid_issues.is_empty() {
         return WorldValidation::Invalid(liquid_issues);
     }
@@ -2580,15 +3034,14 @@ pub(crate) fn validate_patch(
     } else {
         None
     };
-    let frame =
-        match LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius()) {
-            Ok(frame) => frame,
-            Err(error) => {
-                return WorldValidation::Invalid(vec![recipe_issue(format!(
-                    "Hills validation frame failed: {error}"
-                ))]);
-            }
-        };
+    let frame = match patch.local_frame() {
+        Ok(frame) => frame,
+        Err(error) => {
+            return WorldValidation::Invalid(vec![recipe_issue(format!(
+                "Hills validation frame failed: {error}"
+            ))]);
+        }
+    };
     let protected_approaches = match patch
         .protected_approaches()
         .into_iter()
@@ -2600,8 +3053,20 @@ pub(crate) fn validate_patch(
     };
     match frame.canonical_local_world(fragment) {
         Ok(plan) => {
-            let expected_auxiliary = if confluence {
-                match rederive_confluence_auxiliary_crossings(
+            let expected_auxiliary = match flow_shape {
+                HillsFlowShape::Confluence => {
+                    match rederive_confluence_auxiliary_crossings(
+                        &plan,
+                        &liquid_ports,
+                        &protected_approaches,
+                        frame.scale(),
+                        settings.valley_level,
+                    ) {
+                        Ok(expected) => Some(expected),
+                        Err(issues) => return WorldValidation::Invalid(issues),
+                    }
+                }
+                HillsFlowShape::Bent => match rederive_bent_auxiliary_crossings(
                     &plan,
                     &liquid_ports,
                     &protected_approaches,
@@ -2610,9 +3075,8 @@ pub(crate) fn validate_patch(
                 ) {
                     Ok(expected) => Some(expected),
                     Err(issues) => return WorldValidation::Invalid(issues),
-                }
-            } else {
-                None
+                },
+                HillsFlowShape::Straight => None,
             };
             validate_hills_inner(
                 &plan,
@@ -2621,7 +3085,7 @@ pub(crate) fn validate_patch(
                 vegetation.as_ref(),
                 false,
                 patch.layout().kind.is_composite(),
-                confluence,
+                flow_shape,
                 expected_auxiliary.as_ref(),
                 &protected_approaches,
             )
@@ -2639,7 +3103,7 @@ fn validate_hills_inner(
     vegetation_objects: Option<&LandformVegetationSet>,
     validate_common: bool,
     composite_layout: bool,
-    confluence: bool,
+    flow_shape: HillsFlowShape,
     expected_auxiliary_crossings: Option<&BTreeSet<TilePos>>,
     additional_vegetation_protected: &BTreeSet<HexCoord>,
 ) -> WorldValidation<HillsMetrics> {
@@ -2774,9 +3238,14 @@ fn validate_hills_inner(
     let contains_main_trunk = candidate_crossings
         .iter()
         .any(|geometry| geometry.river.is_subset(&fill_coords));
-    if !exact_barrier && !(confluence && contains_main_trunk) {
-        issues.push(recipe_issue(if confluence {
-            "Hills confluence does not preserve one complete three-wide crossing trunk"
+    let preserves_branched_authority = match flow_shape {
+        HillsFlowShape::Straight => false,
+        HillsFlowShape::Bent => expected_auxiliary_crossings.is_some(),
+        HillsFlowShape::Confluence => contains_main_trunk,
+    };
+    if !exact_barrier && !preserves_branched_authority {
+        issues.push(recipe_issue(if flow_shape.is_branched() {
+            "Hills branched river does not preserve its complete three-wide crossing trunk"
         } else {
             "Hills liquid does not form the exact three-wide edge-to-edge barrier"
         }));
@@ -2931,7 +3400,7 @@ fn validate_hills_inner(
         issues.push(recipe_issue(
             "Hills crossing footprints do not span the liquid barrier",
         ));
-    } else if confluence {
+    } else if flow_shape.is_branched() {
         validate_confluence_crossing_authority(
             &ordinary,
             &bridge_barrier,
@@ -3038,10 +3507,9 @@ fn validate_confluence_crossing_authority(
         ("alternate crossing", alternate.clone()),
     ];
     authorities.extend(
-        auxiliary
-            .iter()
-            .copied()
-            .map(|surface| ("auxiliary tributary crossing", BTreeSet::from([surface]))),
+        connected_surface_groups(auxiliary, ordinary)
+            .into_iter()
+            .map(|surfaces| ("auxiliary tributary crossing", surfaces)),
     );
     let mut bank_edges = Vec::with_capacity(authorities.len());
     for (name, authority) in &authorities {
@@ -3111,6 +3579,47 @@ fn validate_confluence_crossing_authority(
             "Hills confluence banks remain connected after both main crossings are removed",
         ));
     }
+}
+
+fn connected_coord_groups(coords: &BTreeSet<HexCoord>) -> Vec<BTreeSet<HexCoord>> {
+    let mut remaining = coords.clone();
+    let mut groups = Vec::new();
+    while let Some(start) = remaining.pop_first() {
+        let mut group = BTreeSet::from([start]);
+        let mut frontier = VecDeque::from([start]);
+        while let Some(coord) = frontier.pop_front() {
+            for neighbor in coord.neighbors() {
+                if remaining.remove(&neighbor) {
+                    group.insert(neighbor);
+                    frontier.push_back(neighbor);
+                }
+            }
+        }
+        groups.push(group);
+    }
+    groups
+}
+
+fn connected_surface_groups(
+    surfaces: &BTreeSet<TilePos>,
+    ordinary: &OrdinaryGraph,
+) -> Vec<BTreeSet<TilePos>> {
+    let mut remaining = surfaces.clone();
+    let mut groups = Vec::new();
+    while let Some(start) = remaining.pop_first() {
+        let mut group = BTreeSet::from([start]);
+        let mut frontier = VecDeque::from([start]);
+        while let Some(surface) = frontier.pop_front() {
+            for neighbor in ordinary.neighbors(surface) {
+                if remaining.remove(neighbor) {
+                    group.insert(*neighbor);
+                    frontier.push_back(*neighbor);
+                }
+            }
+        }
+        groups.push(group);
+    }
+    groups
 }
 
 fn bank_graph_is_connected(

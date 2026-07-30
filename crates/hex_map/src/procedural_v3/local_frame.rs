@@ -2,10 +2,11 @@
 //!
 //! Most V3 recipes operate directly on arbitrary world-space masks. Waterfall and
 //! Forest retain reviewed geometry expressed around axial origin, so they use this
-//! narrow frame to preserve Single output while translating Ring7 patches.
+//! narrow frame to preserve Single output while translating composite patches.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use hex_assets::HexObjectRotation;
 use hex_core::{BiomeRegionId, HexCoord, MapViewHint, TilePos};
 
 use super::composition::GeneratedPatchPlan;
@@ -14,7 +15,10 @@ use super::layout::{
 };
 use super::liquid::LiquidPlan;
 use super::volume::VolumePlan;
-use super::world::{FeaturePlan, InteriorPlan, LightId, PlannedGameplayLight, StructurePlan};
+use super::world::{
+    FeaturePlan, InteriorPlan, LightId, PlannedGameplayLight, PlannedLightPresentation,
+    StructurePlan,
+};
 use super::world::{GeneratedWorldPlan, ProtectedFeatureRoute};
 
 /// Identity-preserving local frame for one resolved recipe patch.
@@ -23,23 +27,24 @@ pub(crate) struct LocalPatchFrame {
     center: HexCoord,
     scale: u32,
     rotation: u8,
+    compose_presentation_rotation: bool,
 }
 
 impl LocalPatchFrame {
-    /// Resolves a stable frame from an exact connected patch mask.
-    ///
-    /// Single layouts deliberately keep axial origin and the configured grid radius
-    /// so their established semantic fingerprints do not change. Composite patches
-    /// use the mask medoid and cap reviewed local geometry at radius twelve.
-    pub(crate) fn resolve(
-        mask: &BTreeSet<HexCoord>,
-        kind: LayoutKind,
-        grid_radius: u32,
-    ) -> Result<Self, String> {
-        Self::resolve_rotated(mask, kind, grid_radius, 0)
+    pub(crate) const fn from_resolved_ring19(center: HexCoord, scale: u32, rotation: u8) -> Self {
+        Self {
+            center,
+            scale,
+            rotation: rotation % 6,
+            compose_presentation_rotation: true,
+        }
     }
 
     /// Resolves a frame whose local recipe axes are rotated into world space.
+    ///
+    /// Single layouts deliberately keep axial origin and the configured grid radius
+    /// so their established semantic fingerprints do not change. Legacy composite
+    /// patches use the mask medoid and cap reviewed local geometry at radius twelve.
     pub(crate) fn resolve_rotated(
         mask: &BTreeSet<HexCoord>,
         kind: LayoutKind,
@@ -57,6 +62,7 @@ impl LocalPatchFrame {
                 center: HexCoord::ORIGIN,
                 scale: grid_radius,
                 rotation: rotation % 6,
+                compose_presentation_rotation: false,
             });
         }
 
@@ -85,6 +91,7 @@ impl LocalPatchFrame {
             center,
             scale: max_distance.min(12),
             rotation: rotation % 6,
+            compose_presentation_rotation: kind == LayoutKind::Ring19,
         })
     }
 
@@ -190,10 +197,10 @@ impl LocalPatchFrame {
 
     /// Creates a canonical Single-layout copy for recipe-specific validation.
     ///
-    /// Ring7 owns world coordinates, patch identities, and biome identities. Recipe
-    /// validators deliberately reason in the same radius-limited local frame as
-    /// their approved Single output, so this projection normalizes all three before
-    /// invoking those validators.
+    /// Composite layouts own world coordinates, patch identities, and biome
+    /// identities. Recipe validators deliberately reason in the same radius-limited
+    /// local frame as their approved Single output, so this projection normalizes all
+    /// three before invoking those validators.
     pub(crate) fn canonical_local_world(
         self,
         plan: &GeneratedPatchPlan,
@@ -237,6 +244,7 @@ impl LocalPatchFrame {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask,
                     edges,
                 },
@@ -295,6 +303,9 @@ impl LocalPatchFrame {
         }
         for feature in features.by_id.values_mut() {
             feature.root = self.translate_position(feature.root, direction)?;
+            if self.compose_presentation_rotation {
+                feature.rotation = compose_object_rotation(feature.rotation, self, direction)?;
+            }
             feature.blocker_footprint =
                 self.translate_positions(&feature.blocker_footprint, direction)?;
         }
@@ -318,6 +329,14 @@ impl LocalPatchFrame {
         *blockers = self.translate_positions(blockers, direction)?;
         for light in lights.values_mut() {
             light.origin = self.translate_position(light.origin, direction)?;
+            if self.compose_presentation_rotation {
+                if let Some(PlannedLightPresentation::CaveCrystal(crystal)) =
+                    &mut light.presentation
+                {
+                    crystal.rotation =
+                        compose_rotation_steps(crystal.rotation, self.rotation, direction);
+                }
+            }
         }
         *biome_regions = self.translate_position_map(std::mem::take(biome_regions), direction)?;
         for interior in interiors.by_id.values_mut() {
@@ -429,6 +448,27 @@ enum FrameDirection {
     ToWorld,
 }
 
+fn compose_object_rotation(
+    rotation: HexObjectRotation,
+    frame: LocalPatchFrame,
+    direction: FrameDirection,
+) -> Result<HexObjectRotation, String> {
+    HexObjectRotation::new(compose_rotation_steps(
+        rotation.steps(),
+        frame.rotation,
+        direction,
+    ))
+    .map_err(|error| format!("translated feature rotation is invalid: {error}"))
+}
+
+const fn compose_rotation_steps(current: u8, frame: u8, direction: FrameDirection) -> u8 {
+    let delta = match direction {
+        FrameDirection::ToLocal => (6_u8 - (frame % 6)) % 6,
+        FrameDirection::ToWorld => frame % 6,
+    };
+    (current + delta) % 6
+}
+
 fn rotate(coord: HexCoord, turns: u8) -> HexCoord {
     let [mut x, mut y, mut z] = coord.to_cubic_array();
     for _ in 0..turns % 6 {
@@ -482,13 +522,64 @@ fn checked_coord_zip(
 
 #[cfg(test)]
 mod tests {
+    use hex_assets::ObjectAssetId;
+    use hex_core::IlluminationLevel;
+
+    use super::super::world::{
+        CaveCrystalKind, CaveCrystalPresentation, CaveCrystalSiteKind, FeatureId, FeatureKind,
+        PlannedFeature,
+    };
     use super::*;
+
+    fn presentation_fixture() -> GeneratedPatchPlan {
+        let feature_root = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        GeneratedPatchPlan {
+            patch_id: PatchId(0),
+            volume: VolumePlan::new(BTreeSet::from([HexCoord::ORIGIN, feature_root.coord])),
+            liquids: LiquidPlan::default(),
+            features: FeaturePlan {
+                by_id: BTreeMap::from([(
+                    FeatureId(0),
+                    PlannedFeature {
+                        root: feature_root,
+                        kind: FeatureKind::Tree,
+                        object_id: ObjectAssetId::new("plant/small-broadleaf")
+                            .expect("fixture object id"),
+                        rotation: HexObjectRotation::new(2).expect("fixture rotation"),
+                        blocker_footprint: BTreeSet::from([feature_root]),
+                    },
+                )]),
+                ..FeaturePlan::default()
+            },
+            structures: StructurePlan::default(),
+            blockers: BTreeSet::from([feature_root]),
+            lights: BTreeMap::from([(
+                LightId(0),
+                PlannedGameplayLight {
+                    origin: TilePos::new(HexCoord::ORIGIN, 3),
+                    level: IlluminationLevel::Bright,
+                    radius: 4,
+                    presentation: Some(PlannedLightPresentation::CaveCrystal(
+                        CaveCrystalPresentation {
+                            kind: CaveCrystalKind::Branched,
+                            site: CaveCrystalSiteKind::InteriorAlcove,
+                            rotation: 1,
+                        },
+                    )),
+                },
+            )]),
+            biome_regions: BTreeMap::new(),
+            interiors: InteriorPlan::default(),
+            anchors: BTreeMap::new(),
+            view_hint: MapViewHint::new((4.0, 8.0, 2.0), (0.0, 3.0, 0.0)),
+        }
+    }
 
     #[test]
     fn single_frame_is_an_exact_identity_at_every_supported_radius() {
         for radius in [12, 20, 40] {
             let mask = HexCoord::ORIGIN.within_radius(radius).into_iter().collect();
-            let frame = LocalPatchFrame::resolve(&mask, LayoutKind::Single, radius)
+            let frame = LocalPatchFrame::resolve_rotated(&mask, LayoutKind::Single, radius, 0)
                 .expect("whole-world Single mask should frame");
             assert_eq!(frame.center(), HexCoord::ORIGIN);
             assert_eq!(frame.scale(), radius);
@@ -505,7 +596,7 @@ mod tests {
             .copied()
             .map(|coord| checked_coord_sum(coord, translation).expect("small translation"))
             .collect();
-        let frame = LocalPatchFrame::resolve(&world, LayoutKind::Ring7, 33)
+        let frame = LocalPatchFrame::resolve_rotated(&world, LayoutKind::Ring7, 33, 0)
             .expect("translated composite mask should frame");
 
         assert_eq!(frame.center(), translation);
@@ -560,10 +651,10 @@ mod tests {
             HexCoord::from_axial(4, 0),
             HexCoord::from_axial(5, 0),
         ]);
-        let first =
-            LocalPatchFrame::resolve(&mask, LayoutKind::Ring7, 33).expect("small connected mask");
-        let second =
-            LocalPatchFrame::resolve(&mask, LayoutKind::Ring7, 33).expect("same connected mask");
+        let first = LocalPatchFrame::resolve_rotated(&mask, LayoutKind::Ring7, 33, 0)
+            .expect("small connected mask");
+        let second = LocalPatchFrame::resolve_rotated(&mask, LayoutKind::Ring7, 33, 0)
+            .expect("same connected mask");
         assert_eq!(first, second);
 
         let local = MapViewHint::new((3.0, 8.0, 2.0), (0.0, 4.0, 0.0));
@@ -585,7 +676,7 @@ mod tests {
             .copied()
             .map(|coord| checked_coord_sum(coord, translation).expect("small translation"))
             .collect();
-        let frame = LocalPatchFrame::resolve(&world, LayoutKind::Ring7, 33)
+        let frame = LocalPatchFrame::resolve_rotated(&world, LayoutKind::Ring7, 33, 0)
             .expect("translated composite mask should frame");
         let hint = MapViewHint::new((12.0, 20.0, -5.0), (3.0, 6.0, 2.0));
         let locally_rotated = MapViewHint::new(
@@ -597,5 +688,93 @@ mod tests {
             frame.view_hint_rotated_to_world(hint, 2),
             frame.view_hint_to_world(locally_rotated)
         );
+    }
+
+    #[test]
+    fn ring19_frame_round_trips_feature_and_crystal_presentation_rotations() {
+        let frame = LocalPatchFrame::from_resolved_ring19(HexCoord::from_axial(22, 0), 12, 4);
+        let mut patch = presentation_fixture();
+        frame
+            .patch_to_world(&mut patch)
+            .expect("Ring19 presentation should project");
+
+        assert_eq!(
+            patch
+                .features
+                .by_id
+                .get(&FeatureId(0))
+                .expect("fixture feature")
+                .rotation
+                .steps(),
+            0
+        );
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = patch
+            .lights
+            .get(&LightId(0))
+            .expect("fixture light")
+            .presentation
+        else {
+            panic!("fixture crystal presentation");
+        };
+        assert_eq!(crystal.rotation, 5);
+
+        let local = frame
+            .canonical_local_world(&patch)
+            .expect("Ring19 presentation should return to recipe-local coordinates");
+        assert_eq!(
+            local
+                .features
+                .by_id
+                .get(&FeatureId(0))
+                .expect("round-tripped feature")
+                .rotation
+                .steps(),
+            2
+        );
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = local
+            .lights
+            .get(&LightId(0))
+            .expect("round-tripped light")
+            .presentation
+        else {
+            panic!("round-tripped crystal presentation");
+        };
+        assert_eq!(crystal.rotation, 1);
+    }
+
+    #[test]
+    fn legacy_ring7_frame_does_not_compose_presentation_rotations() {
+        let translation = HexCoord::from_axial(21, 0);
+        let world_mask = BTreeSet::from([
+            translation,
+            checked_coord_sum(HexCoord::from_axial(1, 0), translation)
+                .expect("fixture translation"),
+        ]);
+        let frame = LocalPatchFrame::resolve_rotated(&world_mask, LayoutKind::Ring7, 33, 4)
+            .expect("legacy frame");
+        let mut patch = presentation_fixture();
+        frame
+            .patch_to_world(&mut patch)
+            .expect("legacy presentation should project");
+
+        assert_eq!(
+            patch
+                .features
+                .by_id
+                .get(&FeatureId(0))
+                .expect("fixture feature")
+                .rotation
+                .steps(),
+            2
+        );
+        let Some(PlannedLightPresentation::CaveCrystal(crystal)) = patch
+            .lights
+            .get(&LightId(0))
+            .expect("fixture light")
+            .presentation
+        else {
+            panic!("fixture crystal presentation");
+        };
+        assert_eq!(crystal.rotation, 1);
     }
 }

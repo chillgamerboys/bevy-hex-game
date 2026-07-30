@@ -4,7 +4,7 @@
 //! around one three-wide watercourse and a separate two-wide ordinary-walker bypass.
 //! Rendering and ECS publication remain downstream of this module.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use hex_assets::RuntimeArtCatalog;
 use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
@@ -16,6 +16,7 @@ use super::layout::{
 use super::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidFlowState, LiquidNode, LiquidPlan};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
+use super::routing::vertex_disjoint_paths;
 use super::seam::{is_seam_closure_access, shape_walker_seams, validate_patch_walker_seams};
 use super::seed::SeedStream;
 #[cfg(test)]
@@ -74,6 +75,7 @@ const CLIFF_PATTERN: [i32; 12] = [-2, -2, -1, 0, 1, 2, 2, 1, 0, -1, -2, -2];
 const CLIFF_SHELF_REGION: SpecialMovementRegion = SpecialMovementRegion(0);
 const RING_ISOLATED_TERRAIN_REGION: SpecialMovementRegion = SpecialMovementRegion(1);
 const MAX_RING_CLOSED_POCKET_CELLS: usize = 3;
+const MAX_RING19_CLOSED_POCKET_CELLS: usize = 12;
 const RELIEF_CENTERS_PER_BANK: u64 = 3;
 const WATERFALL_TREE_TARGET: usize = 3;
 const WATERFALL_GRASS_PERCENT: usize = 20;
@@ -315,12 +317,20 @@ impl WaterfallHydrology {
                         "Ring19 Waterfall translated bridge deck exceeds level {MAX_PROCEDURAL_LEVEL}"
                     ))]);
                 }
-                Ok(Self {
+                let resolved = Self {
                     kind: LayoutKind::Ring19,
                     profile,
                     inlet: Some(inlet.clone()),
                     outlet: Some(outlet.clone()),
-                })
+                };
+                if patch.rotation_turns() != resolved.rotation() {
+                    return Err(vec![recipe_issue(format!(
+                        "Ring19 Waterfall rotation_turns {} disagrees with its resolved outlet orientation {}",
+                        patch.rotation_turns(),
+                        resolved.rotation()
+                    ))]);
+                }
+                Ok(resolved)
             }
         }
     }
@@ -738,13 +748,9 @@ fn construct_patch_with_objects(
     }
     let hydrology = WaterfallHydrology::resolve(&patch)?;
     let rotation = hydrology.rotation();
-    let frame = LocalPatchFrame::resolve_rotated(
-        patch.mask(),
-        patch.layout().kind,
-        patch.grid_radius(),
-        rotation,
-    )
-    .map_err(|error| vec![recipe_issue(error)])?;
+    let frame = patch
+        .local_frame_with_rotation(rotation)
+        .map_err(|error| vec![recipe_issue(error.to_string())])?;
     let mask = frame
         .local_mask(patch.mask())
         .map_err(|error| vec![recipe_issue(error)])?;
@@ -1294,6 +1300,11 @@ fn remove_closed_ordinary_pockets(
     critical_landing: TilePos,
     volume: &mut VolumePlan,
 ) {
+    let maximum_closed_pocket_cells = if patch.layout().kind == LayoutKind::Ring19 {
+        MAX_RING19_CLOSED_POCKET_CELLS
+    } else {
+        MAX_RING_CLOSED_POCKET_CELLS
+    };
     let open_approaches = patch
         .shared_edges()
         .flat_map(|edge| {
@@ -1309,7 +1320,7 @@ fn remove_closed_ordinary_pockets(
     for component in ordinary_components(&ordinary) {
         if component.contains(&critical_landing)
             || !component.is_disjoint(&open_approaches)
-            || component.len() > MAX_RING_CLOSED_POCKET_CELLS
+            || component.len() > maximum_closed_pocket_cells
         {
             continue;
         }
@@ -1769,162 +1780,6 @@ fn route_bent_feeders(
         .iter()
         .all(|path| !path.is_empty())
         .then_some(by_target)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct UnitFlowEdge {
-    to: usize,
-    reverse: usize,
-    capacity: u8,
-    initial_capacity: u8,
-}
-
-#[derive(Debug)]
-struct UnitFlowNetwork {
-    adjacency: Vec<Vec<UnitFlowEdge>>,
-}
-
-impl UnitFlowNetwork {
-    fn new(node_count: usize) -> Self {
-        Self {
-            adjacency: vec![Vec::new(); node_count],
-        }
-    }
-
-    fn add_edge(&mut self, from: usize, to: usize) -> Option<()> {
-        let reverse_from = self.adjacency.get(to)?.len();
-        let reverse_to = self.adjacency.get(from)?.len();
-        self.adjacency.get_mut(from)?.push(UnitFlowEdge {
-            to,
-            reverse: reverse_from,
-            capacity: 1,
-            initial_capacity: 1,
-        });
-        self.adjacency.get_mut(to)?.push(UnitFlowEdge {
-            to: from,
-            reverse: reverse_to,
-            capacity: 0,
-            initial_capacity: 0,
-        });
-        Some(())
-    }
-
-    fn augment_one(&mut self, source: usize, sink: usize) -> Option<()> {
-        let mut predecessor = vec![None; self.adjacency.len()];
-        let mut frontier = VecDeque::from([source]);
-        *predecessor.get_mut(source)? = Some((source, usize::MAX));
-        while let Some(node) = frontier.pop_front() {
-            if node == sink {
-                break;
-            }
-            for (edge_index, edge) in self.adjacency.get(node)?.iter().enumerate() {
-                if edge.capacity == 0 || predecessor.get(edge.to).is_some_and(Option::is_some) {
-                    continue;
-                }
-                *predecessor.get_mut(edge.to)? = Some((node, edge_index));
-                frontier.push_back(edge.to);
-            }
-        }
-        if predecessor.get(sink)?.is_none() {
-            return None;
-        }
-        let mut node = sink;
-        while node != source {
-            let (previous, edge_index) = predecessor.get(node).copied().flatten()?;
-            let reverse = self.adjacency.get(previous)?.get(edge_index)?.reverse;
-            self.adjacency
-                .get_mut(previous)?
-                .get_mut(edge_index)?
-                .capacity = 0;
-            self.adjacency.get_mut(node)?.get_mut(reverse)?.capacity = 1;
-            node = previous;
-        }
-        Some(())
-    }
-
-    fn carries_flow(&self, from: usize, to: usize) -> bool {
-        self.adjacency.get(from).is_some_and(|edges| {
-            edges.iter().any(|edge| {
-                edge.to == to && edge.initial_capacity > 0 && edge.capacity < edge.initial_capacity
-            })
-        })
-    }
-}
-
-fn vertex_disjoint_paths(
-    allowed: &BTreeSet<HexCoord>,
-    starts: &[HexCoord],
-    targets: &[HexCoord],
-) -> Option<Vec<Vec<HexCoord>>> {
-    if starts.len() != targets.len()
-        || starts.is_empty()
-        || starts.iter().any(|start| !allowed.contains(start))
-        || targets.iter().any(|target| !allowed.contains(target))
-    {
-        return None;
-    }
-    let cells = allowed.iter().copied().collect::<Vec<_>>();
-    let indices = cells
-        .iter()
-        .copied()
-        .enumerate()
-        .map(|(index, coord)| (coord, index))
-        .collect::<BTreeMap<_, _>>();
-    let source = cells.len().saturating_mul(2);
-    let sink = source.saturating_add(1);
-    let mut network = UnitFlowNetwork::new(sink.saturating_add(1));
-    for (index, coord) in cells.iter().copied().enumerate() {
-        let input = index.saturating_mul(2);
-        let output = input.saturating_add(1);
-        network.add_edge(input, output)?;
-        for side in HexSide::ALL {
-            let Some(neighbor_index) = indices.get(&side.neighbor(coord)).copied() else {
-                continue;
-            };
-            network.add_edge(output, neighbor_index.saturating_mul(2))?;
-        }
-    }
-    for start in starts {
-        network.add_edge(source, indices.get(start)?.saturating_mul(2))?;
-    }
-    for target in targets {
-        network.add_edge(
-            indices.get(target)?.saturating_mul(2).saturating_add(1),
-            sink,
-        )?;
-    }
-    for _ in 0..starts.len() {
-        network.augment_one(source, sink)?;
-    }
-
-    let target_set = targets.iter().copied().collect::<BTreeSet<_>>();
-    let mut paths = Vec::with_capacity(starts.len());
-    for start in starts {
-        let mut coord = *start;
-        let mut path = vec![coord];
-        let mut visited = BTreeSet::from([coord]);
-        loop {
-            let index = *indices.get(&coord)?;
-            let output = index.saturating_mul(2).saturating_add(1);
-            if target_set.contains(&coord) && network.carries_flow(output, sink) {
-                break;
-            }
-            let next = HexSide::ALL.into_iter().find_map(|side| {
-                let neighbor = side.neighbor(coord);
-                let neighbor_index = indices.get(&neighbor).copied()?;
-                network
-                    .carries_flow(output, neighbor_index.saturating_mul(2))
-                    .then_some(neighbor)
-            })?;
-            if !visited.insert(next) {
-                return None;
-            }
-            path.push(next);
-            coord = next;
-        }
-        paths.push(path);
-    }
-    Some(paths)
 }
 
 fn bridge_tiles(
@@ -2675,12 +2530,7 @@ pub(crate) fn validate_patch(
         Err(hydrology_issues) => return WorldValidation::Invalid(hydrology_issues),
     };
     let rotation = hydrology.rotation();
-    let frame = match LocalPatchFrame::resolve_rotated(
-        patch.mask(),
-        patch.layout().kind,
-        patch.grid_radius(),
-        rotation,
-    ) {
+    let frame = match patch.local_frame_with_rotation(rotation) {
         Ok(frame) => frame,
         Err(error) => {
             return WorldValidation::Invalid(vec![recipe_issue(format!(
@@ -2795,6 +2645,7 @@ struct StitchedSeamContext {
     mid_thresholds: BTreeMap<HexCoord, i32>,
     projected_relief_levels: BTreeMap<(HexCoord, i32), i32>,
     ring_secondary_flank: Vec<TilePos>,
+    maximum_closed_pocket_cells: usize,
 }
 
 fn stitched_seam_context(
@@ -2907,6 +2758,11 @@ fn stitched_seam_context(
         mid_thresholds,
         projected_relief_levels,
         ring_secondary_flank,
+        maximum_closed_pocket_cells: if patch.layout().kind == LayoutKind::Ring19 {
+            MAX_RING19_CLOSED_POCKET_CELLS
+        } else {
+            MAX_RING_CLOSED_POCKET_CELLS
+        },
     })
 }
 
@@ -3493,7 +3349,7 @@ fn validate_stitched_closed_pockets(
     if marked != expected
         || closed_components
             .iter()
-            .any(|component| component.len() > MAX_RING_CLOSED_POCKET_CELLS)
+            .any(|component| component.len() > seam.maximum_closed_pocket_cells)
         || plan
             .anchors
             .values()
@@ -3502,8 +3358,9 @@ fn validate_stitched_closed_pockets(
     {
         issues.push(recipe_issue(format!(
             "Waterfall stitched isolated-terrain projection must exactly tag closed pockets of at \
-             most {MAX_RING_CLOSED_POCKET_CELLS} cells (marked {}, expected {}, components {:?}, \
+             most {} cells (marked {}, expected {}, components {:?}, \
              unexpected dry access {:?})",
+            seam.maximum_closed_pocket_cells,
             marked.len(),
             expected.len(),
             closed_components
@@ -4915,6 +4772,14 @@ mod tests {
         let inlet_id = ResolvedEdgeId(1);
         let outlet_id = ResolvedEdgeId(2);
         let inlet = resolved_liquid_edge(inlet_id, inlet_side, &inlet_boundary, inlet_level, false);
+        let rotation_turns = match outlet_side {
+            HexSide::East => 0,
+            HexSide::NorthEast => 1,
+            HexSide::NorthWest => 2,
+            HexSide::West => 3,
+            HexSide::SouthWest => 4,
+            HexSide::SouthEast => 5,
+        };
         let mut edges = BTreeMap::from_iter(
             HexSide::ALL.map(|side| (side, ResolvedEdgeReference::WorldBoundary)),
         );
@@ -4960,6 +4825,7 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns,
                     mask,
                     edges,
                 },
@@ -5128,6 +4994,7 @@ mod tests {
                 patch_id,
                 ResolvedPatch {
                     biome_region: BiomeRegionId(5),
+                    rotation_turns: 0,
                     mask,
                     edges,
                 },

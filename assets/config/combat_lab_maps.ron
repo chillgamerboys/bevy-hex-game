@@ -258,5 +258,22 @@
                 radius: 4,
             ),
         ),
+        (
+            id: "two-rings",
+            display_name: "Two Rings",
+            description: "Nineteen connected regions form one mountain-fed watershed beside forests, prairies, caves, a fort, and a volcano.",
+            tags: ["Ring19", "Large", "Mixed"],
+            preview: "ui/combat-lab/two-rings.png",
+            scenario: "Two Rings",
+            fixed_seed: Some(1592598566),
+            player_region: (
+                center: Anchor("party_start"),
+                radius: 4,
+            ),
+            hostile_region: (
+                center: Anchor("hostile_start"),
+                radius: 4,
+            ),
+        ),
     ],
 )

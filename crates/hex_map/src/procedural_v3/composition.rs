@@ -210,6 +210,7 @@ impl GeneratedPatchPlan {
                 self.patch_id,
                 ResolvedPatch {
                     biome_region: resolved_patch.biome_region,
+                    rotation_turns: 0,
                     mask: resolved_patch.mask.clone(),
                     edges,
                 },
@@ -289,10 +290,16 @@ impl GeneratedPatchPlan {
             })
             .collect::<Result<_, _>>()?;
         if namespace_names {
-            self.features.protected_routes =
-                namespace_named_map(patch, std::mem::take(&mut self.features.protected_routes));
-            self.features.clearings =
-                namespace_named_map(patch, std::mem::take(&mut self.features.clearings));
+            self.features.protected_routes = namespace_named_map(
+                layout_kind,
+                patch,
+                std::mem::take(&mut self.features.protected_routes),
+            );
+            self.features.clearings = namespace_named_map(
+                layout_kind,
+                patch,
+                std::mem::take(&mut self.features.clearings),
+            );
         }
         self.structures.by_id = std::mem::take(&mut self.structures.by_id)
             .into_iter()
@@ -316,33 +323,62 @@ impl GeneratedPatchPlan {
             })
             .collect::<Result<_, _>>()?;
         if namespace_names {
-            self.anchors = namespace_named_map(patch, std::mem::take(&mut self.anchors));
+            self.anchors =
+                namespace_named_map(layout_kind, patch, std::mem::take(&mut self.anchors));
         }
         Ok(self)
     }
 }
 
-fn namespace_named_map<T>(patch: PatchId, values: BTreeMap<String, T>) -> BTreeMap<String, T> {
+fn namespace_named_map<T>(
+    layout_kind: LayoutKind,
+    patch: PatchId,
+    values: BTreeMap<String, T>,
+) -> BTreeMap<String, T> {
     values
         .into_iter()
-        .map(|(name, value)| (namespace_name(patch, &name), value))
+        .map(|(name, value)| (namespace_name(layout_kind, patch, &name), value))
         .collect()
 }
 
-fn namespace_name(patch: PatchId, local: &str) -> String {
-    format!("{}_{}", patch_slug(patch), local)
+fn namespace_name(layout_kind: LayoutKind, patch: PatchId, local: &str) -> String {
+    format!("{}_{}", patch_slug(layout_kind, patch), local)
 }
 
-fn patch_slug(patch: PatchId) -> String {
-    match patch.0 {
-        0 => "center".to_owned(),
-        1 => "mountains".to_owned(),
-        2 => "waterfall".to_owned(),
-        3 => "forest".to_owned(),
-        4 => "fort".to_owned(),
-        5 => "caves".to_owned(),
-        6 => "sky_islands".to_owned(),
-        id => format!("patch_{id}"),
+fn patch_slug(layout_kind: LayoutKind, patch: PatchId) -> String {
+    match layout_kind {
+        LayoutKind::Ring19 => match patch.0 {
+            0 => "center".to_owned(),
+            1 => "frozen_hills".to_owned(),
+            2 => "forest_a".to_owned(),
+            3 => "prairie_a".to_owned(),
+            4 => "hills_downstream".to_owned(),
+            5 => "waterfall_b".to_owned(),
+            6 => "waterfall_a".to_owned(),
+            7 => "sky_islands".to_owned(),
+            8 => "deep_forest_a".to_owned(),
+            9 => "deep_forest_b".to_owned(),
+            10 => "forest_b".to_owned(),
+            11 => "prairie_b".to_owned(),
+            12 => "waterfall_outlet".to_owned(),
+            13 => "fort".to_owned(),
+            14 => "caves".to_owned(),
+            15 => "volcano".to_owned(),
+            16 => "mountains_a".to_owned(),
+            17 => "mountains_b".to_owned(),
+            18 => "mountains_c".to_owned(),
+            id => format!("region_{id:02}"),
+        },
+        LayoutKind::Single | LayoutKind::Ring7 => match patch.0 {
+            0 => "center".to_owned(),
+            1 => "mountains".to_owned(),
+            2 => "waterfall".to_owned(),
+            3 => "forest".to_owned(),
+            4 => "fort".to_owned(),
+            5 => "caves".to_owned(),
+            6 => "sky_islands".to_owned(),
+            id => format!("patch_{id}"),
+        },
     }
 }
 
@@ -441,7 +477,6 @@ pub(crate) enum CollisionKind {
 /// Why complete patch fragments could not form one strict whole-world plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum WorldCompositionError {
-    Ring19Unavailable,
     InvalidLayout(Vec<String>),
     MissingFragment(PatchId),
     DuplicateFragment(PatchId),
@@ -514,9 +549,6 @@ pub(crate) fn compose_world(
     fragments: Vec<GeneratedPatchPlan>,
     settings: WorldCompositionSettings,
 ) -> Result<GeneratedWorldPlan, WorldCompositionError> {
-    if layout.kind == LayoutKind::Ring19 {
-        return Err(WorldCompositionError::Ring19Unavailable);
-    }
     if let Err(error) = layout.validate() {
         return Err(WorldCompositionError::InvalidLayout(
             error.issues().iter().map(ToString::to_string).collect(),
@@ -614,7 +646,7 @@ pub(crate) fn compose_world(
         if !super::world::valid_stable_name(&alias) {
             return Err(WorldCompositionError::InvalidCanonicalAnchorName(alias));
         }
-        let namespaced = namespace_name(target.patch, &target.local_name);
+        let namespaced = namespace_name(layout.kind, target.patch, &target.local_name);
         let Some(position) = anchors.get(&namespaced).copied() else {
             return Err(WorldCompositionError::MissingCanonicalAnchor {
                 alias,
@@ -1140,14 +1172,17 @@ mod tests {
             assert!(world
                 .features
                 .protected_routes
-                .contains_key(&namespace_name(patch, "main_route")));
-            assert!(world
-                .features
-                .clearings
-                .contains_key(&namespace_name(patch, "main_clearing")));
-            assert!(world
-                .anchors
-                .contains_key(&namespace_name(patch, "party_start")));
+                .contains_key(&namespace_name(LayoutKind::Ring7, patch, "main_route")));
+            assert!(world.features.clearings.contains_key(&namespace_name(
+                LayoutKind::Ring7,
+                patch,
+                "main_clearing"
+            )));
+            assert!(world.anchors.contains_key(&namespace_name(
+                LayoutKind::Ring7,
+                patch,
+                "party_start"
+            )));
         }
         assert_eq!(
             world.anchors.get("party_start"),
@@ -1360,13 +1395,19 @@ mod tests {
     }
 
     #[test]
-    fn ring19_cannot_reach_legacy_namespacing_before_its_namespace_lands() {
-        let mut layout = ring7_layout();
-        layout.kind = LayoutKind::Ring19;
-        assert!(matches!(
-            compose_world(layout, Vec::new(), composition_settings()),
-            Err(WorldCompositionError::Ring19Unavailable)
-        ));
+    fn ring19_named_namespaces_do_not_reuse_ring7_semantics() {
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(0), "party_start"),
+            "center_party_start"
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(18), "party_start"),
+            "mountains_c_party_start"
+        );
+        assert_eq!(
+            namespace_name(LayoutKind::Ring19, PatchId(2), "party_start"),
+            "forest_a_party_start"
+        );
     }
 
     #[test]
@@ -1490,7 +1531,7 @@ mod tests {
             (6, "sky_islands_party_start"),
         ] {
             assert_eq!(
-                namespace_name(PatchId(patch), "party_start"),
+                namespace_name(LayoutKind::Ring7, PatchId(patch), "party_start"),
                 expected,
                 "update only with an explicit shipped Ring7 named-namespace decision"
             );

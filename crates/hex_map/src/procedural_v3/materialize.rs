@@ -1206,6 +1206,7 @@ mod tests {
             .collect();
         let patch = ResolvedPatch {
             biome_region: BiomeRegionId(0),
+            rotation_turns: 0,
             mask: mask.clone(),
             edges,
         };

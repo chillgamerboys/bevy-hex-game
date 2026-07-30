@@ -315,9 +315,14 @@ fn construct_patch_with_streams(
         ))]
     })?;
     let ground_level = patch_ground_level(patch.layout(), patch.id);
-    let rotation = streams.map_or(0, |streams| {
-        u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
-    });
+    let ring19 = patch.layout().kind == super::layout::LayoutKind::Ring19;
+    let rotation = if ring19 {
+        patch.rotation_turns()
+    } else {
+        streams.map_or(0, |streams| {
+            u8::try_from(streams.orientation.sample(0) % 6).unwrap_or_default()
+        })
+    };
     let keep_variant = streams.map_or(0, |streams| {
         u8::try_from(streams.keep.sample(0) % 3).unwrap_or_default()
     });
@@ -331,10 +336,11 @@ fn construct_patch_with_streams(
             &protected,
         )?
     } else {
+        let rotation_attempts = if ring19 { 1_u8 } else { 6_u8 };
         site_centers(&mask)
             .into_iter()
             .find_map(|center| {
-                (0..6_u8)
+                (0..rotation_attempts)
                     .map(|offset| rotation.saturating_add(offset) % 6)
                     .flat_map(|rotation| {
                         (0..3_u8).map(move |offset| {
@@ -768,6 +774,14 @@ impl FortTemplate {
 }
 
 pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMetrics> {
+    let ground_level = patch_ground_level(&plan.layout, PatchId(0));
+    validate_fort_at_ground(plan, ground_level)
+}
+
+pub(crate) fn validate_fort_at_ground(
+    plan: &GeneratedWorldPlan,
+    ground_level: i32,
+) -> WorldValidation<FortMetrics> {
     let mut issues = Vec::new();
     if !plan.liquids.bodies.is_empty()
         || !plan.features.by_id.is_empty()
@@ -782,7 +796,7 @@ pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMe
         ));
     }
 
-    let Some(template) = detect_template(plan) else {
+    let Some(template) = detect_template_at_ground(plan, ground_level) else {
         return WorldValidation::Invalid(vec![recipe_issue(
             "Fort structures and actor anchors do not match a supported exact template",
         )]);
@@ -1012,10 +1026,14 @@ pub(crate) fn validate_fort(plan: &GeneratedWorldPlan) -> WorldValidation<FortMe
     })
 }
 
+#[cfg(test)]
 fn detect_template(plan: &GeneratedWorldPlan) -> Option<FortTemplate> {
+    detect_template_at_ground(plan, patch_ground_level(&plan.layout, PatchId(0)))
+}
+
+fn detect_template_at_ground(plan: &GeneratedWorldPlan, ground_level: i32) -> Option<FortTemplate> {
     let patch = plan.layout.patches.get(&PatchId(0))?;
     let protected = protected_approaches(&plan.layout, PatchId(0));
-    let ground_level = patch_ground_level(&plan.layout, PatchId(0));
     for center in site_centers(&patch.mask) {
         for rotation in 0..6 {
             for keep_variant in 0..3 {
@@ -1152,7 +1170,7 @@ fn protected_approaches(layout: &ResolvedLayoutPlan, patch: PatchId) -> BTreeSet
         .collect()
 }
 
-fn patch_ground_level(layout: &ResolvedLayoutPlan, patch: PatchId) -> i32 {
+pub(crate) fn patch_ground_level(layout: &ResolvedLayoutPlan, patch: PatchId) -> i32 {
     let mut preferred: Vec<_> = layout
         .shared_edges
         .values()
