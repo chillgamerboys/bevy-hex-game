@@ -147,6 +147,18 @@ outcome, successful/refused commands, AI choices, movement distance/budget, cast
 Channel and mana restored by element, strikes, idle turns, disable flow,
 restorations, downings, and revivals.
 
+At combat start, the Lab freezes the accepted content revision, stable map and seed,
+ordered roster/controller headers, and exact initial `TilePos` deployment. Outcome
+combines those launch facts with the canonical summary into `CombatLabReport`; it
+never substitutes final battlefield positions. The full-screen outcome surface
+provides Overview, Units, Spells & Effects, Timeline, and Compare labels plus Save
+Report, Retry Exact, and Tune & Run Again actions.
+
+Saved Reports lists only explicitly saved local reports. When two or more exist it
+shows frozen profile/roster headers and signed numeric deltas for rounds, successful
+and refused commands, movement, Channel, and applied disables. Deletion is a two-step
+request/confirm action and affects only the selected local report.
+
 ### Fixed fixtures
 
 One searchable selector owns the stable fixture IDs:

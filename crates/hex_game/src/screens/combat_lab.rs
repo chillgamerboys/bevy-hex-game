@@ -9,21 +9,26 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
-    character_lattice_file, character_runtime_key, combined_spell_file, CombatLabDeploymentRegion,
-    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, CombatRuleField,
-    CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex, CreationCellKind,
-    CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter, EncounterFaction,
-    EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary, PlayerSettings,
-    PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary, SpellBook,
-    SpellFile, SpellReference, SubstanceTable,
+    character_lattice_file, character_runtime_key, combined_spell_file, AcceptedContentRevision,
+    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
+    CombatRuleField, CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex,
+    CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
+    EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
+    PlayerSettings, PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary,
+    SpellBook, SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
     GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
     MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
     TraversalProfile,
 };
-use hex_units::{Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
+use hex_units::{Archetype, Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
 
+use crate::combat_reports::{
+    CombatLabReportController, CombatLabReportDeployment, CombatLabReportId, CombatLabReportMap,
+    CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
+    CombatLabReportStore,
+};
 use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
@@ -32,6 +37,7 @@ use crate::menus::widgets::{
     DANGER, FUSION_COLOR,
 };
 use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
+use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root, screen_root_node};
 
@@ -42,6 +48,7 @@ enum LabTab {
     #[default]
     Sandbox,
     Fixtures,
+    Reports,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -70,6 +77,7 @@ struct CombatLabState {
     fixture_filter: String,
     creator_origin: bool,
     rules: Option<CombatRulesProfile>,
+    pending_report_delete: Option<CombatLabReportId>,
     notice: String,
     revision: u64,
 }
@@ -85,6 +93,7 @@ impl Default for CombatLabState {
             fixture_filter: String::new(),
             creator_origin: false,
             rules: None,
+            pending_report_delete: None,
             notice: String::new(),
             revision: 1,
         }
@@ -175,6 +184,18 @@ pub(crate) struct CombatLabSession {
     pub(crate) profile: CombatRulesProfile,
     /// Authored settings restored whenever the Lab session leaves gameplay.
     pub(crate) shipped_combat: CombatSettings,
+    /// Stable map identity frozen before Loading.
+    pub(crate) report_map: CombatLabReportMap,
+}
+
+/// Frozen report inputs captured at the instant active combat begins.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CombatLabReportLaunch {
+    pub(crate) origin: CombatLabReportOrigin,
+    pub(crate) map: CombatLabReportMap,
+    pub(crate) content_revision: u64,
+    pub(crate) rosters: CombatLabReportRosters,
+    pub(crate) deployment: CombatLabReportDeployment,
 }
 
 /// Whether a frozen Lab profile was admitted at the Loading boundary.
@@ -290,10 +311,16 @@ enum LabAction {
     ResetRules,
     PrepareDeployment,
     StartFixture(String),
+    RequestReportDelete(CombatLabReportId),
+    ConfirmReportDelete(CombatLabReportId),
+    CancelReportDelete,
 }
 
 #[derive(Component)]
 struct LabRoot;
+
+#[derive(Component)]
+struct SavedReportComparison;
 
 #[derive(Component)]
 struct FixtureFilter;
@@ -424,6 +451,7 @@ pub(super) fn plugin(app: &mut App) {
             (
                 apply_creator_display_names.in_set(GameplaySetup::Restore),
                 enter_deployment.in_set(GameplaySetup::Finalize),
+                capture_fixed_fixture_report_launch.in_set(GameplaySetup::Finalize),
             ),
         )
         .add_systems(
@@ -455,6 +483,7 @@ fn initialize_lab(
     restore_shipped_content(&mut commands, overlay.as_deref());
     commands.remove_resource::<CombatLabSession>();
     commands.remove_resource::<DeploymentSession>();
+    commands.remove_resource::<CombatLabReportLaunch>();
     commands.insert_resource(GameplayPhase::Active);
     if let Some(request) = request {
         state.tab = LabTab::Sandbox;
@@ -480,6 +509,7 @@ fn spawn_lab(
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
     combat: Option<Res<CombatSettings>>,
+    reports: Res<CombatLabReportStore>,
 ) {
     spawn_lab_ui(
         &mut commands,
@@ -491,6 +521,7 @@ fn spawn_lab(
         presets.as_deref(),
         maps.as_deref(),
         combat.as_deref(),
+        &reports,
         &asset_server,
     );
 }
@@ -507,6 +538,7 @@ fn rebuild_lab(
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
     combat: Option<Res<CombatSettings>>,
+    reports: Res<CombatLabReportStore>,
     mut last_revision: Local<u64>,
 ) {
     if roots.is_empty() || *last_revision != state.revision {
@@ -523,6 +555,7 @@ fn rebuild_lab(
             presets.as_deref(),
             maps.as_deref(),
             combat.as_deref(),
+            &reports,
             &asset_server,
         );
         *last_revision = state.revision;
@@ -539,6 +572,7 @@ fn spawn_lab_ui(
     presets: Option<&CreationPresetCatalog>,
     maps: Option<&CombatLabMapCatalog>,
     combat: Option<&CombatSettings>,
+    reports: &CombatLabReportStore,
     asset_server: &AssetServer,
 ) {
     commands
@@ -570,6 +604,13 @@ fn spawn_lab_ui(
                     LabAction::Tab(LabTab::Fixtures),
                     170.0,
                 );
+                lab_button(
+                    tabs,
+                    assets,
+                    "Saved Reports",
+                    LabAction::Tab(LabTab::Reports),
+                    170.0,
+                );
                 lab_button(tabs, assets, "Back", LabAction::Back, 100.0);
             });
             if !state.notice.is_empty() {
@@ -599,6 +640,7 @@ fn spawn_lab_ui(
                     }
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
+                LabTab::Reports => spawn_saved_reports(root, assets, state, reports),
             }
         });
 }
@@ -1553,6 +1595,177 @@ fn spawn_fixture_selector(
         });
 }
 
+fn spawn_saved_reports(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    store: &CombatLabReportStore,
+) {
+    root.spawn(panel())
+        .insert(Node {
+            width: Val::Percent(96.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            ..panel_node()
+        })
+        .with_children(|history_panel| {
+            history_panel.spawn(heading(assets, "explicitly saved local reports"));
+            history_panel.spawn(blurb(
+                assets,
+                "Separate from Creator and Continue · fixed fixtures never consult this history.",
+            ));
+            if let Some(error) = &store.error {
+                history_panel
+                    .spawn(blurb(assets, error.clone()))
+                    .insert(TextColor(DANGER));
+            }
+            if store.history.reports.is_empty() {
+                history_panel.spawn(blurb(
+                    assets,
+                    "No saved reports. Finish a Lab run and choose Save Report.",
+                ));
+                return;
+            }
+            history_panel
+                .spawn((
+                    ScrollArea,
+                    Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(7.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .with_children(|list| {
+                    for saved in &store.history.reports {
+                        list.spawn(panel())
+                            .insert(Node {
+                                width: Val::Percent(100.0),
+                                ..panel_node()
+                            })
+                            .with_children(|card| {
+                                card.spawn(heading(
+                                    assets,
+                                    format!(
+                                        "REPORT {} · {:?}",
+                                        saved.id.0, saved.report.outcome
+                                    ),
+                                ));
+                                card.spawn(fine(
+                                    assets,
+                                    format!(
+                                        "{:?} · {} · seed {} · P{} / H{} · {:016X}",
+                                        saved.report.profile.preset,
+                                        saved.report.map.scenario,
+                                        saved
+                                            .report
+                                            .map
+                                            .resolved_seed
+                                            .map_or_else(|| "authored".to_owned(), |seed| seed
+                                                .to_string()),
+                                        saved.report.rosters.players.len(),
+                                        saved.report.rosters.hostiles.len(),
+                                        saved.report.summary_fingerprint,
+                                    ),
+                                ));
+                                card.spawn(blurb(
+                                    assets,
+                                    format!(
+                                        "Rounds {} · commands {}/{} · move {} · Channel {} · applied disables {}",
+                                        saved.report.summary.rounds,
+                                        saved.report.summary.successful_commands,
+                                        saved.report.summary.refused_commands,
+                                        saved.report.summary.movement_distance,
+                                        saved.report.summary.channels,
+                                        saved.report.summary.applied_disables,
+                                    ),
+                                ));
+                                if state.pending_report_delete == Some(saved.id) {
+                                    card.spawn(fine(
+                                        assets,
+                                        "CONFIRM DELETE · this removes only this local report",
+                                    ))
+                                    .insert(TextColor(DANGER));
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Confirm Delete",
+                                        LabAction::ConfirmReportDelete(saved.id),
+                                        160.0,
+                                    );
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Cancel",
+                                        LabAction::CancelReportDelete,
+                                        100.0,
+                                    );
+                                } else {
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Delete…",
+                                        LabAction::RequestReportDelete(saved.id),
+                                        110.0,
+                                    );
+                                }
+                            });
+                    }
+                });
+            if let [.., left, right] = store.history.reports.as_slice() {
+                history_panel.spawn(heading(
+                    assets,
+                    format!("compare reports {} → {}", left.id.0, right.id.0),
+                ));
+                history_panel.spawn(fine(
+                    assets,
+                    format!(
+                        "FROZEN HEADERS · {:?} P{}/H{} → {:?} P{}/H{}",
+                        left.report.profile.preset,
+                        left.report.rosters.players.len(),
+                        left.report.rosters.hostiles.len(),
+                        right.report.profile.preset,
+                        right.report.rosters.players.len(),
+                        right.report.rosters.hostiles.len(),
+                    ),
+                ));
+                history_panel.spawn((
+                    SavedReportComparison,
+                    blurb(
+                        assets,
+                        format!(
+                        "Rounds {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+}",
+                        signed_delta(right.report.summary.rounds, left.report.summary.rounds),
+                        signed_delta(
+                            right.report.summary.successful_commands,
+                            left.report.summary.successful_commands,
+                        ),
+                        signed_delta(
+                            right.report.summary.refused_commands,
+                            left.report.summary.refused_commands,
+                        ),
+                        signed_delta(
+                            right.report.summary.movement_distance,
+                            left.report.summary.movement_distance,
+                        ),
+                        signed_delta(right.report.summary.channels, left.report.summary.channels),
+                        signed_delta(
+                            right.report.summary.applied_disables,
+                            left.report.summary.applied_disables,
+                        ),
+                        ),
+                    ),
+                ));
+            }
+        });
+}
+
+fn signed_delta(right: u32, left: u32) -> i64 {
+    i64::from(right) - i64::from(left)
+}
+
 fn sync_fixture_filter(
     inputs: Query<&EditableText, (Changed<EditableText>, With<FixtureFilter>)>,
     mut state: ResMut<CombatLabState>,
@@ -1582,6 +1795,8 @@ fn handle_lab_actions(
     presets: Option<Res<CreationPresetCatalog>>,
     map_catalog: Option<Res<CombatLabMapCatalog>>,
     combat: Option<Res<CombatSettings>>,
+    mut reports: ResMut<CombatLabReportStore>,
+    paths: Res<StoragePaths>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -1592,6 +1807,7 @@ fn handle_lab_actions(
         match action {
             LabAction::Tab(tab) => {
                 state.tab = *tab;
+                state.pending_report_delete = None;
             }
             LabAction::Back => next.set(Screen::Title),
             LabAction::ShowSandboxStep(step) => {
@@ -1765,6 +1981,11 @@ fn handle_lab_actions(
                     },
                     profile,
                     shipped_combat: shipped_combat.clone(),
+                    report_map: CombatLabReportMap {
+                        catalog_id: map_definition.id.clone(),
+                        scenario: map_definition.scenario.clone(),
+                        resolved_seed: resolved_seed.map(|seed| seed.0),
+                    },
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -1819,6 +2040,11 @@ fn handle_lab_actions(
                     return_to: Screen::CombatLab,
                     profile: CombatRulesProfile::shipped(shipped_combat),
                     shipped_combat: shipped_combat.clone(),
+                    report_map: CombatLabReportMap {
+                        catalog_id: id.clone(),
+                        scenario: fixture.scenario.to_owned(),
+                        resolved_seed: resolved_seed.map(|seed| seed.0),
+                    },
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -1826,6 +2052,28 @@ fn handle_lab_actions(
                     encounter_override,
                 });
                 next.set(Screen::Loading);
+            }
+            LabAction::RequestReportDelete(id) => {
+                state.pending_report_delete = Some(*id);
+                state.notice = format!("Confirm deletion of saved report {} or cancel.", id.0);
+            }
+            LabAction::ConfirmReportDelete(id) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                match reports.delete(*id, shipped, &paths) {
+                    Ok(()) => {
+                        state.pending_report_delete = None;
+                        state.notice = format!("Saved report {} deleted.", id.0);
+                    }
+                    Err(error) => state.notice = error,
+                }
+            }
+            LabAction::CancelReportDelete => {
+                state.pending_report_delete = None;
+                state.notice = "Report deletion cancelled.".to_owned();
             }
         }
         state.bump();
@@ -2674,7 +2922,10 @@ struct DeploymentRuntime<'w, 's> {
         's,
         (
             Entity,
+            &'static hex_core::UnitId,
             &'static Faction,
+            &'static Archetype,
+            &'static Name,
             &'static mut StandsOn,
             &'static mut Transform,
         ),
@@ -2685,6 +2936,7 @@ struct DeploymentRuntime<'w, 's> {
     encounter: Option<ResMut<'w, Encounter>>,
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
     lab: Option<Res<'w, CombatLabSession>>,
+    accepted: Option<Res<'w, AcceptedContentRevision>>,
 }
 
 fn handle_deployment_actions(
@@ -2815,14 +3067,14 @@ fn handle_deployment_actions(
                 let mut players = runtime
                     .units
                     .iter_mut()
-                    .filter(|(_, faction, _, _)| **faction == Faction::Player)
-                    .map(|(entity, _, _, _)| entity)
+                    .filter(|(_, _, faction, _, _, _, _)| **faction == Faction::Player)
+                    .map(|(entity, _, _, _, _, _, _)| entity)
                     .collect::<Vec<_>>();
                 let mut hostiles = runtime
                     .units
                     .iter_mut()
-                    .filter(|(_, faction, _, _)| **faction == Faction::Hostile)
-                    .map(|(entity, _, _, _)| entity)
+                    .filter(|(_, _, faction, _, _, _, _)| **faction == Faction::Hostile)
+                    .map(|(entity, _, _, _, _, _, _)| entity)
                     .collect::<Vec<_>>();
                 players.sort_by_key(|entity| entity.index());
                 hostiles.sort_by_key(|entity| entity.index());
@@ -2837,7 +3089,9 @@ fn handle_deployment_actions(
                                 format!("Selected surface {pos:?} is no longer valid footing.");
                             continue;
                         };
-                        if let Ok((_, _, mut on, mut transform)) = runtime.units.get_mut(*entity) {
+                        if let Ok((_, _, _, _, _, mut on, mut transform)) =
+                            runtime.units.get_mut(*entity)
+                        {
                             on.0 = standing;
                             transform.translation = standing.world_position();
                         }
@@ -2849,6 +3103,24 @@ fn handle_deployment_actions(
                 }
                 if let Some(active) = runtime.active.as_deref_mut() {
                     active.0.encounter_override = Some(exact);
+                }
+                if let (Some(lab), Some(accepted)) =
+                    (runtime.lab.as_deref(), runtime.accepted.as_deref())
+                {
+                    let units = runtime
+                        .units
+                        .iter_mut()
+                        .map(|(_, id, faction, archetype, name, on, _)| {
+                            (
+                                *id,
+                                *faction,
+                                archetype.0.clone(),
+                                name.as_str().to_owned(),
+                                on.0.pos,
+                            )
+                        })
+                        .collect();
+                    commands.insert_resource(report_launch(lab, accepted.fingerprint(), units));
                 }
                 for (entity, mut visibility) in &mut runtime.hidden_presentation {
                     *visibility = Visibility::Inherited;
@@ -2865,6 +3137,84 @@ fn handle_deployment_actions(
         }
         rebuild_deployment_markers(&mut commands, &runtime.markers, session);
         rebuild_deployment_hud(&mut commands, &runtime.hud, &assets, session, &store);
+    }
+}
+
+fn capture_fixed_fixture_report_launch(
+    mut commands: Commands,
+    lab: Option<Res<CombatLabSession>>,
+    accepted: Option<Res<AcceptedContentRevision>>,
+    existing: Option<Res<CombatLabReportLaunch>>,
+    units: Query<(&hex_core::UnitId, &Faction, &Archetype, &Name, &StandsOn)>,
+) {
+    let (Some(lab), Some(accepted)) = (lab.as_deref(), accepted.as_deref()) else {
+        return;
+    };
+    if existing.is_some() || !matches!(lab.kind, CombatLabSessionKind::FixedFixture(_)) {
+        return;
+    }
+    let units = units
+        .iter()
+        .map(|(id, faction, archetype, name, on)| {
+            (
+                *id,
+                *faction,
+                archetype.0.clone(),
+                name.as_str().to_owned(),
+                on.0.pos,
+            )
+        })
+        .collect();
+    commands.insert_resource(report_launch(lab, accepted.fingerprint(), units));
+}
+
+fn report_launch(
+    lab: &CombatLabSession,
+    content_revision: u64,
+    mut units: Vec<(hex_core::UnitId, Faction, String, String, TilePos)>,
+) -> CombatLabReportLaunch {
+    units.sort_by_key(|(id, ..)| *id);
+    let roster = |faction| {
+        units
+            .iter()
+            .filter(|(_, side, ..)| *side == faction)
+            .map(
+                |(_, _, archetype, display_name, _)| CombatLabReportRosterEntry {
+                    archetype: archetype.clone(),
+                    display_name: display_name.clone(),
+                    controller: if faction == Faction::Player {
+                        CombatLabReportController::Human
+                    } else {
+                        CombatLabReportController::BaselineAi
+                    },
+                },
+            )
+            .collect()
+    };
+    let deployment = |faction| {
+        units
+            .iter()
+            .filter(|(_, side, ..)| *side == faction)
+            .map(|(_, _, _, _, position)| *position)
+            .collect()
+    };
+    CombatLabReportLaunch {
+        origin: match &lab.kind {
+            CombatLabSessionKind::Sandbox => CombatLabReportOrigin::Sandbox,
+            CombatLabSessionKind::FixedFixture(stable_id) => CombatLabReportOrigin::FixedFixture {
+                stable_id: stable_id.clone(),
+            },
+        },
+        map: lab.report_map.clone(),
+        content_revision,
+        rosters: CombatLabReportRosters {
+            players: roster(Faction::Player),
+            hostiles: roster(Faction::Hostile),
+        },
+        deployment: CombatLabReportDeployment {
+            players: deployment(Faction::Player),
+            hostiles: deployment(Faction::Hostile),
+        },
     }
 }
 
@@ -3015,6 +3365,11 @@ mod tests {
             return_to: Screen::CombatLab,
             profile,
             shipped_combat: shipped,
+            report_map: CombatLabReportMap {
+                catalog_id: "flat-arena".to_owned(),
+                scenario: "Flat Arena".to_owned(),
+                resolved_seed: Some(42),
+            },
         }
     }
 
@@ -3057,6 +3412,153 @@ mod tests {
         assert_eq!(presets, 3);
         assert_eq!(adjustments, CombatRuleField::ALL.len() * 2);
         assert_eq!((resets, forwards, backs), (1, 1, 1));
+    }
+
+    #[test]
+    fn report_launch_freezes_stable_roster_order_and_exact_initial_surfaces() {
+        let shipped = CombatSettings::default();
+        let session = rules_session(CombatRulesProfile::shipped(&shipped), shipped);
+        let player = TilePos::new(HexCoord::ORIGIN, 5);
+        let hostile = TilePos::new(HexCoord::ORIGIN, 1);
+        let launch = report_launch(
+            &session,
+            77,
+            vec![
+                (
+                    hex_core::UnitId(9),
+                    Faction::Hostile,
+                    "raider".to_owned(),
+                    "Raider".to_owned(),
+                    hostile,
+                ),
+                (
+                    hex_core::UnitId(2),
+                    Faction::Player,
+                    "hedge-mage".to_owned(),
+                    "Hedge Mage".to_owned(),
+                    player,
+                ),
+            ],
+        );
+        assert_eq!(launch.origin, CombatLabReportOrigin::Sandbox);
+        assert_eq!(launch.content_revision, 77);
+        assert_eq!(
+            launch
+                .rosters
+                .players
+                .iter()
+                .map(|entry| entry.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage"]
+        );
+        assert_eq!(
+            launch
+                .rosters
+                .hostiles
+                .iter()
+                .map(|entry| entry.controller)
+                .collect::<Vec<_>>(),
+            vec![CombatLabReportController::BaselineAi]
+        );
+        assert_eq!(launch.deployment.players, vec![player]);
+        assert_eq!(launch.deployment.hostiles, vec![hostile]);
+    }
+
+    #[test]
+    fn saved_reports_render_comparison_and_require_confirmed_delete() {
+        let shipped = CombatSettings::default();
+        let session = rules_session(CombatRulesProfile::shipped(&shipped), shipped);
+        let launch = report_launch(
+            &session,
+            77,
+            vec![
+                (
+                    hex_core::UnitId(1),
+                    Faction::Player,
+                    "hedge-mage".to_owned(),
+                    "Hedge Mage".to_owned(),
+                    TilePos::new(HexCoord::ORIGIN, 1),
+                ),
+                (
+                    hex_core::UnitId(2),
+                    Faction::Hostile,
+                    "raider".to_owned(),
+                    "Raider".to_owned(),
+                    TilePos::new(HexCoord::from_axial(1, 0), 1),
+                ),
+            ],
+        );
+        let report = |rounds| {
+            let mut summary = hex_combat::CombatSummary::default();
+            summary.rounds = rounds;
+            summary.outcome = Some(hex_combat::EncounterOutcome::Victory);
+            crate::combat_reports::CombatLabReport::new(
+                session.profile.clone(),
+                launch.origin.clone(),
+                launch.map.clone(),
+                launch.content_revision,
+                launch.rosters.clone(),
+                launch.deployment.clone(),
+                hex_combat::EncounterOutcome::Victory,
+                summary,
+            )
+        };
+        let first = CombatLabReportId(1);
+        let store = CombatLabReportStore {
+            history: crate::combat_reports::CombatLabReportHistory {
+                version: crate::combat_reports::COMBAT_LAB_REPORT_HISTORY_VERSION,
+                next_id: 3,
+                reports: vec![
+                    crate::combat_reports::SavedCombatLabReport {
+                        id: first,
+                        report: report(8),
+                    },
+                    crate::combat_reports::SavedCombatLabReport {
+                        id: CombatLabReportId(2),
+                        report: report(6),
+                    },
+                ],
+            },
+            error: None,
+        };
+        let state = CombatLabState {
+            tab: LabTab::Reports,
+            pending_report_delete: Some(first),
+            ..default()
+        };
+        let assets = UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        };
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        commands.spawn(Node::default()).with_children(|root| {
+            spawn_saved_reports(root, &assets, &state, &store);
+        });
+        queue.apply(&mut world);
+
+        let mut comparisons = world.query_filtered::<Entity, With<SavedReportComparison>>();
+        assert_eq!(comparisons.iter(&world).count(), 1);
+        let mut actions = world.query::<&LabAction>();
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(
+                    |action| matches!(action, LabAction::ConfirmReportDelete(id) if *id == first)
+                )
+                .count(),
+            1
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(|action| matches!(action, LabAction::CancelReportDelete))
+                .count(),
+            1
+        );
+        assert_eq!(signed_delta(6, 8), -2);
     }
 
     #[test]

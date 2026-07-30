@@ -912,6 +912,11 @@ fn run_walk(
                 return_to: Screen::CombatLab,
                 profile: hex_assets::CombatRulesProfile::shipped(combat_settings),
                 shipped_combat: combat_settings.clone(),
+                report_map: crate::combat_reports::CombatLabReportMap {
+                    catalog_id: id.clone(),
+                    scenario: scenario.name.clone(),
+                    resolved_seed: resolved_seed.map(|seed| seed.0),
+                },
             });
             let payload = match crate::screens::combat_lab::creator_fixture_payload(
                 id,

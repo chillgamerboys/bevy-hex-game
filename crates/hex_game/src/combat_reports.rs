@@ -109,6 +109,10 @@ pub struct CombatLabReport {
     pub summary: CombatSummary,
 }
 
+/// Complete report for the retained Lab battlefield currently on screen.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct CurrentCombatLabReport(pub(crate) CombatLabReport);
+
 impl CombatLabReport {
     /// Builds a report and captures the canonical summary identity.
     pub fn new(
@@ -304,13 +308,6 @@ pub(crate) struct CombatLabReportStore {
     pub(crate) error: Option<String>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the outcome report controls consume these methods in the next UI slice"
-    )
-)]
 impl CombatLabReportStore {
     /// Explicitly saves one validated report and returns its monotonic local id.
     pub(crate) fn save(
@@ -415,13 +412,6 @@ fn load_report_history(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the outcome report controls consume this writer in the next UI slice"
-    )
-)]
 fn persist_history(
     history: &CombatLabReportHistory,
     shipped: &CombatSettings,

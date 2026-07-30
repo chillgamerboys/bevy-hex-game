@@ -22,13 +22,15 @@ use hex_core::{
 use hex_lattice::{LatticeSpec, LatticeState};
 use hex_units::{Archetype, Downed, Party, Player, Selected, UnitRegistry};
 
-use super::combat_lab::{CombatLabSession, CreatorDisplayName};
+use super::combat_lab::{CombatLabReportLaunch, CombatLabSession, CreatorDisplayName};
 use super::{despawn_screen, DespawnOnExit};
+use crate::combat_reports::{CombatLabReport, CombatLabReportStore, CurrentCombatLabReport};
 use crate::menus::widgets::{
-    blurb, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
+    blurb, fine, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
 };
 use crate::readouts::{region, GameplayUiContext, HudElement, HudRegion, HudSetup, UiUnitIdentity};
 use crate::scenarios::ActiveScenario;
+use crate::storage::StoragePaths;
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<InputBindings>();
@@ -149,6 +151,9 @@ struct LabStatisticsToggleText;
 enum OutcomeAction {
     Continue,
     Retry,
+    RetryExact,
+    TuneAgain,
+    SaveReport,
     ReturnTitle,
 }
 
@@ -852,6 +857,9 @@ fn sync_outcome_modal(
     existing: Query<Entity, With<OutcomeModal>>,
     assets: Res<UiAssets>,
     lab: Option<Res<CombatLabSession>>,
+    launch: Option<Res<CombatLabReportLaunch>>,
+    summary: Option<Res<CombatSummary>>,
+    reports: Option<Res<CombatLabReportStore>>,
 ) {
     let Some(outcome) = resolution.outcome() else {
         for entity in &existing {
@@ -861,6 +869,25 @@ fn sync_outcome_modal(
     };
     if !existing.is_empty() {
         return;
+    }
+    let report = lab
+        .as_deref()
+        .zip(launch.as_deref())
+        .zip(summary.as_deref())
+        .map(|((lab, launch), summary)| {
+            CombatLabReport::new(
+                lab.profile.clone(),
+                launch.origin.clone(),
+                launch.map.clone(),
+                launch.content_revision,
+                launch.rosters.clone(),
+                launch.deployment.clone(),
+                outcome,
+                summary.clone(),
+            )
+        });
+    if let Some(report) = &report {
+        commands.insert_resource(CurrentCombatLabReport(report.clone()));
     }
     let return_label = lab
         .as_deref()
@@ -892,7 +919,13 @@ fn sync_outcome_modal(
             overlay
                 .spawn((
                     Node {
-                        width: Val::Px(430.0),
+                        width: if report.is_some() {
+                            Val::Percent(88.0)
+                        } else {
+                            Val::Px(430.0)
+                        },
+                        max_width: Val::Px(1500.0),
+                        max_height: Val::Percent(90.0),
                         padding: UiRect::all(Val::Px(28.0)),
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -916,6 +949,82 @@ fn sync_outcome_modal(
                     };
                     panel.spawn(heading(&assets, title));
                     panel.spawn(blurb(&assets, detail));
+                    if let (Some(report), Some(lab)) = (&report, lab.as_deref()) {
+                        let changes = report
+                            .profile
+                            .changed_from_shipped(&lab.shipped_combat);
+                        panel.spawn(fine(
+                            &assets,
+                            format!(
+                                "{:?} · {} · seed {} · Player {} / Hostile {} · {} rule change{} · fingerprint {:016X}",
+                                report.profile.preset,
+                                report.map.scenario,
+                                report
+                                    .map
+                                    .resolved_seed
+                                    .map_or_else(|| "authored".to_owned(), |seed| seed.to_string()),
+                                report.rosters.players.len(),
+                                report.rosters.hostiles.len(),
+                                changes.len(),
+                                if changes.len() == 1 { "" } else { "s" },
+                                report.summary_fingerprint,
+                            ),
+                        ));
+                        panel
+                            .spawn(Node {
+                                flex_direction: FlexDirection::Row,
+                                column_gap: Val::Px(7.0),
+                                ..default()
+                            })
+                            .with_children(|tabs| {
+                                for mode in [
+                                    "Overview · ACTIVE",
+                                    "Units",
+                                    "Spells & Effects",
+                                    "Timeline",
+                                    "Compare",
+                                ] {
+                                    tabs.spawn(row_button(mode, 155.0))
+                                        .with_child(blurb(&assets, mode));
+                                }
+                            });
+                        panel.spawn(blurb(
+                            &assets,
+                            format!(
+                                "OVERVIEW\nRounds {} · Commands {} successful / {} refused · AI choices {}\n\
+                                 Movement {} distance / {} budget · Casts {} · Channel {} · Strikes {} · Idle {}\n\
+                                 Disables {} raw / {} prevented / {} applied · Restored {} · Downed {} · Revived {}\n\
+                                 Timeline {} of {} canonical events retained · Compare: {} explicitly saved report{}",
+                                report.summary.rounds,
+                                report.summary.successful_commands,
+                                report.summary.refused_commands,
+                                report.summary.ai_selection_count,
+                                report.summary.movement_distance,
+                                report.summary.movement_budget_used,
+                                report.summary.casts,
+                                report.summary.channels,
+                                report.summary.strikes,
+                                report.summary.idle_turns,
+                                report.summary.raw_disables,
+                                report.summary.prevented_disables,
+                                report.summary.applied_disables,
+                                report.summary.restored_cells,
+                                report.summary.downings,
+                                report.summary.revivals,
+                                report.summary.events.len(),
+                                report.summary.event_count,
+                                reports.as_deref().map_or(0, |store| store.history.reports.len()),
+                                if reports
+                                    .as_deref()
+                                    .is_some_and(|store| store.history.reports.len() == 1)
+                                {
+                                    ""
+                                } else {
+                                    "s"
+                                },
+                            ),
+                        ));
+                    }
                     panel
                         .spawn(Node {
                             flex_direction: FlexDirection::Row,
@@ -923,13 +1032,27 @@ fn sync_outcome_modal(
                             ..default()
                         })
                         .with_children(|buttons| {
-                            let primary = match outcome {
-                                EncounterOutcome::Victory => (OutcomeAction::Continue, "Continue"),
-                                EncounterOutcome::Defeat => (OutcomeAction::Retry, "Retry"),
-                            };
-                            buttons
-                                .spawn((row_button(primary.1, 150.0), primary.0))
-                                .with_child(blurb(&assets, primary.1));
+                            if report.is_some() {
+                                for (action, text) in [
+                                    (OutcomeAction::SaveReport, "Save Report"),
+                                    (OutcomeAction::RetryExact, "Retry Exact"),
+                                    (OutcomeAction::TuneAgain, "Tune & Run Again"),
+                                ] {
+                                    buttons
+                                        .spawn((row_button(text, 170.0), action))
+                                        .with_child(blurb(&assets, text));
+                                }
+                            } else {
+                                let primary = match outcome {
+                                    EncounterOutcome::Victory => {
+                                        (OutcomeAction::Continue, "Continue")
+                                    }
+                                    EncounterOutcome::Defeat => (OutcomeAction::Retry, "Retry"),
+                                };
+                                buttons
+                                    .spawn((row_button(primary.1, 150.0), primary.0))
+                                    .with_child(blurb(&assets, primary.1));
+                            }
                             buttons
                                 .spawn((
                                     row_button(return_label, 170.0),
@@ -946,6 +1069,9 @@ fn handle_outcome_actions(
     resolution: Res<EncounterResolution>,
     active: Option<Res<ActiveScenario>>,
     lab: Option<Res<CombatLabSession>>,
+    current_report: Option<Res<CurrentCombatLabReport>>,
+    mut report_store: Option<ResMut<CombatLabReportStore>>,
+    paths: Option<Res<StoragePaths>>,
     mut commands: Commands,
     mut next_mode: ResMut<NextState<Mode>>,
     mut next_screen: ResMut<NextState<Screen>>,
@@ -972,6 +1098,32 @@ fn handle_outcome_actions(
                 };
                 commands.insert_resource(active.0.clone());
                 next_screen.set(Screen::Loading);
+            }
+            (OutcomeAction::RetryExact, _) => {
+                let Some(active) = active.as_deref() else {
+                    error!("cannot retry exact Lab run: frozen scenario input was not retained");
+                    continue;
+                };
+                commands.insert_resource(active.0.clone());
+                next_screen.set(Screen::Loading);
+            }
+            (OutcomeAction::TuneAgain, _) => {
+                next_screen.set(Screen::CombatLab);
+            }
+            (OutcomeAction::SaveReport, _) => {
+                let (Some(report), Some(store), Some(lab), Some(paths)) = (
+                    current_report.as_deref(),
+                    report_store.as_deref_mut(),
+                    lab.as_deref(),
+                    paths.as_deref(),
+                ) else {
+                    error!("cannot save Lab report: frozen report state is unavailable");
+                    continue;
+                };
+                match store.save(report.0.clone(), &lab.shipped_combat, paths) {
+                    Ok(id) => info!("saved Combat Lab report {}", id.0),
+                    Err(error) => error!("could not save Combat Lab report: {error}"),
+                }
             }
             (OutcomeAction::ReturnTitle, _) => {
                 next_screen.set(
