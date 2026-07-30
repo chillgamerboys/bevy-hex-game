@@ -7,6 +7,28 @@ file is the record that travels with the repo.
 
 <!-- /audit-diff appends below this line. Don't insert content between this comment and Wave entries; the skill anchors on this marker. -->
 
+## Wave 22 — docs: prepare next release and Wave 7 (2026-07-30)
+
+- **PR**: #140 — `wave/5-prealpha-continuity`
+- **Outcome**: green
+- **Lenses triggered**: none
+
+| Lens | File:line | Severity | Status |
+|---|---|---|---|
+| — | — | — | no findings |
+
+**Notes**: D1 confirmed the Upcoming roadmap retains one parseable
+`Epic | Scope | Owner` table and the new Wave 7 row carries no hand-written ticket
+marker. D2 found every relative link and changed fragment valid. D3 spot-checked the
+thirteen-map catalog, seven V3 recipe variants, Ring7 composition, Forest and cave
+`ObjectInstance` publishers, cave crystal point lights, four release targets, current
+deployment controls, and Creator/Combat Lab return routing against shipped content
+and code. D4 found no new competing source of truth: current implementation remains
+in status/contracts, while the Wave 7 plan remains in the roadmap. Fresh-eyes review
+found no additional class. The reproducible README visual walk captured and passed
+the Character Creator workspace and Fort deployment frames, and both were manually
+inspected.
+
 ## Wave 21 — docs: reconcile boundaries, roadmap, and design (2026-07-29)
 
 - **PR**: #121 — `shrav-k/audit-alberto-draft-prs`
