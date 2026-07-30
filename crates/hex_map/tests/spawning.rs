@@ -1156,13 +1156,34 @@ fn v3_deep_forest_publishes_dense_trees_and_reenters_deterministically() {
     );
     assert!(!app.world().contains_resource::<GameplaySetupFailure>());
     let first_report = app.world().resource::<GenerationReport>().clone();
+    assert_eq!(first_report.generator_version, 3);
+    assert_eq!(first_report.seed, 1_592_598_566);
+    assert_eq!(first_report.candidates_evaluated, 8);
+    assert_eq!(first_report.valid_candidates, 8);
+    assert_eq!(first_report.selected_candidate, Some(0));
+    assert!(!first_report.used_fallback);
+    assert_eq!(first_report.repair_rounds, 0);
+    assert!(first_report.repair_actions.is_empty());
+    assert_eq!(first_report.settings_fingerprint, 6_246_604_390_469_913_222);
+    assert_eq!(
+        first_report.semantic_plan_fingerprint,
+        Some(1_319_216_151_194_471_912)
+    );
+    assert_eq!(first_report.map_fingerprint, 15_168_627_475_653_117_104);
     let Some(ProceduralRecipeMetrics::DeepForest(metrics)) = &first_report.recipe_metrics else {
         panic!("V3 Deep Forest should publish exact recipe metrics");
     };
     let metrics = *metrics;
+    assert_eq!(metrics.tree_roots, 105);
+    assert_eq!(metrics.tree_blocker_surfaces, 117);
+    assert_eq!(metrics.blocker_coverage_percent, 29);
     assert_eq!(metrics.clearing_count, 3);
     assert_eq!(metrics.clearing_surfaces, 30);
-    assert!((28..=32).contains(&metrics.blocker_coverage_percent));
+    assert_eq!(metrics.protected_trail_surfaces, 38);
+    assert_eq!(metrics.ordinary_surfaces, 352);
+    assert_eq!(metrics.reachable_elevation_levels, 5);
+    assert_eq!(metrics.relief, 4);
+    assert_eq!(metrics.critical_route_steps, 27);
     assert_eq!(
         metrics.tree_blocker_surfaces,
         u32::try_from(app.world().resource::<TraversalBlockers>().len()).unwrap_or(u32::MAX)
