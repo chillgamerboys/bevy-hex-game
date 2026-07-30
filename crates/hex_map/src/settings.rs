@@ -2952,6 +2952,7 @@ mod tests {
     use super::*;
 
     const WORLD_RON: &str = include_str!("../../../assets/config/world.ron");
+    const V3_FORT_RON: &str = include_str!("../../../assets/config/worlds/procedural-fort.ron");
     const V3_RING7_RON: &str = include_str!("../../../assets/config/worlds/procedural-ring7.ron");
     const V1_HILLS_RON: &str = r#"
 (
@@ -3283,6 +3284,7 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-prairie.ron"),
                 3,
             ),
+            (V3_FORT_RON, 3),
             (V3_RING7_RON, 3),
         ] {
             let settings: MapSettings =
