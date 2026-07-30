@@ -4,9 +4,9 @@
 //! walker-connected by construction. Shared-edge approaches clamp those cones to
 //! the resolved seam datum without a post-generation blend pass.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-use hex_core::{HexCoord, Level, MapViewHint, TilePos};
+use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
@@ -44,6 +44,9 @@ const RIVER_HALF_WIDTH: i32 = 1;
 const CROSSING_HALF_LENGTH: i32 = 2;
 const APPROACH_HALF_LENGTH: i32 = 3;
 const RIVER_DEPTH: Level = 3;
+const SMALL_FALL_HEIGHT: Level = 3;
+const FROZEN_ICE_CAP_TARGET: usize = 5;
+const FROZEN_ICE_REGION: SpecialMovementRegion = SpecialMovementRegion(0);
 
 /// Deterministic measurements for one admitted Hills plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,6 +302,8 @@ pub(crate) fn construct_patch_with_streams(
         &[0, -4, 4, -6, 6, -2, 2]
     };
     let river_level = settings.valley_level.saturating_sub(1);
+    let single_patch_fall =
+        (patch.layout().kind == super::layout::LayoutKind::Single).then_some(SMALL_FALL_HEIGHT);
     let (orientation, river_offset, local_crossings, local_river_nodes) = (0..6)
         .flat_map(|turn| {
             lateral_offsets.iter().copied().map(move |river_offset| {
@@ -320,6 +325,7 @@ pub(crate) fn construct_patch_with_streams(
                         orientation,
                         river_offset,
                         river_level,
+                        single_patch_fall.map(|height| (crossings.fall_target_y, height)),
                         &liquid_sources,
                     )
                     .ok()
@@ -328,7 +334,7 @@ pub(crate) fn construct_patch_with_streams(
                             .iter()
                             .all(|port| port.accepts_nodes(nodes, river_level))
                             && (liquid_sources.is_empty()
-                                || all_nodes_drain_to_sources(nodes, &liquid_sources, river_level))
+                                || all_nodes_drain_to_sources(nodes, &liquid_sources))
                     })
                     .map(|nodes| (orientation, river_offset, crossings, nodes))
                 })
@@ -373,7 +379,65 @@ pub(crate) fn construct_patch_with_streams(
         settings.valley_level,
         &mut surface_by_local,
     );
+    if settings.max_relief >= 10 {
+        let shelf_exclusions = excluded
+            .union(&local_crossings.river)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        add_irregular_shelves(
+            &centres,
+            &local_mask,
+            &shelf_exclusions,
+            &local_crossings,
+            settings.valley_level,
+            &mut surface_by_local,
+        );
+    }
+    let local_ice_caps = if environment == V3EnvironmentSettings::Frozen {
+        frozen_ice_caps(&local_crossings, orientation, river_offset)?
+    } else {
+        BTreeSet::new()
+    };
     let crossings = local_crossings.into_world(frame)?;
+    let ice_caps = local_ice_caps
+        .into_iter()
+        .map(|coord| frame.to_world(coord))
+        .collect::<Result<BTreeSet<_>, _>>()
+        .map_err(|error| {
+            vec![recipe_issue(format!(
+                "Hills frozen ice-cap conversion failed: {error}"
+            ))]
+        })?;
+    let river_nodes = local_river_nodes
+        .into_iter()
+        .map(|(position, node)| {
+            let position = frame.position_to_world(position).map_err(|error| {
+                vec![recipe_issue(format!(
+                    "Hills river position conversion failed: {error}"
+                ))]
+            })?;
+            let downstream = node
+                .downstream
+                .map(|downstream| frame.position_to_world(downstream))
+                .transpose()
+                .map_err(|error| {
+                    vec![recipe_issue(format!(
+                        "Hills river downstream conversion failed: {error}"
+                    ))]
+                })?;
+            Ok((
+                position,
+                LiquidNode {
+                    state: node.state,
+                    downstream,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, Vec<WorldValidationIssue>>>()?;
+    let river_nodes_by_coord = river_nodes
+        .iter()
+        .map(|(position, node)| (position.coord, (*position, *node)))
+        .collect::<BTreeMap<_, _>>();
     let mut surface_by_coord = surface_by_local
         .iter()
         .map(|(coord, level)| {
@@ -396,8 +460,22 @@ pub(crate) fn construct_patch_with_streams(
         let bridge = crossings.bridge_deck.contains(coord);
         let ford = crossings.ford_deck.contains(coord);
         if crossings.river.contains(coord) {
-            let (column, bed, crossing) =
-                river_column(*coord, settings.valley_level, environment, bridge, ford);
+            let Some((liquid_position, liquid_node)) = river_nodes_by_coord.get(coord).copied()
+            else {
+                return Err(vec![recipe_issue(format!(
+                    "Hills river cell {coord:?} has no liquid node"
+                ))]);
+            };
+            let (column, bed, crossing, ice_cap) = river_column(
+                *coord,
+                settings.valley_level,
+                environment,
+                bridge,
+                ford,
+                ice_caps.contains(coord),
+                liquid_position,
+                liquid_node,
+            );
             columns.insert(*coord, column);
             surfaces.insert(
                 bed,
@@ -415,6 +493,15 @@ pub(crate) fn construct_patch_with_streams(
                     },
                 );
                 ordinary_by_coord.insert(*coord, crossing);
+            }
+            if let Some(ice_cap) = ice_cap {
+                surfaces.insert(
+                    ice_cap,
+                    SurfaceMetadata {
+                        access: SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION),
+                        interior: None,
+                    },
+                );
             }
         } else {
             let mut column = land_column(*level, environment);
@@ -522,32 +609,6 @@ pub(crate) fn construct_patch_with_streams(
     } else {
         FillMaterialRole::Water
     };
-    let river_nodes = local_river_nodes
-        .into_iter()
-        .map(|(position, node)| {
-            let position = frame.position_to_world(position).map_err(|error| {
-                vec![recipe_issue(format!(
-                    "Hills river position conversion failed: {error}"
-                ))]
-            })?;
-            let downstream = node
-                .downstream
-                .map(|downstream| frame.position_to_world(downstream))
-                .transpose()
-                .map_err(|error| {
-                    vec![recipe_issue(format!(
-                        "Hills river downstream conversion failed: {error}"
-                    ))]
-                })?;
-            Ok((
-                position,
-                LiquidNode {
-                    state: node.state,
-                    downstream,
-                },
-            ))
-        })
-        .collect::<Result<_, Vec<WorldValidationIssue>>>()?;
     let biome_regions = volume
         .surfaces
         .keys()
@@ -690,6 +751,7 @@ struct CrossingGeometry {
     ford_centerline: Vec<HexCoord>,
     ford_route: BTreeSet<HexCoord>,
     protected: BTreeSet<HexCoord>,
+    fall_target_y: i32,
 }
 
 impl CrossingGeometry {
@@ -725,7 +787,63 @@ impl CrossingGeometry {
             ford_centerline: convert_route(self.ford_centerline)?,
             ford_route: convert_set(self.ford_route)?,
             protected: convert_set(self.protected)?,
+            fall_target_y: self.fall_target_y,
         })
+    }
+}
+
+fn frozen_ice_caps(
+    crossings: &CrossingGeometry,
+    orientation: u8,
+    river_offset: i32,
+) -> Result<BTreeSet<HexCoord>, Vec<WorldValidationIssue>> {
+    let minimum_y = crossings
+        .river
+        .iter()
+        .map(|coord| unrotate(*coord, orientation).y())
+        .min()
+        .unwrap_or_default();
+    let maximum_y = crossings
+        .river
+        .iter()
+        .map(|coord| unrotate(*coord, orientation).y())
+        .max()
+        .unwrap_or_default();
+    let upstream_limit = minimum_y.saturating_add(maximum_y.saturating_sub(minimum_y).max(0) / 3);
+    let mut candidates = crossings
+        .river
+        .iter()
+        .copied()
+        .filter(|coord| {
+            let local = unrotate(*coord, orientation);
+            local.x().saturating_sub(river_offset).abs() == RIVER_HALF_WIDTH
+                && local.y() <= upstream_limit
+                && !crossings.protected.contains(coord)
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|coord| {
+        let local = unrotate(*coord, orientation);
+        (local.y(), local.x(), *coord)
+    });
+    let mut selected = BTreeSet::new();
+    for candidate in candidates {
+        if selected
+            .iter()
+            .all(|ice: &HexCoord| ice.distance(candidate) > 1)
+        {
+            selected.insert(candidate);
+            if selected.len() == FROZEN_ICE_CAP_TARGET {
+                break;
+            }
+        }
+    }
+    if selected.len() < 3 {
+        Err(vec![recipe_issue(format!(
+            "Frozen Hills can place only {} isolated upstream shoreline ice caps",
+            selected.len()
+        ))])
+    } else {
+        Ok(selected)
     }
 }
 
@@ -812,6 +930,7 @@ fn crossing_geometry(
         ford_centerline: centerline(ford_y),
         ford_route,
         protected,
+        fall_target_y: (ford_y / 2).max(1),
     })
 }
 
@@ -821,8 +940,30 @@ fn river_column(
     environment: V3EnvironmentSettings,
     bridge: bool,
     ford: bool,
-) -> (VolumeColumn, TilePos, Option<TilePos>) {
-    let bed_level = valley.saturating_sub(RIVER_DEPTH);
+    ice_cap: bool,
+    liquid_position: TilePos,
+    liquid_node: LiquidNode,
+) -> (VolumeColumn, TilePos, Option<TilePos>, Option<TilePos>) {
+    let (bed_level, fill_bottom) = if liquid_node.state == LiquidFlowState::Fall {
+        liquid_node.downstream.map_or_else(
+            || {
+                (
+                    liquid_position
+                        .level
+                        .saturating_sub(RIVER_DEPTH.saturating_sub(1)),
+                    liquid_position.level.saturating_sub(1),
+                )
+            },
+            |downstream| (downstream.level.saturating_sub(1), downstream.level),
+        )
+    } else {
+        (
+            liquid_position
+                .level
+                .saturating_sub(RIVER_DEPTH.saturating_sub(1)),
+            liquid_position.level.saturating_sub(1),
+        )
+    };
     let core = if environment == V3EnvironmentSettings::Volcanic {
         SolidMaterialRole::Basalt
     } else {
@@ -850,7 +991,7 @@ fn river_column(
             cutaway_for: None,
         }),
         VolumeElement::Fill(NonSolidFill {
-            levels: LevelInterval::new(valley.saturating_sub(2), valley),
+            levels: LevelInterval::new(fill_bottom, liquid_position.level.saturating_add(1)),
             material: fill,
         }),
     ];
@@ -873,10 +1014,20 @@ fn river_column(
     } else {
         None
     };
+    let ice_cap = ice_cap.then(|| {
+        let surface = TilePos::new(coord, liquid_position.level.saturating_add(1));
+        elements.push(VolumeElement::Solid(SolidMass {
+            levels: LevelInterval::new(surface.level, surface.level.saturating_add(1)),
+            material: SolidMaterialRole::Ice,
+            cutaway_for: None,
+        }));
+        surface
+    });
     (
         VolumeColumn { elements },
         TilePos::new(coord, bed_level),
         crossing,
+        ice_cap,
     )
 }
 
@@ -921,11 +1072,19 @@ fn river_nodes(
     orientation: u8,
     river_offset: i32,
     top_level: Level,
+    fall: Option<(i32, Level)>,
     terminal_sources: &BTreeSet<HexCoord>,
 ) -> Result<BTreeMap<TilePos, LiquidNode>, Vec<WorldValidationIssue>> {
     let mut nodes = BTreeMap::new();
     for coord in river {
         let local = unrotate(*coord, orientation);
+        let level = fall.map_or(top_level, |(target_y, height)| {
+            if local.y() >= target_y {
+                top_level.saturating_sub(height)
+            } else {
+                top_level
+            }
+        });
         let forward = rotate(
             HexCoord::from_axial(local.x(), local.y().saturating_add(1)),
             orientation,
@@ -945,15 +1104,26 @@ fn river_nodes(
         } else {
             None
         };
-        nodes.insert(
-            TilePos::new(*coord, top_level),
-            LiquidNode {
-                state: if downstream_coord.is_some() {
-                    LiquidFlowState::Current
+        let downstream = downstream_coord.map(|next| {
+            let next_local = unrotate(next, orientation);
+            let next_level = fall.map_or(top_level, |(target_y, height)| {
+                if next_local.y() >= target_y {
+                    top_level.saturating_sub(height)
                 } else {
-                    LiquidFlowState::Still
+                    top_level
+                }
+            });
+            TilePos::new(next, next_level)
+        });
+        nodes.insert(
+            TilePos::new(*coord, level),
+            LiquidNode {
+                state: match downstream {
+                    Some(next) if next.level < level => LiquidFlowState::Fall,
+                    Some(_) => LiquidFlowState::Current,
+                    None => LiquidFlowState::Still,
                 },
-                downstream: downstream_coord.map(|next| TilePos::new(next, top_level)),
+                downstream,
             },
         );
     }
@@ -963,12 +1133,15 @@ fn river_nodes(
 fn all_nodes_drain_to_sources(
     nodes: &BTreeMap<TilePos, LiquidNode>,
     sources: &BTreeSet<HexCoord>,
-    level: Level,
 ) -> bool {
     let terminals = sources
         .iter()
-        .copied()
-        .map(|coord| TilePos::new(coord, level))
+        .flat_map(|coord| {
+            nodes
+                .keys()
+                .copied()
+                .filter(move |position| position.coord == *coord)
+        })
         .collect::<BTreeSet<_>>();
     nodes.keys().copied().all(|start| {
         let mut current = start;
@@ -1067,6 +1240,111 @@ fn fit_protected_routes(
     }
 }
 
+fn add_irregular_shelves(
+    centres: &[HexCoord],
+    mask: &BTreeSet<HexCoord>,
+    excluded: &BTreeSet<HexCoord>,
+    crossings: &CrossingGeometry,
+    valley: Level,
+    levels: &mut BTreeMap<HexCoord, Level>,
+) {
+    let direction = HexCoord::from_axial(1, 0);
+    let mut occupied = BTreeSet::new();
+    for centre in centres {
+        let direction_offset = centre
+            .x()
+            .saturating_mul(17)
+            .saturating_add(centre.y().saturating_mul(31))
+            .rem_euclid(6);
+        for turn in 0..6_u8 {
+            let turns = u8::try_from(direction_offset)
+                .unwrap_or_default()
+                .saturating_add(turn)
+                % 6;
+            let delta = rotate(direction, turns);
+            let inner = shift(*centre, delta);
+            let outer = shift(inner, delta);
+            let beyond = shift(outer, delta);
+            if [inner, outer, beyond]
+                .into_iter()
+                .any(|coord| !mask.contains(&coord) || excluded.contains(&coord))
+                || occupied.contains(&inner)
+                || occupied.contains(&outer)
+            {
+                continue;
+            }
+            let Some(peak_level) = levels.get(centre).copied() else {
+                break;
+            };
+            let Some(beyond_level) = levels.get(&beyond).copied() else {
+                continue;
+            };
+            if peak_level.saturating_sub(beyond_level) < 3 {
+                continue;
+            }
+            let Some(previous_inner) = levels.get(&inner).copied() else {
+                continue;
+            };
+            let Some(previous_outer) = levels.get(&outer).copied() else {
+                continue;
+            };
+            levels.insert(inner, peak_level);
+            levels.insert(outer, peak_level);
+            if !hills_levels_connected(levels, mask, crossings, valley) {
+                levels.insert(inner, previous_inner);
+                levels.insert(outer, previous_outer);
+                continue;
+            }
+            occupied.insert(inner);
+            occupied.insert(outer);
+            break;
+        }
+    }
+}
+
+fn hills_levels_connected(
+    levels: &BTreeMap<HexCoord, Level>,
+    mask: &BTreeSet<HexCoord>,
+    crossings: &CrossingGeometry,
+    valley: Level,
+) -> bool {
+    let ordinary_by_coord = mask
+        .iter()
+        .filter_map(|coord| {
+            if crossings.river.contains(coord) {
+                if crossings.bridge_deck.contains(coord) {
+                    Some((*coord, valley.saturating_add(1)))
+                } else if crossings.ford_deck.contains(coord) {
+                    Some((*coord, valley))
+                } else {
+                    None
+                }
+            } else {
+                levels.get(coord).copied().map(|level| (*coord, level))
+            }
+        })
+        .collect::<BTreeMap<_, _>>();
+    let Some(start) = ordinary_by_coord.keys().next().copied() else {
+        return false;
+    };
+    let mut visited = BTreeSet::from([start]);
+    let mut frontier = VecDeque::from([start]);
+    while let Some(coord) = frontier.pop_front() {
+        let Some(level) = ordinary_by_coord.get(&coord).copied() else {
+            continue;
+        };
+        for neighbor in coord.neighbors() {
+            let Some(neighbor_level) = ordinary_by_coord.get(&neighbor).copied() else {
+                continue;
+            };
+            if level.abs_diff(neighbor_level) <= 1 && visited.insert(neighbor) {
+                frontier.push_back(neighbor);
+            }
+        }
+    }
+    visited.len() == ordinary_by_coord.len()
+}
+
 fn opposing_landings(
     coords: impl IntoIterator<Item = HexCoord>,
     frame: LocalPatchFrame,
@@ -1109,6 +1387,12 @@ fn rotate(coord: HexCoord, turns: u8) -> HexCoord {
 
 fn unrotate(coord: HexCoord, turns: u8) -> HexCoord {
     rotate(coord, (6_u8.saturating_sub(turns % 6)) % 6)
+}
+
+fn shift(coord: HexCoord, delta: HexCoord) -> HexCoord {
+    let [x, y, z] = coord.to_cubic_array();
+    let [dx, dy, dz] = delta.to_cubic_array();
+    HexCoord::new_cubic(x + dx, y + dy, z + dz)
 }
 
 fn land_column(surface: Level, environment: V3EnvironmentSettings) -> VolumeColumn {
@@ -1232,6 +1516,30 @@ fn validate_hills_inner(
         ));
         return WorldValidation::Invalid(issues);
     };
+    let protected_surfaces = bridge
+        .surfaces
+        .union(&alternate.surfaces)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let (two_level_cliffs, three_level_cliffs) =
+        cliff_transition_counts(&ordinary, &protected_surfaces);
+    if settings.max_relief >= 10 {
+        if relief < 10 {
+            issues.push(recipe_issue(format!(
+                "Hills reachable relief is {relief}; revised terrain requires at least 10"
+            )));
+        }
+        if two_level_cliffs < 3 {
+            issues.push(recipe_issue(format!(
+                "Hills has {two_level_cliffs} non-route two-level cliff transitions; expected at least 3"
+            )));
+        }
+        if three_level_cliffs == 0 {
+            issues.push(recipe_issue(
+                "Hills has no non-route cliff transition of at least three levels",
+            ));
+        }
+    }
     validate_crossing_route("bridge", bridge, &ordinary, &mut issues);
     validate_crossing_route("alternate crossing", alternate, &ordinary, &mut issues);
     if !bridge.surfaces.is_disjoint(&alternate.surfaces) {
@@ -1261,6 +1569,11 @@ fn validate_hills_inner(
         ));
     }
     validate_barrier_surfaces(plan, &fill_coords, bridge, alternate, &mut issues);
+    let frozen = ordinary
+        .positions()
+        .any(|position| solid_material_at(&plan.volume, position) == Some(SolidMaterialRole::Snow));
+    validate_frozen_ice_caps(plan, frozen, &protected_surfaces, &mut issues);
+    validate_small_fall(plan, validate_common, &mut issues);
 
     let bridge_barrier: BTreeSet<_> = bridge
         .surfaces
@@ -1339,6 +1652,271 @@ fn validate_hills_inner(
         bridge_surfaces: count_u32(bridge.surfaces.len()),
         alternate_crossing_surfaces: count_u32(alternate.surfaces.len()),
     })
+}
+
+fn validate_small_fall(
+    plan: &GeneratedWorldPlan,
+    required: bool,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let fall_nodes = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.iter())
+        .filter_map(|(position, node)| {
+            (node.state == LiquidFlowState::Fall).then_some((*position, node.downstream))
+        })
+        .collect::<Vec<_>>();
+    if !required {
+        if !fall_nodes.is_empty() {
+            issues.push(recipe_issue(
+                "Composite Hills must preserve its level cross-patch liquid contract",
+            ));
+        }
+        return;
+    }
+    if fall_nodes.len() != 3 {
+        issues.push(recipe_issue(format!(
+            "Hills requires one contiguous three-wide small fall, found {} nodes",
+            fall_nodes.len()
+        )));
+        return;
+    }
+    let drops = fall_nodes
+        .iter()
+        .filter_map(|(position, downstream)| {
+            downstream.map(|downstream| position.level.saturating_sub(downstream.level))
+        })
+        .collect::<BTreeSet<_>>();
+    if drops != BTreeSet::from([SMALL_FALL_HEIGHT]) {
+        issues.push(recipe_issue(format!(
+            "Hills small fall must descend {SMALL_FALL_HEIGHT} levels in every lane"
+        )));
+    }
+    let coords = fall_nodes
+        .iter()
+        .map(|(position, _)| position.coord)
+        .collect::<BTreeSet<_>>();
+    if coords.iter().any(|coord| {
+        !coord
+            .neighbors()
+            .into_iter()
+            .any(|neighbor| coords.contains(&neighbor))
+    }) {
+        issues.push(recipe_issue(
+            "Hills small fall curtain is not horizontally contiguous",
+        ));
+    }
+    let Some(bridge) = plan.features.protected_routes.get(BRIDGE_ROUTE) else {
+        return;
+    };
+    let Some(alternate) = plan.features.protected_routes.get(FORD_ROUTE) else {
+        return;
+    };
+    let bridge_coords = bridge
+        .surfaces
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let alternate_coords = alternate
+        .surfaces
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let liquid_nodes = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.iter().map(|(position, node)| (*position, *node)))
+        .collect::<BTreeMap<_, _>>();
+    let fall_is_between_crossings = fall_nodes.iter().all(|(fall, _)| {
+        liquid_nodes
+            .keys()
+            .copied()
+            .filter(|position| bridge_coords.contains(&position.coord))
+            .any(|bridge| liquid_path_reaches(&liquid_nodes, bridge, |position| position == *fall))
+            && liquid_path_reaches(&liquid_nodes, *fall, |position| {
+                alternate_coords.contains(&position.coord)
+            })
+    });
+    if !fall_is_between_crossings {
+        issues.push(recipe_issue(
+            "Hills small fall must remain topologically between the bridge and alternate passage",
+        ));
+    }
+}
+
+fn liquid_path_reaches(
+    nodes: &BTreeMap<TilePos, LiquidNode>,
+    start: TilePos,
+    mut target: impl FnMut(TilePos) -> bool,
+) -> bool {
+    let mut current = Some(start);
+    let mut visited = BTreeSet::new();
+    while let Some(position) = current {
+        if target(position) {
+            return true;
+        }
+        if !visited.insert(position) {
+            return false;
+        }
+        current = nodes.get(&position).and_then(|node| node.downstream);
+    }
+    false
+}
+
+fn validate_frozen_ice_caps(
+    plan: &GeneratedWorldPlan,
+    frozen: bool,
+    protected: &BTreeSet<TilePos>,
+    issues: &mut Vec<WorldValidationIssue>,
+) {
+    let ice_caps = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (solid_material_at(&plan.volume, *position) == Some(SolidMaterialRole::Ice))
+                .then_some((*position, *metadata))
+        })
+        .collect::<Vec<_>>();
+    if !frozen {
+        if !ice_caps.is_empty() {
+            issues.push(recipe_issue(
+                "Non-frozen Hills contains frozen shoreline ice caps",
+            ));
+        }
+        return;
+    }
+    if !(3..=7).contains(&ice_caps.len()) {
+        issues.push(recipe_issue(format!(
+            "Frozen Hills has {} shoreline ice caps; expected 3 through 7",
+            ice_caps.len()
+        )));
+    }
+    if ice_caps
+        .iter()
+        .any(|(_, metadata)| metadata.access != SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION))
+    {
+        issues.push(recipe_issue(
+            "Frozen Hills ice caps must remain outside the ordinary walker network",
+        ));
+    }
+    let liquid_coords = plan
+        .volume
+        .fill_runs_by_top()
+        .keys()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    if ice_caps
+        .iter()
+        .any(|(position, _)| !liquid_coords.contains(&position.coord))
+    {
+        issues.push(recipe_issue(
+            "Frozen Hills ice caps must sit over authored river cells",
+        ));
+    }
+    if ice_caps
+        .iter()
+        .any(|(position, _)| protected.iter().any(|route| route.coord == position.coord))
+    {
+        issues.push(recipe_issue(
+            "Frozen Hills ice caps overlap a protected river crossing",
+        ));
+    }
+    for (index, (first, _)) in ice_caps.iter().enumerate() {
+        if ice_caps
+            .iter()
+            .skip(index.saturating_add(1))
+            .any(|(second, _)| first.coord.distance(second.coord) <= 1)
+        {
+            issues.push(recipe_issue(
+                "Frozen Hills shoreline ice caps must remain isolated",
+            ));
+            break;
+        }
+    }
+    let Some(bridge) = plan.features.protected_routes.get(BRIDGE_ROUTE) else {
+        return;
+    };
+    let bridge_coords = bridge
+        .surfaces
+        .iter()
+        .map(|position| position.coord)
+        .collect::<BTreeSet<_>>();
+    let liquid_nodes = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.iter().map(|(position, node)| (*position, *node)))
+        .collect::<BTreeMap<_, _>>();
+    let caps_are_upstream_shoreline = ice_caps.iter().all(|(ice, _)| {
+        let shoreline = ice.coord.neighbors().into_iter().any(|neighbor| {
+            plan.layout.footprint.contains(&neighbor) && !liquid_coords.contains(&neighbor)
+        });
+        let upstream = liquid_nodes
+            .keys()
+            .copied()
+            .filter(|position| position.coord == ice.coord)
+            .any(|position| {
+                liquid_path_reaches(&liquid_nodes, position, |downstream| {
+                    bridge_coords.contains(&downstream.coord)
+                })
+            });
+        shoreline && upstream
+    });
+    if !caps_are_upstream_shoreline {
+        issues.push(recipe_issue(
+            "Frozen Hills ice caps must remain on the upstream shoreline lanes",
+        ));
+    }
+    let flowing_lanes = plan
+        .liquids
+        .bodies
+        .values()
+        .flat_map(|body| body.nodes.iter())
+        .filter(|(position, node)| {
+            bridge_coords.contains(&position.coord) && node.downstream.is_some()
+        })
+        .map(|(position, _)| position.coord)
+        .collect::<BTreeSet<_>>();
+    if flowing_lanes.len() < 2 {
+        issues.push(recipe_issue(
+            "Frozen Hills must preserve at least two flowing river lanes",
+        ));
+    }
+}
+
+fn cliff_transition_counts(
+    ordinary: &OrdinaryGraph,
+    protected: &BTreeSet<TilePos>,
+) -> (usize, usize) {
+    let by_coord = ordinary
+        .positions()
+        .map(|position| (position.coord, position))
+        .collect::<BTreeMap<_, _>>();
+    let mut two_level = 0_usize;
+    let mut three_level = 0_usize;
+    for (coord, position) in &by_coord {
+        for neighbor_coord in coord.neighbors() {
+            if neighbor_coord <= *coord {
+                continue;
+            }
+            let Some(neighbor) = by_coord.get(&neighbor_coord).copied() else {
+                continue;
+            };
+            if protected.contains(position) || protected.contains(&neighbor) {
+                continue;
+            }
+            match position.level.abs_diff(neighbor.level) {
+                2 => two_level = two_level.saturating_add(1),
+                3.. => three_level = three_level.saturating_add(1),
+                _ => {}
+            }
+        }
+    }
+    (two_level, three_level)
 }
 
 fn validate_crossing_route(
@@ -1572,6 +2150,14 @@ mod tests {
             .bodies
             .values()
             .all(|body| body.material == FillMaterialRole::Water));
+        let fall_nodes = plan
+            .liquids
+            .bodies
+            .values()
+            .flat_map(|body| body.nodes.values())
+            .filter(|node| node.state == LiquidFlowState::Fall)
+            .count();
+        assert_eq!(fall_nodes, 3);
         assert_eq!(
             plan.structures
                 .by_id
@@ -1597,6 +2183,19 @@ mod tests {
             .bodies
             .values()
             .all(|body| body.material == FillMaterialRole::Water));
+        let frozen_ice_caps = frozen
+            .validated
+            .plan
+            .volume
+            .surfaces
+            .iter()
+            .filter(|(position, metadata)| {
+                solid_material_at(&frozen.validated.plan.volume, **position)
+                    == Some(SolidMaterialRole::Ice)
+                    && metadata.access == SurfaceAccess::SpecialMovement(FROZEN_ICE_REGION)
+            })
+            .count();
+        assert_eq!(frozen_ice_caps, FROZEN_ICE_CAP_TARGET);
 
         let mut volcanic = settings();
         let V3LayoutSettings::Single(volcanic_patch) = &mut volcanic.layout else {
@@ -1627,6 +2226,75 @@ mod tests {
             .filter(|surface| liquid_coords.contains(&surface.coord))
             .all(|surface| solid_material_at(&plan.volume, *surface)
                 == Some(SolidMaterialRole::Basalt)));
+    }
+
+    #[test]
+    fn revised_hills_reach_ten_levels_with_irregular_non_route_cliffs() {
+        for environment in [
+            V3EnvironmentSettings::TemperateGrassland,
+            V3EnvironmentSettings::Frozen,
+        ] {
+            let mut revised = settings();
+            let V3LayoutSettings::Single(patch) = &mut revised.layout else {
+                unreachable!("test uses Single")
+            };
+            patch.environment = environment;
+            let V3RecipeSettings::Hills(hills) = &mut patch.recipe else {
+                unreachable!("test uses Hills")
+            };
+            hills.max_relief = 12;
+            let selected =
+                generate(12, 0.4, &revised, 1_592_598_566).expect("revised Hills should generate");
+            assert!(selected.metrics.relief >= 10);
+            let plan = &selected.validated.plan;
+            let ordinary = OrdinaryGraph::from_volume(&plan.volume, Some(&plan.blockers));
+            let protected = plan
+                .features
+                .protected_routes
+                .values()
+                .flat_map(|route| route.surfaces.iter().copied())
+                .collect();
+            let (two_level, three_level) = cliff_transition_counts(&ordinary, &protected);
+            assert!(two_level >= 3, "two-level cliff transitions: {two_level}");
+            assert!(
+                three_level >= 1,
+                "three-level cliff transitions: {three_level}"
+            );
+        }
+    }
+
+    #[test]
+    fn revised_hills_pr_corpus_validates_128_seeds_and_named_regressions() {
+        let mut seeds = (0_u64..128).collect::<BTreeSet<_>>();
+        seeds.insert(1_592_598_566);
+        for environment in [
+            V3EnvironmentSettings::TemperateGrassland,
+            V3EnvironmentSettings::Frozen,
+        ] {
+            let mut revised = settings();
+            let V3LayoutSettings::Single(patch) = &mut revised.layout else {
+                unreachable!("test uses Single")
+            };
+            patch.environment = environment;
+            let V3RecipeSettings::Hills(hills) = &mut patch.recipe else {
+                unreachable!("test uses Hills")
+            };
+            hills.max_relief = 12;
+            let mut fallback_seeds = Vec::new();
+            for seed in &seeds {
+                let selected = generate(12, 0.4, &revised, *seed)
+                    .unwrap_or_else(|error| panic!("{environment:?} Hills seed {seed}: {error}"));
+                if selected.used_fallback {
+                    fallback_seeds.push(*seed);
+                }
+            }
+            assert!(
+                fallback_seeds.len().saturating_mul(100) < seeds.len(),
+                "{}/{} {environment:?} Hills seeds used fallback: {fallback_seeds:?}",
+                fallback_seeds.len(),
+                seeds.len()
+            );
+        }
     }
 
     #[test]
