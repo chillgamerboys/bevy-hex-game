@@ -845,7 +845,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     assert_eq!(report.settings_fingerprint, 5_082_310_489_405_017_929);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(8_012_354_130_252_983_421)
+        Some(12_223_039_404_442_798_248)
     );
     assert_eq!(report.map_fingerprint, 17_075_345_429_537_665_322);
     assert_ne!(
