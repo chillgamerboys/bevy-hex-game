@@ -2289,8 +2289,8 @@ impl V3MountainsSettings {
         if self.base_level < 5 {
             return Err("V3 Mountains base_level must leave room for strata".to_owned());
         }
-        if !(14..=24).contains(&self.relief) {
-            return Err("V3 Mountains relief must be between 14 and 24".to_owned());
+        if !(14..=32).contains(&self.relief) {
+            return Err("V3 Mountains relief must be between 14 and 32".to_owned());
         }
         if !(3..=7).contains(&self.peak_count) {
             return Err("V3 Mountains peak_count must be between 3 and 7".to_owned());
