@@ -907,11 +907,11 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.generator_version, 3);
     assert_eq!(report.seed, 381_654_729);
     assert_eq!(report.candidates_evaluated, 8);
-    assert_eq!(report.valid_candidates, 4);
+    assert_eq!(report.valid_candidates, 5);
     assert!(!report.used_fallback);
     assert_eq!(report.repair_rounds, 0);
     assert!(report.repair_actions.is_empty());
-    assert_eq!(report.notes.len(), 4);
+    assert_eq!(report.notes.len(), 3);
     assert!(report
         .notes
         .iter()
@@ -920,15 +920,15 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     assert_eq!(report.settings_fingerprint, 2_658_105_648_444_344_100);
     assert_eq!(
         report.semantic_plan_fingerprint,
-        Some(13_825_840_020_669_178_506)
+        Some(16_803_101_637_412_033_592)
     );
-    assert_eq!(report.map_fingerprint, 7_636_685_298_505_306_166);
+    assert_eq!(report.map_fingerprint, 2_816_539_634_225_236_468);
     let Some(ProceduralRecipeMetrics::Forest(metrics)) = &report.recipe_metrics else {
         panic!("V3 Forest should publish exact recipe metrics");
     };
     assert_eq!(metrics.clearing_count, 4);
     assert_eq!(metrics.relief, 4);
-    assert_eq!(metrics.tree_roots, 52);
+    assert_eq!(metrics.tree_roots, 53);
     assert!(metrics.old_growth_roots > 0);
     assert_eq!(
         metrics.old_growth_blocker_surfaces,
@@ -1014,6 +1014,8 @@ fn v3_forest_publishes_exact_features_blockers_and_routes() {
     );
     assert_eq!(app.world().resource::<VoxelMap>().len(), 469);
     assert_eq!(app.world().resource::<BiomeRegions>().len(), 469);
+    assert!(app.world().resource::<SpecialMovementRegions>().is_empty());
+    assert!(app.world().resource::<InteriorRegions>().is_empty());
     assert!(app.world().resource::<MapViewHint>().is_valid());
     for anchor in [
         "party_start",
