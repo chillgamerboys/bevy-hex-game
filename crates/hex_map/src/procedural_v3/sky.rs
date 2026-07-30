@@ -333,11 +333,24 @@ fn construct_patch_with_objects(
         centres = order_composite_centres(centres, &upper_mask)?;
     }
     let bridge_rows = bridge_rows(&centres, &upper_mask);
-    let bridge_estimate = bridge_rows
-        .iter()
-        .flat_map(|row| row.iter().copied())
-        .collect::<BTreeSet<_>>()
-        .len();
+    let ring_bridge_routes = if composite_layout {
+        resolve_ring_bridge_routes(&bridge_rows, &upper_mask)?
+    } else {
+        Vec::new()
+    };
+    let bridge_estimate = if composite_layout {
+        ring_bridge_routes
+            .iter()
+            .flat_map(|route| route.surfaces.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .len()
+    } else {
+        bridge_rows
+            .iter()
+            .flat_map(|row| row.iter().copied())
+            .collect::<BTreeSet<_>>()
+            .len()
+    };
     let satellite_target = if composite_layout { 1 } else { 7 };
     let target = mask
         .len()
@@ -348,7 +361,14 @@ fn construct_patch_with_objects(
         .saturating_sub(satellite_target)
         .saturating_add(usize::from(composite_layout).saturating_mul(3))
         .max(PRIMARY_ISLANDS);
-    let primary_cells = grow_primary_islands(&upper_mask, &excluded, &centres, primary_target);
+    let primary_cell_owners = grow_primary_islands(
+        &upper_mask,
+        &excluded,
+        &centres,
+        &ring_bridge_routes,
+        primary_target,
+    );
+    let primary_cells = primary_cell_owners.keys().copied().collect::<BTreeSet<_>>();
     let satellite_cells = select_satellite(
         &upper_mask,
         &excluded,
@@ -361,14 +381,8 @@ fn construct_patch_with_objects(
     let primary_region = SpecialMovementRegion(0);
     let satellite_region = SpecialMovementRegion(1);
     let mut upper = BTreeMap::<HexCoord, UpperCell>::new();
-    for coord in &primary_cells {
-        let owner = centres
-            .iter()
-            .enumerate()
-            .min_by_key(|(index, centre)| (centre.distance(*coord), *index))
-            .map(|(index, _)| index)
-            .unwrap_or_default();
-        let level = upper_base.saturating_add(i32::try_from(owner).unwrap_or_default());
+    for (coord, owner) in &primary_cell_owners {
+        let level = upper_base.saturating_add(i32::try_from(*owner).unwrap_or_default());
         upper.insert(
             *coord,
             UpperCell {
@@ -385,7 +399,6 @@ fn construct_patch_with_objects(
         .keys()
         .next_back()
         .map_or(0, |id| id.0.saturating_add(1));
-    let mut reserved_ring_bridge_surfaces = BTreeSet::new();
     for (bridge_index, row) in bridge_rows.iter().enumerate() {
         let Some(start) = row.first().copied() else {
             continue;
@@ -396,12 +409,20 @@ fn construct_patch_with_objects(
         let start_level = upper.get(&start).map_or(upper_base, |cell| cell.level);
         let end_level = upper.get(&end).map_or(start_level, |cell| cell.level);
         let denominator = row.len().saturating_sub(1).max(1);
-        let ring_route = composite_layout
-            .then(|| ring_bridge_route(row, &upper_mask, &reserved_ring_bridge_surfaces))
-            .transpose()?;
-        if let Some(route) = &ring_route {
-            reserved_ring_bridge_surfaces.extend(route.surfaces.iter().copied());
-        }
+        let ring_route = if composite_layout {
+            Some(
+                ring_bridge_routes
+                    .get(bridge_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        vec![recipe_issue(format!(
+                            "SkyIslands lost resolved upper bridge route {bridge_index}"
+                        ))]
+                    })?,
+            )
+        } else {
+            None
+        };
         for (index, coord) in row.iter().copied().enumerate() {
             let level = interpolated_level(start_level, end_level, index, denominator);
             let lane_cells = ring_route.as_ref().map_or_else(
@@ -648,20 +669,29 @@ fn order_composite_centres(
             continue;
         };
         let ordered = [first, second, third];
-        let mut reserved = BTreeSet::new();
-        let mut valid = true;
-        for row in bridge_rows(&ordered, mask) {
-            match ring_bridge_route(&row, mask, &reserved) {
-                Ok(route) => reserved.extend(route.surfaces),
-                Err(issues) => {
-                    last_issues = issues;
-                    valid = false;
-                    break;
-                }
+        let rows = bridge_rows(&ordered, mask);
+        match resolve_ring_bridge_routes(&rows, mask) {
+            Ok(routes)
+                if routes.iter().enumerate().all(|(bridge_index, route)| {
+                    ordered.iter().enumerate().all(|(owner, centre)| {
+                        (owner == bridge_index || owner == bridge_index.saturating_add(1))
+                            || route
+                                .surfaces
+                                .iter()
+                                .all(|surface| centre.distance(*surface) > 1)
+                    })
+                }) =>
+            {
+                return Ok(ordered);
             }
-        }
-        if valid {
-            return Ok(ordered);
+            Ok(_) => {
+                last_issues = vec![recipe_issue(
+                    "SkyIslands upper bridge passes beside its unrelated primary island",
+                )];
+            }
+            Err(issues) => {
+                last_issues = issues;
+            }
         }
     }
     let detail = last_issues
@@ -679,30 +709,66 @@ fn grow_primary_islands(
     mask: &BTreeSet<HexCoord>,
     excluded: &BTreeSet<HexCoord>,
     centres: &[HexCoord; PRIMARY_ISLANDS],
+    bridge_routes: &[RingBridgeRoute],
     target: usize,
-) -> BTreeSet<HexCoord> {
-    let mut cells: BTreeSet<_> = centres.iter().copied().collect();
-    let mut frontier: VecDeque<_> = centres.iter().copied().collect();
-    while cells.len() < target {
-        let Some(coord) = frontier.pop_front() else {
+) -> BTreeMap<HexCoord, usize> {
+    let mut owners = centres
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(owner, coord)| (coord, owner))
+        .collect::<BTreeMap<_, _>>();
+    let mut frontier = centres
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(owner, coord)| (coord, owner))
+        .collect::<VecDeque<_>>();
+    while owners.len() < target {
+        let Some((coord, owner)) = frontier.pop_front() else {
             break;
         };
         let mut neighbors: Vec<_> = coord
             .neighbors()
             .into_iter()
             .filter(|neighbor| mask.contains(neighbor) && !excluded.contains(neighbor))
+            .filter(|neighbor| !owners.contains_key(neighbor))
+            .filter(|neighbor| {
+                bridge_routes
+                    .iter()
+                    .all(|route| !route.surfaces.contains(neighbor))
+            })
+            .filter(|neighbor| {
+                neighbor
+                    .neighbors()
+                    .into_iter()
+                    .filter_map(|adjacent| owners.get(&adjacent))
+                    .all(|adjacent_owner| *adjacent_owner == owner)
+            })
+            .filter(|neighbor| {
+                bridge_routes
+                    .iter()
+                    .enumerate()
+                    .all(|(bridge_index, route)| {
+                        (owner == bridge_index || owner == bridge_index.saturating_add(1))
+                            || route
+                                .surfaces
+                                .iter()
+                                .all(|surface| neighbor.distance(*surface) > 1)
+                    })
+            })
             .collect();
         neighbors.sort_unstable();
         for neighbor in neighbors {
-            if cells.insert(neighbor) {
-                frontier.push_back(neighbor);
-                if cells.len() == target {
+            if owners.insert(neighbor, owner).is_none() {
+                frontier.push_back((neighbor, owner));
+                if owners.len() == target {
                     break;
                 }
             }
         }
     }
-    cells
+    owners
 }
 
 fn select_satellite(
@@ -764,6 +830,20 @@ fn two_wide_cells(coord: HexCoord, mask: &BTreeSet<HexCoord>) -> BTreeSet<HexCoo
 struct RingBridgeRoute {
     lanes: Vec<[HexCoord; 2]>,
     surfaces: BTreeSet<HexCoord>,
+}
+
+fn resolve_ring_bridge_routes(
+    rows: &[Vec<HexCoord>],
+    mask: &BTreeSet<HexCoord>,
+) -> Result<Vec<RingBridgeRoute>, Vec<WorldValidationIssue>> {
+    let mut routes = Vec::with_capacity(rows.len());
+    let mut reserved = BTreeSet::new();
+    for row in rows {
+        let route = ring_bridge_route(row, mask, &reserved)?;
+        reserved.extend(route.surfaces.iter().copied());
+        routes.push(route);
+    }
+    Ok(routes)
 }
 
 impl RingBridgeRoute {
@@ -1021,7 +1101,7 @@ fn validate_sky_inner(
             settings.min_clearance
         )));
     }
-    let bridge_surfaces = if plan.layout.kind.is_composite() {
+    let bridge_surfaces = if composite_layout {
         validate_ring_upper_bridges(plan, &primary, &metal_primary_surfaces, &mut issues)
     } else {
         let count = count_u32(metal_primary_surfaces.len());

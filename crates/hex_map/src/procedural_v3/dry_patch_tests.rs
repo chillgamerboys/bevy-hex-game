@@ -1,3 +1,7 @@
+use std::collections::{BTreeSet, VecDeque};
+
+use hex_core::{SpecialMovementRegion, TilePos};
+
 use super::composition::GeneratedPatchPlan;
 use super::layout::ResolvedLiquidPort;
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
@@ -49,6 +53,220 @@ fn at_least_one_complete_candidate_index_constructs_every_dry_patch() {
     for plan in plans {
         assert_strict_patch(&layout, plan);
     }
+}
+
+#[test]
+fn stitched_sky_rejects_corrupted_upper_bridge_structures_after_local_projection() {
+    let (settings, recipes) = dry_ring_settings();
+    let layout = resolve_layout(33, &settings).expect("the dry Ring7 fixture should resolve");
+    let context = patch(&layout, 6).expect("Sky Islands slot should resolve as a patch context");
+    let catalog = super::vegetation::tests::runtime_art_catalog();
+    let baseline = sky::construct_patch_with_catalog(
+        context,
+        &recipes.sky,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        PatchBuildMode::CanonicalFallback,
+        catalog,
+    )
+    .expect("stitched Sky Islands should construct");
+    let metrics = match sky::validate_patch(
+        context,
+        &baseline,
+        &recipes.sky,
+        V3EnvironmentSettings::TemperateGrassland,
+    ) {
+        super::selection::WorldValidation::Valid(metrics) => metrics,
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the unmodified stitched Sky Islands fixture must validate: {issues:?}");
+        }
+    };
+    assert_eq!(metrics.primary_islands, 3);
+    assert_eq!(metrics.upper_tree_roots, 3);
+    assert!((15..=35).contains(&metrics.upper_grass_percent));
+
+    let bridge_ids = baseline
+        .structures
+        .by_id
+        .iter()
+        .filter_map(|(id, structure)| {
+            (structure.kind == super::world::StructureKind::Bridge
+                && structure.voxels.iter().all(|voxel| {
+                    baseline.volume.surfaces.get(voxel).is_some_and(|metadata| {
+                        metadata.access
+                            == super::volume::SurfaceAccess::SpecialMovement(SpecialMovementRegion(
+                                0,
+                            ))
+                    })
+                }))
+            .then_some(*id)
+        })
+        .collect::<Vec<_>>();
+    let [first_id, second_id] = bridge_ids.as_slice() else {
+        panic!("the stitched fixture must contain exactly two upper bridges");
+    };
+    assert_stitched_sky_topology(&baseline, *first_id, *second_id);
+
+    let mut missing = baseline.clone();
+    missing.structures.by_id.remove(first_id);
+    assert_validation_rejects_with(
+        sky::validate_patch(
+            context,
+            &missing,
+            &recipes.sky,
+            V3EnvironmentSettings::TemperateGrassland,
+        ),
+        "requires exactly two upper bridge structures",
+    );
+
+    let first_voxel = baseline
+        .structures
+        .by_id
+        .get(first_id)
+        .and_then(|structure| structure.voxels.first())
+        .copied()
+        .expect("the first upper bridge should contain exact voxels");
+    let mut overlapping = baseline.clone();
+    overlapping
+        .structures
+        .by_id
+        .get_mut(second_id)
+        .expect("the second upper bridge should remain present")
+        .voxels
+        .insert(first_voxel);
+    assert_validation_rejects_with(
+        sky::validate_patch(
+            context,
+            &overlapping,
+            &recipes.sky,
+            V3EnvironmentSettings::TemperateGrassland,
+        ),
+        "upper bridge structures overlap",
+    );
+
+    let mut narrowed = baseline.clone();
+    narrowed
+        .structures
+        .by_id
+        .get_mut(first_id)
+        .expect("the first upper bridge should remain present")
+        .voxels
+        .remove(&first_voxel);
+    narrowed
+        .structures
+        .by_id
+        .get_mut(second_id)
+        .expect("the second upper bridge should remain present")
+        .voxels
+        .insert(first_voxel);
+    assert_validation_rejects_with(
+        sky::validate_patch(
+            context,
+            &narrowed,
+            &recipes.sky,
+            V3EnvironmentSettings::TemperateGrassland,
+        ),
+        "is not a two-wide span",
+    );
+}
+
+fn assert_stitched_sky_topology(
+    plan: &GeneratedPatchPlan,
+    first_id: super::world::StructureId,
+    second_id: super::world::StructureId,
+) {
+    let primary = plan
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access
+                == super::volume::SurfaceAccess::SpecialMovement(SpecialMovementRegion(0)))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    let bridges = [first_id, second_id].map(|id| {
+        plan.structures
+            .by_id
+            .get(&id)
+            .expect("every upper bridge id should resolve")
+            .voxels
+            .clone()
+    });
+    let [first_bridge, second_bridge] = &bridges;
+    assert!(first_bridge.is_disjoint(second_bridge));
+    let bridge_union = bridges
+        .iter()
+        .flat_map(|bridge| bridge.iter().copied())
+        .collect::<BTreeSet<_>>();
+    assert!(bridge_union.is_subset(&primary));
+    assert!(bridges
+        .iter()
+        .all(|bridge| bridge.len() >= 4 && bridge.len() % 2 == 0));
+    assert!(bridge_union.iter().all(|surface| {
+        bridge_union
+            .iter()
+            .filter(|neighbor| surface.coord.distance(neighbor.coord) == 1)
+            .all(|neighbor| surface.level.abs_diff(neighbor.level) <= 1)
+    }));
+
+    let islands = test_surface_components(
+        &primary
+            .difference(&bridge_union)
+            .copied()
+            .collect::<BTreeSet<_>>(),
+    );
+    assert_eq!(islands.len(), 3);
+    assert_eq!(
+        islands
+            .iter()
+            .flat_map(|island| island.iter().map(|surface| surface.level))
+            .collect::<BTreeSet<_>>()
+            .len(),
+        3
+    );
+    for bridge in bridges {
+        let contacts = islands
+            .iter()
+            .filter(|island| {
+                bridge
+                    .iter()
+                    .any(|voxel| island.iter().any(|surface| test_adjoin(*voxel, *surface)))
+            })
+            .count();
+        assert_eq!(
+            contacts, 2,
+            "each upper span should avoid the unrelated island"
+        );
+    }
+}
+
+fn test_surface_components(surfaces: &BTreeSet<TilePos>) -> Vec<BTreeSet<TilePos>> {
+    let mut remaining = surfaces.clone();
+    let mut components = Vec::new();
+    while let Some(start) = remaining.first().copied() {
+        remaining.remove(&start);
+        let mut component = BTreeSet::from([start]);
+        let mut frontier = VecDeque::from([start]);
+        while let Some(position) = frontier.pop_front() {
+            let neighbors = remaining
+                .iter()
+                .copied()
+                .filter(|neighbor| test_adjoin(position, *neighbor))
+                .collect::<Vec<_>>();
+            for neighbor in neighbors {
+                remaining.remove(&neighbor);
+                component.insert(neighbor);
+                frontier.push_back(neighbor);
+            }
+        }
+        components.push(component);
+    }
+    components
+}
+
+fn test_adjoin(first: TilePos, second: TilePos) -> bool {
+    first.coord.distance(second.coord) == 1 && first.level.abs_diff(second.level) <= 1
 }
 
 #[test]
@@ -187,6 +405,21 @@ fn rotated_waterfall_outlet_aligns_with_the_center_hills_inlet() {
         assert_eq!(outlet.1.state, LiquidFlowState::Still);
         assert_eq!(outlet.1.downstream, None);
     }
+}
+
+fn assert_validation_rejects_with<T>(
+    validation: super::selection::WorldValidation<T>,
+    expected_detail: &str,
+) {
+    let super::selection::WorldValidation::Invalid(issues) = validation else {
+        panic!("corrupted stitched Sky Islands unexpectedly validated");
+    };
+    assert!(
+        issues
+            .iter()
+            .any(|issue| issue.detail.contains(expected_detail)),
+        "expected an issue containing {expected_detail:?}, got {issues:?}"
+    );
 }
 
 fn construct_dry_plans(
