@@ -17,41 +17,29 @@ pub(super) const SMALL_BROADLEAF_ID: &str = "plant/small-broadleaf";
 pub(super) const TALL_NARROW_ID: &str = "plant/tall-narrow";
 pub(super) const OLD_GROWTH_ID: &str = "plant/old-growth";
 pub(super) const GRASS_TUFT_ID: &str = "prop/grass-tuft";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by frozen landform integration")
 )]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_SMALL_BROADLEAF_ID: &str = "plant/snowy-small-broadleaf";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by frozen landform integration")
 )]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_TALL_NARROW_ID: &str = "plant/snowy-tall-narrow";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by frozen landform integration")
 )]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_OLD_GROWTH_ID: &str = "plant/snowy-old-growth";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed by frozen landform integration")
 )]
-#[allow(dead_code, reason = "consumed by frozen landform integration")]
 pub(super) const SNOWY_GRASS_TUFT_ID: &str = "prop/snowy-grass-tuft";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by cave integration")]
+#[cfg_attr(not(test), expect(dead_code, reason = "consumed by cave integration"))]
 pub(super) const CAVE_MOSS_ID: &str = "prop/cave-moss";
-#[expect(
-    clippy::allow_attributes,
-    reason = "staged sibling-lane authority is deliberately unused on this source branch"
-)]
-#[allow(dead_code, reason = "consumed by cave integration")]
+#[cfg_attr(not(test), expect(dead_code, reason = "consumed by cave integration"))]
 pub(super) const CAVE_LICHEN_ID: &str = "prop/cave-lichen";
 
 #[derive(Debug, Clone)]
@@ -144,10 +132,12 @@ impl GrassVegetationSpec {
 
 /// Snow-covered counterparts resolved through the same exact authored contract.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    clippy::allow_attributes,
-    reason = "staged authority is consumed by frozen landform integration"
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "staged authority is consumed by frozen landform integration"
+    )
 )]
 pub(super) struct SnowyVegetationSet {
     pub(super) small_broadleaf: VegetationObjectSpec,
@@ -157,11 +147,10 @@ pub(super) struct SnowyVegetationSet {
 }
 
 impl SnowyVegetationSet {
-    #[expect(
-        clippy::allow_attributes,
-        reason = "staged sibling-lane authority is deliberately unused on this source branch"
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "consumed by frozen landform integration")
     )]
-    #[allow(dead_code, reason = "consumed by frozen landform integration")]
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             small_broadleaf: VegetationObjectSpec::resolve(
@@ -198,10 +187,9 @@ impl SnowyVegetationSet {
 
 /// Nonblocking cave vegetation resolved as an exact pair of authored props.
 #[derive(Debug, Clone)]
-#[allow(
-    dead_code,
-    clippy::allow_attributes,
-    reason = "staged authority is consumed by cave integration"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "staged authority is consumed by cave integration")
 )]
 pub(super) struct CaveVegetationSet {
     pub(super) moss: VegetationObjectSpec,
@@ -209,11 +197,7 @@ pub(super) struct CaveVegetationSet {
 }
 
 impl CaveVegetationSet {
-    #[expect(
-        clippy::allow_attributes,
-        reason = "staged sibling-lane authority is deliberately unused on this source branch"
-    )]
-    #[allow(dead_code, reason = "consumed by cave integration")]
+    #[cfg_attr(not(test), expect(dead_code, reason = "consumed by cave integration"))]
     pub(super) fn resolve(catalog: &RuntimeArtCatalog, recipe: &str) -> Result<Self, String> {
         Ok(Self {
             moss: VegetationObjectSpec::resolve(
