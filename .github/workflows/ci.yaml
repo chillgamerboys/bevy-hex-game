@@ -171,6 +171,28 @@ jobs:
             test-timing.log
             target/nextest/ci/junit.xml
           if-no-files-found: error
+
+  # Rustdoc is a separate bounded deliverable. Keeping it in the test job caused
+  # two consecutive otherwise-green runs to hit the exact 30-minute ceiling only
+  # after Clippy and all ordinary tests had passed.
+  docs:
+    name: Documentation
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       # Docs are a deliverable here, not a nicety: the map is owned by someone who
       # does not write Rust. A broken intra-doc link is a broken handoff.
       #
