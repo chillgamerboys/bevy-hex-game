@@ -2237,7 +2237,7 @@ mod tests {
         assert!(alternate
             .centerline
             .windows(2)
-            .all(|pair| ordinary.admits(pair[0], pair[1])));
+            .all(|pair| matches!(pair, [from, to] if ordinary.admits(*from, *to))));
     }
 
     #[test]
