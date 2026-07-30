@@ -26,7 +26,6 @@ still belong to the crate they change. `docs` is whoever picks it up.
 
 | Epic | Scope | Owner |
 |---|---|---|
-| Wave 7: tactical integrity and Combat Lab tuning | exact-surface unit occupancy, a real Channel action, frozen Sandbox rule profiles, live and post-combat telemetry, comparable run reports, deterministic tuning fixtures, and an evidence-backed action-economy decision | units/combat/game |
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
@@ -58,6 +57,7 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Settings and seams | Wave 5 / HEX-16: persistent display and volume preferences, centralized fixed input actions, and empty music/SFX/UI buses <!-- linear: HEX-16 owner: shravan-kumaran --> |
 | Release artifact scaffold | Wave 5 / HEX-17: stable app identity, normalized packages, retained symbol material, and documented future credential slots with no live integrations <!-- linear: HEX-17 owner: shravan-kumaran --> |
 | Creator and Combat Lab | Wave 6: versioned saved character/spell blueprints, immutable templates, Creator-local lattice tests, roster/deployment Sandbox, fixed fixture selector, frozen launches, and deterministic return/retry routing |
+| Tactical integrity and Combat Lab tuning | Wave 7: exact-surface occupancy, Channel, frozen rules profiles, canonical live/post-combat telemetry, comparable reports, deterministic fixtures, and a measured decision to retain the shipped four-hex movement default |
 | V3 active recipe migration | Hills, Sky Islands, Mountains, Caves, Waterfall, Forest, and Fort all use the V3 semantic pipeline in shipped scenarios |
 | Forest authored objects | Forest publishes rotated vegetation `ObjectInstance`s while exact blockers and canopy cutaway remain separate world projections |
 | Structures and Fort | V3 Fort ships worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation |
@@ -126,19 +126,22 @@ the whole wave lands on `dev` in one merge (CONTRIBUTING.md has the rules).
   rosters on all thirteen distinct supported shipped maps, previews and describes
   each choice, resolves deployment, freezes content for Retry, and refuses resume
   writes. Fixed automated scenarios live behind one searchable stable-ID selector.
-- **Wave 7 — tactical integrity and tempo (next).** Combat Lab becomes the
+- **Wave 7 — tactical integrity and tempo (delivered).** Combat Lab is now the
   authoritative rules-testing workspace. Exact `TilePos` occupancy makes positioning
   real, Channel closes the lattice resource loop, and deterministic profiles,
   telemetry, fixtures, and comparable reports turn action-economy choices into
-  measured decisions rather than guesses. Flat deterministic one-slot initiative
-  remains the baseline; boss initiative, co-casting, rout, terrain magic, perception
-  adapters, and campaign persistence remain outside the wave.
+  measured decisions rather than guesses. The evidence gate retained the shipped
+  four-hex movement default; the measurements and caveats are recorded in the
+  [tempo decision audit](../development/wave-7-tempo-decision.md). Flat deterministic
+  one-slot initiative remains the baseline; boss initiative, co-casting, rout,
+  terrain magic, perception adapters, and campaign persistence remain outside the
+  wave.
 
 #### Wave 7 outcome and topology
 
-Wave 7 is one gameplay wave because occupancy and Channel both change canonical legal
-actions and AI, while the Lab UI, fixtures, reports, Retry, and automation prove only
-their combined behavior. Its lanes enter the integration branch in this order:
+Wave 7 landed as one gameplay wave because occupancy and Channel both change canonical
+legal actions and AI, while the Lab UI, fixtures, reports, Retry, and automation prove
+only their combined behavior. Its lanes entered the integration branch in this order:
 
 1. **Measurement and profile foundation (`hex_combat`, `hex_assets`, `hex_game`).**
    Extend the gameplay-owned serializable combat summary, define a validated
@@ -158,10 +161,11 @@ their combined behavior. Its lanes enter the integration branch in this order:
    `Map → Rosters → Rules → Deploy`. Deployment roster rows become directly selectable
    for repositioning. A focused dashboard, outcome report, comparison view, and
    fixture-to-Sandbox copy flow share the same report projection.
-5. **Fixtures and decision gate.** Add immutable Occupancy Matrix, Channel Attrition,
-   and Tempo Matrix fixtures. Run the same frozen setups across the shipped baseline,
-   a two-step tactical profile, and bounded custom profiles; close the wave by
-   selecting and documenting the default movement/action policy.
+5. **Fixtures and decision gate.** Immutable Occupancy Matrix, Channel Attrition, and
+   Tempo Matrix fixtures run the same frozen setups across the shipped baseline, a
+   two-step tactical profile, and bounded custom profiles. The resulting
+   [tempo decision audit](../development/wave-7-tempo-decision.md) retains the shipped
+   movement/action policy.
 
 The initial Rules panel exposes only already-understood numeric seams:
 movement per turn, strike disables, engage range, disengage margin, levels per bonus

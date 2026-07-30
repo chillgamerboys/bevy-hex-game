@@ -10,98 +10,84 @@
 //! sim's entire input is an ordered command sequence, and a sequence applied
 //! twice from the same spawn state must land the same world twice.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::collections::BTreeMap;
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
-use hex_assets::{
-    ArtPalette, FormationCatalog, PaletteSwatch, PlayerSettings, SrgbColor, Substance,
-    SubstanceFile, SubstanceTable, SwatchId,
-};
+use hex_assets::{ElementCatalog, ElementFile, FormationCatalog, PlayerSettings, SubstanceTable};
 use hex_combat::{
     CombatData, CombatEvent, CombatSummary, CommandRefusal, Initiative, PartyMoveRefusal, TurnOrder,
 };
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, FormationPreset, FormationSlot, GameCommand, Headroom,
-    HexCoord, HexSpan, HexTile, IssuedCommand, Mode, PartyFormation, PartyPath, PlayerSeat, Screen,
-    SubstanceId, TilePos, TraversalBlockers, Turn, UnitId, MAX_HEADROOM,
+    Busy, CommandQueue, ControlOwner, ElementId, FormationPreset, FormationSlot, GameCommand,
+    Headroom, HexCoord, HexSpan, HexTile, IssuedCommand, LatticeCoord, Mode, PartyFormation,
+    PartyPath, PlayerSeat, Screen, SpellId, SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
+    MAX_HEADROOM,
 };
-use hex_units::{route, Body, Downed, Faction, Footing, Party, Standing, StandsOn, UnitRegistry};
+use hex_lattice::{
+    apply_cast, castable, Casting, CellKind, FusionTable, LatticeSpec, LatticeState, LatticeStats,
+    Requirement, SpellTable,
+};
+use hex_test_support::{SyntheticArena, TestAppBuilder, STONE};
+use hex_units::{
+    route, Body, Downed, Faction, Footing, OccupancyBlock, Party, Standing, StandsOn, UnitRegistry,
+};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
-const STONE: SubstanceId = SubstanceId(1);
-
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new()
+        .with_arena(SyntheticArena::flat_radius(10, GROUND_LEVEL))
+        .expect("the shared synthetic arena must be valid");
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
-    app.insert_resource(substance_table());
+    app.insert_resource(shipped_elements());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
     });
-    // A fixed tick makes every run take the same frames through the same
-    // animations — which the replay test depends on to mean anything.
-    app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-        Duration::from_millis(100),
-    ));
-    app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     app.add_plugins((
         hex_anim::plugin,
         hex_units::movement::plugin,
         hex_combat::plugin,
     ));
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
-/// Flat, walkable ground with plenty of headroom.
-fn spawn_terrain(mut commands: Commands) {
-    for coord in HexCoord::ORIGIN.within_radius(10) {
-        commands.spawn((
-            HexTile,
-            coord,
-            TilePos::new(coord, GROUND_LEVEL),
-            HexSpan::new(GROUND - 1.0, GROUND),
-            STONE,
-            Headroom(MAX_HEADROOM),
-        ));
+fn shipped_elements() -> ElementCatalog {
+    ElementCatalog::from_file(&ElementFile {
+        wheel: vec!["Fire".to_owned(), "Water".to_owned()],
+        fusions: bevy::platform::collections::HashMap::default(),
+    })
+}
+
+struct ChannelTables {
+    fire: ElementId,
+}
+
+impl FusionTable for ChannelTables {
+    fn recipe(&self, _output: ElementId) -> Option<Vec<Requirement>> {
+        None
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the test immediately"
-)]
-fn substance_table() -> SubstanceTable {
-    let stone_id = SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
-    let stone = PaletteSwatch::new(
-        "Stone",
-        SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
-        BTreeSet::from(["test".to_owned()]),
-    )
-    .expect("the fixture swatch should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
-        .expect("the fixture palette should be valid");
-    let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert("air".to_owned(), Substance::invisible(false, false));
-    substances.insert(
-        "stone".to_owned(),
-        Substance::from_swatch(stone_id, true, true),
-    );
-    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
-        .expect("the fixture substance should resolve through its palette")
+impl SpellTable for ChannelTables {
+    fn requirements(&self, _spell: SpellId) -> Vec<Requirement> {
+        vec![Requirement {
+            element: self.fire,
+            mana: 2,
+        }]
+    }
+
+    fn casting(&self, _spell: SpellId) -> Casting {
+        Casting::Evocation
+    }
 }
 
 /// A unit with an explicit, pre-registered id.
@@ -241,6 +227,31 @@ fn pair_party_app() -> (App, Entity, Entity) {
     (app, anchor, rear)
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid deterministic fixture content should fail at construction"
+)]
+fn insert_depleted_channel_lattice(app: &mut App, entity: Entity) {
+    let fire = app
+        .world()
+        .resource::<ElementCatalog>()
+        .id("Fire")
+        .expect("the shipped catalog defines Fire");
+    let spell = LatticeCoord::ORIGIN;
+    let [gem, ..] = spell.neighbors();
+    let spec = LatticeSpec::default()
+        .with(spell, CellKind::Spell { spell: SpellId(0) })
+        .with(gem, CellKind::Gem { element: fire });
+    let stats = LatticeStats::new(BTreeMap::from([(fire, 3)]), BTreeMap::from([(fire, 2)]));
+    let mut state = LatticeState::new(&spec, &stats);
+    let tables = ChannelTables { fire };
+    let plan = castable(&spec, &state, spell, &tables).expect("fixture spell can drain its gem");
+    assert!(apply_cast(&mut state, &plan, &tables));
+    app.world_mut()
+        .entity_mut(entity)
+        .insert((spec, state, stats));
+}
+
 fn party_command(anchor: UnitId, paths: Vec<(UnitId, &[HexCoord])>) -> GameCommand {
     GameCommand::MoveParty {
         anchor,
@@ -303,6 +314,159 @@ fn command_grounding_rejects_generated_feature_blockers() {
         standing_of(&mut app, player),
         Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL)),
         "the authoritative applier must not ground a path through a tree root"
+    );
+}
+
+#[test]
+fn occupied_endpoints_and_route_steps_are_refused_exactly() {
+    let cases = [
+        (
+            HexCoord::from_axial(1, 0),
+            vec![HexCoord::ORIGIN, HexCoord::from_axial(1, 0)],
+            OccupancyBlock::Destination {
+                position: TilePos::new(HexCoord::from_axial(1, 0), GROUND_LEVEL),
+                occupant: UnitId(2),
+            },
+        ),
+        (
+            HexCoord::from_axial(1, 0),
+            vec![
+                HexCoord::ORIGIN,
+                HexCoord::from_axial(1, 0),
+                HexCoord::from_axial(2, 0),
+            ],
+            OccupancyBlock::Route {
+                position: TilePos::new(HexCoord::from_axial(1, 0), GROUND_LEVEL),
+                occupant: UnitId(2),
+            },
+        ),
+    ];
+
+    for (blocker, coords, block) in cases {
+        let mut app = test_app();
+        spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+        spawn_unit(&mut app, Faction::Player, blocker, 10, 2);
+        enter_gameplay(&mut app);
+        let command = GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: path(&coords),
+        };
+        push(&mut app, command.clone());
+        app.update();
+        assert_eq!(
+            take_events(&mut app),
+            vec![CombatEvent::CommandRefused {
+                command,
+                refusal: CommandRefusal::Occupied { block },
+            }]
+        );
+    }
+}
+
+#[test]
+fn a_body_on_a_lower_stacked_surface_does_not_block_the_upper_route() {
+    let mut app = test_app();
+    let destination = HexCoord::from_axial(1, 0);
+    let mover = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(&mut app, Faction::Player, destination, 10, 2);
+    for coord in [HexCoord::ORIGIN, destination] {
+        app.world_mut().spawn((
+            HexTile,
+            coord,
+            TilePos::new(coord, 3),
+            HexSpan::new(3.0, 4.0),
+            STONE,
+            Headroom(MAX_HEADROOM),
+        ));
+    }
+    let high = Standing {
+        pos: TilePos::new(HexCoord::ORIGIN, 3),
+        span: HexSpan::new(3.0, 4.0),
+    };
+    app.world_mut().entity_mut(mover).insert((
+        StandsOn(high),
+        Transform::from_translation(high.world_position()),
+    ));
+    enter_gameplay(&mut app);
+
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: vec![high.pos, TilePos::new(destination, 3)],
+        },
+    );
+    settle(&mut app);
+    assert_eq!(
+        standing_of(&mut app, mover),
+        Some(TilePos::new(destination, 3))
+    );
+}
+
+#[test]
+fn a_downed_body_still_owns_its_surface_until_removed() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let destination = HexCoord::from_axial(1, 0);
+    let blocker = spawn_unit(&mut app, Faction::Player, destination, 10, 2);
+    app.world_mut().entity_mut(blocker).insert(Downed);
+    enter_gameplay(&mut app);
+
+    let command = GameCommand::MoveAlong {
+        unit: UnitId(1),
+        path: path(&[HexCoord::ORIGIN, destination]),
+    };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: TilePos::new(destination, GROUND_LEVEL),
+                    occupant: UnitId(2),
+                },
+            },
+        }]
+    );
+}
+
+#[test]
+fn an_in_flight_route_reserves_its_endpoint() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    let destination = HexCoord::from_axial(2, 0);
+    spawn_unit(&mut app, Faction::Player, HexCoord::from_axial(3, 0), 10, 2);
+    enter_gameplay(&mut app);
+    push(
+        &mut app,
+        GameCommand::MoveAlong {
+            unit: UnitId(1),
+            path: path(&[HexCoord::ORIGIN, HexCoord::from_axial(1, 0), destination]),
+        },
+    );
+    app.update();
+
+    let command = GameCommand::MoveAlong {
+        unit: UnitId(2),
+        path: path(&[HexCoord::from_axial(3, 0), destination]),
+    };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app)
+            .into_iter()
+            .find(|event| matches!(event, CombatEvent::CommandRefused { .. })),
+        Some(CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::Occupied {
+                block: OccupancyBlock::Destination {
+                    position: TilePos::new(destination, GROUND_LEVEL),
+                    occupant: UnitId(1),
+                },
+            },
+        })
     );
 }
 
@@ -413,6 +577,24 @@ fn every_party_validation_failure_is_atomic() {
             party_command(
                 UnitId(1),
                 vec![
+                    (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(-1, 0)]),
+                    (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+                ],
+            ),
+            CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Route {
+                        position: TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL),
+                        occupant: UnitId(1),
+                    },
+                },
+            },
+        ),
+        (
+            PlayerSeat(0),
+            party_command(
+                UnitId(1),
+                vec![
                     (UnitId(1), &[HexCoord::ORIGIN, HexCoord::from_axial(1, 0)]),
                     (
                         UnitId(2),
@@ -478,6 +660,44 @@ fn a_wrongly_owned_party_member_rejects_the_whole_move() {
             refusal: CommandRefusal::WrongSeat {
                 issued_by: PlayerSeat(0),
                 owned_by: PlayerSeat(1),
+            },
+        }]
+    );
+    assert_eq!(
+        standing_of(&mut app, anchor),
+        Some(TilePos::new(HexCoord::ORIGIN, GROUND_LEVEL))
+    );
+    assert_eq!(
+        standing_of(&mut app, rear),
+        Some(TilePos::new(HexCoord::from_axial(-1, 0), GROUND_LEVEL))
+    );
+}
+
+#[test]
+fn a_party_route_cannot_enter_a_nonparty_body() {
+    let (mut app, anchor, rear) = pair_party_app();
+    let destination = HexCoord::from_axial(1, 0);
+    spawn_unit(&mut app, Faction::Player, destination, 5, 3);
+    let command = party_command(
+        UnitId(1),
+        vec![
+            (UnitId(1), &[HexCoord::ORIGIN, destination]),
+            (UnitId(2), &[HexCoord::from_axial(-1, 0), HexCoord::ORIGIN]),
+        ],
+    );
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::PartyMove {
+                reason: PartyMoveRefusal::Occupied {
+                    block: OccupancyBlock::Destination {
+                        position: TilePos::new(destination, GROUND_LEVEL),
+                        occupant: UnitId(3),
+                    },
+                },
             },
         }]
     );
@@ -598,6 +818,82 @@ fn a_replayed_sequence_lands_identically() {
     };
 
     assert_eq!(run(), run(), "a replay must not diverge");
+}
+
+#[test]
+fn channel_restores_named_mana_and_spends_exactly_one_action() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    insert_depleted_channel_lattice(&mut app, player);
+    enter_gameplay(&mut app);
+    assert_eq!(mode(&app), Mode::Combat, "precondition: fighting");
+
+    let command = GameCommand::Channel { unit: UnitId(1) };
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::Channelled {
+            unit: UnitId(1),
+            restored: BTreeMap::from([("Fire".to_owned(), 2)]),
+        }]
+    );
+    assert!(
+        app.world()
+            .get::<Turn>(player)
+            .is_some_and(|turn| turn.acted),
+        "Channel consumes the acting unit's one action"
+    );
+    let summary = app.world().resource::<CombatSummary>();
+    assert_eq!(summary.channels, 1);
+    assert_eq!(summary.channelled_mana.get("Fire"), Some(&2));
+
+    push(&mut app, command.clone());
+    app.update();
+    assert_eq!(
+        take_events(&mut app),
+        vec![CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::ActionAlreadySpent,
+        }],
+        "a repeated Channel cannot grant or spend another action"
+    );
+}
+
+#[test]
+fn a_downed_unit_receives_the_exact_channel_refusal() {
+    let mut app = test_app();
+    let player = spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20, 1);
+    spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(2, -2, 0),
+        10,
+        2,
+    );
+    insert_depleted_channel_lattice(&mut app, player);
+    enter_gameplay(&mut app);
+    app.world_mut().entity_mut(player).insert(Downed);
+
+    let command = GameCommand::Channel { unit: UnitId(1) };
+    push(&mut app, command.clone());
+    app.update();
+    let events = take_events(&mut app);
+    assert_eq!(
+        events.first(),
+        Some(&CombatEvent::CommandRefused {
+            command,
+            refusal: CommandRefusal::ActingUnitDowned { unit: UnitId(1) },
+        }),
+        "the refusal is emitted before the resulting terminal outcome"
+    );
 }
 
 /// A command from a unit that is not acting is refused, not deferred.

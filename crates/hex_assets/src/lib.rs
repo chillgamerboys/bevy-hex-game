@@ -19,6 +19,7 @@ use bevy::prelude::*;
 pub mod ai_profiles;
 pub mod art_palette;
 pub mod combat_lab;
+pub mod combat_rules;
 pub mod content_index;
 pub mod creation;
 pub mod elements;
@@ -49,6 +50,10 @@ pub use art_palette::{
 pub use combat_lab::{
     CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
     COMBAT_LAB_MAP_SCHEMA_VERSION,
+};
+pub use combat_rules::{
+    CombatRuleBounds, CombatRuleChange, CombatRuleField, CombatRulesPreset, CombatRulesProfile,
+    COMBAT_RULES_PROFILE_VERSION,
 };
 pub use content_index::{
     AcceptedContentRevision, ContentError, ContentIndex, ContentReadinessSystems, ContentTables,

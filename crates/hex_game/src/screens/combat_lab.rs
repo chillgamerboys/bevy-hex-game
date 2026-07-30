@@ -9,19 +9,27 @@ use bevy::prelude::*;
 use bevy::text::EditableText;
 use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
-    character_lattice_file, character_runtime_key, combined_spell_file, CombatLabDeploymentRegion,
-    CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter, ContentIndex,
+    character_lattice_file, character_runtime_key, combined_spell_file, AcceptedContentRevision,
+    CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
+    CombatRuleField, CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex,
     CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
     EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
     PlayerSettings, PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary,
     SpellBook, SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
-    GameplayPhase, GameplaySetup, Headroom, HexCoord, HexSpan, HexTile, MapAnchorId, MapAnchors,
-    ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers, TraversalProfile,
+    GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord, HexSpan, HexTile,
+    MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
+    TraversalProfile,
 };
-use hex_units::{Body, Faction, Footing, Reach, StandsOn};
+use hex_lattice::SpellTable as _;
+use hex_units::{Archetype, Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
 
+use crate::combat_reports::{
+    CombatLabReportController, CombatLabReportDeployment, CombatLabReportId, CombatLabReportMap,
+    CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
+    CombatLabReportStore,
+};
 use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
@@ -29,48 +37,73 @@ use crate::menus::widgets::{
     blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
     DANGER, FUSION_COLOR,
 };
-use crate::scenarios::ScenarioToLoad;
+use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
+use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root, screen_root_node};
 
 const MAX_ROSTER: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum LabTab {
+pub(crate) enum LabTab {
     #[default]
     Sandbox,
     Fixtures,
+    Reports,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum SandboxStep {
+    #[default]
+    Map,
+    Rosters,
+    Rules,
 }
 
 const DEFAULT_SANDBOX_MAP: &str = "flat-arena";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum RosterChoice {
+pub(crate) enum RosterChoice {
     Template(String),
     Custom(CustomCharacterId),
+    Packaged(CustomCharacterId),
 }
 
 #[derive(Resource, Debug)]
-struct CombatLabState {
-    tab: LabTab,
-    map: String,
-    players: Vec<RosterChoice>,
-    hostiles: Vec<RosterChoice>,
-    fixture_filter: String,
-    creator_origin: bool,
-    notice: String,
-    revision: u64,
+pub(crate) struct CombatLabState {
+    pub(crate) tab: LabTab,
+    pub(crate) sandbox_step: SandboxStep,
+    pub(crate) map: String,
+    pub(crate) players: Vec<RosterChoice>,
+    pub(crate) hostiles: Vec<RosterChoice>,
+    pub(crate) fixture_filter: String,
+    pub(crate) creator_origin: bool,
+    pub(crate) rules: Option<CombatRulesProfile>,
+    pub(crate) preserved_deployment: Option<CombatLabReportDeployment>,
+    pub(crate) frozen_overlay: Option<CreatorContentOverlay>,
+    pub(crate) compare_left: Option<CombatLabReportId>,
+    pub(crate) compare_right: Option<CombatLabReportId>,
+    pub(crate) pending_report_delete: Option<CombatLabReportId>,
+    pub(crate) notice: String,
+    pub(crate) revision: u64,
 }
 
 impl Default for CombatLabState {
     fn default() -> Self {
         Self {
             tab: LabTab::Sandbox,
+            sandbox_step: SandboxStep::Map,
             map: DEFAULT_SANDBOX_MAP.to_owned(),
             players: vec![RosterChoice::Template("hedge-mage".to_owned())],
             hostiles: vec![RosterChoice::Template("raider".to_owned())],
             fixture_filter: String::new(),
             creator_origin: false,
+            rules: None,
+            preserved_deployment: None,
+            frozen_overlay: None,
+            compare_left: None,
+            compare_right: None,
+            pending_report_delete: None,
             notice: String::new(),
             revision: 1,
         }
@@ -157,6 +190,45 @@ pub(crate) enum CombatLabSessionKind {
 pub(crate) struct CombatLabSession {
     pub(crate) kind: CombatLabSessionKind,
     pub(crate) return_to: Screen,
+    /// Frozen validated profile reused by Retry.
+    pub(crate) profile: CombatRulesProfile,
+    /// Authored settings restored whenever the Lab session leaves gameplay.
+    pub(crate) shipped_combat: CombatSettings,
+    /// Stable map identity frozen before Loading.
+    pub(crate) report_map: CombatLabReportMap,
+    /// Immutable pre-combat fixture mutation reapplied on every exact Retry.
+    pub(crate) initial_state: Option<FixedFixtureInitialState>,
+}
+
+/// Frozen report inputs captured at the instant active combat begins.
+#[derive(Resource, Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CombatLabReportLaunch {
+    pub(crate) origin: CombatLabReportOrigin,
+    pub(crate) map: CombatLabReportMap,
+    pub(crate) content_revision: u64,
+    pub(crate) rosters: CombatLabReportRosters,
+    pub(crate) deployment: CombatLabReportDeployment,
+}
+
+/// Outcome-to-Sandbox handoff used by Tune and fixed-fixture copying.
+#[derive(Resource, Debug, Clone)]
+pub(crate) struct CombatLabSandboxRequest {
+    pub(crate) report: crate::combat_reports::CombatLabReport,
+    pub(crate) overlay: Option<CreatorContentOverlay>,
+}
+
+/// Whether a frozen Lab profile was admitted at the Loading boundary.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CombatLabRulesStatus {
+    /// The effective settings were validated and installed.
+    Ready,
+    /// The profile failed closed and gameplay must not start.
+    Invalid,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixedFixtureInitialState {
+    ChannelAttrition,
 }
 
 /// Frozen human deployment state carried over the already-loaded terrain.
@@ -180,6 +252,7 @@ impl DeploymentSession {
         map_definition: CombatLabMapDefinition,
         players: Vec<RosterChoice>,
         hostiles: Vec<RosterChoice>,
+        preserved: Option<&CombatLabReportDeployment>,
     ) -> Self {
         let player_len = players.len();
         let hostile_len = hostiles.len();
@@ -187,8 +260,32 @@ impl DeploymentSession {
             map_definition,
             players,
             hostiles,
-            player_placements: vec![None; player_len],
-            hostile_placements: vec![None; hostile_len],
+            player_placements: preserved.map_or_else(
+                || vec![None; player_len],
+                |deployment| {
+                    deployment
+                        .players
+                        .iter()
+                        .copied()
+                        .map(Some)
+                        .chain(std::iter::repeat(None))
+                        .take(player_len)
+                        .collect()
+                },
+            ),
+            hostile_placements: preserved.map_or_else(
+                || vec![None; hostile_len],
+                |deployment| {
+                    deployment
+                        .hostiles
+                        .iter()
+                        .copied()
+                        .map(Some)
+                        .chain(std::iter::repeat(None))
+                        .take(hostile_len)
+                        .collect()
+                },
+            ),
             active_player: true,
             active_index: 0,
             undo: Vec::new(),
@@ -201,6 +298,7 @@ impl DeploymentSession {
     fn complete(&self) -> bool {
         placements_complete_exact(&self.player_placements, self.players.len())
             && placements_complete_exact(&self.hostile_placements, self.hostiles.len())
+            && !deployment_occupancy(self).has_overlaps()
     }
 }
 
@@ -233,6 +331,7 @@ struct DeploymentHud;
 
 #[derive(Component, Debug, Clone, Copy)]
 enum DeploymentAction {
+    Select { player: bool, index: usize },
     Undo,
     ClearPlayer,
     ClearHostile,
@@ -245,6 +344,7 @@ enum DeploymentAction {
 enum LabAction {
     Tab(LabTab),
     Back,
+    ShowSandboxStep(SandboxStep),
     SelectMap(String),
     AddPlayerTemplate(String),
     AddHostileTemplate(String),
@@ -255,12 +355,23 @@ enum LabAction {
     MovePlayer(usize, i8),
     MoveHostile(usize, i8),
     EditCustom(CustomCharacterId),
+    SelectRulesPreset(CombatRulesPreset),
+    AdjustRule(CombatRuleField, i8),
+    ResetRules,
     PrepareDeployment,
-    StartFixture(String),
+    StartFixture(String, FixtureRulesVariant),
+    SelectCompareLeft(CombatLabReportId),
+    SelectCompareRight(CombatLabReportId),
+    RequestReportDelete(CombatLabReportId),
+    ConfirmReportDelete(CombatLabReportId),
+    CancelReportDelete,
 }
 
 #[derive(Component)]
 struct LabRoot;
+
+#[derive(Component)]
+struct SavedReportComparison;
 
 #[derive(Component)]
 struct FixtureFilter;
@@ -272,19 +383,30 @@ struct FixtureDefinition {
     tags: &'static str,
     description: &'static str,
     scenario: &'static str,
+    sandbox_map: &'static str,
     map_seed: &'static str,
     roster: &'static str,
+    profile_matrix: bool,
 }
 
-const FIXTURES: [FixtureDefinition; 4] = [
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FixtureRulesVariant {
+    Shipped,
+    TacticalTwoStep,
+    CustomThreeStep,
+}
+
+const FIXTURES: [FixtureDefinition; 7] = [
     FixtureDefinition {
         id: "ability-lab",
         name: "Ability Lab",
         tags: "aiming reveal restore revival",
         description: "A flat 2v1 for aiming, friendly damage, reveal, restoration, and revival.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "2 Player · 1 Hostile",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "raider-mirror",
@@ -292,8 +414,10 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "identity defense enchantment",
         description: "Same archetype on both sides, with deterministic defensive enchantments.",
         scenario: "Raider Mirror",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "1 Player Raider · 1 Hostile Raider",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "creator-spell-matrix",
@@ -301,8 +425,10 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "creator disable burn reveal restore defense",
         description: "Creator-format spell delivery against the flat deterministic roster.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "Fixture Caster · Fixture Target",
+        profile_matrix: false,
     },
     FixtureDefinition {
         id: "creator-roster-matrix",
@@ -310,8 +436,43 @@ const FIXTURES: [FixtureDefinition; 4] = [
         tags: "creator roster selection ordering",
         description: "Mixed roster selection, stable unit ordering, and multi-unit combat.",
         scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
         map_seed: "Flat Arena · authored",
         roster: "2 Player · 2 Hostile creator records",
+        profile_matrix: false,
+    },
+    FixtureDefinition {
+        id: "occupancy-matrix",
+        name: "Occupancy Matrix",
+        tags: "occupancy chokepoint endpoint route stacked interruption ai",
+        description: "Party Trial on the authored Crossing for human/AI chokepoints, exact endpoints, route reservations, stacked bridge surfaces, and movement interruption.",
+        scenario: "Party Trial",
+        sandbox_map: "the-crossing",
+        map_seed: "The Crossing · authored",
+        roster: "3 Player · 3 Hostile",
+        profile_matrix: false,
+    },
+    FixtureDefinition {
+        id: "channel-attrition",
+        name: "Channel Attrition",
+        tags: "channel mana disabled enchantment full repeated ai downed",
+        description: "Ability Lab's deterministic lattices for depleted/full mana, disabled cells, enchantment locks, repeated Channel, AI selection, and downed refusal.",
+        scenario: "Ability Lab",
+        sandbox_map: "flat-arena",
+        map_seed: "Flat Arena · authored",
+        roster: "3 Player · 3 Hostile · preloaded lattice states",
+        profile_matrix: false,
+    },
+    FixtureDefinition {
+        id: "tempo-matrix",
+        name: "Tempo Matrix",
+        tags: "tempo profile shipped tactical custom party",
+        description: "The frozen 3v3 Party Trial baseline used repeatedly under Shipped, Tactical two-step, and bounded Custom profiles.",
+        scenario: "Party Trial",
+        sandbox_map: "the-crossing",
+        map_seed: "The Crossing · authored",
+        roster: "3 Player · 3 Hostile",
+        profile_matrix: true,
     },
 ];
 
@@ -322,6 +483,86 @@ pub(crate) fn fixture_scenario_name(id: &str) -> Option<&'static str> {
         .iter()
         .find(|fixture| fixture.id == id)
         .map(|fixture| fixture.scenario)
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn fixture_sandbox_map(id: &str) -> Option<&'static str> {
+    FIXTURES
+        .iter()
+        .find(|fixture| fixture.id == id)
+        .map(|fixture| fixture.sandbox_map)
+}
+
+pub(crate) fn fixture_profile(
+    variant: FixtureRulesVariant,
+    shipped: &CombatSettings,
+) -> CombatRulesProfile {
+    match variant {
+        FixtureRulesVariant::Shipped => CombatRulesProfile::shipped(shipped),
+        FixtureRulesVariant::TacticalTwoStep => CombatRulesProfile::tactical_two_step(shipped),
+        FixtureRulesVariant::CustomThreeStep => {
+            let mut profile =
+                CombatRulesProfile::custom_from(&CombatRulesProfile::shipped(shipped));
+            profile.movement_per_turn = 3;
+            profile
+        }
+    }
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn walk_fixture_profile(
+    name: Option<&str>,
+    shipped: &CombatSettings,
+) -> Result<CombatRulesProfile, String> {
+    let variant = match name.unwrap_or("shipped") {
+        "shipped" => FixtureRulesVariant::Shipped,
+        "tactical" => FixtureRulesVariant::TacticalTwoStep,
+        "custom-three-step" => FixtureRulesVariant::CustomThreeStep,
+        other => {
+            return Err(format!(
+            "unknown fixture profile {other:?}; expected shipped, tactical, or custom-three-step"
+        ))
+        }
+    };
+    Ok(fixture_profile(variant, shipped))
+}
+
+pub(crate) fn fixed_fixture_encounter(id: &str) -> Option<Encounter> {
+    let template = |name: &str| RosterChoice::Template(name.to_owned());
+    match id {
+        "occupancy-matrix" | "tempo-matrix" => Some(encounter_with_placements(
+            "Wave 7 Crossing Matrix",
+            &[template("raider"), template("wolf"), template("raider")],
+            &[template("raider"), template("wolf"), template("raider")],
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: 2, z: -2 }),
+                spread: 2,
+            },
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 0, y: -2, z: 2 }),
+                spread: 2,
+            },
+        )),
+        "channel-attrition" => Some(encounter_with_placements(
+            "Wave 7 Channel Attrition",
+            &[template("hedge-mage"), template("raider"), template("wolf")],
+            &[template("hedge-mage"), template("raider"), template("wolf")],
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: -2, y: 0, z: 2 }),
+                spread: 2,
+            },
+            EncounterPlacement::Formation {
+                center: FormationCenter::Fixed(hex_assets::CubeCoord { x: 2, y: 0, z: -2 }),
+                spread: 2,
+            },
+        )),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "visual-walk")]
+pub(crate) fn walk_fixture_encounter(id: &str) -> Option<Encounter> {
+    fixed_fixture_encounter(id)
 }
 
 /// Frozen creator content and encounter behind an automation fixture, if it uses one.
@@ -338,17 +579,17 @@ pub(crate) fn creator_fixture_payload(
 ) -> Result<Option<(CreatorContentOverlay, Encounter)>, String> {
     let rosters = match id {
         "creator-spell-matrix" => Some((
-            vec![RosterChoice::Custom(CustomCharacterId(1001))],
-            vec![RosterChoice::Custom(CustomCharacterId(1002))],
+            vec![RosterChoice::Packaged(CustomCharacterId(1001))],
+            vec![RosterChoice::Packaged(CustomCharacterId(1002))],
         )),
         "creator-roster-matrix" => Some((
             vec![
-                RosterChoice::Custom(CustomCharacterId(1001)),
-                RosterChoice::Custom(CustomCharacterId(1003)),
+                RosterChoice::Packaged(CustomCharacterId(1001)),
+                RosterChoice::Packaged(CustomCharacterId(1003)),
             ],
             vec![
-                RosterChoice::Custom(CustomCharacterId(1002)),
-                RosterChoice::Custom(CustomCharacterId(1001)),
+                RosterChoice::Packaged(CustomCharacterId(1002)),
+                RosterChoice::Packaged(CustomCharacterId(1001)),
             ],
         )),
         _ => None,
@@ -390,7 +631,9 @@ pub(super) fn plugin(app: &mut App) {
             OnEnter(Screen::Gameplay),
             (
                 apply_creator_display_names.in_set(GameplaySetup::Restore),
+                apply_fixed_fixture_initial_state.in_set(GameplaySetup::Restore),
                 enter_deployment.in_set(GameplaySetup::Finalize),
+                capture_fixed_fixture_report_launch.in_set(GameplaySetup::Finalize),
             ),
         )
         .add_systems(
@@ -399,6 +642,7 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_observer(on_deployment_surface_clicked)
         .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
+        .add_systems(OnExit(Screen::Gameplay), restore_shipped_combat_rules)
         .add_systems(
             OnEnter(Screen::CombatLab),
             (initialize_lab, spawn_lab).chain(),
@@ -412,18 +656,52 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(OnExit(Screen::CombatLab), despawn_screen(Screen::CombatLab));
 }
 
-fn initialize_lab(
+pub(crate) fn initialize_lab(
     mut commands: Commands,
-    request: Option<Res<CreatorTestRequest>>,
+    creator_request: Option<Res<CreatorTestRequest>>,
+    sandbox_request: Option<Res<CombatLabSandboxRequest>>,
     mut state: ResMut<CombatLabState>,
     overlay: Option<Res<CreatorContentOverlay>>,
 ) {
+    let sandbox_request = sandbox_request.as_deref().cloned();
     restore_shipped_content(&mut commands, overlay.as_deref());
     commands.remove_resource::<CombatLabSession>();
     commands.remove_resource::<DeploymentSession>();
+    commands.remove_resource::<CombatLabReportLaunch>();
     commands.insert_resource(GameplayPhase::Active);
-    if let Some(request) = request {
+    if let Some(request) = sandbox_request {
         state.tab = LabTab::Sandbox;
+        state.sandbox_step = SandboxStep::Rules;
+        state.map = request.report.map.catalog_id.clone();
+        let packaged = matches!(
+            request.report.origin,
+            CombatLabReportOrigin::FixedFixture { ref stable_id }
+                if stable_id.starts_with("creator-")
+        );
+        state.players = request
+            .report
+            .rosters
+            .players
+            .iter()
+            .map(|entry| report_roster_choice(entry, packaged))
+            .collect();
+        state.hostiles = request
+            .report
+            .rosters
+            .hostiles
+            .iter()
+            .map(|entry| report_roster_choice(entry, packaged))
+            .collect();
+        state.rules = Some(request.report.profile.clone());
+        state.preserved_deployment = Some(request.report.deployment.clone());
+        state.frozen_overlay = request.overlay;
+        state.notice =
+            "Frozen map, rosters, profile, and exact deployment copied to Sandbox.".to_owned();
+        state.creator_origin = false;
+        commands.remove_resource::<CombatLabSandboxRequest>();
+    } else if let Some(request) = creator_request {
+        state.tab = LabTab::Sandbox;
+        state.sandbox_step = SandboxStep::Rosters;
         state.players = vec![RosterChoice::Custom(request.character)];
         state.notice = "Creator character prefilled; choose the rest of the test.".to_owned();
         state.creator_origin = true;
@@ -432,6 +710,33 @@ fn initialize_lab(
         state.creator_origin = false;
     }
     state.bump();
+}
+
+fn report_roster_choice(entry: &CombatLabReportRosterEntry, packaged: bool) -> RosterChoice {
+    entry
+        .archetype
+        .strip_prefix("custom-character-")
+        .and_then(|id| id.parse::<u64>().ok())
+        .map_or_else(
+            || RosterChoice::Template(entry.archetype.clone()),
+            |id| {
+                if packaged {
+                    RosterChoice::Packaged(CustomCharacterId(id))
+                } else {
+                    RosterChoice::Custom(CustomCharacterId(id))
+                }
+            },
+        )
+}
+
+#[cfg(feature = "test-support")]
+pub(crate) fn roster_choice_key(choice: &RosterChoice) -> String {
+    match choice {
+        RosterChoice::Template(key) => key.clone(),
+        RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+            format!("custom-character-{}", id.0)
+        }
+    }
 }
 
 fn spawn_lab(
@@ -444,6 +749,8 @@ fn spawn_lab(
     spells: Option<Res<SpellBook>>,
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
+    reports: Res<CombatLabReportStore>,
 ) {
     spawn_lab_ui(
         &mut commands,
@@ -454,6 +761,8 @@ fn spawn_lab(
         spells.as_deref(),
         presets.as_deref(),
         maps.as_deref(),
+        combat.as_deref(),
+        &reports,
         &asset_server,
     );
 }
@@ -469,6 +778,8 @@ fn rebuild_lab(
     spells: Option<Res<SpellBook>>,
     presets: Option<Res<CreationPresetCatalog>>,
     maps: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
+    reports: Res<CombatLabReportStore>,
     mut last_revision: Local<u64>,
 ) {
     if roots.is_empty() || *last_revision != state.revision {
@@ -484,6 +795,8 @@ fn rebuild_lab(
             spells.as_deref(),
             presets.as_deref(),
             maps.as_deref(),
+            combat.as_deref(),
+            &reports,
             &asset_server,
         );
         *last_revision = state.revision;
@@ -499,6 +812,8 @@ fn spawn_lab_ui(
     spells: Option<&SpellBook>,
     presets: Option<&CreationPresetCatalog>,
     maps: Option<&CombatLabMapCatalog>,
+    combat: Option<&CombatSettings>,
+    reports: &CombatLabReportStore,
     asset_server: &AssetServer,
 ) {
     commands
@@ -530,6 +845,13 @@ fn spawn_lab_ui(
                     LabAction::Tab(LabTab::Fixtures),
                     170.0,
                 );
+                lab_button(
+                    tabs,
+                    assets,
+                    "Saved Reports",
+                    LabAction::Tab(LabTab::Reports),
+                    170.0,
+                );
                 lab_button(tabs, assets, "Back", LabAction::Back, 100.0);
             });
             if !state.notice.is_empty() {
@@ -537,19 +859,29 @@ fn spawn_lab_ui(
             }
             match state.tab {
                 LabTab::Sandbox => {
-                    spawn_sandbox_setup(
-                        root,
-                        assets,
-                        state,
-                        store,
-                        elements,
-                        spells,
-                        presets,
-                        maps,
-                        asset_server,
-                    );
+                    spawn_sandbox_progress(root, assets, state.sandbox_step);
+                    match state.sandbox_step {
+                        SandboxStep::Map => {
+                            spawn_map_setup(root, assets, state, maps, asset_server);
+                        }
+                        SandboxStep::Rosters => spawn_sandbox_setup(
+                            root,
+                            assets,
+                            state,
+                            store,
+                            elements,
+                            spells,
+                            presets,
+                            maps,
+                            asset_server,
+                        ),
+                        SandboxStep::Rules => {
+                            spawn_rules_setup(root, assets, state, maps, combat);
+                        }
+                    }
                 }
                 LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
+                LabTab::Reports => spawn_saved_reports(root, assets, state, reports),
             }
         });
 }
@@ -617,6 +949,327 @@ fn region_center_label(center: &CombatLabRegionCenter) -> String {
     }
 }
 
+fn spawn_sandbox_progress(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    current: SandboxStep,
+) {
+    root.spawn(Node {
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(10.0),
+        ..default()
+    })
+    .with_children(|progress| {
+        for (step, text) in [
+            (SandboxStep::Map, "1 · MAP"),
+            (SandboxStep::Rosters, "2 · ROSTERS"),
+            (SandboxStep::Rules, "3 · RULES"),
+        ] {
+            let status = if step == current { "ACTIVE" } else { "STEP" };
+            progress
+                .spawn(fine(assets, format!("{status} · {text}")))
+                .insert(TextColor(if step == current {
+                    Color::srgba(0.93, 0.79, 0.46, 1.0)
+                } else {
+                    Color::srgba(0.67, 0.71, 0.77, 1.0)
+                }));
+        }
+        progress.spawn(fine(assets, "4 · DEPLOY"));
+    });
+}
+
+fn spawn_map_setup(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    maps: Option<&CombatLabMapCatalog>,
+    asset_server: &AssetServer,
+) {
+    root.spawn(Node {
+        width: Val::Percent(96.0),
+        min_height: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(12.0),
+        ..default()
+    })
+    .with_children(|body| {
+        body.spawn(panel())
+            .insert(Node {
+                width: Val::Px(360.0),
+                min_height: Val::Px(0.0),
+                ..panel_node()
+            })
+            .with_children(|list| {
+                list.spawn(heading(assets, "1 · choose map"));
+                list.spawn(blurb(
+                    assets,
+                    "The selected map and resolved seed are frozen into every run and report.",
+                ));
+                list.spawn((
+                    ScrollArea,
+                    Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .with_children(|buttons| {
+                    if let Some(maps) = maps {
+                        for map in &maps.maps {
+                            map_button(buttons, assets, map, state.map == map.id);
+                        }
+                    }
+                });
+            });
+        body.spawn(panel())
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|preview| {
+                preview.spawn(heading(assets, "frozen map preview"));
+                if let Some(record) = maps.and_then(|catalog| catalog.get(&state.map)) {
+                    preview.spawn((
+                        Name::new(format!("Map Preview: {}", record.display_name)),
+                        ImageNode::new(asset_server.load(record.preview.clone())),
+                        Node {
+                            width: Val::Percent(100.0),
+                            max_width: Val::Px(720.0),
+                            height: Val::Px(360.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(0.49, 0.68, 0.86, 0.85)),
+                    ));
+                    preview.spawn(heading(assets, record.display_name.clone()));
+                    preview.spawn(fine(assets, record.tags.join("  ·  ")));
+                    preview.spawn(blurb(assets, record.description.clone()));
+                    preview.spawn(fine(
+                        assets,
+                        format!(
+                            "{}  ·  {}",
+                            map_seed_label(record),
+                            deployment_summary(record)
+                        ),
+                    ));
+                    lab_button(
+                        preview,
+                        assets,
+                        "Continue to Rosters",
+                        LabAction::ShowSandboxStep(SandboxStep::Rosters),
+                        220.0,
+                    );
+                } else {
+                    preview
+                        .spawn(blurb(assets, "The packaged map catalog is still loading."))
+                        .insert(TextColor(DANGER));
+                }
+            });
+    });
+}
+
+fn spawn_rules_setup(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    maps: Option<&CombatLabMapCatalog>,
+    shipped: Option<&CombatSettings>,
+) {
+    let Some(shipped) = shipped else {
+        root.spawn(blurb(assets, "Shipped combat rules are still loading."))
+            .insert(TextColor(DANGER));
+        return;
+    };
+    let profile = state
+        .rules
+        .clone()
+        .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+    let changes = profile.changed_from_shipped(shipped);
+    root.spawn(Node {
+        width: Val::Percent(96.0),
+        min_height: Val::Px(0.0),
+        flex_grow: 1.0,
+        flex_direction: FlexDirection::Row,
+        column_gap: Val::Px(12.0),
+        ..default()
+    })
+    .with_children(|body| {
+        body.spawn(panel())
+            .insert(Node {
+                width: Val::Px(285.0),
+                ..panel_node()
+            })
+            .with_children(|summary| {
+                summary.spawn(heading(assets, "frozen run summary"));
+                let map = maps
+                    .and_then(|catalog| catalog.get(&state.map))
+                    .map_or("Loading map", |map| map.display_name.as_str());
+                summary.spawn(blurb(
+                    assets,
+                    format!(
+                        "{map}\nPlayer {} · Hostile {}\n{} field{} changed from shipped",
+                        state.players.len(),
+                        state.hostiles.len(),
+                        changes.len(),
+                        if changes.len() == 1 { "" } else { "s" }
+                    ),
+                ));
+                for change in &changes {
+                    summary.spawn(fine(
+                        assets,
+                        format!(
+                            "CHANGED · {} {} → {}",
+                            change.field.label(),
+                            change.shipped,
+                            change.selected
+                        ),
+                    ));
+                }
+                lab_button(
+                    summary,
+                    assets,
+                    "Back to Rosters",
+                    LabAction::ShowSandboxStep(SandboxStep::Rosters),
+                    190.0,
+                );
+            });
+        body.spawn(panel())
+            .insert(Node {
+                min_width: Val::Px(0.0),
+                min_height: Val::Px(0.0),
+                flex_grow: 1.0,
+                ..panel_node()
+            })
+            .with_children(|rules| {
+                rules.spawn(heading(assets, "3 · rules profile"));
+                rules
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(7.0),
+                        ..default()
+                    })
+                    .with_children(|presets| {
+                        for (preset, text) in [
+                            (CombatRulesPreset::Shipped, "Shipped"),
+                            (CombatRulesPreset::TacticalTwoStep, "Tactical two-step"),
+                            (CombatRulesPreset::Custom, "Custom"),
+                        ] {
+                            let selected = profile.preset == preset;
+                            lab_button(
+                                presets,
+                                assets,
+                                if selected {
+                                    format!("SELECTED · {text}")
+                                } else {
+                                    text.to_owned()
+                                },
+                                LabAction::SelectRulesPreset(preset),
+                                205.0,
+                            );
+                        }
+                    });
+                rules
+                    .spawn((
+                        ScrollArea,
+                        Node {
+                            min_height: Val::Px(0.0),
+                            flex_grow: 1.0,
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(5.0),
+                            overflow: Overflow::scroll_y(),
+                            ..default()
+                        },
+                    ))
+                    .with_children(|fields| {
+                        for field in CombatRuleField::ALL {
+                            let bounds = field.bounds();
+                            let value = profile.value(field);
+                            let shipped_value = CombatRulesProfile::shipped(shipped).value(field);
+                            fields
+                                .spawn(panel())
+                                .insert(Node {
+                                    width: Val::Percent(100.0),
+                                    ..panel_node()
+                                })
+                                .with_children(|row| {
+                                    row.spawn(heading(assets, field.label()));
+                                    row.spawn(fine(assets, field.description()));
+                                    row.spawn(Node {
+                                        flex_direction: FlexDirection::Row,
+                                        align_items: AlignItems::Center,
+                                        column_gap: Val::Px(7.0),
+                                        ..default()
+                                    })
+                                    .with_children(
+                                        |stepper| {
+                                            lab_button(
+                                                stepper,
+                                                assets,
+                                                "−",
+                                                LabAction::AdjustRule(field, -1),
+                                                46.0,
+                                            );
+                                            stepper.spawn(label(assets, value.to_string()));
+                                            lab_button(
+                                                stepper,
+                                                assets,
+                                                "+",
+                                                LabAction::AdjustRule(field, 1),
+                                                46.0,
+                                            );
+                                            stepper.spawn(fine(
+                                                assets,
+                                                format!(
+                                                    "VALID {}–{} · {}",
+                                                    bounds.min,
+                                                    bounds.max,
+                                                    if value == shipped_value {
+                                                        "SHIPPED".to_owned()
+                                                    } else {
+                                                        format!(
+                                                            "CHANGED {} → {}",
+                                                            shipped_value, value
+                                                        )
+                                                    }
+                                                ),
+                                            ));
+                                        },
+                                    );
+                                });
+                        }
+                    });
+                rules
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(7.0),
+                        ..default()
+                    })
+                    .with_children(|actions| {
+                        lab_button(
+                            actions,
+                            assets,
+                            "Reset to Shipped",
+                            LabAction::ResetRules,
+                            180.0,
+                        );
+                        lab_button(
+                            actions,
+                            assets,
+                            "Load Map & Deploy",
+                            LabAction::PrepareDeployment,
+                            210.0,
+                        );
+                    });
+            });
+    });
+}
+
 fn spawn_sandbox_setup(
     root: &mut ChildSpawnerCommands,
     assets: &UiAssets,
@@ -674,27 +1327,13 @@ fn spawn_sandbox_setup(
                         .spawn(blurb(assets, "The packaged map catalog is still loading."))
                         .insert(TextColor(DANGER));
                 }
-                map_panel.spawn(heading(assets, "available maps"));
-                map_panel
-                    .spawn((
-                        ScrollArea,
-                        Node {
-                            width: Val::Percent(100.0),
-                            min_height: Val::Px(90.0),
-                            flex_grow: 1.0,
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(5.0),
-                            overflow: Overflow::scroll_y(),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|list| {
-                        if let Some(maps) = maps {
-                            for map in &maps.maps {
-                                map_button(list, assets, map, state.map == map.id);
-                            }
-                        }
-                    });
+                lab_button(
+                    map_panel,
+                    assets,
+                    "Back to Map",
+                    LabAction::ShowSandboxStep(SandboxStep::Map),
+                    170.0,
+                );
             });
 
         body.spawn(panel())
@@ -749,8 +1388,8 @@ fn spawn_sandbox_setup(
                     lab_button(
                         rosters,
                         assets,
-                        "Load Map & Deploy",
-                        LabAction::PrepareDeployment,
+                        "Continue to Rules",
+                        LabAction::ShowSandboxStep(SandboxStep::Rules),
                         230.0,
                     );
                 } else {
@@ -899,7 +1538,7 @@ fn spawn_build_card(
     let ready = summary.ready()
         && match choice {
             RosterChoice::Template(_) => true,
-            RosterChoice::Custom(_) => {
+            RosterChoice::Custom(_) | RosterChoice::Packaged(_) => {
                 character_is_map_ready_optional(&character, &library, elements, spells)
             }
         };
@@ -1010,6 +1649,16 @@ fn choice_record(
             .find(|character| character.id == *id)
             .cloned()
             .map(|character| (character, store.file.clone(), "Custom")),
+        RosterChoice::Packaged(id) => {
+            let presets = presets?;
+            let library = presets.library_for(PresetAudience::AutomationFixture);
+            library
+                .characters
+                .iter()
+                .find(|character| character.id == *id)
+                .cloned()
+                .map(|character| (character, library, "Fixture"))
+        }
         RosterChoice::Template(name) => {
             let presets = presets?;
             let library = presets.library_for(PresetAudience::HumanTemplate);
@@ -1184,17 +1833,302 @@ fn spawn_fixture_selector(
                                     format!("{} · {}", fixture.map_seed, fixture.roster),
                                 ));
                                 card.spawn(blurb(assets, fixture.description));
-                                lab_button(
-                                    card,
-                                    assets,
-                                    "Run Fixture",
-                                    LabAction::StartFixture(fixture.id.to_owned()),
-                                    150.0,
-                                );
+                                if fixture.profile_matrix {
+                                    for (variant, label) in [
+                                        (FixtureRulesVariant::Shipped, "Run Shipped"),
+                                        (
+                                            FixtureRulesVariant::TacticalTwoStep,
+                                            "Run Tactical two-step",
+                                        ),
+                                        (
+                                            FixtureRulesVariant::CustomThreeStep,
+                                            "Run Custom three-step",
+                                        ),
+                                    ] {
+                                        lab_button(
+                                            card,
+                                            assets,
+                                            label,
+                                            LabAction::StartFixture(fixture.id.to_owned(), variant),
+                                            210.0,
+                                        );
+                                    }
+                                } else {
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Run Fixture",
+                                        LabAction::StartFixture(
+                                            fixture.id.to_owned(),
+                                            FixtureRulesVariant::Shipped,
+                                        ),
+                                        150.0,
+                                    );
+                                }
                             });
                     }
                 });
         });
+}
+
+fn spawn_saved_reports(
+    root: &mut ChildSpawnerCommands,
+    assets: &UiAssets,
+    state: &CombatLabState,
+    store: &CombatLabReportStore,
+) {
+    root.spawn(panel())
+        .insert(Node {
+            width: Val::Percent(96.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            ..panel_node()
+        })
+        .with_children(|history_panel| {
+            history_panel.spawn(heading(assets, "explicitly saved local reports"));
+            history_panel.spawn(blurb(
+                assets,
+                "Separate from Creator and Continue · fixed fixtures never consult this history.",
+            ));
+            if let Some(error) = &store.error {
+                history_panel
+                    .spawn(blurb(assets, error.clone()))
+                    .insert(TextColor(DANGER));
+            }
+            if store.history.reports.is_empty() {
+                history_panel.spawn(blurb(
+                    assets,
+                    "No saved reports. Finish a Lab run and choose Save Report.",
+                ));
+                return;
+            }
+            history_panel
+                .spawn((
+                    ScrollArea,
+                    Node {
+                        min_height: Val::Px(0.0),
+                        flex_grow: 1.0,
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(7.0),
+                        overflow: Overflow::scroll_y(),
+                        ..default()
+                    },
+                ))
+                .with_children(|list| {
+                    for saved in &store.history.reports {
+                        list.spawn(panel())
+                            .insert(Node {
+                                width: Val::Percent(100.0),
+                                ..panel_node()
+                            })
+                            .with_children(|card| {
+                                card.spawn(heading(
+                                    assets,
+                                    format!(
+                                        "REPORT {} · {:?}",
+                                        saved.id.0, saved.report.outcome
+                                    ),
+                                ));
+                                card.spawn(fine(
+                                    assets,
+                                    format!(
+                                        "{:?} · {} · seed {} · P{} / H{} · {:016X}",
+                                        saved.report.profile.preset,
+                                        saved.report.map.scenario,
+                                        saved
+                                            .report
+                                            .map
+                                            .resolved_seed
+                                            .map_or_else(|| "authored".to_owned(), |seed| seed
+                                                .to_string()),
+                                        saved.report.rosters.players.len(),
+                                        saved.report.rosters.hostiles.len(),
+                                        saved.report.summary_fingerprint,
+                                    ),
+                                ));
+                                card.spawn(blurb(
+                                    assets,
+                                    format!(
+                                        "Rounds {} · commands {}/{} · move {} · Channel {} · applied disables {}",
+                                        saved.report.summary.rounds,
+                                        saved.report.summary.successful_commands,
+                                        saved.report.summary.refused_commands,
+                                        saved.report.summary.movement_distance,
+                                        saved.report.summary.channels,
+                                        saved.report.summary.applied_disables,
+                                    ),
+                                ));
+                                let left_selected = selected_compare_ids(state, store).0
+                                    == Some(saved.id);
+                                let right_selected = selected_compare_ids(state, store).1
+                                    == Some(saved.id);
+                                lab_button(
+                                    card,
+                                    assets,
+                                    if left_selected {
+                                        "LEFT · SELECTED"
+                                    } else {
+                                        "Use as Left"
+                                    },
+                                    LabAction::SelectCompareLeft(saved.id),
+                                    140.0,
+                                );
+                                lab_button(
+                                    card,
+                                    assets,
+                                    if right_selected {
+                                        "RIGHT · SELECTED"
+                                    } else {
+                                        "Use as Right"
+                                    },
+                                    LabAction::SelectCompareRight(saved.id),
+                                    140.0,
+                                );
+                                if state.pending_report_delete == Some(saved.id) {
+                                    card.spawn(fine(
+                                        assets,
+                                        "CONFIRM DELETE · this removes only this local report",
+                                    ))
+                                    .insert(TextColor(DANGER));
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Confirm Delete",
+                                        LabAction::ConfirmReportDelete(saved.id),
+                                        160.0,
+                                    );
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Cancel",
+                                        LabAction::CancelReportDelete,
+                                        100.0,
+                                    );
+                                } else {
+                                    lab_button(
+                                        card,
+                                        assets,
+                                        "Delete…",
+                                        LabAction::RequestReportDelete(saved.id),
+                                        110.0,
+                                    );
+                                }
+                            });
+                    }
+                });
+            if let Some((left, right)) = selected_compare_reports(state, store) {
+                history_panel.spawn(heading(
+                    assets,
+                    format!("compare reports {} vs {}", left.id.0, right.id.0),
+                ));
+                history_panel.spawn(fine(
+                    assets,
+                    format!(
+                        "FROZEN LEFT · {}\nFROZEN RIGHT · {}",
+                        frozen_report_header(&left.report),
+                        frozen_report_header(&right.report),
+                    ),
+                ));
+                history_panel.spawn((
+                    SavedReportComparison,
+                    blurb(
+                        assets,
+                        format!(
+                        "Rounds {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+}",
+                        signed_delta(right.report.summary.rounds, left.report.summary.rounds),
+                        signed_delta(
+                            right.report.summary.successful_commands,
+                            left.report.summary.successful_commands,
+                        ),
+                        signed_delta(
+                            right.report.summary.refused_commands,
+                            left.report.summary.refused_commands,
+                        ),
+                        signed_delta(
+                            right.report.summary.movement_distance,
+                            left.report.summary.movement_distance,
+                        ),
+                        signed_delta(right.report.summary.channels, left.report.summary.channels),
+                        signed_delta(
+                            right.report.summary.applied_disables,
+                            left.report.summary.applied_disables,
+                        ),
+                        ),
+                    ),
+                ));
+            }
+        });
+}
+
+fn frozen_report_header(report: &crate::combat_reports::CombatLabReport) -> String {
+    let roster = |entries: &[CombatLabReportRosterEntry]| {
+        entries
+            .iter()
+            .map(|entry| entry.display_name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{:?} [move {} · strike {} · engage {} · margin {} · levels {} · reveal {}] · P [{}] · H [{}]",
+        report.profile.preset,
+        report.profile.movement_per_turn,
+        report.profile.strike_disables,
+        report.profile.engage_range,
+        report.profile.disengage_margin,
+        report.profile.levels_per_bonus_range,
+        report.profile.reveal_duration,
+        roster(&report.rosters.players),
+        roster(&report.rosters.hostiles),
+    )
+}
+
+fn selected_compare_ids(
+    state: &CombatLabState,
+    store: &CombatLabReportStore,
+) -> (Option<CombatLabReportId>, Option<CombatLabReportId>) {
+    let first = store.history.reports.first().map(|saved| saved.id);
+    let last = store.history.reports.last().map(|saved| saved.id);
+    (
+        state
+            .compare_left
+            .filter(|id| store.history.reports.iter().any(|saved| saved.id == *id))
+            .or(first),
+        state
+            .compare_right
+            .filter(|id| store.history.reports.iter().any(|saved| saved.id == *id))
+            .or(last),
+    )
+}
+
+fn selected_compare_reports<'a>(
+    state: &CombatLabState,
+    store: &'a CombatLabReportStore,
+) -> Option<(
+    &'a crate::combat_reports::SavedCombatLabReport,
+    &'a crate::combat_reports::SavedCombatLabReport,
+)> {
+    let (left, right) = selected_compare_ids(state, store);
+    let left = left?;
+    let right = right?;
+    if left == right {
+        return None;
+    }
+    Some((
+        store
+            .history
+            .reports
+            .iter()
+            .find(|saved| saved.id == left)?,
+        store
+            .history
+            .reports
+            .iter()
+            .find(|saved| saved.id == right)?,
+    ))
+}
+
+fn signed_delta(right: u32, left: u32) -> i64 {
+    i64::from(right) - i64::from(left)
 }
 
 fn sync_fixture_filter(
@@ -1225,6 +2159,9 @@ fn handle_lab_actions(
     substances: Option<Res<SubstanceTable>>,
     presets: Option<Res<CreationPresetCatalog>>,
     map_catalog: Option<Res<CombatLabMapCatalog>>,
+    combat: Option<Res<CombatSettings>>,
+    mut reports: ResMut<CombatLabReportStore>,
+    paths: Res<StoragePaths>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -1235,36 +2172,56 @@ fn handle_lab_actions(
         match action {
             LabAction::Tab(tab) => {
                 state.tab = *tab;
+                state.pending_report_delete = None;
             }
             LabAction::Back => next.set(Screen::Title),
+            LabAction::ShowSandboxStep(step) => {
+                state.sandbox_step = *step;
+                state.notice.clear();
+            }
             LabAction::SelectMap(map) => {
                 state.map = map.clone();
+                state.preserved_deployment = None;
             }
             LabAction::AddPlayerTemplate(name) => {
                 if state.players.len() < MAX_ROSTER {
                     state.players.push(RosterChoice::Template(name.clone()));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddHostileTemplate(name) => {
                 if state.hostiles.len() < MAX_ROSTER {
                     state.hostiles.push(RosterChoice::Template(name.clone()));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddPlayerCustom(id) => {
                 if state.players.len() < MAX_ROSTER {
                     state.players.push(RosterChoice::Custom(*id));
+                    state.preserved_deployment = None;
                 }
             }
             LabAction::AddHostileCustom(id) => {
                 if state.hostiles.len() < MAX_ROSTER {
                     state.hostiles.push(RosterChoice::Custom(*id));
+                    state.preserved_deployment = None;
                 }
             }
-            LabAction::RemovePlayer(index) => remove_at(&mut state.players, *index),
-            LabAction::RemoveHostile(index) => remove_at(&mut state.hostiles, *index),
-            LabAction::MovePlayer(index, delta) => move_at(&mut state.players, *index, *delta),
+            LabAction::RemovePlayer(index) => {
+                remove_at(&mut state.players, *index);
+                state.preserved_deployment = None;
+            }
+            LabAction::RemoveHostile(index) => {
+                remove_at(&mut state.hostiles, *index);
+                state.preserved_deployment = None;
+            }
+            LabAction::MovePlayer(index, delta) => {
+                move_at(&mut state.players, *index, *delta);
+                state.preserved_deployment = None;
+            }
             LabAction::MoveHostile(index, delta) => {
                 move_at(&mut state.hostiles, *index, *delta);
+                state.preserved_deployment = None;
             }
             LabAction::EditCustom(character) => {
                 commands.insert_resource(CreatorEditRequest {
@@ -1272,7 +2229,72 @@ fn handle_lab_actions(
                 });
                 next.set(Screen::CharacterCreator);
             }
+            LabAction::SelectRulesPreset(preset) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                let current = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+                state.rules = Some(match preset {
+                    CombatRulesPreset::Shipped => CombatRulesProfile::shipped(shipped),
+                    CombatRulesPreset::TacticalTwoStep => {
+                        CombatRulesProfile::tactical_two_step(shipped)
+                    }
+                    CombatRulesPreset::Custom => CombatRulesProfile::custom_from(&current),
+                });
+                state.notice.clear();
+            }
+            LabAction::AdjustRule(field, delta) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                let mut profile = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
+                let amount = u32::from(delta.unsigned_abs());
+                let next = if *delta < 0 {
+                    profile.value(*field).checked_sub(amount)
+                } else {
+                    profile.value(*field).checked_add(amount)
+                };
+                match next.and_then(|value| profile.set_custom(*field, value).ok().map(|_| value)) {
+                    Some(_) => {
+                        state.rules = Some(profile);
+                        state.notice.clear();
+                    }
+                    None => {
+                        let bounds = field.bounds();
+                        state.notice = format!(
+                            "{} must remain in {}..={}.",
+                            field.label(),
+                            bounds.min,
+                            bounds.max
+                        );
+                    }
+                }
+            }
+            LabAction::ResetRules => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                state.rules = Some(CombatRulesProfile::shipped(shipped));
+                state.notice = "Rules reset to the shipped profile.".to_owned();
+            }
             LabAction::PrepareDeployment => {
+                let Some(shipped_combat) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
                 let Some(map_definition) = map_catalog
                     .as_deref()
                     .and_then(|catalog| catalog.get(&state.map))
@@ -1292,20 +2314,24 @@ fn handle_lab_actions(
                     state.bump();
                     continue;
                 };
-                let overlay = match build_creator_overlay(
-                    &state.players,
-                    &state.hostiles,
-                    &store.file,
-                    shipped_spell_file.as_deref(),
-                    base_lattice_file.as_deref(),
-                    elements.as_deref(),
-                    substances.as_deref(),
-                ) {
-                    Ok(overlay) => overlay,
-                    Err(error) => {
-                        state.notice = error;
-                        state.bump();
-                        continue;
+                let overlay = if let Some(overlay) = state.frozen_overlay.clone() {
+                    overlay
+                } else {
+                    match build_creator_overlay(
+                        &state.players,
+                        &state.hostiles,
+                        &store.file,
+                        shipped_spell_file.as_deref(),
+                        base_lattice_file.as_deref(),
+                        elements.as_deref(),
+                        substances.as_deref(),
+                    ) {
+                        Ok(overlay) => overlay,
+                        Err(error) => {
+                            state.notice = error;
+                            state.bump();
+                            continue;
+                        }
                     }
                 };
                 let encounter = sandbox_encounter(&state.players, &state.hostiles, map_definition);
@@ -1313,11 +2339,22 @@ fn handle_lab_actions(
                     .fixed_seed
                     .or(scenario.generation_seed)
                     .map(ResolvedMapSeed);
+                let profile = state
+                    .rules
+                    .clone()
+                    .unwrap_or_else(|| CombatRulesProfile::shipped(shipped_combat));
+                if let Err(error) = profile.validate(shipped_combat) {
+                    state.notice = format!("Rules profile refused: {error}");
+                    state.bump();
+                    continue;
+                }
+                state.rules = Some(profile.clone());
                 commands.insert_resource(overlay);
                 commands.insert_resource(DeploymentSession::new(
                     map_definition.clone(),
                     state.players.clone(),
                     state.hostiles.clone(),
+                    state.preserved_deployment.as_ref(),
                 ));
                 commands.insert_resource(GameplayPhase::Preparing);
                 commands.insert_resource(CombatLabSession {
@@ -1327,6 +2364,14 @@ fn handle_lab_actions(
                     } else {
                         Screen::CombatLab
                     },
+                    profile,
+                    shipped_combat: shipped_combat.clone(),
+                    report_map: CombatLabReportMap {
+                        catalog_id: map_definition.id.clone(),
+                        scenario: map_definition.scenario.clone(),
+                        resolved_seed: resolved_seed.map(|seed| seed.0),
+                    },
+                    initial_state: None,
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -1335,7 +2380,12 @@ fn handle_lab_actions(
                 });
                 next.set(Screen::Loading);
             }
-            LabAction::StartFixture(id) => {
+            LabAction::StartFixture(id, variant) => {
+                let Some(shipped_combat) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
                 let Some(fixture) = FIXTURES.iter().find(|fixture| fixture.id == id) else {
                     state.notice = format!("Unknown fixture {id:?}.");
                     state.bump();
@@ -1367,13 +2417,24 @@ fn handle_lab_actions(
                         continue;
                     }
                 };
-                let encounter_override = payload.map(|(overlay, encounter)| {
-                    commands.insert_resource(overlay);
-                    encounter
-                });
+                let encounter_override = payload
+                    .map(|(overlay, encounter)| {
+                        commands.insert_resource(overlay);
+                        encounter
+                    })
+                    .or_else(|| fixed_fixture_encounter(id));
                 commands.insert_resource(CombatLabSession {
                     kind: CombatLabSessionKind::FixedFixture(id.clone()),
                     return_to: Screen::CombatLab,
+                    profile: fixture_profile(*variant, shipped_combat),
+                    shipped_combat: shipped_combat.clone(),
+                    report_map: CombatLabReportMap {
+                        catalog_id: fixture.sandbox_map.to_owned(),
+                        scenario: fixture.scenario.to_owned(),
+                        resolved_seed: resolved_seed.map(|seed| seed.0),
+                    },
+                    initial_state: (id == "channel-attrition")
+                        .then_some(FixedFixtureInitialState::ChannelAttrition),
                 });
                 commands.insert_resource(ScenarioToLoad {
                     scenario,
@@ -1381,6 +2442,36 @@ fn handle_lab_actions(
                     encounter_override,
                 });
                 next.set(Screen::Loading);
+            }
+            LabAction::SelectCompareLeft(id) => {
+                state.compare_left = Some(*id);
+                state.notice = format!("Report {} selected as the left comparison.", id.0);
+            }
+            LabAction::SelectCompareRight(id) => {
+                state.compare_right = Some(*id);
+                state.notice = format!("Report {} selected as the right comparison.", id.0);
+            }
+            LabAction::RequestReportDelete(id) => {
+                state.pending_report_delete = Some(*id);
+                state.notice = format!("Confirm deletion of saved report {} or cancel.", id.0);
+            }
+            LabAction::ConfirmReportDelete(id) => {
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                match reports.delete(*id, shipped, &paths) {
+                    Ok(()) => {
+                        state.pending_report_delete = None;
+                        state.notice = format!("Saved report {} deleted.", id.0);
+                    }
+                    Err(error) => state.notice = error,
+                }
+            }
+            LabAction::CancelReportDelete => {
+                state.pending_report_delete = None;
+                state.notice = "Report deletion cancelled.".to_owned();
             }
         }
         state.bump();
@@ -1413,7 +2504,9 @@ fn build_creator_overlay(
         .iter()
         .chain(hostiles)
         .filter_map(|choice| match choice {
-            RosterChoice::Custom(id) => library.characters.iter().find(|saved| saved.id == *id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+                library.characters.iter().find(|saved| saved.id == *id)
+            }
             RosterChoice::Template(_) => None,
         })
         .collect();
@@ -1472,7 +2565,9 @@ fn build_creator_overlay(
         .iter()
         .chain(hostiles)
         .filter_map(|choice| match choice {
-            RosterChoice::Custom(id) => library.characters.iter().find(|saved| saved.id == *id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => {
+                library.characters.iter().find(|saved| saved.id == *id)
+            }
             RosterChoice::Template(_) => None,
         })
     {
@@ -1529,7 +2624,7 @@ fn build_creator_overlay(
             .iter()
             .chain(hostiles)
             .filter_map(|choice| match choice {
-                RosterChoice::Custom(id) => library
+                RosterChoice::Custom(id) | RosterChoice::Packaged(id) => library
                     .characters
                     .iter()
                     .find(|character| character.id == *id)
@@ -1599,7 +2694,7 @@ fn roster_entry(choice: &RosterChoice, placement: Option<EncounterPlacement>) ->
     RosterEntry {
         archetype: match choice {
             RosterChoice::Template(name) => name.clone(),
-            RosterChoice::Custom(id) => character_runtime_key(*id),
+            RosterChoice::Custom(id) | RosterChoice::Packaged(id) => character_runtime_key(*id),
         },
         placement,
         ai_profile: None,
@@ -1616,6 +2711,7 @@ fn choice_name(choice: &RosterChoice, store: &CreationStore) -> String {
             .iter()
             .find(|saved| saved.id == *id)
             .map_or_else(|| format!("missing #{}", id.0), |saved| saved.name.clone()),
+        RosterChoice::Packaged(id) => format!("fixture character #{}", id.0),
     }
 }
 
@@ -1678,6 +2774,23 @@ fn placements_complete_exact(placements: &[Option<TilePos>], roster_len: usize) 
     placements.len() == roster_len
         && !placements.is_empty()
         && placements.iter().all(Option::is_some)
+}
+
+fn deployment_snapshot(session: &DeploymentSession) -> Option<CombatLabReportDeployment> {
+    session.complete().then(|| CombatLabReportDeployment {
+        players: session
+            .player_placements
+            .iter()
+            .copied()
+            .flatten()
+            .collect(),
+        hostiles: session
+            .hostile_placements
+            .iter()
+            .copied()
+            .flatten()
+            .collect(),
+    })
 }
 
 type DeploymentTileQuery<'w, 's> = Query<
@@ -1756,6 +2869,31 @@ fn enter_deployment(
         &footing,
         session.map_definition.hostile_region.radius,
     );
+    let mut occupied = std::collections::BTreeSet::new();
+    let mut dropped = 0;
+    for placements in [
+        session.player_placements.as_mut_slice(),
+        session.hostile_placements.as_mut_slice(),
+    ] {
+        for placement in placements {
+            if placement.is_some_and(|position| {
+                footing.at(position).is_none() || !occupied.insert(position)
+            }) {
+                *placement = None;
+                dropped += 1;
+            }
+        }
+    }
+    if dropped == 0 && session.complete() {
+        session.notice =
+            "Exact frozen deployment retained · select any row to reposition.".to_owned();
+    } else if dropped > 0 {
+        session.notice = format!(
+            "{dropped} frozen placement{} no longer valid; place the highlighted roster rows.",
+            if dropped == 1 { " is" } else { "s are" }
+        );
+        advance_deployment_cursor(session);
+    }
 
     let player_material = materials.add(deployment_material(Color::srgba(0.20, 0.68, 0.98, 0.58)));
     let hostile_material = materials.add(deployment_material(Color::srgba(0.94, 0.30, 0.24, 0.58)));
@@ -1900,13 +3038,15 @@ fn spawn_deployment_hud(
                     "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
                 ));
             });
-            for (title, roster, placements) in [
+            for (player, title, roster, placements) in [
                 (
+                    true,
                     "PLAYER",
                     session.players.as_slice(),
                     session.player_placements.as_slice(),
                 ),
                 (
+                    false,
                     "HOSTILE",
                     session.hostiles.as_slice(),
                     session.hostile_placements.as_slice(),
@@ -1922,25 +3062,35 @@ fn spawn_deployment_hud(
                     side.spawn(fine(assets, title));
                     for (index, choice) in roster.iter().enumerate() {
                         let placement = placements.get(index).copied().flatten();
-                        side.spawn(fine(
-                            assets,
-                            format!(
-                                "[{}{}] {} · {}",
-                                if title == "PLAYER" { "P" } else { "H" },
-                                index + 1,
-                                choice_name(choice, store),
-                                placement.map_or_else(
-                                    || "choose surface".to_owned(),
-                                    |pos| format!(
-                                        "({}, {}, {}) · elevation {}",
-                                        pos.coord.x(),
-                                        pos.coord.y(),
-                                        pos.coord.z(),
-                                        pos.level
-                                    )
+                        let selected =
+                            session.active_player == player && session.active_index == index;
+                        let text = format!(
+                            "{} [{}{}] {}\n{}",
+                            if selected { "SELECTED" } else { "SELECT" },
+                            if player { "P" } else { "H" },
+                            index + 1,
+                            choice_name(choice, store),
+                            placement.map_or_else(
+                                || "choose surface".to_owned(),
+                                |pos| format!(
+                                    "({},{},{}) · elevation {}",
+                                    pos.coord.x(),
+                                    pos.coord.y(),
+                                    pos.coord.z(),
+                                    pos.level
                                 )
-                            ),
-                        ));
+                            )
+                        );
+                        side.spawn((
+                            row_button(text.clone(), 235.0),
+                            DeploymentAction::Select { player, index },
+                        ))
+                        .insert(BorderColor::all(if selected {
+                            Color::srgba(0.93, 0.79, 0.46, 0.95)
+                        } else {
+                            Color::srgba(0.26, 0.29, 0.34, 0.9)
+                        }))
+                        .with_child(fine(assets, text));
                     }
                 });
             }
@@ -1973,7 +3123,7 @@ fn spawn_deployment_hud(
                     "Deterministic Auto-place",
                     DeploymentAction::AutoPlace,
                 );
-                deployment_button(actions, assets, "Back to Setup", DeploymentAction::Back);
+                deployment_button(actions, assets, "Back to Rules", DeploymentAction::Back);
                 if session.complete() {
                     deployment_button(
                         actions,
@@ -1981,6 +3131,13 @@ fn spawn_deployment_hud(
                         "Start Combat",
                         DeploymentAction::StartCombat,
                     );
+                } else {
+                    actions
+                        .spawn(fine(
+                            assets,
+                            "START COMBAT · DISABLED — place every roster entry",
+                        ))
+                        .insert(TextColor(DANGER));
                 }
             });
         });
@@ -2030,11 +3187,8 @@ fn on_deployment_surface_clicked(
         rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
         return;
     }
-    let occupied = session
-        .player_placements
-        .iter()
-        .chain(&session.hostile_placements)
-        .any(|placement| *placement == Some(surface.pos));
+    let active = deployment_unit_id(session.active_player, session.active_index);
+    let occupied = deployment_occupancy(session).is_occupied(surface.pos, Some(active));
     if occupied {
         session.notice = "That exact surface is already occupied.".to_owned();
         rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
@@ -2055,6 +3209,32 @@ fn on_deployment_surface_clicked(
     advance_deployment_cursor(session);
     rebuild_deployment_markers(&mut commands, &markers, session);
     rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
+}
+
+fn deployment_unit_id(player: bool, index: usize) -> hex_core::UnitId {
+    let side = if player {
+        0
+    } else {
+        u64::try_from(MAX_ROSTER).unwrap_or(u64::MAX)
+    };
+    hex_core::UnitId(side.saturating_add(u64::try_from(index).unwrap_or(u64::MAX)))
+}
+
+fn deployment_occupancy(session: &DeploymentSession) -> UnitOccupancy {
+    UnitOccupancy::from_positions(
+        session
+            .player_placements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, placement)| {
+                placement.map(|position| (deployment_unit_id(true, index), position))
+            })
+            .chain(session.hostile_placements.iter().enumerate().filter_map(
+                |(index, placement)| {
+                    placement.map(|position| (deployment_unit_id(false, index), position))
+                },
+            )),
+    )
 }
 
 fn advance_deployment_cursor(session: &mut DeploymentSession) {
@@ -2187,7 +3367,10 @@ struct DeploymentRuntime<'w, 's> {
         's,
         (
             Entity,
+            &'static hex_core::UnitId,
             &'static Faction,
+            &'static Archetype,
+            &'static Name,
             &'static mut StandsOn,
             &'static mut Transform,
         ),
@@ -2198,11 +3381,13 @@ struct DeploymentRuntime<'w, 's> {
     encounter: Option<ResMut<'w, Encounter>>,
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
     lab: Option<Res<'w, CombatLabSession>>,
+    accepted: Option<Res<'w, AcceptedContentRevision>>,
 }
 
 fn handle_deployment_actions(
     clicked: Query<(&Interaction, &DeploymentAction), Changed<Interaction>>,
     mut session: Option<ResMut<DeploymentSession>>,
+    mut lab_state: ResMut<CombatLabState>,
     mut phase: ResMut<GameplayPhase>,
     mut runtime: DeploymentRuntime,
     assets: Res<UiAssets>,
@@ -2218,6 +3403,23 @@ fn handle_deployment_actions(
             continue;
         }
         match action {
+            DeploymentAction::Select { player, index } => {
+                let valid = if *player {
+                    *index < session.players.len()
+                } else {
+                    *index < session.hostiles.len()
+                };
+                if valid {
+                    session.active_player = *player;
+                    session.active_index = *index;
+                    session.notice = format!(
+                        "{} {} selected · click a {} highlighted surface to place or reposition.",
+                        if *player { "PLAYER" } else { "HOSTILE" },
+                        index + 1,
+                        if *player { "BLUE" } else { "RED" }
+                    );
+                }
+            }
             DeploymentAction::Undo => {
                 if let Some((player, index, previous)) = session.undo.pop() {
                     let placements = if player {
@@ -2252,29 +3454,42 @@ fn handle_deployment_actions(
                 session.notice = "Hostile placements cleared.".to_owned();
             }
             DeploymentAction::AutoPlace => {
-                let mut used = std::collections::BTreeSet::new();
-                for (placement, surface) in session
+                session.player_placements.fill(None);
+                session.hostile_placements.fill(None);
+                let mut occupancy = UnitOccupancy::default();
+                for (index, (placement, surface)) in session
                     .player_placements
                     .iter_mut()
                     .zip(&session.player_surfaces)
+                    .enumerate()
                 {
                     *placement = Some(*surface);
-                    used.insert(*surface);
+                    occupancy.relocate(deployment_unit_id(true, index), *surface);
                 }
                 let hostile = session
                     .hostile_surfaces
                     .iter()
-                    .filter(|surface| !used.contains(surface))
+                    .filter(|surface| !occupancy.is_occupied(**surface, None))
                     .copied()
                     .take(session.hostile_placements.len())
                     .collect::<Vec<_>>();
-                for (placement, surface) in session.hostile_placements.iter_mut().zip(hostile) {
+                for (index, (placement, surface)) in session
+                    .hostile_placements
+                    .iter_mut()
+                    .zip(hostile)
+                    .enumerate()
+                {
                     *placement = Some(surface);
+                    occupancy.relocate(deployment_unit_id(false, index), surface);
                 }
                 session.undo.clear();
                 advance_deployment_cursor(session);
             }
             DeploymentAction::Back => {
+                if let Some(deployment) = deployment_snapshot(session) {
+                    lab_state.preserved_deployment = Some(deployment);
+                    lab_state.bump();
+                }
                 *phase = GameplayPhase::Active;
                 next.set(
                     runtime
@@ -2302,14 +3517,14 @@ fn handle_deployment_actions(
                 let mut players = runtime
                     .units
                     .iter_mut()
-                    .filter(|(_, faction, _, _)| **faction == Faction::Player)
-                    .map(|(entity, _, _, _)| entity)
+                    .filter(|(_, _, faction, _, _, _, _)| **faction == Faction::Player)
+                    .map(|(entity, _, _, _, _, _, _)| entity)
                     .collect::<Vec<_>>();
                 let mut hostiles = runtime
                     .units
                     .iter_mut()
-                    .filter(|(_, faction, _, _)| **faction == Faction::Hostile)
-                    .map(|(entity, _, _, _)| entity)
+                    .filter(|(_, _, faction, _, _, _, _)| **faction == Faction::Hostile)
+                    .map(|(entity, _, _, _, _, _, _)| entity)
                     .collect::<Vec<_>>();
                 players.sort_by_key(|entity| entity.index());
                 hostiles.sort_by_key(|entity| entity.index());
@@ -2324,7 +3539,9 @@ fn handle_deployment_actions(
                                 format!("Selected surface {pos:?} is no longer valid footing.");
                             continue;
                         };
-                        if let Ok((_, _, mut on, mut transform)) = runtime.units.get_mut(*entity) {
+                        if let Ok((_, _, _, _, _, mut on, mut transform)) =
+                            runtime.units.get_mut(*entity)
+                        {
                             on.0 = standing;
                             transform.translation = standing.world_position();
                         }
@@ -2336,6 +3553,24 @@ fn handle_deployment_actions(
                 }
                 if let Some(active) = runtime.active.as_deref_mut() {
                     active.0.encounter_override = Some(exact);
+                }
+                if let (Some(lab), Some(accepted)) =
+                    (runtime.lab.as_deref(), runtime.accepted.as_deref())
+                {
+                    let units = runtime
+                        .units
+                        .iter_mut()
+                        .map(|(_, id, faction, archetype, name, on, _)| {
+                            (
+                                *id,
+                                *faction,
+                                archetype.0.clone(),
+                                name.as_str().to_owned(),
+                                on.0.pos,
+                            )
+                        })
+                        .collect();
+                    commands.insert_resource(report_launch(lab, accepted.fingerprint(), units));
                 }
                 for (entity, mut visibility) in &mut runtime.hidden_presentation {
                     *visibility = Visibility::Inherited;
@@ -2352,6 +3587,85 @@ fn handle_deployment_actions(
         }
         rebuild_deployment_markers(&mut commands, &runtime.markers, session);
         rebuild_deployment_hud(&mut commands, &runtime.hud, &assets, session, &store);
+    }
+}
+
+fn capture_fixed_fixture_report_launch(
+    mut commands: Commands,
+    lab: Option<Res<CombatLabSession>>,
+    accepted: Option<Res<AcceptedContentRevision>>,
+    existing: Option<Res<CombatLabReportLaunch>>,
+    units: Query<(&hex_core::UnitId, &Faction, &Archetype, &Name, &StandsOn)>,
+) {
+    let (Some(lab), Some(accepted)) = (lab.as_deref(), accepted.as_deref()) else {
+        return;
+    };
+    if existing.is_some() || !matches!(lab.kind, CombatLabSessionKind::FixedFixture(_)) {
+        return;
+    }
+    let units = units
+        .iter()
+        .map(|(id, faction, archetype, name, on)| {
+            (
+                *id,
+                *faction,
+                archetype.0.clone(),
+                name.as_str().to_owned(),
+                on.0.pos,
+            )
+        })
+        .collect();
+    commands.insert_resource(report_launch(lab, accepted.fingerprint(), units));
+}
+
+fn report_launch(
+    lab: &CombatLabSession,
+    content_revision: u64,
+    mut units: Vec<(hex_core::UnitId, Faction, String, String, TilePos)>,
+) -> CombatLabReportLaunch {
+    units.sort_by_key(|(id, ..)| *id);
+    let roster = |faction| {
+        units
+            .iter()
+            .filter(|(_, side, ..)| *side == faction)
+            .map(
+                |(id, _, archetype, display_name, _)| CombatLabReportRosterEntry {
+                    unit_id: id.0,
+                    archetype: archetype.clone(),
+                    display_name: display_name.clone(),
+                    controller: if faction == Faction::Player {
+                        CombatLabReportController::Human
+                    } else {
+                        CombatLabReportController::BaselineAi
+                    },
+                },
+            )
+            .collect()
+    };
+    let deployment = |faction| {
+        units
+            .iter()
+            .filter(|(_, side, ..)| *side == faction)
+            .map(|(_, _, _, _, position)| *position)
+            .collect()
+    };
+    CombatLabReportLaunch {
+        origin: match &lab.kind {
+            CombatLabSessionKind::Sandbox => CombatLabReportOrigin::Sandbox,
+            CombatLabSessionKind::FixedFixture(stable_id) => CombatLabReportOrigin::FixedFixture {
+                stable_id: stable_id.clone(),
+            },
+        },
+        map: lab.report_map.clone(),
+        content_revision,
+        rosters: CombatLabReportRosters {
+            players: roster(Faction::Player),
+            hostiles: roster(Faction::Hostile),
+        },
+        deployment: CombatLabReportDeployment {
+            players: deployment(Faction::Player),
+            hostiles: deployment(Faction::Hostile),
+        },
     }
 }
 
@@ -2418,6 +3732,47 @@ pub(crate) fn apply_creator_content_overlay(world: &mut World) {
     active.insert_into_world(world);
 }
 
+/// Validates and installs the frozen effective Lab rules before gameplay admission.
+pub(crate) fn apply_combat_rules_profile(world: &mut World) {
+    let Some(session) = world.get_resource::<CombatLabSession>().cloned() else {
+        world.remove_resource::<CombatLabRulesStatus>();
+        return;
+    };
+    if world
+        .get_resource::<CombatLabRulesStatus>()
+        .is_some_and(|status| *status == CombatLabRulesStatus::Ready)
+    {
+        return;
+    }
+    match session.profile.effective_settings(&session.shipped_combat) {
+        Ok(effective) => {
+            world.insert_resource(effective);
+            world.insert_resource(CombatLabRulesStatus::Ready);
+        }
+        Err(error) => {
+            if world
+                .get_resource::<CombatLabRulesStatus>()
+                .is_none_or(|status| *status != CombatLabRulesStatus::Invalid)
+            {
+                error!("Combat Lab rules profile refused before gameplay: {error}");
+            }
+            world.remove_resource::<CombatSettings>();
+            world.insert_resource(GameplaySetupFailure::new(format!(
+                "Combat Lab rules profile was refused: {error}"
+            )));
+            world.insert_resource(ScenarioContractStatus::Invalid);
+            world.insert_resource(CombatLabRulesStatus::Invalid);
+        }
+    }
+}
+
+fn restore_shipped_combat_rules(mut commands: Commands, session: Option<Res<CombatLabSession>>) {
+    if let Some(session) = session {
+        commands.insert_resource(session.shipped_combat.clone());
+    }
+    commands.remove_resource::<CombatLabRulesStatus>();
+}
+
 /// Restores the base namespace after a creator session froze combined ids.
 pub(crate) fn restore_shipped_content(
     commands: &mut Commands,
@@ -2445,14 +3800,366 @@ fn apply_creator_display_names(
     }
 }
 
+fn apply_fixed_fixture_initial_state(
+    mut commands: Commands,
+    session: Option<Res<CombatLabSession>>,
+    content: Option<Res<ContentIndex>>,
+    elements: Option<Res<ElementCatalog>>,
+    mut units: Query<(
+        &Faction,
+        &Archetype,
+        &hex_lattice::LatticeSpec,
+        &mut hex_lattice::LatticeState,
+    )>,
+) {
+    let (Some(setup), Some(content), Some(elements)) = (
+        session.as_deref().and_then(|session| session.initial_state),
+        content.as_deref(),
+        elements.as_deref(),
+    ) else {
+        return;
+    };
+    match setup {
+        FixedFixtureInitialState::ChannelAttrition => {
+            let tables = content.tables(elements);
+            for (faction, archetype, spec, mut state) in &mut units {
+                match (*faction, archetype.0.as_str()) {
+                    // Both controllers begin with missing mana, so the human can
+                    // repeat Channel and baseline AI has the same canonical option.
+                    (Faction::Player | Faction::Hostile, "hedge-mage") => {
+                        if let Err(error) = apply_fixture_cast(spec, &mut state, &tables, false) {
+                            commands.insert_resource(GameplaySetupFailure::new(error));
+                            return;
+                        }
+                    }
+                    // Locked mana proves Channel does not refill funding already
+                    // committed to an enchantment.
+                    (Faction::Player, "raider") => {
+                        if let Err(error) = apply_fixture_cast(spec, &mut state, &tables, true) {
+                            commands.insert_resource(GameplaySetupFailure::new(error));
+                            return;
+                        }
+                    }
+                    // One live-but-damaged unit exercises disabled-cell exclusion.
+                    (Faction::Player, "wolf") => {
+                        if let Some((coord, _)) = spec.cells().next() {
+                            hex_lattice::apply_disables(&mut state, &[coord]);
+                        }
+                    }
+                    // One fully disabled body proves the downed-unit refusal path.
+                    (Faction::Hostile, "wolf") => {
+                        let cells = spec.cells().map(|(coord, _)| coord).collect::<Vec<_>>();
+                        hex_lattice::apply_disables(&mut state, &cells);
+                    }
+                    // The hostile raider remains completely full as the no-op
+                    // Channel/cap reference state.
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn apply_fixture_cast(
+    spec: &hex_lattice::LatticeSpec,
+    state: &mut hex_lattice::LatticeState,
+    tables: &hex_assets::ContentTables<'_>,
+    enchantment: bool,
+) -> Result<(), String> {
+    let plan = spec.cells().find_map(|(coord, kind)| {
+        if !matches!(kind, hex_lattice::CellKind::Spell { .. }) {
+            return None;
+        }
+        let plan = hex_lattice::castable(spec, state, coord, tables).ok()?;
+        let is_enchantment = matches!(
+            tables.casting(plan.spell),
+            hex_lattice::Casting::Enchantment { .. }
+        );
+        (is_enchantment == enchantment).then_some(plan)
+    });
+    let Some(plan) = plan else {
+        return Err(format!(
+            "Channel fixture could not find a castable {} spell.",
+            if enchantment {
+                "enchantment"
+            } else {
+                "non-enchantment"
+            }
+        ));
+    };
+    if !hex_lattice::apply_cast(state, &plan, tables) {
+        return Err("Channel fixture cast plan failed to apply atomically.".to_owned());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::world::CommandQueue;
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         AcceptedContentRevision, ArtPalette, ElementFile, SubstanceFile, SubstanceTable,
     };
 
     use super::*;
+
+    fn rules_session(profile: CombatRulesProfile, shipped: CombatSettings) -> CombatLabSession {
+        CombatLabSession {
+            kind: CombatLabSessionKind::Sandbox,
+            return_to: Screen::CombatLab,
+            profile,
+            shipped_combat: shipped,
+            report_map: CombatLabReportMap {
+                catalog_id: "flat-arena".to_owned(),
+                scenario: "Flat Arena".to_owned(),
+                resolved_seed: Some(42),
+            },
+            initial_state: None,
+        }
+    }
+
+    #[test]
+    fn rules_step_exposes_presets_every_bounded_stepper_reset_and_forward_gate() {
+        let mut world = World::new();
+        let assets = UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        };
+        let state = CombatLabState {
+            sandbox_step: SandboxStep::Rules,
+            ..default()
+        };
+        let shipped = CombatSettings::default();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        commands.spawn(Node::default()).with_children(|root| {
+            spawn_rules_setup(root, &assets, &state, None, Some(&shipped));
+        });
+        queue.apply(&mut world);
+
+        let mut presets = 0;
+        let mut adjustments = 0;
+        let mut resets = 0;
+        let mut forwards = 0;
+        let mut backs = 0;
+        let mut actions = world.query::<&LabAction>();
+        for action in actions.iter(&world) {
+            match action {
+                LabAction::SelectRulesPreset(_) => presets += 1,
+                LabAction::AdjustRule(_, _) => adjustments += 1,
+                LabAction::ResetRules => resets += 1,
+                LabAction::PrepareDeployment => forwards += 1,
+                LabAction::ShowSandboxStep(SandboxStep::Rosters) => backs += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(presets, 3);
+        assert_eq!(adjustments, CombatRuleField::ALL.len() * 2);
+        assert_eq!((resets, forwards, backs), (1, 1, 1));
+    }
+
+    #[test]
+    fn report_launch_freezes_stable_roster_order_and_exact_initial_surfaces() {
+        let shipped = CombatSettings::default();
+        let session = rules_session(CombatRulesProfile::shipped(&shipped), shipped);
+        let player = TilePos::new(HexCoord::ORIGIN, 5);
+        let hostile = TilePos::new(HexCoord::ORIGIN, 1);
+        let launch = report_launch(
+            &session,
+            77,
+            vec![
+                (
+                    hex_core::UnitId(9),
+                    Faction::Hostile,
+                    "raider".to_owned(),
+                    "Raider".to_owned(),
+                    hostile,
+                ),
+                (
+                    hex_core::UnitId(2),
+                    Faction::Player,
+                    "hedge-mage".to_owned(),
+                    "Hedge Mage".to_owned(),
+                    player,
+                ),
+            ],
+        );
+        assert_eq!(launch.origin, CombatLabReportOrigin::Sandbox);
+        assert_eq!(launch.content_revision, 77);
+        assert_eq!(
+            launch
+                .rosters
+                .players
+                .iter()
+                .map(|entry| entry.archetype.as_str())
+                .collect::<Vec<_>>(),
+            vec!["hedge-mage"]
+        );
+        assert_eq!(
+            launch
+                .rosters
+                .hostiles
+                .iter()
+                .map(|entry| entry.controller)
+                .collect::<Vec<_>>(),
+            vec![CombatLabReportController::BaselineAi]
+        );
+        assert_eq!(launch.deployment.players, vec![player]);
+        assert_eq!(launch.deployment.hostiles, vec![hostile]);
+    }
+
+    #[test]
+    fn saved_reports_render_comparison_and_require_confirmed_delete() {
+        let shipped = CombatSettings::default();
+        let session = rules_session(CombatRulesProfile::shipped(&shipped), shipped);
+        let launch = report_launch(
+            &session,
+            77,
+            vec![
+                (
+                    hex_core::UnitId(1),
+                    Faction::Player,
+                    "hedge-mage".to_owned(),
+                    "Hedge Mage".to_owned(),
+                    TilePos::new(HexCoord::ORIGIN, 1),
+                ),
+                (
+                    hex_core::UnitId(2),
+                    Faction::Hostile,
+                    "raider".to_owned(),
+                    "Raider".to_owned(),
+                    TilePos::new(HexCoord::from_axial(1, 0), 1),
+                ),
+            ],
+        );
+        let report = |rounds| {
+            let mut summary = hex_combat::CombatSummary::default();
+            summary.rounds = rounds;
+            summary.outcome = Some(hex_combat::EncounterOutcome::Victory);
+            crate::combat_reports::CombatLabReport::new(
+                session.profile.clone(),
+                launch.origin.clone(),
+                launch.map.clone(),
+                launch.content_revision,
+                launch.rosters.clone(),
+                launch.deployment.clone(),
+                hex_combat::EncounterOutcome::Victory,
+                summary,
+            )
+        };
+        let first = CombatLabReportId(1);
+        let store = CombatLabReportStore {
+            history: crate::combat_reports::CombatLabReportHistory {
+                version: crate::combat_reports::COMBAT_LAB_REPORT_HISTORY_VERSION,
+                next_id: 3,
+                reports: vec![
+                    crate::combat_reports::SavedCombatLabReport {
+                        id: first,
+                        report: report(8),
+                    },
+                    crate::combat_reports::SavedCombatLabReport {
+                        id: CombatLabReportId(2),
+                        report: report(6),
+                    },
+                ],
+            },
+            error: None,
+        };
+        let state = CombatLabState {
+            tab: LabTab::Reports,
+            pending_report_delete: Some(first),
+            ..default()
+        };
+        let assets = UiAssets {
+            display: Handle::default(),
+            body: Handle::default(),
+            hex_cell: Handle::default(),
+        };
+        let mut world = World::new();
+        let mut queue = CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        commands.spawn(Node::default()).with_children(|root| {
+            spawn_saved_reports(root, &assets, &state, &store);
+        });
+        queue.apply(&mut world);
+
+        let mut comparisons = world.query_filtered::<Entity, With<SavedReportComparison>>();
+        assert_eq!(comparisons.iter(&world).count(), 1);
+        let mut actions = world.query::<&LabAction>();
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(|action| matches!(action, LabAction::SelectCompareLeft(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(|action| matches!(action, LabAction::SelectCompareRight(_)))
+                .count(),
+            2
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(
+                    |action| matches!(action, LabAction::ConfirmReportDelete(id) if *id == first)
+                )
+                .count(),
+            1
+        );
+        assert_eq!(
+            actions
+                .iter(&world)
+                .filter(|action| matches!(action, LabAction::CancelReportDelete))
+                .count(),
+            1
+        );
+        assert_eq!(signed_delta(6, 8), -2);
+    }
+
+    #[test]
+    fn loading_installs_a_frozen_tactical_profile_without_changing_shipped_snapshot() {
+        let shipped = CombatSettings::default();
+        let profile = CombatRulesProfile::tactical_two_step(&shipped);
+        let mut app = App::new();
+        app.insert_resource(shipped.clone());
+        app.insert_resource(rules_session(profile.clone(), shipped.clone()));
+
+        apply_combat_rules_profile(app.world_mut());
+
+        assert_eq!(
+            app.world().resource::<CombatSettings>().movement_per_turn,
+            2
+        );
+        let session = app.world().resource::<CombatLabSession>();
+        assert_eq!(session.profile, profile);
+        assert_eq!(session.shipped_combat, shipped);
+        assert_eq!(
+            *app.world().resource::<CombatLabRulesStatus>(),
+            CombatLabRulesStatus::Ready
+        );
+    }
+
+    #[test]
+    fn loading_fails_closed_on_a_profile_that_lies_about_preset_identity() {
+        let shipped = CombatSettings::default();
+        let mut profile = CombatRulesProfile::shipped(&shipped);
+        profile.movement_per_turn = 3;
+        let mut app = App::new();
+        app.insert_resource(shipped.clone());
+        app.insert_resource(rules_session(profile, shipped));
+
+        apply_combat_rules_profile(app.world_mut());
+
+        assert!(!app.world().contains_resource::<CombatSettings>());
+        assert_eq!(
+            *app.world().resource::<CombatLabRulesStatus>(),
+            CombatLabRulesStatus::Invalid
+        );
+    }
 
     struct ContentFixture {
         element_file: ElementFile,
@@ -2553,6 +4260,76 @@ mod tests {
         })
     }
 
+    #[test]
+    fn channel_attrition_materializes_every_declared_lattice_state() {
+        let fixture = content_fixture().expect("shipped content fixture should resolve");
+        let shipped = CombatSettings::default();
+        let session = CombatLabSession {
+            initial_state: Some(FixedFixtureInitialState::ChannelAttrition),
+            ..rules_session(CombatRulesProfile::shipped(&shipped), shipped)
+        };
+        let mut app = App::new();
+        app.insert_resource(session)
+            .insert_resource(fixture.shipped.content.clone())
+            .insert_resource(fixture.elements.clone())
+            .add_systems(Update, apply_fixed_fixture_initial_state);
+        for faction in [Faction::Player, Faction::Hostile] {
+            for name in ["hedge-mage", "raider", "wolf"] {
+                let archetype = fixture
+                    .shipped
+                    .lattices
+                    .get(name)
+                    .unwrap_or_else(|| panic!("missing shipped {name}"));
+                app.world_mut().spawn((
+                    faction,
+                    Archetype(name.to_owned()),
+                    archetype.spec.clone(),
+                    hex_lattice::LatticeState::new(&archetype.spec, &archetype.stats),
+                ));
+            }
+        }
+        app.update();
+
+        let mut units = app.world_mut().query::<(
+            &Faction,
+            &Archetype,
+            &hex_lattice::LatticeSpec,
+            &hex_lattice::LatticeState,
+        )>();
+        for (faction, archetype, spec, state) in units.iter(app.world()) {
+            match (*faction, archetype.0.as_str()) {
+                (Faction::Player | Faction::Hostile, "hedge-mage") => {
+                    let fresh = fixture
+                        .shipped
+                        .lattices
+                        .get("hedge-mage")
+                        .expect("fresh mage");
+                    let fresh = hex_lattice::LatticeState::new(&fresh.spec, &fresh.stats);
+                    assert!(state.total_gem_mana() < fresh.total_gem_mana());
+                }
+                (Faction::Player, "raider") => {
+                    assert_eq!(state.enchantment_count(), 1);
+                    assert!(state.total_locked_mana() > 0);
+                }
+                (Faction::Player, "wolf") => {
+                    let disabled = spec
+                        .cells()
+                        .filter(|(coord, _)| state.is_disabled(*coord))
+                        .count();
+                    assert_eq!(disabled, 1);
+                }
+                (Faction::Hostile, "wolf") => {
+                    assert!(spec.cells().all(|(coord, _)| state.is_disabled(coord)));
+                }
+                (Faction::Hostile, "raider") => {
+                    assert_eq!(state.enchantment_count(), 0);
+                    assert_eq!(state.total_locked_mana(), 0);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn app_with_content_fixture(fixture: &ContentFixture) -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
@@ -2628,6 +4405,7 @@ mod tests {
                 RosterChoice::Template("hedge-mage".to_owned()),
             ],
             vec![RosterChoice::Template("raider".to_owned())],
+            None,
         );
         let player = TilePos::new(HexCoord::ORIGIN, 3);
         let hostile = TilePos::new(HexCoord::new_cubic(2, -2, 0), 7);
@@ -2638,6 +4416,27 @@ mod tests {
             resolved_deployment_markers(&session).collect::<Vec<_>>(),
             vec![(true, 1, player), (false, 0, hostile)]
         );
+
+        let second_player = TilePos::new(HexCoord::from_axial(1, 0), 3);
+        session.player_placements = vec![Some(player), Some(second_player)];
+        session.hostile_placements = vec![Some(player)];
+        assert!(
+            !session.complete(),
+            "deployment uses the shared exact-surface overlap rule"
+        );
+        session.hostile_placements = vec![Some(TilePos::new(player.coord, player.level + 1))];
+        assert!(
+            session.complete(),
+            "stacked surfaces at distinct elevations remain distinct"
+        );
+        assert_eq!(
+            deployment_snapshot(&session),
+            Some(CombatLabReportDeployment {
+                players: vec![player, second_player],
+                hostiles: vec![TilePos::new(player.coord, player.level + 1)],
+            }),
+            "leaving deployment must preserve the tester's latest exact surfaces"
+        );
     }
 
     #[test]
@@ -2647,6 +4446,9 @@ mod tests {
         assert_eq!(ids.len(), FIXTURES.len());
         assert!(ids.contains("ability-lab"));
         assert!(ids.contains("creator-spell-matrix"));
+        assert!(ids.contains("occupancy-matrix"));
+        assert!(ids.contains("channel-attrition"));
+        assert!(ids.contains("tempo-matrix"));
     }
 
     #[test]

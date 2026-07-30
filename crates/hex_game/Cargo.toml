@@ -20,12 +20,15 @@ hex_world = { workspace = true }
 hex_dev = { workspace = true, optional = true }
 ron = { workspace = true }
 serde = { workspace = true }
+serde_json = "1"
+xxhash-rust = { workspace = true }
 
 [dev-dependencies]
 # Only for the tests that open each scenario's world file and check it parses.
 ron = { workspace = true }
 hex_ai = { workspace = true }
 hex_anim = { workspace = true }
+hex_test_support = { workspace = true }
 
 [features]
 # Empty by default so `cargo build --release` ships without the inspector. Use
@@ -41,6 +44,13 @@ map-review = []
 # each one, so an agent or a human can review the frames. Same release-shaped
 # philosophy as map-review.
 visual-walk = []
+# Headless game/UI observation helpers. Never enabled by the shipping build.
+test-support = []
+
+[[test]]
+name = "gameplay_app"
+path = "tests/gameplay_app.rs"
+required-features = ["test-support"]
 
 [lints]
 workspace = true

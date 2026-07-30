@@ -11,7 +11,7 @@ use hex_core::Screen;
 
 pub(crate) mod combat_lab;
 mod creator;
-mod gameplay;
+pub(crate) mod gameplay;
 mod lattice_demo;
 mod loading;
 mod settings;

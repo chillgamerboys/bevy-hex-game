@@ -13,6 +13,22 @@ This document owns the creation-library, creator, sandbox, deployment, fixture, 
 launch-snapshot contracts. `hex_assets` owns serializable content, `hex_combat` owns
 the fail-closed deployability decision, and `hex_game` owns persistence and UI.
 
+Wave 7 adds a versioned `CombatRulesProfile` without changing that ownership. Shipped
+values are copied from validated `combat.ron`; Tactical two-step changes only movement
+per turn; Custom edits remain inside published numeric bounds. The profile exposes
+only movement per turn, strike disables, engage range, disengage margin, levels per
+bonus range, and Reveal duration. Loading validates and installs an effective
+session-local copy before gameplay, Retry retains it exactly, and leaving the Lab
+restores the authored settings. Invalid profiles fail closed and never edit
+`combat.ron`.
+
+One versioned `CombatLabReport` combines that frozen profile with map and resolved
+seed, accepted content fingerprint, ordered rosters, exact `TilePos` deployment,
+Sandbox or stable fixture origin, final outcome, and the gameplay-owned
+`CombatSummary`. Its deterministic summary fingerprint is validated on read. Local
+report history is a separate bounded schema from Creator creations and Continue;
+fixed fixtures never consult it.
+
 ## Saved creation library
 
 `creations.ron` is one versioned local library containing custom characters and
@@ -75,7 +91,7 @@ disable, restore, enchantment breakage, and reset without entering map gameplay.
 
 ## Combat Lab
 
-Combat Lab has two tabs.
+Combat Lab has three tabs: Sandbox, Fixed Fixtures, and Saved Reports.
 
 ### Sandbox
 
@@ -92,6 +108,13 @@ fully editable and ordered, with one to six units per side. Choices come from pa
 templates or saved Map-ready characters. Player units are human controlled; hostile
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.
 
+Sandbox setup is an explicit `Map → Rosters → Rules → Deploy` flow. The Rules step
+offers Shipped, Tactical two-step, and Custom profiles. Its six labelled steppers
+consume the profile contract's descriptions and inclusive bounds, and every numeric
+difference is also written as `CHANGED shipped → selected`; color is supplementary.
+Reset restores the exact shipped profile. Loading validates and freezes the selected
+profile without writing `combat.ron`.
+
 `Test on Map` is enabled only for the current saved, clean, Map-ready character. It
 opens this same Sandbox with that record in Player slot one. The tester still chooses
 the map and completes both rosters.
@@ -107,14 +130,42 @@ The map renders clickable world-space surface caps inside both authored regions.
 Candidates use the shared walker `Footing`, exact headroom and blockers, and the live
 terrain surface, so a click records the complete `TilePos`, including elevation.
 Occupied or invalid surfaces are rejected. Placement proceeds in roster order; the
-tester may Undo, Clear either side, or deterministically Auto-place nearest legal
-unused surfaces. Start Combat remains disabled until every unit has a unique valid
+tester may directly select any roster row to reposition an earlier unit, Undo, Clear
+either side, or deterministically Auto-place nearest legal unused surfaces. Direct
+placement, auto-place, and the Start gate all consume canonical exact-surface
+occupancy. Start Combat remains visibly disabled until every unit has a unique valid
 placement.
 
 Start Combat repositions the frozen roster onto those exact surfaces without
 regenerating terrain, then enters `Active`. Retry retains the content snapshot, map
 seed, roster order, and resolved surfaces. Fixed fixtures bypass Deployment because
 their encounter placements are immutable.
+
+During a Lab encounter, a collapsible statistics drawer supplements rather than
+replaces the ordinary HUD. It reads `CombatSummary` directly and labels rounds and
+completed turns, current and maximum no-progress stretches, outcome,
+successful/refused commands, AI choices, movement distance/budget, casts, Channel and
+mana restored by element, strikes, idle turns, disable flow, restorations, downings,
+and revivals. The same projection carries per-unit command, movement, spell, Channel,
+disable, recovery, condition, idle, and AI totals; presentation never reconstructs
+them from live entities.
+
+At combat start, the Lab freezes the accepted content revision, stable map and seed,
+ordered roster/controller headers, and exact initial `TilePos` deployment. Outcome
+combines those launch facts with the canonical summary into `CombatLabReport`; it
+never substitutes final battlefield positions. The full-screen outcome surface
+provides functional Overview, Units, Spells & Effects, Timeline, and Compare modes
+plus Save Report, Retry Exact, and Tune & Run Again actions. Timeline reads the
+bounded canonical event window and labels truncation. Compare explicitly selects a
+saved report and shows signed numeric deltas against the current run. Tune returns to
+Rules with the frozen map, ordered rosters, profile, and every still-valid exact
+deployment surface retained.
+
+Saved Reports lists only explicitly saved local reports. The user selects the left
+and right report independently; when they differ, the view shows frozen
+profile/roster headers and signed numeric deltas for rounds, successful and refused
+commands, movement, Channel, and applied disables. Deletion is a two-step
+request/confirm action and affects only the selected local report.
 
 ### Fixed fixtures
 
@@ -126,10 +177,22 @@ One searchable selector owns the stable fixture IDs:
 | `raider-mirror` | same-archetype identity and defensive enchantments |
 | `creator-spell-matrix` | packaged creator Disable, Burn, Reveal, Restore, defense |
 | `creator-roster-matrix` | packaged creator rosters, ordering, selection, multi-unit combat |
+| `occupancy-matrix` | human/AI chokepoints, endpoints, route reservations, stacked surfaces, interruption |
+| `channel-attrition` | depleted/full mana, disabled cells, enchantment locks, repeated/AI Channel, downed refusal |
+| `tempo-matrix` | repeated frozen Party Trial baseline under Shipped, Tactical two-step, and bounded Custom profiles |
 
 Automated walks launch by ID, never by list position. Creator-format fixture records,
 roster, AI, map, seed, and placements are immutable and never consult the local
 creation library.
+
+The three Wave 7 fixtures own launch inputs rather than merely renaming existing
+scenario cards. Occupancy and Tempo materialize frozen 3v3 encounter overrides.
+Channel Attrition materializes a 3v3 matrix with depleted human and AI casters, one
+locked enchantment, one partly disabled body, one full-mana reference, and one fully
+disabled body. Tempo exposes Shipped, Tactical two-step, and a validated Custom
+three-step run over the same encounter. A fixed-fixture outcome offers Copy to
+Sandbox, carrying its exact map, roster, initial placement, profile, and any frozen
+creator content into the ordinary Rules and Deployment flow.
 
 ## Frozen launch and return routing
 

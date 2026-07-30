@@ -42,7 +42,7 @@ The HUD is mode-aware:
 - Exploring shows the party rail, selected-ally lattice, formation editor, Group/Solo,
   presets, Rest, and the exploration hint. Combat-only spell actions are absent.
 - A player turn shows the compact initiative rail, party rail, active ally lattice,
-  movement and action budget, spells, and a visible End Turn button.
+  movement and action budget, spells, and visible Channel and End Turn buttons.
 - A hostile turn says `ENEMY TURN`, keeps a labeled `SELECTED ALLY` lattice for
   inspection, and replaces action buttons with `PLAYER COMMANDS LOCKED`.
 - A damage or restoration decision replaces ordinary actions with its exact role,
@@ -136,6 +136,28 @@ authored amount and the cells currently disabled. Restoring at least one cell re
 `Downed`, but the unit is held outside `TurnOrder` until the next wrap. At that boundary
 it rejoins the initiative sort by initiative then stable `UnitId`.
 
+### Channel closes the mana loop
+
+`GameCommand::Channel` is a canonical combat action for an active, non-downed unit
+whose one action remains. The command passes through the same modal, seat, turn,
+busy, and action gates as casting and striking. It consumes exactly that action even
+when every eligible gem is already full; it neither spends movement nor grants
+another action.
+
+The applier delegates the refill itself to `hex_lattice::channel`. For each element
+in stable ID order, the unit's Channelling budget fills live unlocked gems in
+`LatticeCoord` order up to their per-gem Attunement capacity. Disabled cells are not
+repaired and enchantment locks are not bypassed. The returned per-element amounts are
+resolved through the loaded element catalog before mutation and emitted as one
+`CombatEvent::Channelled` under stable names. Missing or inconsistent catalog/lattice
+facts fail closed.
+
+The player action panel emits Channel through the command queue. Combat includes it
+in the baseline AI's canonical legal-action set only when the actor carries the full
+lattice/spec/stats contract; the deterministic baseline selects it when a live gem is
+empty and no higher-priority restoration, reveal, damaging cast, enchantment, or
+strike applies.
+
 ### Focused automation and Party Trial
 
 `CombatSummary` is the session-scoped, serde-capable verification artifact. It records
@@ -144,7 +166,12 @@ AI dispatch traces (profile, algorithm, observation, canonical legal actions,
 fingerprint, selection, and emitted command); aggregate moves, casts, strikes,
 decisions, and explicit end turns; raw, prevented, and applied disables; restored
 cells, revivals, and downings; the ordered structured event stream; and the final
-outcome. It resets with the gameplay session.
+outcome. Wave 7 extends that same authority with refused-command counts, movement
+distance and budget use, casts by stable spell name, delivered-effect categories,
+Channel actions, and mana restored by stable element name. A versioned deterministic
+summary fingerprint covers the aggregates plus both bounded detail windows; their
+rolling fingerprints continue to cover facts that aged out. It resets with the
+gameplay session.
 
 The automated UI suite deliberately does not use the authored Crossing:
 
@@ -430,6 +457,29 @@ exact-path `MoveParty` is validated in full before any member receives presentat
 and interruption reconciles every in-flight member before initiative is built.
 Rotation, bottleneck compression, reformation, and Solo behavior are specified in
 [party.md](party.md).
+
+### Bodies occupy exact surfaces
+
+`hex_units::UnitOccupancy` is the one gameplay projection from stable `UnitId` to
+exact `TilePos`. Elevation is identity: a body on the ground does not block the bridge
+surface above it. The projection includes each unit's current `StandsOn` and every
+surface reserved by an in-flight `MovingTo` route. A downed unit remains a body and
+continues to own its surface so revival cannot create an overlap; despawn/removal
+removes it with the entity.
+
+`Reach`, click path construction, the movement preview, authoritative `MoveAlong`,
+baseline AI legal actions and traversal, whole-party planning/application, encounter
+placement, and Combat Lab deployment all consume this projection. A route may neither
+finish on nor pass through another body. The command refusal preserves that
+distinction as `OccupancyBlock::Destination` or `OccupancyBlock::Route`, including
+the exact surface and stable occupant. Commands drained in one frame reserve their
+endpoints before the next command validates, so deferred ECS insertion cannot create
+a same-frame overlap.
+
+Group movement excludes the moving party's own starting surfaces while retaining
+external bodies, then continues to require unique member destinations. This preserves
+the existing atomic compression/trailing behavior without allowing a formation to
+route through a nonparty body or letting two members swap directly across one edge.
 
 ## The high ground
 

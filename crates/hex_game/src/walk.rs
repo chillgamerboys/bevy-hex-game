@@ -36,7 +36,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use hex_assets::{ScenarioLibrary, SubstanceTable};
-use hex_combat::AiDecisionTraces;
+use hex_combat::{AiDecisionTraces, CombatSummary, EncounterOutcome, EncounterResolution};
 use hex_core::{
     Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetupFailure, Headroom, HexCoord,
     HexSpan, HexTile, IssuedCommand, LatticeCoord, PendingDecision, ResolvedMapSeed, Screen,
@@ -54,6 +54,7 @@ const SCRIPT_ENV: &str = "HEX_WALK_SCRIPT";
 const OUT_ENV: &str = "HEX_WALK_OUT";
 const SIZE_ENV: &str = "HEX_WALK_SIZE";
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const WALK_TIME_SCALE: f32 = 12.0;
 const DEFAULT_WALK_WIDTH: u32 = 1920;
 const DEFAULT_WALK_HEIGHT: u32 = 1080;
 
@@ -103,7 +104,14 @@ pub(super) fn plugin(app: &mut App) {
         size.1
     );
     app.insert_resource(WalkState::new(steps, PathBuf::from(out), size))
+        .add_systems(Startup, accelerate_walk_time)
         .add_systems(PreUpdate, run_walk.after(InputSystems));
+}
+
+fn accelerate_walk_time(mut time: ResMut<Time<Virtual>>) {
+    // Walks exercise the ordinary animation/timer systems, but should not spend
+    // wall-clock minutes waiting through every combatant in a 6v6 matrix.
+    time.set_relative_speed(WALK_TIME_SCALE);
 }
 
 fn install_config_error(app: &mut App, error: String) {
@@ -143,6 +151,12 @@ enum WalkStep {
     AwaitButton(String),
     /// End player turns and answer player decisions until a named button exists.
     AutoUntilButton(String),
+    /// Open a canonical fixture report for presentation review without solving combat.
+    ///
+    /// This feature-only step deliberately supplies a terminal result to the ordinary
+    /// report system. Logical outcome and metric evidence belongs to the deterministic
+    /// simulation target; the visual walk reviews only the resulting composition.
+    PresentFixtureReport,
     /// End player turns and answer player decisions until baseline AI casts.
     AutoUntilAiCast,
     /// End turns until the named stable player unit owns the turn.
@@ -188,7 +202,11 @@ enum WalkStep {
         seed: Option<u64>,
     },
     /// Launch an immutable Combat Lab fixture by stable machine id.
-    StartFixture { id: String },
+    StartFixture {
+        id: String,
+        #[serde(default)]
+        profile: Option<String>,
+    },
 }
 
 fn load_script(path: &str) -> Result<Vec<WalkStep>, String> {
@@ -224,7 +242,7 @@ fn validate_step(step: &WalkStep) -> Result<(), String> {
         WalkStep::StartScenario { name, .. } if name.trim().is_empty() => {
             Err("scenario name must not be empty".to_owned())
         }
-        WalkStep::StartFixture { id } if id.trim().is_empty() => {
+        WalkStep::StartFixture { id, .. } if id.trim().is_empty() => {
             Err("fixture id must not be empty".to_owned())
         }
         _ => Ok(()),
@@ -339,6 +357,8 @@ struct WalkCombat<'w, 's> {
     pending: Option<Res<'w, PendingDecision>>,
     traces: Option<Res<'w, AiDecisionTraces>>,
     aiming: Option<ResMut<'w, Aiming>>,
+    resolution: Option<ResMut<'w, EncounterResolution>>,
+    summary: Option<ResMut<'w, CombatSummary>>,
     enemies: Query<'w, 's, (&'static UnitId, &'static StandsOn), (With<Enemy>, Without<Downed>)>,
     anchors: Query<'w, 's, &'static TilePos, With<AnchorMarker>>,
     terrain: WalkTerrain<'w, 's>,
@@ -353,6 +373,7 @@ struct WalkContent<'w> {
     base_lattices: Option<Res<'w, hex_assets::LatticeFile>>,
     elements: Option<Res<'w, hex_assets::ElementCatalog>>,
     substances: Option<Res<'w, hex_assets::SubstanceTable>>,
+    combat: Option<Res<'w, hex_assets::CombatSettings>>,
 }
 
 #[derive(SystemParam)]
@@ -630,6 +651,17 @@ fn run_walk(
                 );
             }
         }
+        WalkStep::PresentFixtureReport => {
+            let (Some(resolution), Some(summary)) = (
+                combat.resolution.as_deref_mut(),
+                combat.summary.as_deref_mut(),
+            ) else {
+                return;
+            };
+            resolution.0 = Some(EncounterOutcome::Victory);
+            summary.outcome = Some(EncounterOutcome::Victory);
+            state.advance();
+        }
         WalkStep::AutoUntilAiCast => {
             let cast_seen = combat.traces.as_deref().is_some_and(|traces| {
                 traces
@@ -881,7 +913,13 @@ fn run_walk(
             next.set(Screen::Loading);
             state.advance();
         }
-        WalkStep::StartFixture { ref id } => {
+        WalkStep::StartFixture {
+            ref id,
+            ref profile,
+        } => {
+            let Some(combat_settings) = content.combat.as_deref() else {
+                return;
+            };
             let Some(library) = content.library.as_deref() else {
                 return;
             };
@@ -903,9 +941,38 @@ fn run_walk(
                 return;
             };
             let resolved_seed = scenario.generation_seed.map(ResolvedMapSeed);
+            let profile = match crate::screens::combat_lab::walk_fixture_profile(
+                profile.as_deref(),
+                combat_settings,
+            ) {
+                Ok(profile) => profile,
+                Err(reason) => {
+                    error!("visual walk: {reason}");
+                    state.failed = true;
+                    exit.write(AppExit::error());
+                    return;
+                }
+            };
+            // Direct fixture-to-fixture transitions do not pass through Combat
+            // Lab initialization, so explicitly retire the prior run's frozen
+            // launch and completed report before installing the next session.
+            commands.remove_resource::<crate::screens::combat_lab::CombatLabReportLaunch>();
+            commands.remove_resource::<crate::combat_reports::CurrentCombatLabReport>();
             commands.insert_resource(crate::screens::combat_lab::CombatLabSession {
                 kind: crate::screens::combat_lab::CombatLabSessionKind::FixedFixture(id.clone()),
                 return_to: Screen::CombatLab,
+                profile,
+                shipped_combat: combat_settings.clone(),
+                report_map: crate::combat_reports::CombatLabReportMap {
+                    catalog_id: crate::screens::combat_lab::fixture_sandbox_map(id)
+                        .unwrap_or(id)
+                        .to_owned(),
+                    scenario: scenario.name.clone(),
+                    resolved_seed: resolved_seed.map(|seed| seed.0),
+                },
+                initial_state: (id == "channel-attrition").then_some(
+                    crate::screens::combat_lab::FixedFixtureInitialState::ChannelAttrition,
+                ),
             });
             let payload = match crate::screens::combat_lab::creator_fixture_payload(
                 id,
@@ -923,10 +990,12 @@ fn run_walk(
                     return;
                 }
             };
-            let encounter_override = payload.map(|(overlay, encounter)| {
-                commands.insert_resource(overlay);
-                encounter
-            });
+            let encounter_override = payload
+                .map(|(overlay, encounter)| {
+                    commands.insert_resource(overlay);
+                    encounter
+                })
+                .or_else(|| crate::screens::combat_lab::walk_fixture_encounter(id));
             commands.insert_resource(ScenarioToLoad {
                 scenario,
                 resolved_seed,
@@ -993,6 +1062,13 @@ fn auto_player_input(
                 return;
             }
         }
+        if frames >= 8 {
+            queue.push(IssuedCommand {
+                seat: owner.0,
+                command: GameCommand::EndTurn { unit: *unit },
+            });
+            return;
+        }
 
         let occupied = players
             .iter()
@@ -1016,6 +1092,11 @@ fn auto_player_input(
                     .filter_map(|candidate| {
                         reach
                             .path_to(candidate.pos)
+                            .filter(|path| {
+                                path.iter()
+                                    .skip(1)
+                                    .all(|step| !occupied.contains(&step.pos))
+                            })
                             .map(|path| (**target, candidate.pos, path))
                     })
             })
@@ -1135,6 +1216,7 @@ mod tests {
         Key("KeyR"),
         AwaitButton("Cast Ember"),
         AutoUntilButton("Cast Renewal"),
+        PresentFixtureReport,
         AutoUntilAiCast,
         AutoUntilPlayerTurn(1),
         AutoUntilDamageDecision,
@@ -1151,7 +1233,7 @@ mod tests {
     #[test]
     fn a_full_script_parses_with_every_step_kind() {
         let steps: Vec<WalkStep> = ron::from_str(FULL_SCRIPT).expect("script parses");
-        assert_eq!(steps.len(), 24);
+        assert_eq!(steps.len(), 25);
         assert_eq!(steps.first(), Some(&WalkStep::AwaitScreen("Title".into())));
         assert_eq!(
             steps.get(3),
@@ -1171,6 +1253,7 @@ mod tests {
             steps.get(7),
             Some(&WalkStep::StartFixture {
                 id: "ability-lab".into(),
+                profile: None,
             })
         );
         for step in &steps {
@@ -1227,6 +1310,7 @@ mod tests {
             "../../walks/gameplay.ron",
             "../../walks/ability_lab.ron",
             "../../walks/raider_mirror.ron",
+            "../../walks/wave7_combat_lab.ron",
             "../../walks/waterfall.ron",
             "../../walks/forest.ron",
         ] {
@@ -1241,6 +1325,27 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{} invalid: {error}", path.display()));
             }
         }
+    }
+
+    #[test]
+    fn scoped_gameplay_acceptance_stays_within_the_frame_budget() {
+        let steps: Vec<WalkStep> =
+            ron::from_str(include_str!("../../../walks/wave7_combat_lab.ron"))
+                .expect("the Wave 7 gameplay walk parses");
+        let captures = steps
+            .iter()
+            .filter(|step| matches!(step, WalkStep::Capture(_)))
+            .count();
+        assert!(
+            captures <= 10,
+            "scoped gameplay acceptance captured {captures} frames; the contract permits 10"
+        );
+        assert!(
+            !steps
+                .iter()
+                .any(|step| matches!(step, WalkStep::AutoUntilButton(_))),
+            "presentation acceptance must not solve combat with frame-sensitive input"
+        );
     }
 
     #[test]

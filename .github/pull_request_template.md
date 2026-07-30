@@ -8,11 +8,28 @@
 - [ ] `cargo fmt --all --check` (unless Markdown-only)
 - [ ] `cargo deny check` (unless Markdown-only)
 - [ ] `cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings` (unless Markdown-only)
-- [ ] `cargo test --workspace --all-features --profile ci` (unless Markdown-only)
+- [ ] Gameplay rules, contracts, simulation, and app partitions (report each concern below)
+- [ ] Residual workspace tests and doctests (unless Markdown-only)
 - [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features` (unless Markdown-only)
 - [ ] `cargo build --workspace --profile ci` (unless Markdown-only; CI builds all three platforms)
 - [ ] Automated visual walk green — `/visual-walk` captured the screens and the agent read every frame
 - [ ] **A human ran the game and looked at it**
+
+### Evidence by concern
+
+- Pure rules:
+- ECS contracts:
+- Deterministic simulation:
+- Headless game/UI:
+- Visual smoke (presentation only; reviewed gameplay frames, maximum 10):
+- Scheduled/manual soak or performance (when applicable):
+
+<!--
+Screenshots are not evidence of exact occupancy, action accounting, tempo,
+determinism, report identity, or state restoration. Cite canonical snapshots and
+named metrics for those claims. A timeout or no-progress bound is a typed result,
+not a pass.
+-->
 
 <!--
 Those last two are different gates, not a formality and not each other's

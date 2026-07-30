@@ -47,7 +47,13 @@ Run the same Rust checks CI runs:
 cargo fmt --all --check
 cargo deny check
 cargo clippy --workspace --all-targets --all-features --profile ci -- -D warnings
-cargo test --workspace --all-features --profile ci
+cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-rules
+cargo nextest run --workspace --all-features --cargo-profile ci --profile gameplay-contracts
+cargo nextest run -p hex_combat --test simulation --cargo-profile ci --profile gameplay-simulation
+cargo nextest run -p hex_game --features test-support --test gameplay_app --cargo-profile ci --profile gameplay-app
+cargo nextest run --workspace --all-features --cargo-profile ci --profile ci \
+  -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))'
+cargo test --workspace --all-features --profile ci --doc
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 cargo build --workspace --profile ci
 ```
@@ -55,6 +61,12 @@ cargo build --workspace --profile ci
 CI runs the final build command on Linux, Windows, and macOS. Run it on your local
 platform; the CI matrix covers the other two. Markdown-only changes skip the Rust
 commands, but still need valid relative links.
+
+The gameplay commands are separated because their evidence has different authority:
+pure rules, focused ECS contracts, deterministic multi-turn snapshots, and headless
+game/UI behavior. See the
+[gameplay testing contract](docs/development/gameplay-testing.md) before adding a
+helper, integration binary, screenshot, soak, or balance claim.
 
 **Then run the affected application.** This is not optional, and it is not covered by
 the above. Several failure modes here produce a clean log and a wrong window: missing

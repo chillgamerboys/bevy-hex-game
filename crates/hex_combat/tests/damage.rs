@@ -10,10 +10,9 @@
 //! wiring, not the drawings.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_combat::{
     CombatEvent, CommandRefusal, FactionLatticeKnowledge, Initiative, KnownCell,
@@ -29,20 +28,16 @@ use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{Downed, Faction, Party, Player, Standing, StandsOn, UnitRegistry};
 
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
     app.add_plugins(hex_combat::plugin);
     app.init_resource::<UnitRegistry>();
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
+    let mut app = builder.build();
     app.world_mut()
         .resource_mut::<NextState<Screen>>()
         .set(Screen::Gameplay);

@@ -11,37 +11,30 @@
 //! loading and the gameplay readout.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_combat::{FactionLatticeKnowledge, Initiative, KnownCell, RevealAll, TurnOrder};
 use hex_core::{
     CommandQueue, ElementId, GameCommand, Headroom, HexCoord, HexSpan, IssuedCommand,
-    KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, Mode, PlayerSeat, Screen,
-    SubstanceId, TilePos, UnitId,
+    KnowledgeExpiry, KnowledgeSource, LatticeCoord, LightDomain, PlayerSeat, Screen, SubstanceId,
+    TilePos, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::TestAppBuilder;
 use hex_units::{Faction, Standing, StandsOn};
 
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new().with_fixed_step(Duration::ZERO);
+    let app = builder.app_mut();
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
     app.add_plugins(hex_combat::plugin);
-
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
+    builder.build()
 }
 
 /// A three-cell lattice: two gems and a blank.

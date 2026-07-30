@@ -8,18 +8,13 @@
 //! Terrain is spawned by the test, because `hex_combat` cannot see `hex_map` and does
 //! not need to: it consumes `TilePos`, `HexSpan`, `SubstanceId` and `Headroom`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use bevy::app::PluginsState;
 use bevy::prelude::*;
-use bevy::state::app::StatesPlugin;
 
 use hex_anim::Transformation;
-use hex_assets::{
-    ArtPalette, PaletteSwatch, PlayerSettings, SrgbColor, Substance, SubstanceFile, SubstanceTable,
-    SwatchId,
-};
+use hex_assets::{ElementCatalog, ElementFile, PlayerSettings};
 use hex_combat::{
     AiDecisionTraces, CombatSummary, CombatTranscriptRecorder, EncounterOutcome,
     EncounterResolution, Initiative, TurnOrder, MAX_AI_DECISION_TRACES, MAX_COMBAT_SUMMARY_DETAILS,
@@ -27,32 +22,34 @@ use hex_combat::{
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, Headroom, HexCoord, HexSpan, HexTile, IssuedCommand,
     LatticeCoord, LightDomain, Mode, PendingDecision, PlayerSeat, Screen, SubstanceId, TilePos,
-    Turn, UnitId, MAX_HEADROOM,
+    Turn, UnitId,
 };
 use hex_lattice::{CellKind, LatticeSpec, LatticeState, LatticeStats};
 use hex_perception::{
     apply_observations, FactionMapKnowledge, FactionObservation, FactionObservations, ObservedUnit,
     SurfaceSnapshot, SurfaceSnapshots,
 };
+use hex_test_support::{SyntheticArena, TestAppBuilder};
 use hex_units::{Body, Faction, HexPathingLine, MovingTo, Standing, StandsOn, UnitAllocator};
 
 const GROUND: f32 = 2.0;
 const GROUND_LEVEL: hex_core::Level = 1;
-const STONE: SubstanceId = SubstanceId(1);
-
+#[expect(
+    clippy::expect_used,
+    reason = "invalid shared deterministic fixture data must fail during construction"
+)]
 fn test_app() -> App {
-    let mut app = App::new();
-    app.add_plugins((MinimalPlugins, StatesPlugin, bevy::input::InputPlugin));
-    app.init_state::<Screen>();
+    let mut builder = TestAppBuilder::new()
+        .with_fixed_step(Duration::ZERO)
+        .with_arena(SyntheticArena::flat_radius(10, GROUND_LEVEL))
+        .expect("the shared synthetic arena must be valid");
+    let app = builder.app_mut();
     // The shipped combat.ron values; production loads the file instead.
     app.insert_resource(hex_assets::CombatSettings::default());
-    app.add_sub_state::<Mode>();
-    app.insert_resource(substance_table());
     app.insert_resource(PlayerSettings {
         scale: 0.25,
         speed: 5.0,
     });
-    app.add_systems(OnEnter(Screen::Gameplay), spawn_terrain);
     // `hex_units::movement::plugin`, not the whole of `hex_units::plugin`: this is what
     // keeps `StandsOn` honest as a unit walks, and combat is meaningless without it.
     // The full plugin would also read the active scenario placements and spawn its own
@@ -63,49 +60,7 @@ fn test_app() -> App {
         hex_combat::plugin,
     ));
 
-    while app.plugins_state() != PluginsState::Cleaned {
-        app.finish();
-        app.cleanup();
-    }
-    app
-}
-
-/// Flat, walkable ground with plenty of headroom.
-fn spawn_terrain(mut commands: Commands) {
-    for coord in HexCoord::ORIGIN.within_radius(10) {
-        commands.spawn((
-            HexTile,
-            coord,
-            TilePos::new(coord, GROUND_LEVEL),
-            HexSpan::new(GROUND - 1.0, GROUND),
-            STONE,
-            Headroom(MAX_HEADROOM),
-        ));
-    }
-}
-
-#[expect(
-    clippy::expect_used,
-    reason = "invalid compile-time fixture data should fail the test immediately"
-)]
-fn substance_table() -> SubstanceTable {
-    let stone_id = SwatchId::new("terrain/stone").expect("the fixture swatch id should be valid");
-    let stone = PaletteSwatch::new(
-        "Stone",
-        SrgbColor::new(0.5, 0.5, 0.5).expect("the fixture color should be valid"),
-        BTreeSet::from(["test".to_owned()]),
-    )
-    .expect("the fixture swatch should be valid");
-    let palette = ArtPalette::new(BTreeMap::from([(stone_id.clone(), stone)]))
-        .expect("the fixture palette should be valid");
-    let mut substances = bevy::platform::collections::HashMap::default();
-    substances.insert("air".to_owned(), Substance::invisible(false, false));
-    substances.insert(
-        "stone".to_owned(),
-        Substance::from_swatch(stone_id, true, true),
-    );
-    SubstanceTable::from_file(&SubstanceFile { substances }, &palette)
-        .expect("the fixture substance should resolve through its palette")
+    builder.build()
 }
 
 /// The stable id combat dealt this entity when the fight began.
@@ -607,6 +562,93 @@ fn an_adjacent_enemy_attacks_without_moving() {
         Some(adjacent),
         "an attack should not change which surface the enemy stands on"
     );
+}
+
+#[test]
+fn a_depleted_enemy_channels_only_from_its_canonical_legal_actions() {
+    let mut app = test_app();
+    let elements = ElementCatalog::from_file(&ElementFile {
+        wheel: vec!["Fire".to_owned(), "Water".to_owned()],
+        fusions: bevy::platform::collections::HashMap::default(),
+    });
+    let Some(fire) = elements.id("Fire") else {
+        unreachable!("the fixture defines Fire")
+    };
+    app.insert_resource(elements);
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let enemy = spawn_unit(
+        &mut app,
+        Faction::Hostile,
+        HexCoord::new_cubic(3, -3, 0),
+        10,
+    );
+    let gem = LatticeCoord::ORIGIN;
+    let spec = LatticeSpec::default().with(gem, CellKind::Gem { element: fire });
+    let empty = LatticeStats::default();
+    let state = LatticeState::new(&spec, &empty);
+    let stats = LatticeStats::new(BTreeMap::from([(fire, 3)]), BTreeMap::from([(fire, 2)]));
+    app.world_mut()
+        .entity_mut(enemy)
+        .insert((spec, state, stats));
+    enter_gameplay(&mut app);
+
+    end_turn(&mut app);
+
+    let enemy_id = unit_id(&app, enemy);
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let Some(trace) = traces.entries.last() else {
+        panic!("the enemy should produce a decision trace")
+    };
+    assert!(
+        trace
+            .legal_actions
+            .actions()
+            .iter()
+            .any(|action| action.command == GameCommand::Channel { unit: enemy_id }),
+        "combat must place Channel in the canonical set before the algorithm can choose it"
+    );
+    assert_eq!(
+        trace.command,
+        Some(GameCommand::Channel { unit: enemy_id }),
+        "the baseline's depleted-lattice choice is deterministic"
+    );
+    assert_eq!(
+        app.world()
+            .get::<LatticeState>(enemy)
+            .map(|state| state.mana(gem)),
+        Some(2)
+    );
+    assert_eq!(app.world().resource::<CombatSummary>().channels, 1);
+}
+
+#[test]
+fn enemy_legal_routes_never_enter_an_allied_occupied_surface() {
+    let mut app = test_app();
+    spawn_unit(&mut app, Faction::Player, HexCoord::ORIGIN, 20);
+    let actor = spawn_unit(&mut app, Faction::Hostile, HexCoord::from_axial(3, 0), 10);
+    let blocker = spawn_unit(&mut app, Faction::Hostile, HexCoord::from_axial(2, 0), 5);
+    enter_gameplay(&mut app);
+
+    end_turn(&mut app);
+
+    let actor_id = unit_id(&app, actor);
+    let blocked = app
+        .world()
+        .get::<StandsOn>(blocker)
+        .map(|standing| standing.0.pos);
+    let traces = app.world().resource::<AiDecisionTraces>();
+    let Some(trace) = traces.entries.last() else {
+        panic!("the acting enemy should produce a decision trace")
+    };
+    assert_eq!(trace.actor, actor_id);
+    assert!(trace.legal_actions.actions().iter().all(|action| {
+        match &action.command {
+            GameCommand::MoveAlong { path, .. } => {
+                !path.iter().any(|position| Some(*position) == blocked)
+            }
+            _ => true,
+        }
+    }));
 }
 
 /// A hostile strike can park resolution on a human defender choice. The AI must not
