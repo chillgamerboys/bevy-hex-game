@@ -785,6 +785,7 @@ fn spawn_units(
     palette: Res<ArtPalette>,
     settings: Res<PlayerSettings>,
     encounter: Res<Encounter>,
+    phase: Option<Res<GameplayPhase>>,
     // Absent until the element and spell catalogs resolve, which the loading gate now
     // waits on — so in practice it is here. Optional rather than required because a
     // headless test harness has no content, and demanding it would make every one of
@@ -805,7 +806,13 @@ fn spawn_units(
     let body = Body::new(TraversalProfile::WALKER);
     let footing = Footing::from_tiles(tiles.iter(), &table, body, content.blockers.as_deref());
 
-    let placements = match place_roster(&encounter, &footing, content.anchors.as_deref()) {
+    let allow_staging_overflow = phase.is_some_and(|phase| *phase == GameplayPhase::Preparing);
+    let placements = match place_roster(
+        &encounter,
+        &footing,
+        content.anchors.as_deref(),
+        allow_staging_overflow,
+    ) {
         Ok(placements) => placements,
         Err(reason) => {
             error!("{reason}");
@@ -944,6 +951,7 @@ fn place_roster<'a>(
     encounter: &'a Encounter,
     footing: &Footing,
     anchors: Option<&MapAnchors>,
+    allow_staging_overflow: bool,
 ) -> Result<Vec<(RosteredUnit<'a>, Standing)>, String> {
     let units: Vec<RosteredUnit<'a>> = encounter.entries().collect();
     let mut resolved: Vec<Option<Standing>> = vec![None; units.len()];
@@ -990,6 +998,7 @@ fn place_roster<'a>(
     // Surfaces per formation centre, computed once. Two rosters may share a centre, and
     // the flood fill is the expensive part of placement.
     let mut spreads: HashMap<(TilePos, u32), Vec<Standing>> = HashMap::default();
+    let mut staging_spreads: HashMap<TilePos, Vec<Standing>> = HashMap::default();
     for (index, unit) in units.iter().enumerate() {
         let EncounterPlacement::Formation { center, spread } = unit.placement else {
             continue;
@@ -1002,21 +1011,42 @@ fn place_roster<'a>(
         };
         let candidates = spreads
             .entry((middle.pos, *spread))
-            .or_insert_with(|| formation_surfaces(middle, footing, *spread));
+            .or_insert_with(|| formation_surfaces(middle, footing, Some(*spread)));
 
-        let Some(standing) = candidates
+        let standing = candidates
             .iter()
             .find(|candidate| !occupancy.is_occupied(candidate.pos, None))
-            .copied()
-        else {
-            return Err(format!(
-                "Encounter {:?}: {} has no free surface within {spread} steps of its formation \
-                 centre {:?}. The formation needs a wider spread, or the roster is larger than \
-                 the ground it was given.",
-                encounter.name,
-                describe(unit),
-                middle.pos
-            ));
+            .copied();
+        let standing = standing.or_else(|| {
+            allow_staging_overflow.then(|| {
+                staging_spreads
+                    .entry(middle.pos)
+                    .or_insert_with(|| formation_surfaces(middle, footing, None))
+                    .iter()
+                    .find(|candidate| !occupancy.is_occupied(candidate.pos, None))
+                    .copied()
+            })?
+        });
+        let Some(standing) = standing else {
+            let reason = if allow_staging_overflow {
+                format!(
+                    "Encounter {:?}: {} has no free staging surface reachable from formation \
+                     centre {:?}. The terrain cannot stage the frozen deployment roster.",
+                    encounter.name,
+                    describe(unit),
+                    middle.pos
+                )
+            } else {
+                format!(
+                    "Encounter {:?}: {} has no free surface within {spread} steps of its formation \
+                     centre {:?}. The formation needs a wider spread, or the roster is larger than \
+                     the ground it was given.",
+                    encounter.name,
+                    describe(unit),
+                    middle.pos
+                )
+            };
+            return Err(reason);
         };
         occupancy.relocate(
             UnitId(u64::try_from(index).unwrap_or(u64::MAX)),
@@ -1117,8 +1147,8 @@ fn anchored_standing(
 /// Sorted explicitly. [`Reach`] is a hash map, so its iteration order is not a promise,
 /// and a formation that dealt its surfaces in a different order between runs would make
 /// the same encounter on the same seed a different fight.
-fn formation_surfaces(center: Standing, footing: &Footing, spread: u32) -> Vec<Standing> {
-    let reach = Reach::from(center, footing, Some(spread));
+fn formation_surfaces(center: Standing, footing: &Footing, spread: Option<u32>) -> Vec<Standing> {
+    let reach = Reach::from(center, footing, spread);
     let mut surfaces: Vec<Standing> = reach.surfaces().collect();
     surfaces.sort_by_key(|surface| {
         (

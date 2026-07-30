@@ -150,6 +150,9 @@ GitHub CI additionally runs the three-platform shipping build and domain coverag
 Run the automated visual walk and inspect every frame, then have a human play the
 combined build. Human review belongs here because motion, seams, composition, and
 taste do not become cheaper or more reliable when repeated on incomplete leaves.
+Record that playtest against the full final wave head SHA using the PR template's
+structured manual runtime fields. Any subsequent source or integration commit
+invalidates it and requires a new playtest before merge.
 
 Retry an apparent infrastructure failure once after confirming that no compiler,
 test, lint, or application error preceded it. If the same job reaches the same hard
