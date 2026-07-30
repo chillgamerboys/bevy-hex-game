@@ -40,7 +40,7 @@ use hex_core::{
 use hex_map::LiquidVisualTime;
 use hex_perception::ResolvedIllumination;
 use hex_units::{Body, Footing, Selected, Standing, StandsOn};
-use hex_world::{CameraMode, PanOrbitCamera};
+use hex_world::{CameraMode, CameraSystems, PanOrbitCamera};
 
 use crate::capture::{prepare_capture_path, write_png};
 use crate::scenarios::ScenarioToLoad;
@@ -110,6 +110,7 @@ fn install_capture_systems(app: &mut App, capture: ReviewCapture) {
                 capture_settled_frame,
             )
                 .chain()
+                .before(CameraSystems::FollowCharacter)
                 .before(TransformSystems::Propagate)
                 .run_if(in_state(Screen::Gameplay)),
         );
@@ -737,7 +738,7 @@ fn apply_review_view(
     mut mode: ResMut<CameraMode>,
     mut exit: MessageWriter<AppExit>,
 ) {
-    if state.failed || !state.focus_relocated {
+    if state.failed || state.view_applied || !state.focus_relocated {
         return;
     }
     let Ok((mut transform, mut orbit, mut target)) = camera.single_mut() else {
@@ -1128,6 +1129,27 @@ mod tests {
     use crate::capture::{has_visual_coverage, temporary_capture_path};
 
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct CharacterFollowObservation {
+        saw_review_pose: bool,
+    }
+
+    fn observe_review_pose_before_character_follow(
+        mode: Res<CameraMode>,
+        settings: Res<CameraSettings>,
+        cameras: Query<&PanOrbitCamera>,
+        mut observation: ResMut<CharacterFollowObservation>,
+    ) {
+        let Ok(camera) = cameras.single() else {
+            return;
+        };
+        if *mode == CameraMode::Character
+            && (camera.radius - settings.character_radius).abs() < f32::EPSILON
+        {
+            observation.saw_review_pose = true;
+        }
+    }
 
     fn scenario(seed: Option<u64>) -> Scenario {
         Scenario {
@@ -1955,6 +1977,11 @@ mod tests {
         app.insert_resource(test_camera_settings());
         app.insert_resource(CameraMode::Map);
         app.insert_resource(Assets::<Image>::default());
+        app.init_resource::<CharacterFollowObservation>()
+            .add_systems(
+                PostUpdate,
+                observe_review_pose_before_character_follow.in_set(CameraSystems::FollowCharacter),
+            );
         install_capture_systems(
             &mut app,
             ReviewCapture {
@@ -1966,11 +1993,14 @@ mod tests {
                 illumination_overlay: false,
             },
         );
-        app.world_mut().spawn((
-            Transform::default(),
-            PanOrbitCamera::default(),
-            RenderTarget::default(),
-        ));
+        let camera = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                PanOrbitCamera::default(),
+                RenderTarget::default(),
+            ))
+            .id();
         app.world_mut()
             .resource_mut::<NextState<Screen>>()
             .set(Screen::Gameplay);
@@ -1997,6 +2027,43 @@ mod tests {
             .expect("the test should have exactly one camera");
         let expected_focus = target + Vec3::Y * test_camera_settings().character_focus_height;
         assert!(orbit.focus.distance(expected_focus) < 0.0001);
+        assert!(
+            app.world()
+                .resource::<CharacterFollowObservation>()
+                .saw_review_pose,
+            "the one-shot review pose must publish before Character collision follows it"
+        );
+
+        let retained_translation = Vec3::new(31.0, 41.0, 59.0);
+        let retained_focus = Vec3::new(26.0, 35.0, 53.0);
+        {
+            let mut camera = app.world_mut().entity_mut(camera);
+            camera
+                .get_mut::<Transform>()
+                .expect("the test camera should keep its transform")
+                .translation = retained_translation;
+            let mut orbit = camera
+                .get_mut::<PanOrbitCamera>()
+                .expect("the test camera should keep its controls");
+            orbit.focus = retained_focus;
+            orbit.radius = 3.0;
+        }
+        app.update();
+        let camera = app.world().entity(camera);
+        assert!(
+            camera
+                .get::<Transform>()
+                .expect("the test camera should keep its transform")
+                .translation
+                .distance(retained_translation)
+                < f32::EPSILON,
+            "review automation must not reapply its initial pose after success"
+        );
+        let orbit = camera
+            .get::<PanOrbitCamera>()
+            .expect("the test camera should keep its controls");
+        assert!(orbit.focus.distance(retained_focus) < f32::EPSILON);
+        assert!((orbit.radius - 3.0).abs() < f32::EPSILON);
     }
 
     #[test]

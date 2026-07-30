@@ -40,7 +40,11 @@ pub struct CameraSettings {
     pub character_radius: f32,
     /// Clearance kept between the close camera and the first obstructing terrain run.
     pub character_collision_margin: f32,
-    /// Smallest radius the close camera may use while avoiding terrain.
+    /// Preferred smallest usable radius while avoiding terrain.
+    ///
+    /// Character-camera collision first searches nearby yaw directions that can
+    /// retain this radius. A complete enclosure may require a smaller radius so
+    /// the camera never crosses an actual terrain hit.
     pub character_min_effective_radius: f32,
     /// World units per second used when restoring the close camera after an
     /// obstruction clears.
