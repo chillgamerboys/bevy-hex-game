@@ -336,7 +336,7 @@ struct FixtureDefinition {
     roster: &'static str,
 }
 
-const FIXTURES: [FixtureDefinition; 4] = [
+const FIXTURES: [FixtureDefinition; 7] = [
     FixtureDefinition {
         id: "ability-lab",
         name: "Ability Lab",
@@ -372,6 +372,33 @@ const FIXTURES: [FixtureDefinition; 4] = [
         scenario: "Ability Lab",
         map_seed: "Flat Arena · authored",
         roster: "2 Player · 2 Hostile creator records",
+    },
+    FixtureDefinition {
+        id: "occupancy-matrix",
+        name: "Occupancy Matrix",
+        tags: "occupancy chokepoint endpoint route stacked interruption ai",
+        description: "Party Trial on the authored Crossing for human/AI chokepoints, exact endpoints, route reservations, stacked bridge surfaces, and movement interruption.",
+        scenario: "Party Trial",
+        map_seed: "The Crossing · authored",
+        roster: "3 Player · 3 Hostile",
+    },
+    FixtureDefinition {
+        id: "channel-attrition",
+        name: "Channel Attrition",
+        tags: "channel mana disabled enchantment full repeated ai downed",
+        description: "Ability Lab's deterministic lattices for depleted/full mana, disabled cells, enchantment locks, repeated Channel, AI selection, and downed refusal.",
+        scenario: "Ability Lab",
+        map_seed: "Flat Arena · authored",
+        roster: "2 Player · 1 Hostile",
+    },
+    FixtureDefinition {
+        id: "tempo-matrix",
+        name: "Tempo Matrix",
+        tags: "tempo profile shipped tactical custom party",
+        description: "The frozen 3v3 Party Trial baseline used repeatedly under Shipped, Tactical two-step, and bounded Custom profiles.",
+        scenario: "Party Trial",
+        map_seed: "The Crossing · authored",
+        roster: "3 Player · 3 Hostile",
     },
 ];
 
@@ -3808,6 +3835,9 @@ mod tests {
         assert_eq!(ids.len(), FIXTURES.len());
         assert!(ids.contains("ability-lab"));
         assert!(ids.contains("creator-spell-matrix"));
+        assert!(ids.contains("occupancy-matrix"));
+        assert!(ids.contains("channel-attrition"));
+        assert!(ids.contains("tempo-matrix"));
     }
 
     #[test]

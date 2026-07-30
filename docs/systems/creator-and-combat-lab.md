@@ -169,6 +169,9 @@ One searchable selector owns the stable fixture IDs:
 | `raider-mirror` | same-archetype identity and defensive enchantments |
 | `creator-spell-matrix` | packaged creator Disable, Burn, Reveal, Restore, defense |
 | `creator-roster-matrix` | packaged creator rosters, ordering, selection, multi-unit combat |
+| `occupancy-matrix` | human/AI chokepoints, endpoints, route reservations, stacked surfaces, interruption |
+| `channel-attrition` | depleted/full mana, disabled cells, enchantment locks, repeated/AI Channel, downed refusal |
+| `tempo-matrix` | repeated frozen Party Trial baseline under Shipped, Tactical two-step, and bounded Custom profiles |
 
 Automated walks launch by ID, never by list position. Creator-format fixture records,
 roster, AI, map, seed, and placements are immutable and never consult the local
