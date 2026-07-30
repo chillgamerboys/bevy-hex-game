@@ -7,11 +7,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hex_assets::{HexObjectRotation, RuntimeArtCatalog};
-use hex_core::{HexCoord, MapViewHint, TilePos};
+use hex_core::{HexCoord, TilePos};
 use xxhash_rust::xxh3::xxh3_64;
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
-use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
+use super::layout::{
+    resolve_layout, HexSide, LayoutKind, PatchId, ResolvedEdgeReference, ResolvedLayoutPlan,
+    ResolvedPatch,
+};
 use super::local_frame::LocalPatchFrame;
 use super::patch::{PatchBuildMode, PatchRecipeContext};
 use super::seam::{shape_walker_seams, validate_patch_walker_seams};
@@ -21,11 +24,9 @@ use super::selection::{
     ValidatedWorldSelection, WorldValidation,
 };
 use super::traversal::OrdinaryGraph;
-use super::vegetation::{TemperateVegetationSet, GRASS_TUFT_ID};
-use super::volume::{
-    LevelInterval, SolidMass, SolidMaterialRole, SurfaceAccess, SurfaceMetadata, VolumeColumn,
-    VolumeElement, VolumePlan,
-};
+use super::vegetation::{GrassVegetationSpec, VegetationObjectSpec, GRASS_TUFT_ID};
+use super::vegetation_landform::{actor_anchors, grassland_column, rolling_levels, view_hint};
+use super::volume::{SurfaceAccess, SurfaceMetadata, VolumePlan};
 use super::world::{
     FeatureId, FeatureKind, FeaturePlan, GeneratedWorldPlan, InteriorPlan, PlannedFeature,
     StructurePlan, WorldIssueCode, WorldValidationIssue,
@@ -40,13 +41,12 @@ use crate::settings::{
 const PARTY_START: &str = "party_start";
 const HOSTILE_START: &str = "hostile_start";
 const PRAIRIE_OVERLOOK: &str = "prairie_overlook";
-const MOUND_COUNT: u64 = 5;
 
 #[derive(Debug)]
 struct PrairieRecipe {
     level_height: f32,
     layout: ResolvedLayoutPlan,
-    objects: TemperateVegetationSet,
+    objects: GrassVegetationSpec,
     #[cfg(test)]
     reject_candidates: bool,
 }
@@ -79,7 +79,7 @@ pub(crate) fn generate(
             "Prairie requires at least 127 connected columns".to_owned(),
         ));
     }
-    let objects = TemperateVegetationSet::resolve(catalog, "Prairie")
+    let objects = GrassVegetationSpec::resolve(catalog, "Prairie")
         .map_err(V3GenerationError::RecipeContract)?;
     run_recipe(
         &PrairieRecipe {
@@ -150,7 +150,12 @@ impl V3Recipe for PrairieRecipe {
                 "Prairie settings changed after construction",
             )]);
         };
-        validate_prairie(plan, recipe_settings)
+        validate_prairie(
+            plan,
+            recipe_settings,
+            &self.objects.grass_tuft,
+            &BTreeSet::new(),
+        )
     }
 
     fn repair(
@@ -271,7 +276,7 @@ pub(crate) fn construct_patch(
     mode: PatchBuildMode,
     catalog: &RuntimeArtCatalog,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
-    let objects = TemperateVegetationSet::resolve(catalog, "Prairie")
+    let objects = GrassVegetationSpec::resolve(catalog, "Prairie")
         .map_err(|error| vec![recipe_issue(error)])?;
     construct_patch_with_objects(patch, settings, environment, level_height, mode, &objects)
 }
@@ -282,7 +287,7 @@ fn construct_patch_with_objects(
     environment: V3EnvironmentSettings,
     level_height: f32,
     mode: PatchBuildMode,
-    objects: &TemperateVegetationSet,
+    objects: &GrassVegetationSpec,
 ) -> Result<GeneratedPatchPlan, Vec<WorldValidationIssue>> {
     if environment != V3EnvironmentSettings::TemperateGrassland {
         return Err(vec![recipe_issue(
@@ -304,6 +309,7 @@ fn construct_patch_with_objects(
         settings.base_level,
         settings.max_relief,
         streams.map(|streams| streams.landform),
+        "prairie",
     )?;
     let mut world_levels = frame
         .levels_to_world(local_levels)
@@ -339,7 +345,7 @@ fn construct_patch_with_objects(
             ordinary_by_coord.insert(*coord, position);
         }
     }
-    let (party_start, hostile_start) = actor_anchors(&ordinary_by_coord)?;
+    let (party_start, hostile_start) = actor_anchors(&ordinary_by_coord, "prairie")?;
     let prairie_overlook = ordinary_by_coord
         .values()
         .copied()
@@ -352,25 +358,17 @@ fn construct_patch_with_objects(
         })
         .ok_or_else(|| vec![recipe_issue("Prairie has no review surface")])?;
 
-    let mut excluded_coords = patch
+    let protected_approaches = patch
         .protected_approaches()
         .into_iter()
         .map(|coord| frame.to_local(coord).map_err(recipe_issue))
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|issue| vec![issue])?;
-    for anchor in [party_start, hostile_start, prairie_overlook] {
-        excluded_coords.extend(
-            anchor
-                .coord
-                .within_radius(1)
-                .into_iter()
-                .filter(|coord| mask.contains(coord)),
-        );
-    }
-    let eligible = ordinary_by_coord
-        .iter()
-        .filter_map(|(coord, position)| (!excluded_coords.contains(coord)).then_some(*position))
-        .collect::<BTreeSet<_>>();
+    let eligible = eligible_grass_surfaces(
+        &ordinary_by_coord,
+        [party_start, hostile_start, prairie_overlook],
+        &protected_approaches,
+    );
     let grass_target = eligible
         .len()
         .saturating_mul(usize::from(settings.grass_coverage_percent))
@@ -416,7 +414,7 @@ fn construct_patch_with_objects(
 
     let columns = surface_by_coord
         .iter()
-        .map(|(coord, position)| (*coord, grassland_column(position.level)))
+        .map(|(coord, position)| (*coord, grassland_column(position.level, false)))
         .collect();
     let volume = VolumePlan {
         mask: mask.clone(),
@@ -449,11 +447,12 @@ fn construct_patch_with_objects(
         biome_regions,
         interiors: InteriorPlan::default(),
         anchors,
-        view_hint: frame.view_hint_to_world(vegetation_view_hint(
+        view_hint: frame.view_hint_to_world(view_hint(
             frame.scale(),
             settings.base_level,
             settings.max_relief,
             level_height,
+            "prairie",
         )?),
     };
     frame
@@ -477,25 +476,61 @@ pub(crate) fn validate_patch(
     patch: PatchRecipeContext<'_>,
     settings: &V3PrairieSettings,
     plan: &GeneratedPatchPlan,
+    catalog: &RuntimeArtCatalog,
 ) -> WorldValidation<PrairieMetrics> {
-    let Ok(frame) =
-        LocalPatchFrame::resolve(patch.mask(), patch.layout().kind, patch.grid_radius())
-    else {
-        return WorldValidation::Invalid(vec![recipe_issue(
-            "Prairie patch cannot resolve its validation frame",
-        )]);
+    let protected_approaches = patch.protected_approaches();
+    let objects = match GrassVegetationSpec::resolve(catalog, "Prairie") {
+        Ok(objects) => objects,
+        Err(error) => return WorldValidation::Invalid(vec![recipe_issue(error)]),
     };
-    match frame.canonical_local_world(plan) {
-        Ok(world) => validate_prairie(&world, settings),
-        Err(error) => WorldValidation::Invalid(vec![recipe_issue(error)]),
+    let world = isolated_patch_world(patch, plan);
+    validate_prairie(&world, settings, &objects.grass_tuft, &protected_approaches)
+}
+
+fn isolated_patch_world(
+    patch: PatchRecipeContext<'_>,
+    plan: &GeneratedPatchPlan,
+) -> GeneratedWorldPlan {
+    let edges = HexSide::ALL
+        .into_iter()
+        .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+        .collect();
+    let layout = ResolvedLayoutPlan {
+        kind: LayoutKind::Single,
+        grid_radius: patch.grid_radius(),
+        footprint: plan.volume.mask.clone(),
+        patches: BTreeMap::from([(
+            PatchId(0),
+            ResolvedPatch {
+                biome_region: patch.biome_region(),
+                mask: plan.volume.mask.clone(),
+                edges,
+            },
+        )]),
+        shared_edges: BTreeMap::new(),
+    };
+    GeneratedWorldPlan {
+        layout,
+        volume: plan.volume.clone(),
+        liquids: plan.liquids.clone(),
+        features: plan.features.clone(),
+        structures: plan.structures.clone(),
+        blockers: plan.blockers.clone(),
+        lights: plan.lights.clone(),
+        biome_regions: plan.biome_regions.clone(),
+        interiors: plan.interiors.clone(),
+        anchors: plan.anchors.clone(),
+        view_hint: plan.view_hint,
     }
 }
 
 fn validate_prairie(
     plan: &GeneratedWorldPlan,
     settings: &V3PrairieSettings,
+    grass: &VegetationObjectSpec,
+    protected_approaches: &BTreeSet<HexCoord>,
 ) -> WorldValidation<PrairieMetrics> {
-    let mut issues = Vec::new();
+    let mut issues = plan.validate();
     if !plan.liquids.bodies.is_empty()
         || !plan.structures.by_id.is_empty()
         || !plan.lights.is_empty()
@@ -541,36 +576,86 @@ fn validate_prairie(
         issues.push(recipe_issue("Prairie requires prairie_overlook"));
     }
 
-    let mut excluded_coords = BTreeSet::new();
-    for anchor in [party, hostile, overlook].into_iter().flatten() {
-        excluded_coords.extend(anchor.coord.within_radius(1));
-    }
-    let eligible = ordinary
+    let ordinary_by_coord = ordinary
         .positions()
-        .filter(|position| !excluded_coords.contains(&position.coord))
-        .collect::<BTreeSet<_>>();
-    let grass_roots = plan
-        .features
-        .by_id
-        .values()
-        .filter_map(|feature| {
-            if feature.kind != FeatureKind::TallGrass
-                || feature.object_id.as_str() != GRASS_TUFT_ID
-                || !feature.blocker_footprint.is_empty()
-            {
+        .map(|position| (position.coord, position))
+        .collect::<BTreeMap<_, _>>();
+    let eligible = eligible_grass_surfaces(
+        &ordinary_by_coord,
+        [party, hostile, overlook].into_iter().flatten(),
+        protected_approaches,
+    );
+    let surface_by_coord = plan
+        .volume
+        .surfaces
+        .keys()
+        .map(|surface| (surface.coord, *surface))
+        .collect::<BTreeMap<_, _>>();
+    let mut grass_roots = BTreeSet::new();
+    for feature in plan.features.by_id.values() {
+        if feature.kind != FeatureKind::TallGrass
+            || feature.object_id != grass.id
+            || feature.object_id.as_str() != GRASS_TUFT_ID
+            || !feature.blocker_footprint.is_empty()
+        {
+            issues.push(recipe_issue(format!(
+                "Prairie feature at {:?} is not the accepted nonblocking grass tuft",
+                feature.root
+            )));
+            continue;
+        }
+        if !grass_roots.insert(feature.root) {
+            issues.push(recipe_issue(format!(
+                "Prairie repeats a grass root at {:?}",
+                feature.root
+            )));
+            continue;
+        }
+        let Some(projected) = grass.project_visual_volume(feature.root, feature.rotation) else {
+            issues.push(recipe_issue(format!(
+                "Prairie grass at {:?} cannot project its complete rotated authored volume",
+                feature.root
+            )));
+            continue;
+        };
+        for visual in projected.cells {
+            let Some(support) = surface_by_coord.get(&visual.coord).copied() else {
                 issues.push(recipe_issue(format!(
-                    "Prairie feature at {:?} is not the accepted nonblocking grass tuft",
+                    "Prairie grass at {:?} leaves terrain at {visual:?}",
                     feature.root
                 )));
-                return None;
+                continue;
+            };
+            if visual.level <= support.level {
+                issues.push(recipe_issue(format!(
+                    "Prairie grass at {:?} intersects terrain at {visual:?}",
+                    feature.root
+                )));
             }
-            Some(feature.root)
-        })
-        .collect::<BTreeSet<_>>();
+            if !eligible.contains(&support) && visual.level <= support.level.saturating_add(2) {
+                issues.push(recipe_issue(format!(
+                    "Prairie grass at {:?} enters a protected walker volume at {visual:?}",
+                    feature.root
+                )));
+            }
+        }
+    }
     if !grass_roots.is_subset(&eligible) {
         issues.push(recipe_issue(
             "Prairie grass leaves its exact route-and-anchor-safe eligible set",
         ));
+    }
+    let expected_grass = eligible
+        .len()
+        .saturating_mul(usize::from(settings.grass_coverage_percent))
+        / 100;
+    if plan.features.by_id.len() != expected_grass || grass_roots.len() != expected_grass {
+        issues.push(recipe_issue(format!(
+            "Prairie requires exactly {expected_grass} unique grass features, got {} features and \
+             {} unique accepted roots",
+            plan.features.by_id.len(),
+            grass_roots.len()
+        )));
     }
     let coverage = count_u32(grass_roots.len())
         .saturating_mul(100)
@@ -611,86 +696,19 @@ fn validate_prairie(
     })
 }
 
-fn rolling_levels(
-    mask: &BTreeSet<HexCoord>,
-    base_level: i32,
-    max_relief: i32,
-    stream: Option<SeedStream<'_>>,
-) -> Result<BTreeMap<HexCoord, i32>, Vec<WorldValidationIssue>> {
-    let mut candidates = mask.iter().copied().collect::<Vec<_>>();
-    candidates.sort_unstable();
-    if candidates.len() < usize::try_from(MOUND_COUNT).unwrap_or_default() {
-        return Err(vec![recipe_issue(
-            "Prairie footprint cannot fit its rolling-ground centres",
-        )]);
+fn eligible_grass_surfaces(
+    ordinary_by_coord: &BTreeMap<HexCoord, TilePos>,
+    anchors: impl IntoIterator<Item = TilePos>,
+    protected_approaches: &BTreeSet<HexCoord>,
+) -> BTreeSet<TilePos> {
+    let mut excluded_coords = protected_approaches.clone();
+    for anchor in anchors {
+        excluded_coords.extend(anchor.coord.within_radius(1));
     }
-    let mut centres = Vec::new();
-    if let Some(stream) = stream {
-        let count = u64::try_from(candidates.len()).unwrap_or(u64::MAX);
-        for index in 0..MOUND_COUNT {
-            let mut cursor = usize::try_from(stream.sample(index) % count).unwrap_or_default();
-            for _ in 0..candidates.len() {
-                let Some(candidate) = candidates.get(cursor).copied() else {
-                    break;
-                };
-                if !centres.contains(&candidate) {
-                    centres.push(candidate);
-                    break;
-                }
-                cursor = cursor.saturating_add(1) % candidates.len();
-            }
-        }
-    } else {
-        let denominator = usize::try_from(MOUND_COUNT).unwrap_or(1).saturating_add(1);
-        for index in 1..=usize::try_from(MOUND_COUNT).unwrap_or_default() {
-            let cursor = candidates.len().saturating_mul(index) / denominator;
-            if let Some(candidate) = candidates.get(cursor.min(candidates.len() - 1)).copied() {
-                centres.push(candidate);
-            }
-        }
-    }
-    if centres.len() != usize::try_from(MOUND_COUNT).unwrap_or_default() {
-        return Err(vec![recipe_issue(
-            "Prairie could not select five distinct rolling-ground centres",
-        )]);
-    }
-    Ok(mask
+    ordinary_by_coord
         .iter()
-        .copied()
-        .map(|coord| {
-            let height = centres
-                .iter()
-                .enumerate()
-                .map(|(index, centre)| {
-                    let amplitude = if index == 0 {
-                        max_relief
-                    } else {
-                        max_relief.saturating_sub(1).max(1)
-                    };
-                    let distance = i32::try_from(centre.distance(coord)).unwrap_or(i32::MAX);
-                    amplitude.saturating_sub(distance / 2).max(0)
-                })
-                .max()
-                .unwrap_or_default();
-            (coord, base_level.saturating_add(height))
-        })
-        .collect())
-}
-
-fn actor_anchors(
-    ordinary: &BTreeMap<HexCoord, TilePos>,
-) -> Result<(TilePos, TilePos), Vec<WorldValidationIssue>> {
-    let party = ordinary
-        .values()
-        .copied()
-        .min_by_key(|position| (position.coord.x(), position.coord.y(), *position))
-        .ok_or_else(|| vec![recipe_issue("Prairie has no ordinary party landing")])?;
-    let hostile = ordinary
-        .values()
-        .copied()
-        .max_by_key(|position| (position.coord.x(), position.coord.y(), *position))
-        .ok_or_else(|| vec![recipe_issue("Prairie has no ordinary hostile landing")])?;
-    Ok((party, hostile))
+        .filter_map(|(coord, position)| (!excluded_coords.contains(coord)).then_some(*position))
+        .collect()
 }
 
 fn object_rotation(
@@ -716,63 +734,6 @@ fn feature_priority(stream: Option<SeedStream<'_>>, coord: HexCoord, salt: u64) 
         },
         |stream| stream.sample_coord(coord, salt),
     )
-}
-
-fn grassland_column(surface: i32) -> VolumeColumn {
-    VolumeColumn {
-        elements: vec![
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(0, 1),
-                material: SolidMaterialRole::Bedrock,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(1, surface.saturating_sub(3)),
-                material: SolidMaterialRole::Stone,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(surface.saturating_sub(3), surface),
-                material: SolidMaterialRole::Dirt,
-                cutaway_for: None,
-            }),
-            VolumeElement::Solid(SolidMass {
-                levels: LevelInterval::new(surface, surface.saturating_add(1)),
-                material: SolidMaterialRole::Grass,
-                cutaway_for: None,
-            }),
-        ],
-    }
-}
-
-fn vegetation_view_hint(
-    radius: u32,
-    base_level: i32,
-    relief: i32,
-    level_height: f32,
-) -> Result<MapViewHint, Vec<WorldValidationIssue>> {
-    let radius = u16::try_from(radius)
-        .map(f32::from)
-        .map_err(|error| vec![recipe_issue(format!("Prairie radius exceeds u16: {error}"))])?;
-    let focus_level = i16::try_from(base_level.saturating_add(relief / 2))
-        .map(f32::from)
-        .map_err(|error| {
-            vec![recipe_issue(format!(
-                "Prairie focus level exceeds i16: {error}"
-            ))]
-        })?;
-    let focus_y = focus_level * level_height;
-    let hint = MapViewHint::new(
-        (
-            radius.mul_add(1.25, 4.0),
-            focus_y + radius.mul_add(0.85, 8.0),
-            radius.mul_add(1.35, 4.0),
-        ),
-        (0.0, focus_y, 0.0),
-    );
-    hint.is_valid()
-        .then_some(hint)
-        .ok_or_else(|| vec![recipe_issue("Prairie camera hint is invalid")])
 }
 
 fn recipe_issues_to_error(issues: Vec<WorldValidationIssue>) -> V3GenerationError {
@@ -862,6 +823,9 @@ mod tests {
                     repeated.validated.semantic_fingerprint
                 );
                 assert!(!first.used_fallback);
+                assert_eq!(first.candidates_evaluated, 8);
+                assert_eq!(first.valid_candidates, 8);
+                assert!(first.notes.is_empty());
                 assert!((65..=75).contains(&first.metrics.grass_coverage_percent));
                 assert_eq!(first.metrics.relief, 4);
                 assert!(first.validated.plan.blockers.is_empty());
@@ -879,34 +843,61 @@ mod tests {
                     .used_fallback
             })
             .count();
-        assert!(
-            fallbacks.saturating_mul(100) < 128,
-            "{fallbacks}/128 Prairie seeds used fallback"
+        assert_eq!(
+            fallbacks, 0,
+            "actual Prairie fallback count for the 128-seed PR corpus"
         );
+    }
+
+    #[test]
+    fn prairie_resolves_from_a_grass_only_art_catalog() {
+        let selected = super::generate(
+            12,
+            0.4,
+            &settings(),
+            1592598566,
+            super::super::vegetation::tests::grass_only_runtime_art_catalog(),
+        )
+        .expect("Prairie should not require unrelated tree assets");
+        assert_eq!(selected.candidates_evaluated, 8);
+        assert_eq!(selected.valid_candidates, 8);
     }
 
     #[test]
     fn forced_candidate_failure_uses_independent_prairie_fallback() {
         let settings = settings();
         let layout = resolve_layout(12, &settings).expect("fixture layout should resolve");
-        let objects = TemperateVegetationSet::resolve(
-            super::super::vegetation::tests::runtime_art_catalog(),
+        let objects = GrassVegetationSpec::resolve(
+            super::super::vegetation::tests::grass_only_runtime_art_catalog(),
             "Prairie",
         )
         .expect("fixture art should resolve");
-        let selected = run_recipe(
-            &PrairieRecipe {
-                level_height: 0.4,
-                layout,
-                objects,
-                reject_candidates: true,
-            },
-            &settings,
-            12,
-            44,
-        )
-        .expect("canonical Prairie fallback should validate");
-        assert!(selected.used_fallback);
-        assert_eq!(selected.selected_candidate, None);
+        let force = |seed| {
+            run_recipe(
+                &PrairieRecipe {
+                    level_height: 0.4,
+                    layout: layout.clone(),
+                    objects: objects.clone(),
+                    reject_candidates: true,
+                },
+                &settings,
+                12,
+                seed,
+            )
+            .expect("canonical Prairie fallback should validate")
+        };
+        let first = force(44);
+        let other_seed = force(9_999);
+        for selected in [&first, &other_seed] {
+            assert!(selected.used_fallback);
+            assert_eq!(selected.selected_candidate, None);
+            assert_eq!(selected.candidates_evaluated, 8);
+            assert_eq!(selected.valid_candidates, 0);
+        }
+        assert_eq!(
+            first.validated.semantic_fingerprint, other_seed.validated.semantic_fingerprint,
+            "canonical fallback must not depend on the rejected world seed"
+        );
+        assert_eq!(first.metrics, other_seed.metrics);
     }
 }
