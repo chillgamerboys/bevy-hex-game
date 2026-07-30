@@ -346,13 +346,13 @@ fn validate_object(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::OnceLock;
 
     use super::*;
     use hex_assets::{ArtPalette, ObjectCatalogFile, VoxelStyleCatalog};
 
-    fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
+    pub(crate) fn runtime_art_catalog() -> &'static RuntimeArtCatalog {
         static CATALOG: OnceLock<RuntimeArtCatalog> = OnceLock::new();
         CATALOG.get_or_init(|| {
             let palette: ArtPalette = ron::from_str(include_str!(concat!(
