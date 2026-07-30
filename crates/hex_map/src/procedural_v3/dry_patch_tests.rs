@@ -494,6 +494,64 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
             panic!("the seeded Ring19 confluence must validate: {issues:?}");
         }
     }
+    let mut revised_hills = recipes.hills.clone();
+    revised_hills.max_relief = 12;
+    for mode in [
+        PatchBuildMode::CanonicalFallback,
+        PatchBuildMode::Candidate {
+            world_seed: 1_592_598_566,
+            candidate: 0,
+        },
+    ] {
+        let revised = hills::construct_patch_with_catalog(
+            context,
+            &revised_hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            LEVEL_HEIGHT,
+            mode,
+            super::vegetation::tests::runtime_art_catalog(),
+        )
+        .expect("the revised relief-12 Hills confluence should construct");
+        assert_strict_patch(&layout, revised.clone());
+        let ordinary_without_blockers = revised
+            .volume
+            .surfaces
+            .iter()
+            .filter_map(|(position, metadata)| {
+                (metadata.access == super::volume::SurfaceAccess::Ordinary).then_some(*position)
+            })
+            .collect::<BTreeSet<_>>();
+        let ordinary_with_blockers = ordinary_without_blockers
+            .difference(&revised.blockers)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            test_surface_components(&ordinary_without_blockers).len(),
+            1,
+            "seam closure must not recreate the observed 351+15 surface split"
+        );
+        assert_eq!(
+            test_surface_components(&ordinary_with_blockers).len(),
+            1,
+            "authored vegetation must preserve the repaired confluence network"
+        );
+        let metrics = match hills::validate_patch(
+            context,
+            &revised,
+            &revised_hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        ) {
+            super::selection::WorldValidation::Valid(metrics) => metrics,
+            super::selection::WorldValidation::Invalid(issues) => {
+                panic!("the revised relief-12 Hills confluence must validate: {issues:?}");
+            }
+        };
+        assert!(
+            metrics.relief >= 10,
+            "the revised confluence must retain at least ten reachable relief levels"
+        );
+    }
 
     let body = first
         .liquids
@@ -672,6 +730,29 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
         })
         .collect::<BTreeSet<_>>();
     assert_eq!(auxiliary_crossings.len(), 2);
+    let walkable = first
+        .volume
+        .surfaces
+        .iter()
+        .filter_map(|(position, metadata)| {
+            (metadata.access == super::volume::SurfaceAccess::Ordinary
+                && !first.blockers.contains(position))
+            .then_some(*position)
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        test_surface_components(&walkable).len(),
+        1,
+        "the unmodified confluence walker network must be connected"
+    );
+    for auxiliary in &auxiliary_crossings {
+        let mut without_auxiliary = walkable.clone();
+        without_auxiliary.remove(auxiliary);
+        assert!(
+            test_surface_components(&without_auxiliary).len() > 1,
+            "selected auxiliary crossing {auxiliary:?} must be indispensable"
+        );
+    }
 
     let auxiliary = *auxiliary_crossings
         .first()
@@ -711,6 +792,35 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
         validate(&wrong_auxiliary_material),
         "does not use the exact causeway material",
     );
+
+    let mut missing_auxiliary_membership = first.clone();
+    missing_auxiliary_membership
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("auxiliary biome-region membership");
+    assert_validation_rejects_with(
+        validate(&missing_auxiliary_membership),
+        "missing exact biome-region membership",
+    );
+
+    let mut auxiliary_support_gap = first.clone();
+    let auxiliary_fill = auxiliary_support_gap
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Fill(fill) => Some(fill),
+            _ => None,
+        })
+        .expect("auxiliary liquid fill");
+    auxiliary_fill.levels = super::volume::LevelInterval::new(
+        auxiliary_fill.levels.bottom,
+        auxiliary_fill.levels.top.saturating_sub(1),
+    );
+    assert_validation_rejects_with(validate(&auxiliary_support_gap), "unsupported vertical gap");
 
     let moved_coord = auxiliary
         .coord
@@ -781,6 +891,53 @@ fn center_hills_routes_three_inlets_into_one_outlet() {
         .is_none());
     assert_validation_rejects_with(
         validate(&moved_auxiliary),
+        "do not match their rederived liquid-branch authority",
+    );
+
+    let shifted_position = TilePos::new(auxiliary.coord, auxiliary.level.saturating_add(1));
+    let mut shifted_auxiliary = first.clone();
+    let auxiliary_metadata = shifted_auxiliary
+        .volume
+        .surfaces
+        .remove(&auxiliary)
+        .expect("old auxiliary surface metadata");
+    let auxiliary_biome = shifted_auxiliary
+        .biome_regions
+        .remove(&auxiliary)
+        .expect("old auxiliary biome membership");
+    let auxiliary_support = shifted_auxiliary
+        .volume
+        .columns
+        .get_mut(&auxiliary.coord)
+        .expect("auxiliary causeway column")
+        .elements
+        .iter_mut()
+        .find_map(|element| match element {
+            super::volume::VolumeElement::Solid(solid)
+                if solid.material == super::volume::SolidMaterialRole::Gravel
+                    && solid.levels.bottom <= auxiliary.level
+                    && auxiliary.level < solid.levels.top =>
+            {
+                Some(solid)
+            }
+            _ => None,
+        })
+        .expect("auxiliary causeway support");
+    auxiliary_support.levels = super::volume::LevelInterval::new(
+        shifted_position.level,
+        shifted_position.level.saturating_add(1),
+    );
+    assert!(shifted_auxiliary
+        .volume
+        .surfaces
+        .insert(shifted_position, auxiliary_metadata)
+        .is_none());
+    assert!(shifted_auxiliary
+        .biome_regions
+        .insert(shifted_position, auxiliary_biome)
+        .is_none());
+    assert_validation_rejects_with(
+        validate(&shifted_auxiliary),
         "do not match their rederived liquid-branch authority",
     );
 
