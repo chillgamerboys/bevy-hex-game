@@ -2486,7 +2486,31 @@ mod tests {
                 )),
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-old-growth.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-small-broadleaf.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/plant/snowy-tall-narrow.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-lichen.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/cave-moss.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
                     "/../../assets/art/objects/prop/grass-tuft.ron"
+                )),
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../assets/art/objects/prop/snowy-grass-tuft.ron"
                 )),
                 include_str!(concat!(
                     env!("CARGO_MANIFEST_DIR"),
