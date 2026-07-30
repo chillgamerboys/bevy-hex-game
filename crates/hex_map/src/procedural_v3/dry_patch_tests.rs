@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use hex_core::{SpecialMovementRegion, TilePos};
 
@@ -409,6 +409,282 @@ fn rotated_waterfall_outlet_aligns_with_the_center_hills_inlet() {
         assert_eq!(outlet.1.state, LiquidFlowState::Still);
         assert_eq!(outlet.1.downstream, None);
     }
+}
+
+#[test]
+fn center_hills_routes_three_inlets_into_one_outlet() {
+    let (mut settings, recipes) = dry_ring_settings();
+    let V3LayoutSettings::Ring7(ring) = &mut settings.layout else {
+        panic!("the fixture must remain Ring7");
+    };
+    ring.center.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.waterfall.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.center.edges.north_east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.mountains.edges.south_west =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.center.edges.north_west = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.sky_islands.edges.south_east =
+        shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+            width: 3,
+        }));
+    ring.center.edges.west = shared_edge(EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+    ring.caves.edges.east = shared_edge(EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings {
+        width: 3,
+    }));
+
+    let layout = resolve_layout(33, &settings).expect("the confluence fixture should resolve");
+    let context = patch(&layout, 0).expect("center patch");
+    let mode = PatchBuildMode::CanonicalFallback;
+    let first = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("central Hills should construct a confluence");
+    let second = hills::construct_patch_with_catalog(
+        context,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        LEVEL_HEIGHT,
+        mode,
+        super::vegetation::tests::runtime_art_catalog(),
+    )
+    .expect("the same confluence should construct again");
+    assert_eq!(first.volume, second.volume);
+    assert_eq!(first.liquids, second.liquids);
+    assert_strict_patch(&layout, first.clone());
+
+    let body = first
+        .liquids
+        .bodies
+        .values()
+        .next()
+        .expect("Hills confluence body");
+    let nodes_by_coord = body
+        .nodes
+        .iter()
+        .map(|(position, node)| (position.coord, (*position, *node)))
+        .collect::<BTreeMap<_, _>>();
+    let mut inlets = Vec::new();
+    let mut outlets = BTreeSet::new();
+    let mut liquid_approaches = BTreeSet::new();
+    for edge in context.shared_edges() {
+        let Some((source, port)) = edge.liquid_port() else {
+            continue;
+        };
+        let boundary = port
+            .lanes
+            .iter()
+            .map(|(coord, _)| *coord)
+            .collect::<BTreeSet<_>>();
+        liquid_approaches.extend(port.first_approach.iter().copied());
+        assert!(port
+            .first_approach
+            .iter()
+            .all(|coord| nodes_by_coord.contains_key(coord)));
+        if source {
+            outlets.extend(boundary);
+        } else {
+            inlets.extend(boundary);
+        }
+    }
+    assert_eq!(inlets.len(), 9);
+    assert_eq!(outlets.len(), 3);
+    assert!(outlets.iter().all(|coord| {
+        nodes_by_coord.get(coord).is_some_and(|(_, node)| {
+            node.state == LiquidFlowState::Still && node.downstream.is_none()
+        })
+    }));
+    assert!(inlets.iter().all(|coord| {
+        let Some((mut position, _)) = nodes_by_coord.get(coord).copied() else {
+            return false;
+        };
+        let mut visited = BTreeSet::new();
+        loop {
+            if !visited.insert(position) {
+                return false;
+            }
+            if outlets.contains(&position.coord) {
+                break true;
+            }
+            let Some(next) = body.nodes.get(&position).and_then(|node| node.downstream) else {
+                break false;
+            };
+            position = next;
+        }
+    }));
+    let mut indegree = BTreeMap::<TilePos, usize>::new();
+    for downstream in body.nodes.values().filter_map(|node| node.downstream) {
+        *indegree.entry(downstream).or_default() += 1;
+    }
+    assert!(indegree.values().any(|count| *count > 1));
+
+    let walker_only_approaches = context
+        .protected_approaches()
+        .difference(&liquid_approaches)
+        .copied()
+        .collect::<BTreeSet<_>>();
+    assert!(walker_only_approaches
+        .is_disjoint(&nodes_by_coord.keys().copied().collect::<BTreeSet<_>>()));
+    match hills::validate_patch(
+        context,
+        &first,
+        &recipes.hills,
+        V3EnvironmentSettings::TemperateGrassland,
+        super::vegetation::tests::runtime_art_catalog(),
+    ) {
+        super::selection::WorldValidation::Valid(_) => {}
+        super::selection::WorldValidation::Invalid(issues) => {
+            panic!("the confluence must pass Hills validation: {issues:?}");
+        }
+    }
+
+    let body_id = *first
+        .liquids
+        .bodies
+        .keys()
+        .next()
+        .expect("Hills confluence body id");
+    let inlet_position = nodes_by_coord
+        .get(inlets.first().expect("an inlet coordinate"))
+        .map(|(position, _)| *position)
+        .expect("inlet position");
+    let outlet_position = nodes_by_coord
+        .get(outlets.first().expect("an outlet coordinate"))
+        .map(|(position, _)| *position)
+        .expect("outlet position");
+    let validate = |plan: &GeneratedPatchPlan| {
+        hills::validate_patch(
+            context,
+            plan,
+            &recipes.hills,
+            V3EnvironmentSettings::TemperateGrassland,
+            super::vegetation::tests::runtime_art_catalog(),
+        )
+    };
+
+    let mut missing_inlet = first.clone();
+    missing_inlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .remove(&inlet_position);
+    assert_validation_rejects_with(validate(&missing_inlet), "liquid approach");
+
+    let mut stopped_inlet = first.clone();
+    let inlet_node = stopped_inlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&inlet_position)
+        .expect("inlet");
+    inlet_node.state = LiquidFlowState::Still;
+    inlet_node.downstream = None;
+    assert_validation_rejects_with(validate(&stopped_inlet), "does not flow into the patch");
+
+    let mut flowing_outlet = first.clone();
+    let outlet_node = flowing_outlet
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&outlet_position)
+        .expect("outlet");
+    outlet_node.state = LiquidFlowState::Current;
+    outlet_node.downstream = Some(inlet_position);
+    assert_validation_rejects_with(
+        validate(&flowing_outlet),
+        "must be Still before composition",
+    );
+
+    let mut cycle = first.clone();
+    let internal = cycle
+        .liquids
+        .bodies
+        .get(&body_id)
+        .expect("body")
+        .nodes
+        .keys()
+        .copied()
+        .find(|position| !outlets.contains(&position.coord) && position != &inlet_position)
+        .expect("internal flow node");
+    cycle
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .get_mut(&internal)
+        .expect("internal flow node")
+        .downstream = Some(internal);
+    assert_validation_rejects_with(validate(&cycle), "internal terminal or cycle");
+
+    let undeclared_boundary = context
+        .shared_edges()
+        .filter(|edge| edge.liquid_port().is_none())
+        .flat_map(|edge| edge.boundary_pairs())
+        .map(|(inside, _)| inside)
+        .find(|coord| !nodes_by_coord.contains_key(coord))
+        .expect("a dry shared-boundary coordinate");
+    let mut leaked = first.clone();
+    leaked
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .insert(
+            TilePos::new(undeclared_boundary, inlet_position.level),
+            super::liquid::LiquidNode {
+                state: LiquidFlowState::Still,
+                downstream: None,
+            },
+        );
+    assert_validation_rejects_with(validate(&leaked), "undeclared shared-boundary cells");
+
+    let mut wrong_level = first;
+    let displaced = wrong_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .remove(&outlet_position)
+        .expect("outlet node");
+    wrong_level
+        .liquids
+        .bodies
+        .get_mut(&body_id)
+        .expect("body")
+        .nodes
+        .insert(
+            TilePos::new(
+                outlet_position.coord,
+                outlet_position.level.saturating_add(20),
+            ),
+            displaced,
+        );
+    assert_validation_rejects_with(validate(&wrong_level), "liquid approach");
 }
 
 fn assert_validation_rejects_with<T>(
