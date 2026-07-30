@@ -2,9 +2,9 @@
 //!
 //! This crate knows what an algorithm may observe and what it may select. It does
 //! not know combat legality and cannot mutate the simulation. `hex_combat` owns both:
-//! it builds a canonically ordered [`LegalActionSet`], invokes a registered
-//! [`AiAlgorithm`], validates the returned [`ActionKey`], and sends the matched
-//! [`GameCommand`] through the ordinary command applier.
+//! it builds a canonically ordered [`LegalActionSet`] or compact [`CellChoiceSet`],
+//! invokes a registered [`AiAlgorithm`], validates the returned [`AiSelection`],
+//! and sends the matched [`GameCommand`] through the ordinary command applier.
 
 use bevy_ecs::{prelude::Component, reflect::ReflectComponent};
 use bevy_reflect::Reflect;
@@ -12,7 +12,7 @@ use hex_core::{
     EffectPayload, GameCommand, KnowledgeState, LatticeCoord, PlayerSeat, TilePos, UnitId,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 /// Stable content identity for one registered decision implementation.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -143,6 +143,9 @@ pub struct AiObservedHostile {
     pub unit: UnitId,
     /// Exact observed surface.
     pub position: TilePos,
+    /// Whether the observed hostile is already downed.
+    #[serde(default)]
+    pub downed: bool,
     /// Hostile lattice facts projected only through faction knowledge.
     pub lattice: AiLatticeObservation,
 }
@@ -184,6 +187,12 @@ pub struct AiObservation {
     Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord,
 )]
 pub struct LegalActionFingerprint(pub u64);
+
+/// Stable fingerprint for one exact cell-choice request.
+#[derive(
+    Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord,
+)]
+pub struct CellChoiceFingerprint(pub u64);
 
 /// Opaque selection key, valid only with the request fingerprint that issued it.
 #[derive(
@@ -291,6 +300,130 @@ impl LegalActionSet {
     }
 }
 
+/// A compact exact-cell decision without materializing every combination.
+///
+/// The eligible coordinates are canonical and complete. An algorithm chooses exactly
+/// [`Self::count`] distinct members, and the host validates that selection before it
+/// constructs the ordinary replayable command.
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CellChoiceSet {
+    fingerprint: CellChoiceFingerprint,
+    subject: UnitId,
+    count: u16,
+    eligible: Vec<LatticeCoord>,
+}
+
+impl CellChoiceSet {
+    /// Builds a request from its canonical coordinate set.
+    ///
+    /// Sorting and deduplication here keep adapters from accidentally issuing a
+    /// request whose validity depends on source iteration order.
+    #[must_use]
+    pub fn from_cells(
+        fingerprint: CellChoiceFingerprint,
+        subject: UnitId,
+        count: u16,
+        mut eligible: Vec<LatticeCoord>,
+    ) -> Self {
+        eligible.sort_unstable();
+        eligible.dedup();
+        Self {
+            fingerprint,
+            subject,
+            count: count.min(u16::try_from(eligible.len()).unwrap_or(u16::MAX)),
+            eligible,
+        }
+    }
+
+    /// Fingerprint binding the quota and complete eligible set.
+    #[must_use]
+    pub const fn fingerprint(&self) -> CellChoiceFingerprint {
+        self.fingerprint
+    }
+
+    /// Unit whose lattice supplies the eligible cells.
+    #[must_use]
+    pub const fn subject(&self) -> UnitId {
+        self.subject
+    }
+
+    /// Exact number of distinct cells the algorithm must return.
+    #[must_use]
+    pub const fn count(&self) -> u16 {
+        self.count
+    }
+
+    /// Eligible cells in canonical coordinate order.
+    #[must_use]
+    pub fn eligible(&self) -> &[LatticeCoord] {
+        &self.eligible
+    }
+
+    /// Builds a request-bound selection.
+    #[must_use]
+    pub fn selection(&self, cells: Vec<LatticeCoord>) -> CellSelection {
+        CellSelection {
+            fingerprint: self.fingerprint,
+            cells,
+        }
+    }
+
+    /// Validates fingerprint, quota, uniqueness, and membership.
+    pub fn validate(&self, selection: &CellSelection) -> Result<(), AiDecisionFailure> {
+        if selection.fingerprint != self.fingerprint {
+            return Err(AiDecisionFailure::StaleFingerprint);
+        }
+        let actual = u16::try_from(selection.cells.len()).unwrap_or(u16::MAX);
+        if actual != self.count {
+            return Err(AiDecisionFailure::WrongCellCount);
+        }
+        let mut cells = selection.cells.clone();
+        cells.sort_unstable();
+        if cells
+            .windows(2)
+            .any(|pair| matches!(pair, [left, right] if left == right))
+        {
+            return Err(AiDecisionFailure::DuplicateCell);
+        }
+        if cells
+            .iter()
+            .any(|cell| self.eligible.binary_search(cell).is_err())
+        {
+            return Err(AiDecisionFailure::IneligibleCell);
+        }
+        Ok(())
+    }
+}
+
+/// Exact cells selected for one compact request.
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct CellSelection {
+    fingerprint: CellChoiceFingerprint,
+    /// Exact replayable coordinates chosen by the algorithm.
+    pub cells: Vec<LatticeCoord>,
+}
+
+impl CellSelection {
+    /// Fingerprint of the request that issued this selection.
+    #[must_use]
+    pub const fn fingerprint(&self) -> CellChoiceFingerprint {
+        self.fingerprint
+    }
+}
+
+/// One selection returned by an algorithm.
+///
+/// `untagged` preserves the serialized shape of legacy action-key traces while adding
+/// the distinct cell-selection object for compact damage and restoration decisions.
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AiSelection {
+    /// One opaque normal-turn action key.
+    Action(ActionKey),
+    /// Exact cells for a compact lattice decision.
+    Cells(CellSelection),
+}
+
 /// Complete input to one registered algorithm call.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct DecisionRequest {
@@ -304,6 +437,9 @@ pub struct DecisionRequest {
     pub observation: AiObservation,
     /// The complete legal choice set.
     pub legal_actions: LegalActionSet,
+    /// Compact exact-cell domain for damage or restoration decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cell_choices: Option<CellChoiceSet>,
 }
 
 /// Mutable, session-scoped implementation selected by an AI profile.
@@ -311,8 +447,8 @@ pub struct DecisionRequest {
 /// Implementations may retain deterministic actor/group state. The runtime clears
 /// algorithm instances on gameplay teardown; persistence belongs to Wave 5.
 pub trait AiAlgorithm: Send + Sync + 'static {
-    /// Selects one request-scoped action key without mutating game state.
-    fn select(&mut self, request: &DecisionRequest) -> ActionKey;
+    /// Selects one request-scoped action or exact cell set without mutating game state.
+    fn select(&mut self, request: &DecisionRequest) -> AiSelection;
 }
 
 /// Shipped deterministic combat policy.
@@ -320,7 +456,7 @@ pub trait AiAlgorithm: Send + Sync + 'static {
 pub struct BaselineAlgorithm;
 
 impl AiAlgorithm for BaselineAlgorithm {
-    fn select(&mut self, request: &DecisionRequest) -> ActionKey {
+    fn select(&mut self, request: &DecisionRequest) -> AiSelection {
         let actions = request.legal_actions.actions();
         let fallback = actions
             .iter()
@@ -330,70 +466,75 @@ impl AiAlgorithm for BaselineAlgorithm {
             .unwrap_or_else(|| ActionKey::from_parts(request.legal_actions.fingerprint(), 0));
 
         match request.kind {
-            AiDecisionKind::ChooseDisables => choose_cells(request, false).unwrap_or(fallback),
-            AiDecisionKind::ChooseRestores => choose_cells(request, true).unwrap_or(fallback),
-            AiDecisionKind::TurnAction => choose_turn_action(request).unwrap_or(fallback),
+            AiDecisionKind::ChooseDisables => {
+                choose_cells(request, false).unwrap_or(AiSelection::Action(fallback))
+            }
+            AiDecisionKind::ChooseRestores => {
+                choose_cells(request, true).unwrap_or(AiSelection::Action(fallback))
+            }
+            AiDecisionKind::TurnAction => {
+                AiSelection::Action(choose_turn_action(request).unwrap_or(fallback))
+            }
         }
     }
 }
 
-fn choose_cells(request: &DecisionRequest, restoring: bool) -> Option<ActionKey> {
-    request
-        .legal_actions
-        .actions()
+fn choose_cells(request: &DecisionRequest, restoring: bool) -> Option<AiSelection> {
+    let choices = request.cell_choices.as_ref()?;
+    let lattice_unit = choices.subject();
+    let lattice = if request.observation.actor.unit == lattice_unit {
+        Some(&request.observation.actor.lattice)
+    } else {
+        request
+            .observation
+            .allies
+            .iter()
+            .find(|ally| ally.unit == lattice_unit)
+            .map(|ally| &ally.lattice)
+    }?;
+    let mut ranked: Vec<(u8, u16, LatticeCoord)> = choices
+        .eligible()
         .iter()
-        .filter_map(|action| {
-            let cells = match (&action.command, restoring) {
-                (GameCommand::ChooseDisables { cells, .. }, false)
-                | (GameCommand::ChooseRestores { cells, .. }, true) => cells,
-                _ => return None,
-            };
-            let lattice_unit = match action.command {
-                GameCommand::ChooseRestores { target, .. } => target,
-                _ => action.command.unit(),
-            };
-            let lattice = if request.observation.actor.unit == lattice_unit {
-                Some(&request.observation.actor.lattice)
+        .filter_map(|coord| {
+            let cell = lattice.cells.iter().find(|cell| cell.coord == *coord)?;
+            let kind = cell.kind?;
+            let rank = if restoring {
+                match kind {
+                    AiCellKind::Spell => 0,
+                    AiCellKind::Fusion => 1,
+                    AiCellKind::Gem => 2,
+                    AiCellKind::Blank => 3,
+                }
             } else {
-                request
-                    .observation
-                    .allies
-                    .iter()
-                    .find(|ally| ally.unit == lattice_unit)
-                    .map(|ally| &ally.lattice)
-            }?;
-            let mut ranks: Vec<(u8, u16, LatticeCoord)> = cells
-                .iter()
-                .filter_map(|coord| {
-                    let cell = lattice.cells.iter().find(|cell| cell.coord == *coord)?;
-                    let kind = cell.kind?;
-                    let rank = if restoring {
-                        match kind {
-                            AiCellKind::Spell => 0,
-                            AiCellKind::Fusion => 1,
-                            AiCellKind::Gem => 2,
-                            AiCellKind::Blank => 3,
-                        }
-                    } else {
-                        match kind {
-                            AiCellKind::Blank => 0,
-                            AiCellKind::Gem => 1,
-                            AiCellKind::Fusion => 2,
-                            AiCellKind::Spell => 3,
-                        }
-                    };
-                    Some((rank, cell.mana.unwrap_or(0), *coord))
-                })
-                .collect();
-            ranks.sort_unstable();
-            Some((ranks, action.key))
+                match kind {
+                    AiCellKind::Blank => 0,
+                    AiCellKind::Gem => 1,
+                    AiCellKind::Fusion => 2,
+                    AiCellKind::Spell => 3,
+                }
+            };
+            Some((rank, cell.mana.unwrap_or(0), *coord))
         })
-        .min_by(|left, right| left.0.cmp(&right.0))
-        .map(|(_, key)| key)
+        .collect();
+    ranked.sort_unstable();
+    let cells = ranked
+        .into_iter()
+        .take(usize::from(choices.count()))
+        .map(|(_, _, coord)| coord)
+        .collect();
+    Some(AiSelection::Cells(choices.selection(cells)))
 }
 
 fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
     let actions = request.legal_actions.actions();
+    let traversal = ReverseTraversal::new(&request.observation.traversal);
+    let hostile_distances: Vec<(UnitId, Vec<u32>)> = request
+        .observation
+        .hostiles
+        .iter()
+        .filter(|hostile| !hostile.downed)
+        .map(|hostile| (hostile.unit, traversal.distances_to_melee(hostile.position)))
+        .collect();
     let cast_named_at = |name: &str, target: TilePos| {
         actions.iter().find_map(|action| match &action.command {
             GameCommand::Cast {
@@ -492,15 +633,12 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
             GameCommand::MoveAlong { path, .. } => {
                 let endpoint = path.last()?;
                 let used = u32::try_from(path.len().saturating_sub(1)).unwrap_or(u32::MAX);
-                let nearest = request
-                    .observation
-                    .hostiles
+                let nearest = hostile_distances
                     .iter()
-                    .filter_map(|hostile| {
-                        route_to_melee(&request.observation.traversal, *endpoint, hostile.position)
-                            .map(|remaining| {
-                                (used.saturating_add(remaining), hostile.unit, remaining)
-                            })
+                    .filter_map(|(unit, distances)| {
+                        traversal
+                            .distance_at(distances, *endpoint)
+                            .map(|remaining| (used.saturating_add(remaining), *unit, remaining))
                     })
                     .min()?;
                 Some((
@@ -517,33 +655,101 @@ fn choose_turn_action(request: &DecisionRequest) -> Option<ActionKey> {
         .map(|(_, _, _, _, key)| key)
 }
 
-fn route_to_melee(
-    traversal: &[AiTraversalObservation],
-    start: TilePos,
-    target: TilePos,
-) -> Option<u32> {
-    let by_position: BTreeMap<TilePos, &AiTraversalObservation> = traversal
-        .iter()
-        .map(|surface| (surface.position, surface))
-        .collect();
-    let target_edges = &by_position.get(&target)?.neighbors;
-    let mut distance = BTreeMap::from([(start, 0u32)]);
-    let mut frontier = VecDeque::from([start]);
-    while let Some(at) = frontier.pop_front() {
-        let cost = *distance.get(&at)?;
-        let surface = by_position.get(&at)?;
-        if surface.neighbors.contains(&target) && target_edges.contains(&at) {
-            return Some(cost);
-        }
-        for &next in &surface.neighbors {
-            if distance.contains_key(&next) {
-                continue;
+/// One canonical reverse traversal index shared by every candidate in a decision.
+struct ReverseTraversal<'a> {
+    surfaces: Vec<&'a AiTraversalObservation>,
+    index_by_position: HashMap<TilePos, usize>,
+    predecessors: Vec<Vec<usize>>,
+}
+
+impl<'a> ReverseTraversal<'a> {
+    fn new(traversal: &'a [AiTraversalObservation]) -> Self {
+        let mut surfaces: Vec<_> = traversal.iter().collect();
+        surfaces.sort_unstable_by_key(|surface| surface.position);
+        surfaces.dedup_by_key(|surface| surface.position);
+        let index_by_position: HashMap<_, _> = surfaces
+            .iter()
+            .enumerate()
+            .map(|(index, surface)| (surface.position, index))
+            .collect();
+        let mut predecessors = vec![Vec::new(); surfaces.len()];
+        for (source_index, surface) in surfaces.iter().enumerate() {
+            for &neighbor in &surface.neighbors {
+                if let Some(&neighbor_index) = index_by_position.get(&neighbor) {
+                    if let Some(incoming) = predecessors.get_mut(neighbor_index) {
+                        incoming.push(source_index);
+                    }
+                }
             }
-            distance.insert(next, cost.saturating_add(1));
-            frontier.push_back(next);
+        }
+        for incoming in &mut predecessors {
+            incoming.sort_unstable();
+            incoming.dedup();
+        }
+        Self {
+            surfaces,
+            index_by_position,
+            predecessors,
         }
     }
-    None
+
+    /// Returns every authorized start's shortest directed distance to melee range.
+    fn distances_to_melee(&self, target: TilePos) -> Vec<u32> {
+        let mut distances = vec![u32::MAX; self.surfaces.len()];
+        let Some(&target_index) = self.index_by_position.get(&target) else {
+            return distances;
+        };
+        let Some(target_surface) = self.surfaces.get(target_index) else {
+            return distances;
+        };
+        let mut goals: Vec<usize> = target_surface
+            .neighbors
+            .iter()
+            .filter_map(|position| self.index_by_position.get(position).copied())
+            .filter(|&index| {
+                self.surfaces
+                    .get(index)
+                    .is_some_and(|surface| surface.neighbors.contains(&target))
+            })
+            .collect();
+        goals.sort_unstable();
+        goals.dedup();
+
+        let mut frontier = VecDeque::new();
+        for goal in goals {
+            if let Some(distance) = distances.get_mut(goal) {
+                *distance = 0;
+                frontier.push_back(goal);
+            }
+        }
+        while let Some(at) = frontier.pop_front() {
+            let Some(&cost) = distances.get(at) else {
+                continue;
+            };
+            let Some(predecessors) = self.predecessors.get(at) else {
+                continue;
+            };
+            for &previous in predecessors {
+                let Some(previous_distance) = distances.get_mut(previous) else {
+                    continue;
+                };
+                if *previous_distance != u32::MAX {
+                    continue;
+                }
+                *previous_distance = cost.saturating_add(1);
+                frontier.push_back(previous);
+            }
+        }
+        distances
+    }
+
+    fn distance_at(&self, distances: &[u32], position: TilePos) -> Option<u32> {
+        let index = self.index_by_position.get(&position)?;
+        distances
+            .get(*index)
+            .copied()
+            .filter(|distance| *distance != u32::MAX)
+    }
 }
 
 /// Why a requested AI selection did not produce its named command.
@@ -553,11 +759,22 @@ pub enum AiDecisionFailure {
     StaleFingerprint,
     /// The fingerprint matched but no action had the returned ordinal.
     UnknownAction,
+    /// The algorithm returned a normal action for a cell request, or vice versa.
+    WrongSelectionKind,
+    /// A cell selection did not contain the exact requested quota.
+    WrongCellCount,
+    /// A cell selection repeated one coordinate.
+    DuplicateCell,
+    /// A cell selection named a coordinate outside the eligible set.
+    IneligibleCell,
 }
 
 /// Development trace for one deterministic AI dispatch.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct AiDecisionTrace {
+    /// Monotonic session-local dispatch sequence assigned by the host.
+    #[serde(default)]
+    pub sequence: u64,
     /// Selected content profile.
     pub profile: AiProfileId,
     /// Registered implementation.
@@ -574,16 +791,73 @@ pub struct AiDecisionTrace {
     pub legal_actions: LegalActionSet,
     /// Fingerprint of the offered legal set.
     pub fingerprint: LegalActionFingerprint,
-    /// Returned key.
-    pub selected: ActionKey,
+    /// Fingerprint of the compact cell set, when this was a lattice decision.
+    #[serde(default)]
+    pub cell_fingerprint: Option<CellChoiceFingerprint>,
+    /// Returned action or exact cells.
+    pub selected: AiSelection,
     /// Command ultimately sent through the applier, including deterministic fallback.
     pub command: Option<GameCommand>,
     /// Failure when the key could not resolve.
     pub failure: Option<AiDecisionFailure>,
 }
 
+/// Compact deterministic record retained by long-running combat summaries.
+///
+/// Full observations and legal domains belong in the short live trace window or the
+/// opt-in transcript recorder. This record keeps enough information to audit dispatch,
+/// selection, fallback, and replay outcome without retaining a map projection per turn.
+#[derive(Reflect, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AiDecisionRecord {
+    /// Monotonic session-local dispatch sequence.
+    #[serde(default)]
+    pub sequence: u64,
+    /// Selected content profile.
+    pub profile: AiProfileId,
+    /// Registered implementation.
+    pub algorithm: AiAlgorithmId,
+    /// Stable acting unit.
+    pub actor: UnitId,
+    /// Optional coordination group.
+    pub group: Option<AiGroupId>,
+    /// Decision point answered.
+    pub kind: AiDecisionKind,
+    /// Fingerprint of the offered normal-action set.
+    pub fingerprint: LegalActionFingerprint,
+    /// Fingerprint of the compact cell set, when applicable.
+    #[serde(default)]
+    pub cell_fingerprint: Option<CellChoiceFingerprint>,
+    /// Returned action or exact cells.
+    pub selected: AiSelection,
+    /// Command sent through the applier, including fallback.
+    pub command: Option<GameCommand>,
+    /// Failure that caused fallback.
+    pub failure: Option<AiDecisionFailure>,
+}
+
+impl From<&AiDecisionTrace> for AiDecisionRecord {
+    fn from(trace: &AiDecisionTrace) -> Self {
+        Self {
+            sequence: trace.sequence,
+            profile: trace.profile.clone(),
+            algorithm: trace.algorithm.clone(),
+            actor: trace.actor,
+            group: trace.group.clone(),
+            kind: trace.kind,
+            fingerprint: trace.fingerprint,
+            cell_fingerprint: trace.cell_fingerprint,
+            selected: trace.selected.clone(),
+            command: trace.command.clone(),
+            failure: trace.failure,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+    use std::time::{Duration, Instant};
+
     use hex_core::{HexCoord, KnowledgeState};
 
     use super::*;
@@ -591,22 +865,22 @@ mod tests {
     struct FirstAlgorithm;
 
     impl AiAlgorithm for FirstAlgorithm {
-        fn select(&mut self, request: &DecisionRequest) -> ActionKey {
-            request.legal_actions.actions().first().map_or_else(
+        fn select(&mut self, request: &DecisionRequest) -> AiSelection {
+            AiSelection::Action(request.legal_actions.actions().first().map_or_else(
                 || ActionKey::from_parts(request.legal_actions.fingerprint(), 0),
                 |action| action.key,
-            )
+            ))
         }
     }
 
     struct LastAlgorithm;
 
     impl AiAlgorithm for LastAlgorithm {
-        fn select(&mut self, request: &DecisionRequest) -> ActionKey {
-            request.legal_actions.actions().last().map_or_else(
+        fn select(&mut self, request: &DecisionRequest) -> AiSelection {
+            AiSelection::Action(request.legal_actions.actions().last().map_or_else(
                 || ActionKey::from_parts(request.legal_actions.fingerprint(), 0),
                 |action| action.key,
-            )
+            ))
         }
     }
 
@@ -648,6 +922,7 @@ mod tests {
                 LegalActionFingerprint(42),
                 vec![GameCommand::EndTurn { unit: UnitId(1) }],
             ),
+            cell_choices: None,
         }
     }
 
@@ -705,6 +980,12 @@ mod tests {
         let first = FirstAlgorithm.select(&request);
         let last = LastAlgorithm.select(&request);
         assert_ne!(first, last);
+        let AiSelection::Action(first) = first else {
+            panic!("first algorithm should return an action");
+        };
+        let AiSelection::Action(last) = last else {
+            panic!("last algorithm should return an action");
+        };
         assert!(matches!(
             request
                 .legal_actions
@@ -719,5 +1000,265 @@ mod tests {
                 .map(|action| &action.command),
             Some(GameCommand::EndTurn { .. })
         ));
+    }
+
+    #[test]
+    fn compact_cell_choices_validate_without_materializing_combinations() {
+        let eligible = (0..32).map(|x| LatticeCoord::new(x, 0)).collect::<Vec<_>>();
+        let choices = CellChoiceSet::from_cells(CellChoiceFingerprint(77), UnitId(4), 8, eligible);
+        assert_eq!(choices.eligible().len(), 32);
+        assert_eq!(choices.count(), 8);
+        let valid = choices.selection(
+            choices
+                .eligible()
+                .iter()
+                .copied()
+                .take(8)
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(choices.validate(&valid), Ok(()));
+
+        let duplicate = choices.selection(vec![LatticeCoord::ORIGIN; 8]);
+        assert_eq!(
+            choices.validate(&duplicate),
+            Err(AiDecisionFailure::DuplicateCell)
+        );
+        let outside = choices.selection(
+            (0..7)
+                .map(|x| LatticeCoord::new(x, 0))
+                .chain([LatticeCoord::new(99, 0)])
+                .collect(),
+        );
+        assert_eq!(
+            choices.validate(&outside),
+            Err(AiDecisionFailure::IneligibleCell)
+        );
+    }
+
+    fn benchmark_ally(unit: UnitId, position: TilePos) -> AiAlliedUnit {
+        AiAlliedUnit {
+            unit,
+            position,
+            downed: false,
+            lattice: AiLatticeObservation {
+                capacity: None,
+                cells: Vec::new(),
+            },
+            spells: Vec::new(),
+        }
+    }
+
+    fn mix_fingerprint(mut fingerprint: u64, bytes: &[u8]) -> u64 {
+        for &byte in bytes {
+            fingerprint ^= u64::from(byte);
+            fingerprint = fingerprint.wrapping_mul(1_099_511_628_211);
+        }
+        fingerprint
+    }
+
+    fn benchmark_request(radius: u32, team_size: usize) -> DecisionRequest {
+        let position = |coord| TilePos::new(coord, 1);
+        let mut coords = HexCoord::ORIGIN.within_radius(radius);
+        coords.sort_unstable();
+        let coordinate_set: BTreeSet<HexCoord> = coords.iter().copied().collect();
+        let traversal = coords
+            .iter()
+            .copied()
+            .map(|coord| {
+                let mut neighbors = coord
+                    .neighbors()
+                    .into_iter()
+                    .filter(|neighbor| coordinate_set.contains(neighbor))
+                    .map(position)
+                    .collect::<Vec<_>>();
+                neighbors.sort_unstable();
+                AiTraversalObservation {
+                    position: position(coord),
+                    knowledge: KnowledgeState::Observed,
+                    standable: true,
+                    neighbors,
+                }
+            })
+            .collect();
+
+        let allied_offsets = [
+            HexCoord::from_axial(-1, 0),
+            HexCoord::from_axial(0, -1),
+            HexCoord::from_axial(1, -1),
+            HexCoord::from_axial(1, 0),
+            HexCoord::from_axial(0, 1),
+        ];
+        let allies = allied_offsets
+            .into_iter()
+            .take(team_size.saturating_sub(1))
+            .enumerate()
+            .map(|(index, coord)| {
+                benchmark_ally(
+                    UnitId(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(1)),
+                    position(coord),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let distance = i32::try_from(radius.saturating_sub(2)).unwrap_or(i32::MAX);
+        let hostile_offsets = [
+            HexCoord::from_axial(distance, 0),
+            HexCoord::from_axial(0, distance),
+            HexCoord::from_axial(-distance, distance),
+            HexCoord::from_axial(-distance, 0),
+            HexCoord::from_axial(0, -distance),
+            HexCoord::from_axial(distance, -distance),
+        ];
+        let hostiles = hostile_offsets
+            .into_iter()
+            .take(team_size)
+            .enumerate()
+            .map(|(index, coord)| AiObservedHostile {
+                unit: UnitId(u64::try_from(index).unwrap_or(u64::MAX).saturating_add(100)),
+                position: position(coord),
+                downed: false,
+                lattice: AiLatticeObservation {
+                    capacity: None,
+                    cells: Vec::new(),
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let mut endpoints = HexCoord::ORIGIN.within_radius(4);
+        endpoints.sort_unstable();
+        let mut commands = endpoints
+            .into_iter()
+            .filter(|coord| *coord != HexCoord::ORIGIN)
+            .map(|endpoint| GameCommand::MoveAlong {
+                unit: UnitId(0),
+                path: HexCoord::ORIGIN
+                    .line_between(endpoint)
+                    .into_iter()
+                    .map(position)
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        commands.push(GameCommand::EndTurn { unit: UnitId(0) });
+
+        let mut fingerprint = 14_695_981_039_346_656_037;
+        fingerprint = mix_fingerprint(fingerprint, &radius.to_le_bytes());
+        fingerprint = mix_fingerprint(
+            fingerprint,
+            &u64::try_from(team_size).unwrap_or(u64::MAX).to_le_bytes(),
+        );
+        for command in &commands {
+            if let GameCommand::MoveAlong { path, .. } = command {
+                for step in path {
+                    fingerprint = mix_fingerprint(fingerprint, &step.coord.x().to_le_bytes());
+                    fingerprint = mix_fingerprint(fingerprint, &step.coord.y().to_le_bytes());
+                    fingerprint = mix_fingerprint(fingerprint, &step.level.to_le_bytes());
+                }
+            }
+        }
+        let legal_actions =
+            LegalActionSet::from_canonical_commands(LegalActionFingerprint(fingerprint), commands);
+        let mut turn_order = std::iter::once(UnitId(0))
+            .chain(allies.iter().map(|ally| ally.unit))
+            .chain(hostiles.iter().map(|hostile| hostile.unit))
+            .collect::<Vec<_>>();
+        turn_order.sort_unstable();
+
+        DecisionRequest {
+            controller: PlayerSeat(1),
+            group: Some(AiGroupId("benchmark".to_owned())),
+            kind: AiDecisionKind::TurnAction,
+            observation: AiObservation {
+                actor: benchmark_ally(UnitId(0), position(HexCoord::ORIGIN)),
+                allies,
+                hostiles,
+                turn_order,
+                round: 7,
+                effects: Vec::new(),
+                traversal,
+            },
+            legal_actions,
+            cell_choices: None,
+        }
+    }
+
+    fn selection_fingerprint(selection: &AiSelection) -> u64 {
+        match selection {
+            AiSelection::Action(key) => {
+                let fingerprint = mix_fingerprint(
+                    14_695_981_039_346_656_037,
+                    &key.fingerprint().0.to_le_bytes(),
+                );
+                mix_fingerprint(fingerprint, &key.ordinal().to_le_bytes())
+            }
+            AiSelection::Cells(selection) => {
+                let mut fingerprint = mix_fingerprint(
+                    14_695_981_039_346_656_037,
+                    &selection.fingerprint().0.to_le_bytes(),
+                );
+                for cell in &selection.cells {
+                    fingerprint = mix_fingerprint(fingerprint, &cell.q().to_le_bytes());
+                    fingerprint = mix_fingerprint(fingerprint, &cell.r().to_le_bytes());
+                }
+                fingerprint
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode radius/team AI decision acceptance benchmark"]
+    fn baseline_ai_radius_team_matrix_release_benchmark() {
+        for radius in [12, 20, 40] {
+            for team_size in [1, 3, 6] {
+                let request = benchmark_request(radius, team_size);
+                assert_eq!(
+                    request,
+                    benchmark_request(radius, team_size),
+                    "radius {radius} {team_size}v{team_size} request was not deterministic"
+                );
+                let mut algorithm = BaselineAlgorithm;
+                let expected = algorithm.select(&request);
+                let expected_fingerprint = selection_fingerprint(&expected);
+                let mut samples = Vec::with_capacity(100);
+                for _ in 0..100 {
+                    let started = Instant::now();
+                    let selected =
+                        std::hint::black_box(algorithm.select(std::hint::black_box(&request)));
+                    samples.push(started.elapsed());
+                    assert_eq!(selected, expected);
+                    assert_eq!(selection_fingerprint(&selected), expected_fingerprint);
+                    assert!(matches!(
+                        selected,
+                        AiSelection::Action(key)
+                            if key.fingerprint() == request.legal_actions.fingerprint()
+                    ));
+                }
+                samples.sort_unstable();
+                let median = samples.get(49).copied().unwrap_or(Duration::MAX);
+                let p95 = samples.get(94).copied().unwrap_or(Duration::MAX);
+                let worst = samples.get(99).copied().unwrap_or(Duration::MAX);
+                eprintln!(
+                    "AI_BENCH radius={radius} teams={team_size}v{team_size} decisions=100 \
+                     request_fingerprint={} selection_fingerprint={expected_fingerprint} \
+                     median_us={} p95_us={} worst_us={}",
+                    request.legal_actions.fingerprint().0,
+                    median.as_micros(),
+                    p95.as_micros(),
+                    worst.as_micros(),
+                );
+
+                if radius == 40 {
+                    let (p95_budget, worst_budget) = if cfg!(debug_assertions) {
+                        (Duration::from_millis(250), Duration::from_millis(500))
+                    } else {
+                        (Duration::from_millis(50), Duration::from_millis(100))
+                    };
+                    assert!(
+                        p95 < p95_budget && worst < worst_budget,
+                        "radius-40 {team_size}v{team_size} exceeded AI budgets: \
+                         p95={p95:?}, worst={worst:?}"
+                    );
+                }
+            }
+        }
     }
 }

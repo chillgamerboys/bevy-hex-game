@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a twelve-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a fourteen-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -75,6 +75,9 @@ capture keep live animation. `HEX_REVIEW_FOCUS_ANCHOR` relocates the selected ac
 an exact generated anchor before framing and requires a capture.
 `HEX_REVIEW_CUTAWAY=full` exposes the selected cave interior for a review overview
 while ordinary gameplay keeps its local six-hex opening; it also requires a capture.
+`HEX_REVIEW_ILLUMINATION=overlay` adds exact Dark, Dim, and Bright cave-interior
+gameplay-tier caps to a capture without changing physical lighting, perception, fog,
+or picking.
 The process exits after persisting the PNG. A frame that fails the visual-coverage
 check still leaves its PNG at the requested path and exits with an error, so the
 rejected output can be inspected.
@@ -130,10 +133,10 @@ and the renderer does not project gameplay blockers.
 
 **`hex_perception`** owns authoritative illumination, faction sight, and map
 knowledge. It depends on `hex_units` to observe unit positions.
-`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`,
-while `hex_combat` consumes the richer current-observation API only to gate
-gameplay-owned lattice knowledge. Neither gameplay crate may import map-generator
-internals.
+`hex_units` will consume only the compact `LocalMapKnowledge` projection in `hex_core`
+for player movement, while `hex_combat` consumes faction-generic projections and the
+richer current-observation API to gate gameplay-owned lattice knowledge, cast anchors,
+and AI. Neither gameplay crate may import map-generator internals.
 
 **Two owners, two roles.** The **world owner** has `hex_map`, `hex_world`,
 `hex_perception`, their schema/settings modules in `hex_assets`, and map/perception
@@ -189,6 +192,10 @@ and tests without a renderer. It holds the largest share of the test suite.
   ResolveObservation → PublishKnowledge → ApplyPresentation`) orders both initial
   perception and later updates. Authored lighting publishes
   `ExteriorIllumination`; gameplay never samples renderer lights or pixels.
+- **Same-frame combat knowledge** is ordered `PublishKnowledge → combat spatial
+  knowledge synchronization → CombatSystems::Act → Apply → Resolve → Advance`.
+  Casting and AI must use that publication; neither preview nor a legal-action request
+  authorizes a later command by itself.
 - **A position is a voxel, not a coordinate.** `TilePos { coord, level }`. Separate
   surfaces in one coordinate's column are not connected. Never key anything by
   `HexCoord` in a way that collapses a stack.
@@ -209,6 +216,9 @@ and tests without a renderer. It holds the largest share of the test suite.
 - **Settings come from `assets/config/*.ron`.** On initial load, resources are
   absent until parsed rather than defaulted, so a bad file stalls loading. After
   that, a failed hot reload retains the last valid value and reports the error.
+  Elements, substances, spells, and lattices additionally require one matching
+  `AcceptedContentRevision`; resource presence or a settled Bevy change tick cannot
+  admit mixed source revisions.
 
 ## Bevy 0.19 specifics
 
@@ -318,7 +328,9 @@ tickets. Binding is encouraged, never required.
 ## Current state
 
 Runs on macOS/Metal at 60 FPS, 3,400–4,100 entities in gameplay depending on the
-terrain seed. Bevy 0.19, Rust 1.97.1, and 1,236 tests. macOS is the primary
+terrain seed. Bevy 0.19 and Rust 1.97.1 are pinned. The test count is intentionally
+not frozen here; the current foundation gate and its exact count are recorded in
+[foundation-hardening.md](docs/planning/foundation-hardening.md). macOS is the primary
 dev machine; the WSL2 setup in the README belongs to another contributor and still
 works.
 

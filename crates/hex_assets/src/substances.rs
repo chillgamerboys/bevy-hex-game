@@ -15,6 +15,7 @@ use hex_core::{Screen, SubstanceId};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::fingerprint::FingerprintEncoder;
 use crate::{ArtPalette, LoadSettings, Rgb, SwatchId, CONFIG_EXTENSIONS};
 
 /// Registers the substance table for loading.
@@ -330,6 +331,26 @@ impl SubstanceTable {
     pub fn matches_sources(&self, file: &SubstanceFile, palette: &ArtPalette) -> bool {
         self.source_substances == file.substances
             && self.source_palette_fingerprint == palette.semantic_fingerprint()
+    }
+
+    pub(crate) fn semantic_fingerprint(&self) -> u64 {
+        let mut encoder = FingerprintEncoder::new(b"hex-substance-table-v1");
+        encoder.usize(self.by_id.len());
+        for (index, substance) in self.by_id.iter().enumerate() {
+            encoder.string(self.names.get(index).map_or("", String::as_str));
+            if let Some(swatch) = &substance.swatch {
+                encoder.u8(1);
+                encoder.string(swatch.as_str());
+            } else {
+                encoder.u8(0);
+            }
+            encoder.f32(substance.color.0);
+            encoder.f32(substance.color.1);
+            encoder.f32(substance.color.2);
+            encoder.bool(substance.solid);
+            encoder.bool(substance.diggable);
+        }
+        encoder.finish()
     }
 
     fn accepted_sources(&self) -> Option<(SubstanceFile, ArtPalette)> {

@@ -111,6 +111,7 @@ pub enum ScenarioCategory {
 /// count parentheses to discover which entry failed. Reading the other fields first
 /// lets the error identify the exact scenario while keeping category genuinely required.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScenarioFields {
     name: String,
     #[serde(default, deserialize_with = "deserialize_present_category")]
@@ -294,6 +295,24 @@ mod tests {
         assert!(error.contains("Forgotten Lane"), "{error}");
     }
 
+    #[test]
+    fn unknown_scenario_fields_are_rejected() {
+        let error = ron::from_str::<Scenario>(
+            r#"(
+                name: "Typo",
+                category: Demo,
+                blurb: "Invalid on purpose.",
+                world: "config/world.ron",
+                encounter: "config/encounters/bridge-crossing.ron",
+                generaton_seed: Some(7),
+            )"#,
+        )
+        .expect_err("a misspelled field must not be silently ignored")
+        .to_string();
+
+        assert!(error.contains("generaton_seed"), "{error}");
+    }
+
     /// Generated scenarios own distinct reproducible seeds and name an encounter file.
     ///
     /// Whether that encounter places its units through generated *anchors* is a
@@ -312,8 +331,8 @@ mod tests {
 
         assert_eq!(
             generated.len(),
-            8,
-            "the scenario library should include all eight generated maps"
+            10,
+            "the scenario library should include all ten generated maps"
         );
         let seeds: HashSet<u64> = generated
             .iter()

@@ -2504,6 +2504,7 @@ mod tests {
     use super::*;
 
     const WORLD_RON: &str = include_str!("../../../assets/config/world.ron");
+    const V3_RING7_RON: &str = include_str!("../../../assets/config/worlds/procedural-ring7.ron");
     const V1_HILLS_RON: &str = r#"
 (
     grid_radius: 12,
@@ -2760,27 +2761,27 @@ mod tests {
         for (ron, expected_version) in [
             (
                 include_str!("../../../assets/config/worlds/procedural-hills.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-frozen.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-volcanic.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-sky-islands.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-mountains.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-caves.ron"),
-                2,
+                3,
             ),
             (
                 include_str!("../../../assets/config/worlds/procedural-waterfall.ron"),
@@ -2790,6 +2791,7 @@ mod tests {
                 include_str!("../../../assets/config/worlds/procedural-forest.ron"),
                 3,
             ),
+            (V3_RING7_RON, 3),
         ] {
             let settings: MapSettings =
                 ron::from_str(ron).expect("shipped procedural RON should parse");
@@ -2806,6 +2808,99 @@ mod tests {
                 expected_version == 3
             );
         }
+    }
+
+    #[test]
+    fn shipped_v3_ring7_preserves_exact_shared_contracts() {
+        let settings: MapSettings =
+            ron::from_str(V3_RING7_RON).expect("the shipped Ring7 RON should parse");
+        settings
+            .validate()
+            .expect("the shipped Ring7 settings should validate");
+        assert_eq!(settings.grid_radius, 33);
+        assert_eq!(settings.level_height.to_bits(), 0.4_f32.to_bits());
+
+        let TerrainSettings::Procedural(ProceduralSettings::V3(ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring7(ring),
+        })) = settings.terrain
+        else {
+            panic!("the shipped composite should use the V3 Ring7 layout")
+        };
+
+        let all_edges = [
+            ring.center.edges.edges(),
+            ring.mountains.edges.edges(),
+            ring.waterfall.edges.edges(),
+            ring.forest.edges.edges(),
+            ring.fort.edges.edges(),
+            ring.caves.edges.edges(),
+            ring.sky_islands.edges.edges(),
+        ];
+        let shared = all_edges
+            .into_iter()
+            .flatten()
+            .filter_map(|edge| {
+                let PatchEdgeContractSettings::Shared(shared) = edge else {
+                    return None;
+                };
+                Some(shared)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(shared.len(), 24, "twelve reciprocal internal seams");
+        for contract in &shared {
+            assert_eq!(
+                contract.elevation,
+                EdgeElevationSettings {
+                    preferred: 15,
+                    min: 14,
+                    max: 16,
+                }
+            );
+            assert_eq!(contract.walker, WalkerPortSettings { count: 2, width: 2 });
+            assert_eq!(contract.approach_depth, 3);
+        }
+
+        let PatchEdgeContractSettings::Shared(center_east) = &ring.center.edges.east else {
+            panic!("the center east edge should be shared")
+        };
+        assert_eq!(
+            center_east.liquid,
+            EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 })
+        );
+        let PatchEdgeContractSettings::Shared(waterfall_west) = &ring.waterfall.edges.west else {
+            panic!("the Waterfall west edge should be shared")
+        };
+        assert_eq!(
+            waterfall_west.liquid,
+            EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 })
+        );
+        let PatchEdgeContractSettings::Shared(center_west) = &ring.center.edges.west else {
+            panic!("the center west edge should be shared")
+        };
+        assert_eq!(
+            center_west.liquid,
+            EdgeLiquidSettings::Outlet(EdgeLiquidPortSettings { width: 3 })
+        );
+        let PatchEdgeContractSettings::Shared(caves_east) = &ring.caves.edges.east else {
+            panic!("the Caves east edge should be shared")
+        };
+        assert_eq!(
+            caves_east.liquid,
+            EdgeLiquidSettings::Inlet(EdgeLiquidPortSettings { width: 3 })
+        );
+
+        assert_eq!(
+            shared
+                .iter()
+                .filter(|contract| matches!(contract.liquid, EdgeLiquidSettings::Dry))
+                .count(),
+            20,
+            "every other internal seam should be dry"
+        );
+        assert!(
+            ring.mountains.edges.all_liquids_dry(),
+            "Mountains must remain entirely dry"
+        );
     }
 
     #[test]

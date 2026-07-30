@@ -6,6 +6,7 @@
 //! Each cutaway owns only its [`PresentationOcclusionReason`]; one adapter applies the
 //! combined result to visibility, picking, and shadows without changing map semantics.
 
+use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::light::NotShadowCaster;
 use bevy::picking::Pickable;
@@ -107,14 +108,14 @@ fn reconcile_interior_cutaway(
 ) {
     let active = active_cutaway(interiors.as_deref(), &targets);
 
-    for (position, occluder, mut occlusion) in &mut candidates {
+    for (position, occluder, occlusion) in &mut candidates {
         let should_hide = active.is_some_and(|(region, centre)| {
             occluder.is_some_and(|occluder| occluder.0 == region)
                 && (full_review_override.is_some()
                     || position.coord.distance(centre) <= CUTAWAY_RADIUS_HEXES)
         });
         set_reason(
-            &mut occlusion,
+            occlusion,
             PresentationOcclusionReason::InteriorCutaway,
             should_hide,
         );
@@ -129,6 +130,7 @@ fn reconcile_canopy_cutaway(
     mut canopies: Query<(
         &CanopyOccluder,
         &GlobalTransform,
+        Option<&Aabb>,
         &mut PresentationOcclusion,
     )>,
     mut reported_invalid_cardinality: Local<Option<(usize, usize)>>,
@@ -154,22 +156,40 @@ fn reconcile_canopy_cutaway(
         }
     };
 
-    for (canopy, transform, mut occlusion) in &mut canopies {
+    for (canopy, transform, bounds, occlusion) in &mut canopies {
         let should_hide = active.is_some_and(|(target, (camera, camera_transform))| {
+            let (centre, radius) = canopy_world_sphere(transform, bounds);
             canopy.0.coord.distance(target.surface.coord) <= CANOPY_CUTAWAY_RADIUS_HEXES
                 && canopy_intersects_focus_segment(
                     camera_transform.translation(),
                     camera.focus,
-                    transform.translation(),
-                    transform.scale().abs().max_element() + CANOPY_INTERSECTION_PADDING,
+                    centre,
+                    radius,
                 )
         });
         set_reason(
-            &mut occlusion,
+            occlusion,
             PresentationOcclusionReason::CanopyCutaway,
             should_hide,
         );
     }
+}
+
+fn canopy_world_sphere(transform: &GlobalTransform, bounds: Option<&Aabb>) -> (Vec3, f32) {
+    bounds.map_or_else(
+        || {
+            (
+                transform.translation(),
+                transform.scale().abs().max_element() + CANOPY_INTERSECTION_PADDING,
+            )
+        },
+        |bounds| {
+            let centre = transform.transform_point(bounds.center.into());
+            let radius = bounds.half_extents.length() * transform.scale().abs().max_element()
+                + CANOPY_INTERSECTION_PADDING;
+            (centre, radius)
+        },
+    )
 }
 
 fn active_cutaway(
@@ -184,10 +204,13 @@ fn active_cutaway(
 }
 
 fn set_reason(
-    occlusion: &mut PresentationOcclusion,
+    mut occlusion: Mut<'_, PresentationOcclusion>,
     reason: PresentationOcclusionReason,
     active: bool,
 ) {
+    if occlusion.contains(reason) == active {
+        return;
+    }
     if active {
         occlusion.insert(reason);
     } else {
@@ -232,7 +255,9 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
                     .insert((previous, Pickable::IGNORE, NotShadowCaster));
             }
             (true, Some(_)) => {
-                *visibility = Visibility::Hidden;
+                if *visibility != Visibility::Hidden {
+                    *visibility = Visibility::Hidden;
+                }
                 let mut entity = commands.entity(entity);
                 if pickable.copied() != Some(Pickable::IGNORE) {
                     entity.insert(Pickable::IGNORE);
@@ -264,6 +289,22 @@ fn apply_presentation_occlusion(mut commands: Commands, mut candidates: Occlusio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource, Default)]
+    struct CutawayChangeCounts {
+        occlusions: usize,
+        visibilities: usize,
+    }
+
+    fn count_cutaway_changes(
+        candidates: Query<(Ref<PresentationOcclusion>, Ref<Visibility>)>,
+        mut counts: ResMut<CutawayChangeCounts>,
+    ) {
+        for (occlusion, visibility) in &candidates {
+            counts.occlusions += usize::from(occlusion.is_changed());
+            counts.visibilities += usize::from(visibility.is_changed());
+        }
+    }
 
     fn position(x: i32, y: i32, level: i32) -> TilePos {
         TilePos::new(HexCoord::from_axial(x, y), level)
@@ -355,6 +396,31 @@ mod tests {
 
         assert_ordinary(&app, near);
         assert_ordinary(&app, boundary);
+    }
+
+    #[test]
+    fn one_hundred_idle_frames_do_not_republish_cutaway_state() {
+        let target = position(0, 0, 7);
+        let region = InteriorRegionId(2);
+        let (mut app, _) = test_app(target, region);
+        app.init_resource::<CutawayChangeCounts>().add_systems(
+            PostUpdate,
+            count_cutaway_changes.after(apply_presentation_occlusion),
+        );
+        let roof = spawn_roof(&mut app, position(0, 0, 13), region);
+
+        app.update();
+        assert_hidden(&app, roof);
+        *app.world_mut().resource_mut::<CutawayChangeCounts>() = CutawayChangeCounts::default();
+
+        for _ in 0..100 {
+            app.update();
+        }
+
+        assert_hidden(&app, roof);
+        let counts = app.world().resource::<CutawayChangeCounts>();
+        assert_eq!(counts.occlusions, 0);
+        assert_eq!(counts.visibilities, 0);
     }
 
     #[test]
@@ -527,6 +593,26 @@ mod tests {
         app.update();
 
         assert_canopy_ordinary(&app, obstructing);
+    }
+
+    #[test]
+    fn character_camera_uses_the_complete_authored_canopy_bounds() {
+        let target = position(0, 0, 7);
+        let (mut app, _) = test_app(target, InteriorRegionId(1));
+        *app.world_mut().resource_mut::<CameraMode>() = CameraMode::Character;
+        let eye = Vec3::new(0.0, 4.0, 7.0);
+        let focus = target.coord.to_world(0.4);
+        let on_segment = eye.lerp(focus, 0.5);
+        let translation = on_segment + Vec3::X * 4.0;
+        let canopy = spawn_canopy(&mut app, position(1, 0, 7), translation, 1.0);
+        app.world_mut().entity_mut(canopy).insert(Aabb {
+            center: (-Vec3::X * 4.0).into(),
+            half_extents: Vec3A::splat(0.5),
+        });
+
+        app.update();
+
+        assert_hidden(&app, canopy);
     }
 
     #[test]

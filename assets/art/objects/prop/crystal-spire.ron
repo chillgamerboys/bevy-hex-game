@@ -1,0 +1,72 @@
+(
+    schema_version: 1,
+    id: "prop/crystal-spire",
+    display_name: "Cyan Crystal Spire",
+    category: Prop,
+    bounds: (
+        radius: 1,
+        min_level: 0,
+        height: 4,
+    ),
+    connectivity: Free,
+    origin: (q: 0, r: 0, level: 0),
+    placements: [
+        (
+            position: (q: -1, r: 1, level: 0),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: -1, r: 1, level: 1),
+            style: "crystal/cyan-glow",
+            part: Prop(Detail),
+        ),
+        (
+            position: (q: 0, r: -1, level: 0),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 0),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 1),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 2),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 0, r: 0, level: 3),
+            style: "crystal/cyan-glow",
+            part: Prop(Detail),
+        ),
+        (
+            position: (q: 0, r: 1, level: 0),
+            style: "crystal/cyan-glow",
+            part: Prop(Detail),
+        ),
+        (
+            position: (q: 1, r: -1, level: 0),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 1),
+            style: "crystal/cyan-body",
+            part: Prop(Structure),
+        ),
+        (
+            position: (q: 1, r: -1, level: 2),
+            style: "crystal/cyan-glow",
+            part: Prop(Detail),
+        ),
+    ],
+    blocker_footprint: [],
+    canopy_occluders: [],
+)

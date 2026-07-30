@@ -191,9 +191,11 @@ The `hex_perception` crate follows the same rule. It depends on `hex_units` only
 snapshot stable unit identities, factions, and exact standing positions, and on
 `hex_assets` for validated sight settings and substance solidity. It cannot expose map
 internals back to units. `hex_units` will read only the `LocalMapKnowledge` projection
-in `hex_core`; `hex_combat` consumes its richer current-observation API only to gate
-access to gameplay-owned lattice knowledge. Combat retains divination facts on their
-own expiry clock, but never decides that a world unit is visible. A lighting-profile adapter
+in `hex_core` for the pending player-movement adapter; `hex_combat` consumes
+faction-generic traversal projections and the richer current-observation API to gate
+hostile identities, cast anchors, AI inputs, and gameplay-owned lattice knowledge.
+Combat retains divination facts on their own expiry clock, but never decides that a
+world unit is visible. A lighting-profile adapter
 publishes the core `ExteriorIllumination` projection before perception runs; it does
 not expose `hex_world` renderer state to perception. Physical lights and rendered fog
 are presentation. Neither is the authoritative gameplay visibility calculation.

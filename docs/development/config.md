@@ -64,6 +64,15 @@ The split exists because some values are read continuously while the game runs a
 others are read once, when the map and pieces are created. Nothing is lost either
 way — the rebuild is quick.
 
+Elements, substances, spells, and lattices form one semantic revision at the Loading
+boundary. A bad cross-file edit may leave the last valid resolved catalogs available
+for inspection, but Loading does not treat their presence as readiness. It waits
+until canonical source fingerprints prove that every raw file, direct catalog,
+`ContentIndex`, and `LatticeLibrary` describes the same accepted revision. Repairing
+or reverting the edit publishes a new `AcceptedContentRevision` and allows the
+rebuild; leaving an invalid edit settled for several frames never admits a mixed
+revision.
+
 (`cargo run --release` runs faster but will not reload files at all. Use `cargo dev`
 while tuning, and `--release` when you just want to play.)
 
@@ -90,15 +99,18 @@ The optional review overrides are:
 | `HEX_REVIEW_LIQUID_PHASE` | Freezes liquid animation at a finite phase in seconds, wrapped over its visual cycle; captures default to `0.0` |
 | `HEX_REVIEW_FOCUS_ANCHOR` | Moves the selected actor to one exact generated map anchor before framing |
 | `HEX_REVIEW_CUTAWAY` | `full` hides the complete roof of the selected interior instead of the local six-hex opening |
+| `HEX_REVIEW_ILLUMINATION` | `overlay` draws exact cave-interior gameplay illumination tiers: charcoal Dark, blue Dim, and cyan-green Bright |
 
 `HEX_REVIEW_VIEW`, `HEX_REVIEW_CAMERA`, `HEX_REVIEW_FOCUS_ANCHOR`, and
-`HEX_REVIEW_CUTAWAY` require `HEX_REVIEW_CAPTURE`. The focus override resolves the
-anchor's full `TilePos`, not just its horizontal coordinate, so it can target an
-underground floor beneath a surface. It also applies the selected actor's normal
-solidity and headroom rules. An unknown anchor or one the actor cannot stand on fails
-the review process instead of silently capturing the wrong place. The full cutaway
-still requires the selected actor to occupy an exact interior surface and affects
-only that interior; ordinary gameplay retains the local cutaway.
+`HEX_REVIEW_CUTAWAY` and `HEX_REVIEW_ILLUMINATION` require `HEX_REVIEW_CAPTURE`.
+The focus override resolves the anchor's full `TilePos`, not just its horizontal
+coordinate, so it can target an underground floor beneath a surface. It also applies
+the selected actor's normal solidity and headroom rules. An unknown anchor or one the
+actor cannot stand on fails the review process instead of silently capturing the
+wrong place. The full cutaway still requires the selected actor to occupy an exact
+interior surface and affects only that interior; ordinary gameplay retains the local
+cutaway. The illumination overlay reads `ResolvedIllumination` and never changes
+gameplay light, physical lights, faction knowledge, fog, or picking.
 
 For example, this exposes the complete generated cave network for a top-down overview:
 
@@ -108,12 +120,14 @@ HEX_REVIEW_CAPTURE=".context/caves/full-overview.png" \
 HEX_REVIEW_FOCUS_ANCHOR="conflict_center" \
 HEX_REVIEW_VIEW="top-down" \
 HEX_REVIEW_CUTAWAY="full" \
+HEX_REVIEW_ILLUMINATION="overlay" \
 cargo run -p hex_game --release --features map-review
 ```
 
 Use the unoccupied `conflict_center` anchor for a neutral cave overview.
 `deep_chamber` is also the configured enemy position, so relocating the player there
-can start combat before capture.
+can start combat before capture. Omit `HEX_REVIEW_ILLUMINATION` for the ordinary
+untinted cave overview.
 
 ## The format
 
@@ -202,33 +216,46 @@ to the scenario, as described in **Configuring a scenario** below. Version 1 is
 frozen: keep `generator_version: 1` to reproduce an existing seed with the original
 algorithm and fields.
 
-**Use current procedural terrain.** Generator version 2 uses one geometry recipe plus
-a separate material environment. Hills is the first shipped V2 recipe:
+**Use current procedural terrain.** Generator version 3 places each typed recipe
+inside a patch. A `Single` layout owns the complete map footprint:
 
 ```ron
 terrain: Procedural((
-    generator_version: 2,
-    environment: TemperateGrassland,
-    recipe: Hills((
-        valley_level: 15,
-        max_relief: 8,
-        hills_per_bank: 3,
+    generator_version: 3,
+    layout: Single((
+        environment: TemperateGrassland,
+        recipe: Hills((
+            valley_level: 15,
+            max_relief: 8,
+            hills_per_bank: 3,
+        )),
+        overlays: [],
+        mask: WholeWorld,
+        edges: (
+            east: WorldBoundary,
+            south_east: WorldBoundary,
+            south_west: WorldBoundary,
+            west: WorldBoundary,
+            north_west: WorldBoundary,
+            north_east: WorldBoundary,
+        ),
     )),
 )),
 ```
 
-V2 Hills preserves the approved V1 maps for equivalent Hills settings and seeds while
-publishing them through the V2 volume pipeline. It derives its three-wide hazard,
-two-wide crossings, bed and hazard bounds, and bridge level from `valley_level`; those
-invariants are intentionally not editable. Temperate, Frozen, and Volcanic Hills use
-this recipe in the shipped scenario library.
+Native V3 Hills derives its edge-to-edge three-wide hazard, direct two-wide metal
+bridge, separated two-wide alternate crossing, bed, fill bounds, and bridge level
+from `valley_level`; those invariants are intentionally not editable. Temperate,
+Frozen, and Volcanic Hills use this recipe in the shipped scenario library. V2 keeps
+its frozen external shape and implementation only as a development reference while
+the V3 review corpus is approved.
 
-`LayeredSkyIslands` finalizes the same Hills ground before sampling any independent
+`SkyIslands` finalizes the same Hills ground before sampling any independent
 `sky.*` stream, then adds three primary islands, one or two satellites, and a two-wide
 upper bridge network:
 
 ```ron
-recipe: LayeredSkyIslands((
+recipe: SkyIslands((
     ground: (
         valley_level: 15,
         max_relief: 8,
@@ -737,7 +764,11 @@ waiting for a playtest.
 ```
 
 Coordinates are axial `(q, r)` and carry no meaning beyond adjacency — the drawing
-matters, not where it sits.
+matters, not where it sits. Every authored archetype must form one contiguous
+hex arrangement. A disconnected island is rejected while resolving
+`LatticeLibrary`, and the error names the offending archetype; it cannot survive as a
+valid-but-unreachable part of a character. Cell order in the RON file does not affect
+that check or the semantic content fingerprint.
 
 `attunement` is how much mana one gem of that element holds when full. `channelling` is
 how much a channel action puts back per turn. An element with no attunement entry resolves

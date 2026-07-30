@@ -24,6 +24,7 @@ pub mod creation;
 pub mod elements;
 /// What stands on the map when a scenario starts.
 pub mod encounter;
+mod fingerprint;
 /// Selectable exploration formation presets.
 pub mod formations;
 /// Who each of them is: archetype lattices, resolved from content.
@@ -49,7 +50,9 @@ pub use combat_lab::{
     CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
     COMBAT_LAB_MAP_SCHEMA_VERSION,
 };
-pub use content_index::{ContentError, ContentIndex, ContentTables};
+pub use content_index::{
+    AcceptedContentRevision, ContentError, ContentIndex, ContentReadinessSystems, ContentTables,
+};
 pub use creation::{
     character_lattice_file, character_runtime_key, combined_spell_file, creator_character_issues,
     creator_spell_issues, normalized_name, validate_name, CreationCell, CreationCellKind,
@@ -110,6 +113,7 @@ pub fn plugin(app: &mut App) {
         .register_type::<CelestialCycleSettings>()
         .register_type::<LightingKeyframe>()
         .register_type::<CelestialBody>()
+        .register_type::<ResolvedLighting>()
         .register_type::<PerceptionSettings>()
         .register_type::<SightPreset>()
         .register_type::<SightRanges>()

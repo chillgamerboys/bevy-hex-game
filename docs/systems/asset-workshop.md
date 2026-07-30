@@ -5,9 +5,10 @@ development tooling: it creates durable RON assets for the game, but it is not a
 screen and does not run through the gameplay setup lifecycle.
 
 The contracts, tracked catalogs, and standalone `hex_editor` authoring application
-are live. Static runtime object rendering is also live through `hex_objects`. Forest
-migration, procedural plant generation, reference-image import, and animated effect
-timelines remain separate later work.
+are live. Static runtime object rendering is also live through `hex_objects`, and
+Forest publishes exact authored tree and grass instances through that renderer.
+Procedural plant generation, reference-image import, and animated effect timelines
+remain separate later work.
 
 ## Launch
 
@@ -355,8 +356,10 @@ mesh chunks grouped by style and canopy membership. Repeated instances share tho
 meshes and materials, and object voxels never become one ECS entity each.
 
 Run `cargo object-gallery` to inspect all six rotations of the first production
-object under the neutral rig. Set `HEX_OBJECT_GALLERY_RIG=dark` for the matching dark
-render without changing the asset or its runtime material. Set
+object under the neutral rig. Set `HEX_OBJECT_GALLERY_OBJECT=<object-id>` to inspect
+any tracked object; the camera and layout scale to its authored bounds. Set
+`HEX_OBJECT_GALLERY_RIG=dark` for the matching dark render without changing the asset
+or its runtime material. Set
 `HEX_OBJECT_GALLERY_CAPTURE=<path.png>` to capture the selected rig through an
 offscreen target and exit automatically. Set
 `HEX_OBJECT_GALLERY_MATERIAL_FIXTURES=1` to add transient opaque, cutout, translucent,
@@ -374,16 +377,10 @@ Cutout styles temporarily render as single-sample threshold masks while any Blen
 object is live. The renderer restores each camera's previous MSAA setting after the
 last Blend chunk leaves, which restores true alpha-to-coverage for Cutout styles.
 
-The Workshop and renderer still do not replace Forest's temporary vegetation,
-synthesize plants, import reference images, animate spell effects, or provide a
-runtime construction system. Forest integration is world-side work: the map may
-publish `ObjectInstance` for the authored visual while continuing to publish exact
-blockers separately. Authored canopy chunks need a separate world/presentation
-adapter before they can replace Forest's current root-keyed `CanopyOccluder`.
-`hex_objects` must not infer either gameplay fact from `root`, `trunk`, or `foliage`
-parts. Procedural plant synthesis follows only after the authored exemplar path is
-reviewed; neither stage widens the object schema with renderer- or biome-specific
-policy.
+The Workshop and renderer do not synthesize plants, import reference images, animate
+spell effects, or provide a runtime construction system. Forest consumes this contract
+through renderer-neutral instances and keeps topology, blockers, route protection, and
+canopy policy world-owned; procedural plant synthesis remains later work.
 
 Common launch, save, recovery, and review failures are indexed in
 [troubleshooting.md](../development/troubleshooting.md#asset-workshop).

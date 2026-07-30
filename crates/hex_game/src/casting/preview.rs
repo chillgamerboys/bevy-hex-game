@@ -37,7 +37,9 @@ use bevy::picking::Pickable;
 use bevy::prelude::*;
 
 use hex_assets::{GameAssets, TargetShape};
-use hex_core::{Headroom, HexSpan, HexTile, Pause, TilePos};
+use hex_core::{Headroom, HexSpan, HexTile, KnowledgeState, Pause, TilePos};
+use hex_perception::FactionMapKnowledge;
+use hex_units::Faction;
 use hex_units::{volumes, TerrainRevision};
 
 use super::{facing_toward, in_range, Aim, Aiming, CastReadout};
@@ -92,7 +94,7 @@ type TileQuery<'w, 's> =
 
 /// Marks a clickable marker over one legal anchor.
 #[derive(Component, Debug)]
-pub(super) struct AnchorMarker;
+pub(crate) struct AnchorMarker;
 
 /// Marks a cap over one surface inside the resolved volume.
 #[derive(Component, Debug)]
@@ -130,6 +132,11 @@ pub struct AimVolume {
 /// key still matches: the markers stay where the old rule put them while the applier
 /// measures with the new one, so the interface offers a cast that is then refused. That
 /// is the one direction of disagreement this module's header calls a bug.
+///
+/// Knowledge availability is part of the key, while changes within an available
+/// [`FactionMapKnowledge`] force a redraw separately. This removes markers in the same
+/// frame an observed surface becomes remembered without exposing a private generation
+/// counter from the perception owner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DrawKey {
     aim: Aim,
@@ -138,6 +145,7 @@ pub(super) struct DrawKey {
     range: u32,
     levels_per_bonus: u32,
     shape: TargetShape,
+    knowledge_available: bool,
 }
 
 /// What is currently on the ground.
@@ -154,10 +162,14 @@ pub(super) fn redraw_preview(
     assets: Option<Res<GameAssets>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     revision: Res<TerrainRevision>,
+    knowledge: Option<Res<FactionMapKnowledge>>,
     tiles: TileQuery,
     drawn: Query<Entity, DrawnPreview>,
 ) {
     let Some(assets) = assets else { return };
+    let knowledge_changed = knowledge
+        .as_ref()
+        .is_some_and(|knowledge| knowledge.is_changed());
 
     let wanted = aiming
         .0
@@ -172,8 +184,9 @@ pub(super) fn redraw_preview(
             shape: readout
                 .row(&aim.spell)
                 .map_or(TargetShape::Single, |row| row.shape.clone()),
+            knowledge_available: knowledge.is_some(),
         });
-    if drawn_key.0 == wanted {
+    if drawn_key.0 == wanted && !knowledge_changed {
         return;
     }
     for marker in &drawn {
@@ -198,13 +211,19 @@ pub(super) fn redraw_preview(
     let volume_material = materials.add(cap_material(row.color.with_alpha(VOLUME_ALPHA), 4.0));
     let aim_material = materials.add(cap_material(row.color.with_alpha(AIM_ALPHA), 5.0));
 
-    // Only surfaces with room above them: a run buried inside a column has a `TilePos`
-    // and no visible face, so a marker there would be paint inside rock. This makes the
-    // preview *stricter* than the applier, which is the safe direction — the applier
-    // would accept a buried anchor, and there is simply no way to offer one.
+    // Only currently observed surfaces with room above them. The resolved volume may
+    // spill into hidden space, but painting an authoritative hidden surface would reveal
+    // the very terrain this interface is meant to protect.
+    let player_knowledge = knowledge
+        .as_deref()
+        .map(|knowledge| knowledge.faction(Faction::Player));
     let surfaces: Vec<(TilePos, f32)> = tiles
         .iter()
-        .filter(|(_, _, headroom)| headroom.0 > 0)
+        .filter(|(pos, _, headroom)| {
+            headroom.0 > 0
+                && player_knowledge
+                    .is_some_and(|knowledge| knowledge.state(**pos) == KnowledgeState::Observed)
+        })
         .map(|(pos, span, _)| (*pos, span.top))
         .collect();
 

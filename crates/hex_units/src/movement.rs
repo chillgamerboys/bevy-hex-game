@@ -380,6 +380,26 @@ impl Reach {
     /// most six edges each, so even the unbounded search is trivial.
     #[must_use]
     pub fn from(start: Standing, footing: &Footing, budget: Option<u32>) -> Self {
+        Self::flood(start, footing, budget, None)
+    }
+
+    /// Floods only until `target` is discovered, or the connected component ends.
+    ///
+    /// This is the route-preserving projection used by formation planning. Its
+    /// predecessor for `target` is identical to [`Self::from`]: both searches use
+    /// the same breadth-first frontier and deterministic neighbor ordering. Stopping
+    /// at discovery avoids traversing the rest of a large map when the highest
+    /// priority formation slot is only one step away.
+    pub(crate) fn until(start: Standing, footing: &Footing, target: TilePos) -> Self {
+        Self::flood(start, footing, None, Some(target))
+    }
+
+    fn flood(
+        start: Standing,
+        footing: &Footing,
+        budget: Option<u32>,
+        target: Option<TilePos>,
+    ) -> Self {
         let mut reach = Self::default();
         reach.steps.insert(
             start.pos,
@@ -389,6 +409,30 @@ impl Reach {
                 came_from: None,
             },
         );
+        if target == Some(start.pos) {
+            return reach;
+        }
+        // Formation members normally advance into an adjacent slot. The general
+        // flood would discover that same one-edge predecessor, but only after
+        // allocating a frontier and probing neighbor coordinates that precede it
+        // in the deterministic order. Record the identical result directly.
+        let direct = target.and_then(|target| {
+            footing
+                .at(target)
+                .filter(|_| footing.admits_step(start.pos, target))
+                .map(|standing| (target, standing))
+        });
+        if let Some((target, standing)) = direct {
+            reach.steps.insert(
+                target,
+                Step {
+                    standing,
+                    cost: 1,
+                    came_from: Some(start.pos),
+                },
+            );
+            return reach;
+        }
 
         let mut frontier = std::collections::VecDeque::from([start]);
         while let Some(current) = frontier.pop_front() {
@@ -415,6 +459,9 @@ impl Reach {
                             came_from: Some(current.pos),
                         },
                     );
+                    if target == Some(next.pos) {
+                        return reach;
+                    }
                     frontier.push_back(next);
                 }
             }
@@ -810,6 +857,11 @@ mod tests {
         let Some(steps) = route(from, to, &footing) else {
             panic!("a wall with a way round it is not 'no route exists'")
         };
+        assert_eq!(
+            Reach::until(from, &footing, to.pos).path_to(to.pos),
+            Some(steps.clone()),
+            "a target-bounded projection must retain the full router's exact tie-breaks"
+        );
         assert_eq!(
             steps.first().map(|s| s.pos),
             Some(from.pos),

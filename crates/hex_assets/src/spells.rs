@@ -27,6 +27,7 @@ use bevy::prelude::*;
 use hex_core::{HexCoord, Level, Screen, SpellId};
 use serde::{Deserialize, Serialize};
 
+use crate::fingerprint::FingerprintEncoder;
 use crate::{LoadSettings, CONFIG_EXTENSIONS};
 
 /// One gem a spell requires: a distinct adjacent source of `element` contributing
@@ -508,6 +509,9 @@ pub struct SpellBook {
     by_name: HashMap<String, SpellId>,
     #[reflect(ignore)]
     spells: HashMap<SpellId, Spell>,
+    /// Canonical semantics of the `SpellFile` this book was built from.
+    #[reflect(ignore)]
+    source_fingerprint: u64,
 }
 
 impl SpellBook {
@@ -549,6 +553,16 @@ impl SpellBook {
         self.by_id.is_empty()
     }
 
+    /// Whether this book was built from the current authored spell semantics.
+    #[must_use]
+    pub fn matches_source(&self, file: &SpellFile) -> bool {
+        self.source_fingerprint == spell_file_fingerprint(file)
+    }
+
+    pub(crate) const fn source_fingerprint(&self) -> u64 {
+        self.source_fingerprint
+    }
+
     /// Builds a book from a loaded file, assigning ids from sorted names.
     #[must_use]
     pub fn from_file(file: &SpellFile) -> Self {
@@ -569,6 +583,119 @@ impl SpellBook {
             by_id,
             by_name,
             spells,
+            source_fingerprint: spell_file_fingerprint(file),
+        }
+    }
+}
+
+fn spell_file_fingerprint(file: &SpellFile) -> u64 {
+    let mut encoder = FingerprintEncoder::new(b"hex-spell-file-v1");
+    let mut entries: Vec<_> = file.spells.iter().collect();
+    entries.sort_by_key(|(name, _)| *name);
+    encoder.usize(entries.len());
+    for (name, spell) in entries {
+        encoder.string(name);
+        encoder.usize(spell.requirements.len());
+        for requirement in &spell.requirements {
+            encoder.string(&requirement.element);
+            encoder.u16(requirement.mana);
+        }
+        match spell.casting {
+            CastingAxis::Evocation => encoder.u8(0),
+            CastingAxis::Enchantment { defense } => {
+                encoder.u8(1);
+                encoder.u16(defense);
+            }
+        }
+        encoder.u8(match spell.mana {
+            ManaAxis::Fixed => 0,
+            ManaAxis::Variable => 1,
+        });
+        encoder.bool(spell.co_castable);
+        encoder.u8(spell.targeting.range);
+        fingerprint_shape(&mut encoder, &spell.targeting.shape);
+        encoder.bool(spell.targeting.needs_los);
+        encoder.usize(spell.effects.len());
+        for effect in &spell.effects {
+            fingerprint_effect(&mut encoder, effect);
+        }
+    }
+    encoder.finish()
+}
+
+fn fingerprint_shape(encoder: &mut FingerprintEncoder, shape: &TargetShape) {
+    match shape {
+        TargetShape::SelfCast => encoder.u8(0),
+        TargetShape::Single => encoder.u8(1),
+        TargetShape::Sphere { radius } => {
+            encoder.u8(2);
+            encoder.u8(*radius);
+        }
+        TargetShape::Column { height } => {
+            encoder.u8(3);
+            encoder.u8(*height);
+        }
+        TargetShape::Line { length, width } => {
+            encoder.u8(4);
+            encoder.u8(*length);
+            encoder.u8(*width);
+        }
+        TargetShape::Cone { length, spread } => {
+            encoder.u8(5);
+            encoder.u8(*length);
+            encoder.u8(*spread);
+        }
+        TargetShape::Path { offsets } => {
+            encoder.u8(6);
+            encoder.usize(offsets.len());
+            for offset in offsets {
+                encoder.i32(offset.coord.x());
+                encoder.i32(offset.coord.y());
+                encoder.i32(offset.level);
+            }
+        }
+    }
+}
+
+fn fingerprint_effect(encoder: &mut FingerprintEncoder, effect: &Effect) {
+    match effect {
+        Effect::DisableHexes { count, targeted } => {
+            encoder.u8(0);
+            encoder.u8(*count);
+            encoder.bool(*targeted);
+        }
+        Effect::Burn { turns } => {
+            encoder.u8(1);
+            encoder.u16(*turns);
+        }
+        Effect::RestoreHexes { count } => {
+            encoder.u8(2);
+            encoder.u8(*count);
+        }
+        Effect::ModifyIncomingDisables { amount } => {
+            encoder.u8(3);
+            encoder.u16(*amount);
+        }
+        Effect::Reveal { tier } => {
+            encoder.u8(4);
+            encoder.u8(*tier);
+        }
+        Effect::Illuminate { radius } => {
+            encoder.u8(5);
+            encoder.u8(*radius);
+        }
+        Effect::SetTerrain { substance } => {
+            encoder.u8(6);
+            encoder.string(substance);
+        }
+        Effect::ClearTerrain => encoder.u8(7),
+        Effect::SpawnWall { substance } => {
+            encoder.u8(8);
+            encoder.string(substance);
+        }
+        Effect::Displace { distance } => {
+            encoder.u8(9);
+            encoder.u8(*distance);
         }
     }
 }

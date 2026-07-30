@@ -29,7 +29,7 @@
 
 use bevy::prelude::*;
 use hex_assets::{Effect, ManaAxis, Spell, TargetShape};
-use hex_core::AppSystems;
+use hex_core::{AppSystems, PerceptionSystems};
 
 /// What an enemy does with its turn. A placeholder, and says so.
 mod ai;
@@ -48,7 +48,7 @@ pub mod summary;
 /// Whose turn it is, and what they have left.
 pub mod turns;
 
-pub use ai::{AiAlgorithmRegistry, AiDecisionTraces};
+pub use ai::{AiAlgorithmRegistry, AiDecisionTraces, MAX_AI_DECISION_TRACES};
 pub use commands::{delivers_anything, UNDELIVERABLE};
 pub use effects::PersistentEffects;
 pub use hex_core::Turn;
@@ -60,7 +60,9 @@ pub use outcomes::{
     RestorationRefusal, UnitData,
 };
 pub use resolution::{encounter_unresolved, EncounterResolution};
-pub use summary::{CombatSummary, CommandKind};
+pub use summary::{
+    CombatSummary, CombatTranscriptRecorder, CommandKind, MAX_COMBAT_SUMMARY_DETAILS,
+};
 pub use turns::{Initiative, TurnOrder};
 
 /// Combat-owned compatibility verdict for spells authored by the Wave 6 creator.
@@ -149,7 +151,7 @@ pub fn plugin(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            CombatSystems::Act,
+            CombatSystems::Act.after(PerceptionSystems::PublishKnowledge),
             CombatSystems::Apply,
             CombatSystems::Resolve,
             CombatSystems::Advance,

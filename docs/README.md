@@ -26,6 +26,7 @@ doc or the code, not drift.
 | Building V3 recipes or composing biome patches | [systems/world-generation-v3.md](systems/world-generation-v3.md) |
 | Authoring colours, voxel styles, plants, props, or static effects | [design/visual-language.md](design/visual-language.md), then [systems/asset-workshop.md](systems/asset-workshop.md) |
 | Writing code that touches turns or movement | [systems/combat.md](systems/combat.md) |
+| Changing enemy decision policy or AI diagnostics | [systems/ai.md](systems/ai.md) |
 | Writing code that touches party selection or formations | [systems/party.md](systems/party.md) |
 | Writing code that casts a spell or reshapes terrain | [systems/casting.md](systems/casting.md) |
 | Working on saved characters, spells, deployment, or test fixtures | [systems/creator-and-combat-lab.md](systems/creator-and-combat-lab.md) |
@@ -34,6 +35,7 @@ doc or the code, not drift.
 | Looking at a wrong window | [development/troubleshooting.md](development/troubleshooting.md) |
 | Producing or extending release artifacts | [development/release.md](development/release.md) |
 | Picking up the next piece of work | [planning/roadmap.md](planning/roadmap.md) |
+| Reviewing the 2026 foundation-hardening evidence | [planning/foundation-hardening.md](planning/foundation-hardening.md) |
 
 ## The index
 
@@ -45,6 +47,7 @@ doc or the code, not drift.
 | [systems/world-generation-v3.md](systems/world-generation-v3.md) | Anyone building V3 terrain | Patch and edge contracts, private semantic layers, recipe order, determinism, migration, and removal of V1/V2 | World owner |
 | [systems/asset-workshop.md](systems/asset-workshop.md) | Artists and tooling contributors | Voxel-style and object schemas, editing behavior, persistence, review output, and the isolated editor boundary | Both, jointly |
 | [systems/combat.md](systems/combat.md) | Anyone touching turns or movement | The turn loop as built: two tempos, what a turn costs, committing a move, what height buys | Gameplay owner |
+| [systems/ai.md](systems/ai.md) | Anyone touching enemy decisions | Authorized observations, compact legal choices, deterministic algorithm dispatch, and bounded diagnostics | Gameplay owner |
 | [systems/party.md](systems/party.md) | Anyone touching selection or formations | Stable party controls, Group/Solo mode, preset editing, and pre-alpha resume lifetime | Gameplay owner |
 | [systems/casting.md](systems/casting.md) | Anyone touching spells or terrain magic | What makes a cast legal, the volume it affects, who decides what the material does, and persistent effects | Gameplay owner |
 | [systems/creator-and-combat-lab.md](systems/creator-and-combat-lab.md) | Anyone touching creators or deterministic test flows | Saved blueprints, readiness, Combat Lab setup/deployment, fixtures, snapshots, and return routing | Gameplay owner |
@@ -62,6 +65,7 @@ doc or the code, not drift.
 | [planning/production-audit.md](planning/production-audit.md) | Both devs | Dated snapshot: the July 2026 production-readiness audit and the architecture it recommends — **frozen; not updated as code moves** | Nobody. It is a record |
 | [planning/boundary.md](planning/boundary.md) | Both owners | The open asks in both directions, each with a signature and a fallback if deferred, plus what each side commits to | Whoever adds or retires an ask |
 | [planning/audit-log.md](planning/audit-log.md) | Reviewers | The durable trail of `/audit-diff` waves, one per audited PR | `/audit-diff`, automatically |
+| [planning/foundation-hardening.md](planning/foundation-hardening.md) | Reviewers and maintainers | July 2026 correctness, scalability, branch, stress, and handoff evidence for the foundation cleanup | Foundation hardening owner |
 
 Outside this directory: the root [`README.md`](../README.md) introduces the game,
 [`CLAUDE.md`](../CLAUDE.md) is the operational summary loaded into every agent

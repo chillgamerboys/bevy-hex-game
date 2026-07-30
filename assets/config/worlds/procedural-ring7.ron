@@ -1,0 +1,253 @@
+// Fixed V3 seven-region review world.
+(
+    grid_radius: 33,
+    level_height: 0.4,
+    terrain: Procedural((
+        generator_version: 3,
+        layout: Ring7((
+            center: (
+                environment: TemperateGrassland,
+                recipe: Hills((
+                    valley_level: 15,
+                    max_relief: 8,
+                    hills_per_bank: 3,
+                )),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Inlet((width: 3)),
+                        approach_depth: 3,
+                    )),
+                    south_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Outlet((width: 3)),
+                        approach_depth: 3,
+                    )),
+                    north_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                ),
+            ),
+            mountains: (
+                environment: Frozen,
+                recipe: Mountains((
+                    base_level: 15,
+                    relief: 24,
+                    peak_count: 7,
+                )),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: WorldBoundary,
+                    south_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_west: WorldBoundary,
+                    north_east: WorldBoundary,
+                ),
+            ),
+            waterfall: (
+                environment: TemperateGrassland,
+                recipe: Waterfall(()),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: WorldBoundary,
+                    south_east: WorldBoundary,
+                    south_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Outlet((width: 3)),
+                        approach_depth: 3,
+                    )),
+                    north_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_east: WorldBoundary,
+                ),
+            ),
+            forest: (
+                environment: TemperateGrassland,
+                recipe: Forest(()),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: WorldBoundary,
+                    south_east: WorldBoundary,
+                    south_west: WorldBoundary,
+                    west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                ),
+            ),
+            fort: (
+                environment: TemperateGrassland,
+                recipe: Fort(()),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_east: WorldBoundary,
+                    south_west: WorldBoundary,
+                    west: WorldBoundary,
+                    north_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    north_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                ),
+            ),
+            caves: (
+                environment: Rocky,
+                recipe: Caves((
+                    surface_level: 17,
+                    cave_floor_level: 6,
+                    chamber_count: 12,
+                )),
+                overlays: [
+                    (
+                        name: "cave_crystals",
+                        kind: Lighting,
+                    ),
+                ],
+                mask: GeneratedRegion,
+                edges: (
+                    east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Inlet((width: 3)),
+                        approach_depth: 3,
+                    )),
+                    south_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_west: WorldBoundary,
+                    west: WorldBoundary,
+                    north_west: WorldBoundary,
+                    north_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                ),
+            ),
+            sky_islands: (
+                environment: TemperateGrassland,
+                recipe: SkyIslands((
+                    ground: (
+                        valley_level: 15,
+                        max_relief: 8,
+                        hills_per_bank: 3,
+                    ),
+                    min_clearance: 22,
+                    upper_coverage_percent: 24,
+                )),
+                overlays: [],
+                mask: GeneratedRegion,
+                edges: (
+                    east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_east: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    south_west: Shared((
+                        elevation: (preferred: 15, min: 14, max: 16),
+                        walker: (count: 2, width: 2),
+                        liquid: Dry,
+                        approach_depth: 3,
+                    )),
+                    west: WorldBoundary,
+                    north_west: WorldBoundary,
+                    north_east: WorldBoundary,
+                ),
+            ),
+        )),
+    )),
+)

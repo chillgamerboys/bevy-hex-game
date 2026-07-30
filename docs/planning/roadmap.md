@@ -28,14 +28,13 @@ still belong to the crate they change. `docs` is whoever picks it up.
 |---|---|---|
 | Run bottoms on tiles | Publish `RunBottom(Level)` beside every run entity's `TilePos`, including stacked runs; accepted prerequisite to terrain casting and obstruction-aware trajectories | map |
 | Terrain magic | after boundary asks G/H/L are agreed: canonical exact-voxel `TerrainImpact` announcements using runtime `ElementId`, map-approved conjuration through `TerrainEdit::Set`, 3D volume shapes, the casting legality ladder, and deterministic `TerrainImpactOutcome` consumption; feature destruction remains deferred | combat | <!-- linear: HEX-19 owner: shravan-kumaran -->
-| Persistent effects | `{source, target, payload, start, end}` in hex_core with a hex_combat runtime; rounds and enchantment-bound end conditions; `Burn` and damage-over-time become payloads | combat | <!-- linear: HEX-20 owner: shravan-kumaran -->
 | Trajectories and lingering effects | obstruction, area-unit resolution, area-lingering zones, and dispel; obstruction remains a `RunBottom`/line-of-sight satellite rather than a complete-party combat gate | combat | <!-- linear: HEX-24 owner: shravan-kumaran -->
 | Magic outside combat | general real-time casting and its input model; Rest has moved into outcomes/recovery and does not settle this deferred question | combat | <!-- linear: HEX-25 owner: shravan-kumaran -->
 | Channelling and co-casting | the always-available channel action, and rituals — which wait on the initiative question being settled | combat | <!-- linear: HEX-26 owner: shravan-kumaran -->
 | Engine upkeep | the one budgeted Bevy 0.20 upgrade (~Q4 2026) plus the feature trim, landed together in a quiet window before any release | game | <!-- linear: HEX-18 owner: shravan-kumaran -->
 | Cave lighting retrofit | generated public lamps/crystals, deterministic gameplay-light placement over the required cave route and critical chambers, and matching emissive presentation | map/perception |
 | Perception presentation | faction fog, remembered rendering, picking gates, and composition with cave/canopy cutaways | perception |
-| Movement and combat perception adapters | unknown-route restriction; detection, engagement, targeting, AI, and one-round last-known-position behavior in isolated owner-reviewed PRs | units/combat |
+| Remaining movement and combat perception adapters | unknown-route restriction; detection, engagement, ordinary-attack targeting, and one-round last-known-position behavior in isolated owner-reviewed PRs; AI and casting anchors are already live | units/combat |
 | Forest authored-object adoption | World-side Forest placements publish shared `ObjectInstance`s while blockers remain a separate exact projection; procedural plant synthesis follows only after exemplar review | map/shared presentation |
 | Structures and Fort | worked-stone walls, towers, gates, keep, wall walks, stairs, battlements, and validated defensive circulation | map |
 | Seven-region composition | one radius-33 world: central Hills, then Mountains, Waterfall, Forest, Fort, Caves, and Sky Islands clockwise; global routes, elevation seams, and hydrology before patch interiors | map |
@@ -51,6 +50,8 @@ still belong to the crate they change. `docs` is whoever picks it up.
 | Casting UX | HEX-21 landed in Wave 3: cursor shape previews, blocked reasons, target cycling, and per-element cast presentation |
 | Combat readability | HEX-23 landed in Wave 3: initiative order, detailed lattice panels, and the structured combat log |
 | AI host | Wave 4: pure request/action contracts, authoritative canonical legal actions, profile/algorithm dispatch, encounter overrides, and deterministic `baseline-v1` |
+| Knowledge-safe AI and casting | Foundation hardening: faction-authorized AI identities, terrain, traversal, turn/effect fields and legal commands; Observed-only cast anchors from preview through authoritative application |
+| Persistent effects | HEX-20: `{source, target, payload, start, end}` vocabulary and combat runtime, including personal-turn Burn and enchantment-bound expiry <!-- linear: HEX-20 owner: shravan-kumaran --> |
 | Party controls | Wave 4: stable six-member strip and number-key selection, camera focus, combat-owned acting selection, Group/Solo mode, and preset/member-slot editing |
 | Formation traversal | Wave 4: per-segment sextant rotation, deterministic bottleneck compression/reformation, and all-or-nothing exact-path `MoveParty` validation |
 | Outcomes and recovery | Wave 4: retained-world Victory/Defeat, exact same-seed Retry, caster-chosen Renewal restoration with next-round revival, and whole-party exploration Rest |
@@ -73,11 +74,11 @@ branched from updated `dev` after that contract merged.
 The map owner keeps semantic plans private and publishes exact shared consequences.
 Recipe PRs do not edit gameplay-owned crates.
 
-**Perception lane:** fog presentation and cave lights → movement adapter →
-engagement/targeting/AI adapters. `hex_perception` may observe unit positions, while
-`hex_units` reads
-only `LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned
-crate is isolated and reviewed by that owner.
+**Perception lane:** knowledge-safe casting and AI are live. Fog presentation and cave
+lights → movement adapter → engagement/ordinary-targeting/lost-contact adapters remain.
+`hex_perception` may observe unit positions, while `hex_units` reads only
+`LocalMapKnowledge` from `hex_core`. Every adapter that changes an owned crate is
+isolated and reviewed by that owner.
 
 Headless perception remains independent of the map lane. Forest and Fort do not
 depend on combat integration. `Ring7` waits for Waterfall, Forest, and Fort semantic
@@ -208,9 +209,11 @@ The decision-complete contract is
 ### Spatial perception
 
 Remaining perception work follows
-[the perception contract](../systems/perception.md): presentation and each
+[the perception contract](../systems/perception.md): presentation and each remaining
 gameplay-owned adapter stay separate, while spatial observation and hidden lattice
-contents remain distinct information channels.
+contents remain distinct information channels. Casting and AI already use the live
+faction authority; fog/picking, unknown-frontier movement, engagement, ordinary
+attacks, and lost-contact search do not.
 
 ### The map rows
 

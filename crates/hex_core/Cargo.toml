@@ -11,7 +11,7 @@ description = "Shared vocabulary and pure domain logic: hex coordinates, voxels,
 # higher-level crate that owns the behavior instead.
 [dependencies]
 bevy_ecs = { workspace = true, features = ["bevy_reflect"] }
-bevy_input = { workspace = true }
+bevy_input = { workspace = true, features = ["keyboard"] }
 bevy_math = { workspace = true }
 bevy_platform = { workspace = true }
 bevy_reflect = { workspace = true }

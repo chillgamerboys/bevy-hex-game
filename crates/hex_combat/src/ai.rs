@@ -4,27 +4,28 @@
 //! for the complete legal command set; their only authority is choosing one key. The
 //! selected command then travels through the same queue and applier as player input.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use hex_ai::{
     ActionKey, AiAlgorithm, AiAlgorithmId, AiAlliedUnit, AiCellKind, AiController,
     AiDecisionFailure, AiDecisionKind, AiDecisionTrace, AiEffectObservation, AiLatticeCell,
-    AiLatticeObservation, AiObservation, AiObservedHostile, AiProfileId, AiSpellObservation,
-    AiTraversalObservation, BaselineAlgorithm, DecisionRequest, LegalActionFingerprint,
-    LegalActionSet,
+    AiLatticeObservation, AiObservation, AiObservedHostile, AiProfileId, AiSelection,
+    AiSpellObservation, AiTraversalObservation, BaselineAlgorithm, CellChoiceFingerprint,
+    CellChoiceSet, DecisionRequest, LegalActionFingerprint, LegalActionSet,
 };
 use hex_assets::{
     AiProfileCatalog, CastingAxis, CombatSettings, ContentIndex, Effect, ElementCatalog, SpellBook,
     SubstanceTable, TargetShape,
 };
 use hex_core::{
-    Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure, Headroom,
-    HexSpan, HexTile, IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems,
-    PendingDecision, Screen, Sextant, SubstanceId, TilePos, TraversalBlockers, Turn, UnitId,
+    Busy, CommandQueue, ControlOwner, GameCommand, GameplaySetup, GameplaySetupFailure,
+    IssuedCommand, KnowledgeState, LatticeCoord, Mode, PausableSystems, PendingDecision, Screen,
+    Sextant, TilePos, Turn, UnitId,
 };
 use hex_lattice::{castable, CellKind, LatticeSpec, LatticeState};
+use hex_perception::{FactionKnowledge, FactionMapKnowledge, SurfaceSnapshot};
 use hex_units::{
     targeting, volumes, Body, Downed, Enemy, Faction, Footing, Player, Reach, StandsOn,
     UnitRegistry,
@@ -77,19 +78,27 @@ impl AiAlgorithmRegistry {
 pub struct AiDecisionTraces {
     /// Dispatches in command order.
     pub entries: Vec<AiDecisionTrace>,
+    next_sequence: u64,
 }
 
-type TileQuery<'w, 's> = Query<
-    'w,
-    's,
-    (
-        &'static TilePos,
-        &'static HexSpan,
-        &'static SubstanceId,
-        &'static Headroom,
-    ),
-    With<HexTile>,
->;
+/// Maximum exact decision snapshots retained for live developer inspection.
+pub const MAX_AI_DECISION_TRACES: usize = 64;
+
+impl AiDecisionTraces {
+    fn record(&mut self, mut trace: AiDecisionTrace) {
+        trace.sequence = self.next_sequence;
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        while self.entries.len() >= MAX_AI_DECISION_TRACES {
+            self.entries.remove(0);
+        }
+        self.entries.push(trace);
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.next_sequence = 0;
+    }
+}
 
 type UnitQuery<'w, 's> = Query<
     'w,
@@ -214,7 +223,7 @@ fn clear_session(
     mut traces: ResMut<AiDecisionTraces>,
 ) {
     algorithms.reset();
-    traces.entries.clear();
+    traces.clear();
 }
 
 #[derive(SystemParam)]
@@ -225,9 +234,9 @@ struct AiWorld<'w> {
     content: Option<Res<'w, ContentIndex>>,
     elements: Option<Res<'w, ElementCatalog>>,
     combat: Option<Res<'w, CombatSettings>>,
+    spatial: Option<Res<'w, FactionMapKnowledge>>,
     knowledge: Res<'w, FactionLatticeKnowledge>,
     effects: Res<'w, PersistentEffects>,
-    blockers: Option<Res<'w, TraversalBlockers>>,
 }
 
 fn drive_ai(
@@ -238,7 +247,6 @@ fn drive_ai(
     mut algorithms: ResMut<AiAlgorithmRegistry>,
     mut traces: ResMut<AiDecisionTraces>,
     world: AiWorld,
-    tiles: TileQuery,
     units: UnitQuery,
 ) {
     let Some(table) = world.table.as_deref() else {
@@ -294,40 +302,72 @@ fn drive_ai(
         AiAlgorithmId("baseline-v1".to_owned())
     };
 
-    let footing = Footing::from_tiles(tiles.iter(), table, *actor.3, world.blockers.as_deref());
-    let commands = match kind {
-        AiDecisionKind::TurnAction => enumerate_turn_actions(
-            actor,
-            &units,
-            &footing,
-            &tiles,
-            world.spells.as_deref(),
-            world.content.as_deref(),
-            world.elements.as_deref(),
-            world.combat.as_deref(),
-        ),
-        AiDecisionKind::ChooseDisables => {
-            enumerate_cell_choices(actor_id, actor.10, actor.11, count, false, None)
+    let spatial = world
+        .spatial
+        .as_deref()
+        .map(|knowledge| knowledge.faction(*actor.4));
+    let footing = spatial.map(|knowledge| authorized_footing(knowledge, table, *actor.3));
+    let reach = footing
+        .as_ref()
+        .map(|footing| Reach::from(actor.2 .0, footing, None));
+    let (commands, cell_choices) = match kind {
+        AiDecisionKind::TurnAction => {
+            match (spatial, footing.as_ref(), reach.as_ref()) {
+                (Some(spatial), Some(footing), Some(reach)) if spatial.unit(actor_id).is_some() => {
+                    (
+                        enumerate_turn_actions(
+                            actor,
+                            &units,
+                            footing,
+                            reach,
+                            spatial,
+                            world.spells.as_deref(),
+                            world.content.as_deref(),
+                            world.elements.as_deref(),
+                            world.combat.as_deref(),
+                        ),
+                        None,
+                    )
+                }
+                // Ending the turn is the only spatially neutral action. Keeping it
+                // available avoids a deadlock while failing closed on movement,
+                // strikes, casts, identities, and terrain when perception is absent.
+                _ => (vec![GameCommand::EndTurn { unit: actor_id }], None),
+            }
         }
-        AiDecisionKind::ChooseRestores => restoration_target
-            .and_then(|target| {
-                unit_registry
-                    .entity_of(target)
-                    .map(|entity| (target, entity))
-            })
-            .and_then(|(target, entity)| units.get(entity).ok().map(|unit| (target, unit)))
-            .map_or_else(Vec::new, |(target, target_unit)| {
-                enumerate_cell_choices(
-                    actor_id,
-                    target_unit.10,
-                    target_unit.11,
-                    count,
-                    true,
-                    Some(target),
-                )
-            }),
+        AiDecisionKind::ChooseDisables => (
+            Vec::new(),
+            cell_choice_set(
+                actor_id,
+                actor_id,
+                actor.10,
+                actor.11,
+                count,
+                AiDecisionKind::ChooseDisables,
+            ),
+        ),
+        AiDecisionKind::ChooseRestores => (
+            Vec::new(),
+            restoration_target
+                .and_then(|target| {
+                    unit_registry
+                        .entity_of(target)
+                        .map(|entity| (target, entity))
+                })
+                .and_then(|(target, entity)| units.get(entity).ok().map(|unit| (target, unit)))
+                .and_then(|(target, target_unit)| {
+                    cell_choice_set(
+                        actor_id,
+                        target,
+                        target_unit.10,
+                        target_unit.11,
+                        count,
+                        AiDecisionKind::ChooseRestores,
+                    )
+                }),
+        ),
     };
-    if commands.is_empty() {
+    if commands.is_empty() && cell_choices.is_none() {
         warn!("AI {actor_id:?} has no legal command for {kind:?}");
         return;
     }
@@ -338,7 +378,9 @@ fn drive_ai(
         &turn_order,
         &world.knowledge,
         &world.effects,
-        &footing,
+        spatial,
+        footing.as_ref(),
+        reach.as_ref(),
         world.spells.as_deref(),
         world.content.as_deref(),
         world.elements.as_deref(),
@@ -349,31 +391,23 @@ fn drive_ai(
         kind,
         observation,
         legal_actions,
+        cell_choices,
     };
     let selected = algorithms
         .get_mut(&dispatched_id)
         .map(|algorithm| algorithm.select(&request))
-        .unwrap_or_else(|| ActionKey::from_parts(request.legal_actions.fingerprint(), u32::MAX));
-    let failure = if selected.fingerprint() != request.legal_actions.fingerprint() {
-        Some(AiDecisionFailure::StaleFingerprint)
-    } else if request.legal_actions.resolve(selected).is_none() {
-        Some(AiDecisionFailure::UnknownAction)
-    } else {
-        None
+        .unwrap_or_else(|| {
+            AiSelection::Action(ActionKey::from_parts(
+                request.legal_actions.fingerprint(),
+                u32::MAX,
+            ))
+        });
+    let (command, failure) = match resolve_selection(&request, &selected) {
+        Ok(command) => (Some(command), None),
+        Err(failure) => (fallback_command(&request), Some(failure)),
     };
-    let command = request
-        .legal_actions
-        .resolve(selected)
-        .or_else(|| {
-            request
-                .legal_actions
-                .actions()
-                .iter()
-                .find(|action| matches!(action.command, GameCommand::EndTurn { .. }))
-        })
-        .or_else(|| request.legal_actions.actions().first())
-        .map(|action| action.command.clone());
-    traces.entries.push(AiDecisionTrace {
+    traces.record(AiDecisionTrace {
+        sequence: 0,
         profile: controller.profile.clone(),
         algorithm: dispatched_id,
         actor: actor_id,
@@ -382,12 +416,16 @@ fn drive_ai(
         observation: request.observation.clone(),
         legal_actions: request.legal_actions.clone(),
         fingerprint: request.legal_actions.fingerprint(),
+        cell_fingerprint: request
+            .cell_choices
+            .as_ref()
+            .map(CellChoiceSet::fingerprint),
         selected,
         command: command.clone(),
         failure,
     });
     if let Some(failure) = failure {
-        warn!("AI {actor_id:?} returned an invalid action key: {failure:?}");
+        warn!("AI {actor_id:?} returned an invalid selection: {failure:?}");
     }
     if let Some(command) = command {
         queue.push(IssuedCommand {
@@ -409,6 +447,101 @@ fn configured_algorithm(
         )
 }
 
+fn authorized_footing(knowledge: &FactionKnowledge, table: &SubstanceTable, body: Body) -> Footing {
+    let surfaces: Vec<SurfaceSnapshot> = knowledge
+        .surfaces()
+        .map(|(_, known)| known.snapshot())
+        .filter(|surface| !surface.blocked)
+        .collect();
+    Footing::from_tiles(
+        surfaces.iter().map(|surface| {
+            (
+                &surface.pos,
+                &surface.span,
+                &surface.substance,
+                &surface.headroom,
+            )
+        }),
+        table,
+        body,
+        None,
+    )
+}
+
+fn resolve_selection(
+    request: &DecisionRequest,
+    selected: &AiSelection,
+) -> Result<GameCommand, AiDecisionFailure> {
+    match (request.kind, selected) {
+        (AiDecisionKind::TurnAction, AiSelection::Action(key)) => {
+            if key.fingerprint() != request.legal_actions.fingerprint() {
+                return Err(AiDecisionFailure::StaleFingerprint);
+            }
+            request
+                .legal_actions
+                .resolve(*key)
+                .map(|action| action.command.clone())
+                .ok_or(AiDecisionFailure::UnknownAction)
+        }
+        (
+            AiDecisionKind::ChooseDisables | AiDecisionKind::ChooseRestores,
+            AiSelection::Cells(selection),
+        ) => {
+            let choices = request
+                .cell_choices
+                .as_ref()
+                .ok_or(AiDecisionFailure::WrongSelectionKind)?;
+            choices.validate(selection)?;
+            Ok(match request.kind {
+                AiDecisionKind::ChooseDisables => GameCommand::ChooseDisables {
+                    unit: request.observation.actor.unit,
+                    cells: selection.cells.clone(),
+                },
+                AiDecisionKind::ChooseRestores => GameCommand::ChooseRestores {
+                    unit: request.observation.actor.unit,
+                    target: choices.subject(),
+                    cells: selection.cells.clone(),
+                },
+                AiDecisionKind::TurnAction => unreachable!("covered by the outer match"),
+            })
+        }
+        _ => Err(AiDecisionFailure::WrongSelectionKind),
+    }
+}
+
+fn fallback_command(request: &DecisionRequest) -> Option<GameCommand> {
+    match request.kind {
+        AiDecisionKind::TurnAction => request
+            .legal_actions
+            .actions()
+            .iter()
+            .find(|action| matches!(action.command, GameCommand::EndTurn { .. }))
+            .or_else(|| request.legal_actions.actions().first())
+            .map(|action| action.command.clone()),
+        AiDecisionKind::ChooseDisables | AiDecisionKind::ChooseRestores => {
+            let choices = request.cell_choices.as_ref()?;
+            let cells = choices
+                .eligible()
+                .iter()
+                .copied()
+                .take(usize::from(choices.count()))
+                .collect();
+            Some(match request.kind {
+                AiDecisionKind::ChooseDisables => GameCommand::ChooseDisables {
+                    unit: request.observation.actor.unit,
+                    cells,
+                },
+                AiDecisionKind::ChooseRestores => GameCommand::ChooseRestores {
+                    unit: request.observation.actor.unit,
+                    target: choices.subject(),
+                    cells,
+                },
+                AiDecisionKind::TurnAction => unreachable!("covered by the outer match"),
+            })
+        }
+    }
+}
+
 fn enumerate_turn_actions(
     actor: (
         Entity,
@@ -427,7 +560,8 @@ fn enumerate_turn_actions(
     ),
     units: &UnitQuery,
     footing: &Footing,
-    tiles: &TileQuery,
+    reach: &Reach,
+    spatial: &FactionKnowledge,
     spells: Option<&SpellBook>,
     content: Option<&ContentIndex>,
     elements: Option<&ElementCatalog>,
@@ -437,15 +571,45 @@ fn enumerate_turn_actions(
     let Some(turn) = actor.5 else {
         return Vec::new();
     };
+    let observed_hostiles: BTreeSet<UnitId> = spatial
+        .units()
+        .filter(|(_, unit)| actor.4.is_hostile_to(unit.faction))
+        .filter_map(|(id, _)| {
+            units
+                .iter()
+                .any(|candidate| *candidate.1 == id)
+                .then_some(id)
+        })
+        .collect();
+    let live_hostiles: BTreeSet<UnitId> = observed_hostiles
+        .iter()
+        .copied()
+        .filter(|id| {
+            units
+                .iter()
+                .find(|candidate| *candidate.1 == *id)
+                .is_some_and(|candidate| !candidate.6)
+        })
+        .collect();
+    let authorized_units: BTreeSet<UnitId> = units
+        .iter()
+        .filter(|unit| *unit.4 == *actor.4)
+        .map(|unit| *unit.1)
+        .chain(observed_hostiles.iter().copied())
+        .collect();
     let mut commands = vec![GameCommand::EndTurn { unit: id }];
     if turn.acted {
         return commands;
     }
 
     if turn.movement_left > 0 {
-        let reach = Reach::from(actor.2 .0, footing, Some(turn.movement_left));
         for surface in reach.surfaces() {
-            if surface.pos == actor.2 .0.pos || occupied(surface.pos, units, Some(id)) {
+            if surface.pos == actor.2 .0.pos
+                || reach
+                    .cost(surface.pos)
+                    .is_none_or(|cost| cost > turn.movement_left)
+                || occupied(surface.pos, units, Some(id), &authorized_units)
+            {
                 continue;
             }
             if let Some(path) = reach.path_to(surface.pos) {
@@ -459,7 +623,7 @@ fn enumerate_turn_actions(
 
     for unit in units
         .iter()
-        .filter(|unit| !unit.6 && actor.4.is_hostile_to(*unit.4) && unit.0 != actor.0)
+        .filter(|unit| live_hostiles.contains(unit.1) && unit.0 != actor.0)
     {
         if footing.admits_step(actor.2 .0.pos, unit.2 .0.pos)
             && footing.admits_step(unit.2 .0.pos, actor.2 .0.pos)
@@ -475,9 +639,11 @@ fn enumerate_turn_actions(
         (actor.10, actor.11, spells, content, elements)
     {
         let tables = index.tables(elements);
-        let mut anchors: Vec<TilePos> = tiles.iter().map(|(pos, ..)| *pos).collect();
-        anchors.sort_unstable();
-        anchors.dedup();
+        let anchors: Vec<TilePos> = spatial
+            .surfaces()
+            .filter(|(_, known)| known.state() == KnowledgeState::Observed)
+            .map(|(position, _)| position)
+            .collect();
         for (spell_id, name, spell) in book.iter() {
             if !delivers_anything(spell) {
                 continue;
@@ -518,7 +684,7 @@ fn enumerate_turn_actions(
                 &[None]
             };
             for target in spell_anchors {
-                if damages_downed(spell, target, units) {
+                if damages_downed(spell, target, units, &authorized_units) {
                     continue;
                 }
                 for &facing in facings {
@@ -540,13 +706,23 @@ fn enumerate_turn_actions(
     commands
 }
 
-fn occupied(pos: TilePos, units: &UnitQuery, except: Option<UnitId>) -> bool {
+fn occupied(
+    pos: TilePos,
+    units: &UnitQuery,
+    except: Option<UnitId>,
+    authorized: &BTreeSet<UnitId>,
+) -> bool {
     units
         .iter()
-        .any(|unit| Some(*unit.1) != except && unit.2 .0.pos == pos)
+        .any(|unit| authorized.contains(unit.1) && Some(*unit.1) != except && unit.2 .0.pos == pos)
 }
 
-fn damages_downed(spell: &hex_assets::Spell, target: TilePos, units: &UnitQuery) -> bool {
+fn damages_downed(
+    spell: &hex_assets::Spell,
+    target: TilePos,
+    units: &UnitQuery,
+    authorized: &BTreeSet<UnitId>,
+) -> bool {
     spell.effects.iter().any(|effect| {
         matches!(
             effect,
@@ -555,66 +731,48 @@ fn damages_downed(spell: &hex_assets::Spell, target: TilePos, units: &UnitQuery)
                 ..
             } | Effect::Burn { .. }
         )
-    }) && units.iter().any(|unit| unit.6 && unit.2 .0.pos == target)
+    }) && units
+        .iter()
+        .any(|unit| authorized.contains(unit.1) && unit.6 && unit.2 .0.pos == target)
 }
 
-fn enumerate_cell_choices(
+fn cell_choice_set(
     decider: UnitId,
+    subject: UnitId,
     spec: Option<&LatticeSpec>,
     state: Option<&LatticeState>,
     count: u16,
-    restoring: bool,
-    target: Option<UnitId>,
-) -> Vec<GameCommand> {
+    kind: AiDecisionKind,
+) -> Option<CellChoiceSet> {
     let (Some(spec), Some(state)) = (spec, state) else {
-        return Vec::new();
+        return None;
     };
+    let restoring = kind == AiDecisionKind::ChooseRestores;
     let cells: Vec<LatticeCoord> = spec
         .cells()
         .filter(|(coord, _)| state.is_disabled(*coord) == restoring)
         .map(|(coord, _)| coord)
         .collect();
-    let take = usize::from(count).min(cells.len());
-    let mut combinations = Vec::new();
-    combinations_of(&cells, take, 0, &mut Vec::new(), &mut combinations);
-    combinations
-        .into_iter()
-        .map(|cells| {
-            if restoring {
-                GameCommand::ChooseRestores {
-                    unit: decider,
-                    target: target.unwrap_or(decider),
-                    cells,
-                }
-            } else {
-                GameCommand::ChooseDisables {
-                    unit: decider,
-                    cells,
-                }
-            }
-        })
-        .collect()
-}
-
-fn combinations_of(
-    cells: &[LatticeCoord],
-    take: usize,
-    start: usize,
-    current: &mut Vec<LatticeCoord>,
-    output: &mut Vec<Vec<LatticeCoord>>,
-) {
-    if current.len() == take {
-        output.push(current.clone());
-        return;
+    let owed = count.min(u16::try_from(cells.len()).unwrap_or(u16::MAX));
+    let mut bytes = Vec::with_capacity(32usize.saturating_add(cells.len().saturating_mul(8)));
+    bytes.push(match kind {
+        AiDecisionKind::ChooseDisables => 0,
+        AiDecisionKind::ChooseRestores => 1,
+        AiDecisionKind::TurnAction => return None,
+    });
+    bytes.extend_from_slice(&decider.0.to_le_bytes());
+    bytes.extend_from_slice(&subject.0.to_le_bytes());
+    bytes.extend_from_slice(&owed.to_le_bytes());
+    for cell in &cells {
+        bytes.extend_from_slice(&cell.q().to_le_bytes());
+        bytes.extend_from_slice(&cell.r().to_le_bytes());
     }
-    for index in start..cells.len() {
-        let Some(&cell) = cells.get(index) else {
-            continue;
-        };
-        current.push(cell);
-        combinations_of(cells, take, index.saturating_add(1), current, output);
-        let _ = current.pop();
-    }
+    Some(CellChoiceSet::from_cells(
+        CellChoiceFingerprint(xxh3_64(&bytes)),
+        subject,
+        owed,
+        cells,
+    ))
 }
 
 #[expect(
@@ -641,7 +799,9 @@ fn build_observation(
     turn_order: &TurnOrder,
     knowledge: &FactionLatticeKnowledge,
     effects: &PersistentEffects,
-    footing: &Footing,
+    spatial: Option<&FactionKnowledge>,
+    footing: Option<&Footing>,
+    reach: Option<&Reach>,
     spells: Option<&SpellBook>,
     content: Option<&ContentIndex>,
     elements: Option<&ElementCatalog>,
@@ -652,18 +812,30 @@ fn build_observation(
         .map(|unit| allied(unit, spells, content, elements))
         .collect();
     allies.sort_by_key(|ally| ally.unit);
-    let mut hostiles: Vec<AiObservedHostile> = units
-        .iter()
-        .filter(|unit| actor.4.is_hostile_to(*unit.4))
-        .map(|unit| AiObservedHostile {
-            unit: *unit.1,
-            position: unit.2 .0.pos,
-            lattice: known_lattice(knowledge, *actor.4, *unit.1),
+    let mut hostiles: Vec<AiObservedHostile> = spatial
+        .into_iter()
+        .flat_map(FactionKnowledge::units)
+        .filter(|(_, observed)| actor.4.is_hostile_to(observed.faction))
+        .filter_map(|(id, observed)| {
+            let unit = units.iter().find(|unit| *unit.1 == id)?;
+            Some(AiObservedHostile {
+                unit: id,
+                position: observed.pos,
+                downed: unit.6,
+                lattice: known_lattice(knowledge, *actor.4, id),
+            })
         })
         .collect();
     hostiles.sort_by_key(|hostile| hostile.unit);
+    let known_units: BTreeSet<UnitId> = std::iter::once(*actor.1)
+        .chain(allies.iter().map(|ally| ally.unit))
+        .chain(hostiles.iter().map(|hostile| hostile.unit))
+        .collect();
     let mut effect_observations: Vec<AiEffectObservation> = effects
         .iter()
+        .filter(|(_, effect)| {
+            known_units.contains(&effect.source) && known_units.contains(&effect.target)
+        })
         .map(|(_, effect)| AiEffectObservation {
             source: effect.source,
             target: effect.target,
@@ -671,27 +843,33 @@ fn build_observation(
         })
         .collect();
     effect_observations.sort_by_key(|effect| (effect.source, effect.target));
-    let reach = Reach::from(actor.2 .0, footing, None);
-    let mut traversal: Vec<AiTraversalObservation> = reach
-        .surfaces()
-        .map(|standing| {
-            let mut neighbors: Vec<TilePos> = standing
-                .pos
-                .coord
-                .neighbors()
-                .into_iter()
-                .flat_map(|coord| footing.steps_from(standing, coord))
-                .map(|next| next.pos)
-                .filter(|position| reach.cost(*position).is_some())
-                .collect();
-            neighbors.sort_unstable();
-            neighbors.dedup();
-            AiTraversalObservation {
-                position: standing.pos,
-                knowledge: KnowledgeState::Observed,
-                standable: true,
-                neighbors,
-            }
+    let mut traversal: Vec<AiTraversalObservation> = spatial
+        .zip(footing)
+        .zip(reach)
+        .into_iter()
+        .flat_map(|((spatial, footing), reach)| {
+            reach
+                .surfaces()
+                .map(|standing| {
+                    let mut neighbors: Vec<TilePos> = standing
+                        .pos
+                        .coord
+                        .neighbors()
+                        .into_iter()
+                        .flat_map(|coord| footing.steps_from(standing, coord))
+                        .map(|next| next.pos)
+                        .filter(|position| reach.cost(*position).is_some())
+                        .collect();
+                    neighbors.sort_unstable();
+                    neighbors.dedup();
+                    AiTraversalObservation {
+                        position: standing.pos,
+                        knowledge: spatial.state(standing.pos),
+                        standable: true,
+                        neighbors,
+                    }
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
     traversal.sort_by_key(|surface| surface.position);
@@ -699,7 +877,12 @@ fn build_observation(
         actor: allied(actor, spells, content, elements),
         allies,
         hostiles,
-        turn_order: turn_order.order().to_vec(),
+        turn_order: turn_order
+            .order()
+            .iter()
+            .copied()
+            .filter(|unit| known_units.contains(unit))
+            .collect(),
         round: turn_order.round,
         effects: effect_observations,
         traversal,
@@ -909,16 +1092,24 @@ mod tests {
     }
 
     #[test]
-    fn combinations_are_complete_and_stable() {
-        let cells = [
+    fn compact_cell_choice_set_is_canonical_and_exact() {
+        let cells = vec![
             LatticeCoord::ORIGIN,
             LatticeCoord::new(1, 0),
             LatticeCoord::new(0, 1),
         ];
-        let mut found = Vec::new();
-        combinations_of(&cells, 2, 0, &mut Vec::new(), &mut found);
-        assert_eq!(found.len(), 3);
-        assert_eq!(found.first(), Some(&vec![cells[0], cells[1]]));
+        let choices =
+            CellChoiceSet::from_cells(CellChoiceFingerprint(7), UnitId(1), 2, cells.clone());
+        assert_eq!(choices.count(), 2);
+        assert_eq!(choices.eligible().len(), 3);
+        assert_eq!(
+            choices.eligible(),
+            &[
+                LatticeCoord::ORIGIN,
+                LatticeCoord::new(0, 1),
+                LatticeCoord::new(1, 0),
+            ]
+        );
     }
 
     #[test]

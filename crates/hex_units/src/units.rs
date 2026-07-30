@@ -28,7 +28,7 @@ use hex_assets::{
     SubstanceTable,
 };
 use hex_lattice::LatticeState;
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use hex_core::{
     CommandQueue, ControlOwner, GameCommand, GameplayPhase, GameplaySetup, GameplaySetupFailure,
@@ -442,8 +442,12 @@ fn on_tile_clicked(
         else {
             return;
         };
-        let anchor_footing =
-            Footing::from_tiles(tiles.iter(), &table, *anchor_body, blockers.as_deref());
+        let anchor_footing = Arc::new(Footing::from_tiles(
+            tiles.iter(),
+            &table,
+            *anchor_body,
+            blockers.as_deref(),
+        ));
         let Some(destination) = anchor_footing.at(*pos) else {
             return;
         };
@@ -453,6 +457,11 @@ fn on_tile_clicked(
         if anchor_path.len() < 2 {
             return;
         }
+        // Footing is body-profile specific, but members with the same body read the
+        // same immutable terrain index. Today every shipped unit is a walker, so a
+        // six-member move needs one index rather than six duplicate map projections;
+        // retaining the profile-keyed cache keeps future heterogeneous parties valid.
+        let mut footing_by_body = vec![(*anchor_body, Arc::clone(&anchor_footing))];
         let mut members = Vec::with_capacity(party.members.len());
         for member in &party.members {
             let Some((unit, _, standing, body, _, _)) = party_players
@@ -461,10 +470,25 @@ fn on_tile_clicked(
             else {
                 return;
             };
+            let member_footing = if let Some((_, footing)) = footing_by_body
+                .iter()
+                .find(|(cached_body, _)| *cached_body == *body)
+            {
+                Arc::clone(footing)
+            } else {
+                let footing = Arc::new(Footing::from_tiles(
+                    tiles.iter(),
+                    &table,
+                    *body,
+                    blockers.as_deref(),
+                ));
+                footing_by_body.push((*body, Arc::clone(&footing)));
+                footing
+            };
             members.push(FormationMember {
                 unit: *unit,
                 standing: standing.0,
-                footing: Footing::from_tiles(tiles.iter(), &table, *body, blockers.as_deref()),
+                footing: member_footing,
             });
         }
         match plan_formation_move(preset, formation, &anchor_path, members) {
