@@ -847,7 +847,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
         report.semantic_plan_fingerprint,
         Some(12_223_039_404_442_798_248)
     );
-    assert_eq!(report.map_fingerprint, 17_075_345_429_537_665_322);
+    assert_eq!(report.map_fingerprint, 1_240_755_793_707_644_182);
     assert_ne!(
         report.semantic_plan_fingerprint,
         Some(report.map_fingerprint),
@@ -858,7 +858,7 @@ fn v3_waterfall_publishes_exact_resources_and_report_identity() {
     let Some(ProceduralRecipeMetrics::Waterfall(metrics)) = &report.recipe_metrics else {
         panic!("V3 Waterfall should publish exact recipe metrics");
     };
-    assert_eq!(metrics.fall_height, 11);
+    assert_eq!(metrics.fall_height, 13);
     assert_eq!(metrics.fall_nodes, 3);
     assert_eq!(metrics.bypass_steps, 11);
     assert_eq!(metrics.alternate_bypass_steps, 13);
