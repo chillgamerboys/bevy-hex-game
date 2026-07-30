@@ -458,7 +458,9 @@ mod tests {
         TraversalBlockers, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
-    use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
+    use hex_map::{
+        GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
+    };
     use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{
         either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
@@ -2323,6 +2325,24 @@ mod tests {
     }
 
     fn assert_vegetation_scenario_reenters_with_the_same_art(scenario_name: &str) {
+        fn object_snapshot(app: &mut App) -> Vec<(String, TilePos, u32, u8)> {
+            let world = app.world_mut();
+            let mut objects = world.query::<&ObjectInstance>();
+            let mut snapshot = objects
+                .iter(world)
+                .map(|instance| {
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        instance.origin(),
+                        instance.level_height().to_bits(),
+                        instance.rotation().steps(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            snapshot.sort_unstable();
+            snapshot
+        }
+
         let mut app = procedural_gameplay_app(scenario_name);
         let art_fingerprint = app
             .world()
@@ -2342,13 +2362,9 @@ mod tests {
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("hostile_start"))
             .unwrap_or_else(|| panic!("{scenario_name} should publish hostile_start"));
-        let first_features = app
-            .world_mut()
-            .query_filtered::<Entity, With<ObjectInstance>>()
-            .iter(app.world())
-            .count();
+        let first_features = object_snapshot(&mut app);
         assert!(
-            first_features > 0,
+            !first_features.is_empty(),
             "{scenario_name} should publish authored object instances"
         );
 
@@ -2362,11 +2378,8 @@ mod tests {
             "gameplay teardown should retain the accepted global art graph"
         );
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
-            0,
+            object_snapshot(&mut app),
+            Vec::new(),
             "{scenario_name} teardown left authored feature instances alive"
         );
 
@@ -2379,12 +2392,9 @@ mod tests {
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
+            object_snapshot(&mut app),
             first_features,
-            "{scenario_name} re-entry changed its authored feature instance count"
+            "{scenario_name} re-entry changed its exact authored feature placement"
         );
     }
 
@@ -2474,6 +2484,19 @@ mod tests {
                 !report.used_fallback,
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
+            if scenario_name == "Prairie" {
+                let Some(ProceduralRecipeMetrics::Prairie(metrics)) =
+                    report.recipe_metrics.as_ref()
+                else {
+                    panic!("Prairie did not publish its recipe-specific metrics");
+                };
+                assert!(metrics.grass_roots > 0, "Prairie did not publish grass");
+                assert!(
+                    (65..=75).contains(&metrics.grass_coverage_percent),
+                    "Prairie grass coverage left its approved band: {}%",
+                    metrics.grass_coverage_percent
+                );
+            }
             let encounter = encounter_of(&scenario);
             let anchors = app.world().resource::<MapAnchors>();
             for required in encounter

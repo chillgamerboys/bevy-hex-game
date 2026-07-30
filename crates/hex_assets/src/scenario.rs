@@ -181,7 +181,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
 
@@ -336,7 +336,7 @@ mod tests {
             11,
             "the scenario library should include all eleven generated maps"
         );
-        let mut by_seed = BTreeMap::<u64, Vec<&str>>::new();
+        let mut by_seed = BTreeMap::<u64, BTreeSet<&str>>::new();
         for scenario in &generated {
             let seed = scenario
                 .generation_seed
@@ -344,7 +344,7 @@ mod tests {
             by_seed
                 .entry(seed)
                 .or_default()
-                .push(scenario.name.as_str());
+                .insert(scenario.name.as_str());
         }
         let duplicate_seeds: BTreeMap<_, _> = by_seed
             .into_iter()
@@ -352,7 +352,10 @@ mod tests {
             .collect();
         assert_eq!(
             duplicate_seeds,
-            BTreeMap::from([(1_592_598_566, vec!["Procedural Hills", "Prairie"],)]),
+            BTreeMap::from([(
+                1_592_598_566,
+                BTreeSet::from(["Prairie", "Procedural Hills"]),
+            )]),
             "only the approved directly comparable maps may share a configured seed"
         );
 

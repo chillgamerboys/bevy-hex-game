@@ -2016,7 +2016,7 @@ mod tests {
         let error = persist_screenshot(&uniform, &path)
             .expect_err("a uniform renderer output should fail visual validation");
         assert!(
-            error.contains("rejected PNG was preserved"),
+            error.contains("effectively black") && error.contains("rejected PNG was preserved"),
             "unexpected validation error: {error}"
         );
         let png = fs::read(&path).expect("the rejected capture should remain readable");

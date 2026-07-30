@@ -169,7 +169,12 @@ mod tests {
         assert!(catalog.get("the-crossing").is_some());
         assert!(catalog.get("procedural-hills").is_some());
         assert!(catalog.get("forest").is_some());
-        assert!(catalog.get("prairie").is_some());
+        let prairie = catalog
+            .get("prairie")
+            .expect("Prairie should remain selectable in Combat Lab");
+        assert_eq!(prairie.scenario, "Prairie");
+        assert_eq!(prairie.fixed_seed, Some(1_592_598_566));
+        assert_eq!(prairie.preview, "ui/combat-lab/prairie.png");
         assert!(catalog.get("fort").is_some());
         assert!(catalog.get("seven-regions").is_some());
         assert_eq!(catalog.maps.len(), 14);
