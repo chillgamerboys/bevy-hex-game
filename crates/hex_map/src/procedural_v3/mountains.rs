@@ -711,9 +711,9 @@ fn select_peaks(
 
 fn mountain_rise(peak: HexCoord, coord: HexCoord, relief: Level) -> Level {
     let distance = i32::try_from(peak.distance(coord)).unwrap_or(i32::MAX);
-    let sharp_core = relief.saturating_sub(distance.saturating_mul(3)).max(0);
+    let sharp_core = relief.saturating_sub(distance.saturating_mul(8)).max(0);
     let outer_radius = relief.saturating_div(3).saturating_add(4);
-    let walker_skirt = outer_radius.saturating_sub(distance).clamp(0, 4);
+    let walker_skirt = outer_radius.saturating_sub(distance).clamp(0, 12);
     sharp_core.max(walker_skirt)
 }
 
@@ -762,16 +762,16 @@ fn is_exposed_stone(
     levels: &BTreeMap<HexCoord, Level>,
     settings: &V3MountainsSettings,
 ) -> bool {
-    let high = level
+    let snow_capped = level
         >= settings
             .base_level
-            .saturating_add(settings.relief.saturating_mul(2) / 3);
+            .saturating_add(settings.relief.saturating_mul(3) / 4);
     let steep = coord.neighbors().into_iter().any(|neighbor| {
         levels
             .get(&neighbor)
             .is_some_and(|other| level.abs_diff(*other) >= 2)
     });
-    high || steep
+    steep && !snow_capped
 }
 
 fn mountain_column(surface: Level, exposed: bool) -> VolumeColumn {
@@ -986,12 +986,13 @@ fn validate_mountains_inner(
     }
     let accessible_mountain_surfaces = distances
         .keys()
-        .filter(|position| position.level >= settings.base_level.saturating_add(2))
+        .filter(|position| position.level > settings.base_level)
         .count();
-    if percent(accessible_mountain_surfaces, all_positions.len()) < 8 {
-        issues.push(recipe_issue(
-            "Mountains exposes less than 8% accessible foothill/pass terrain",
-        ));
+    let accessible_mountain_percent = percent(accessible_mountain_surfaces, mountain_surfaces);
+    if accessible_mountain_percent < 60 {
+        issues.push(recipe_issue(format!(
+            "Mountains exposes {accessible_mountain_percent}% of its raised standable surfaces to ordinary movement; expected at least 60%"
+        )));
     }
     let min_level = all_positions
         .iter()
@@ -1019,6 +1020,20 @@ fn validate_mountains_inner(
             "Mountains realizes {realized_peaks} summit cells; expected at least {}",
             settings.peak_count
         )));
+    }
+    let snow_cap_level = settings
+        .base_level
+        .saturating_add(settings.relief.saturating_mul(3) / 4);
+    if all_positions
+        .iter()
+        .filter(|position| position.level >= snow_cap_level)
+        .any(|position| {
+            surface_material_at(&plan.volume, *position) != Some(SolidMaterialRole::Snow)
+        })
+    {
+        issues.push(recipe_issue(
+            "Mountains highest elevation band is not completely snow-capped",
+        ));
     }
     let cliff_edges = count_cliff_edges(&plan.volume);
     if cliff_edges == 0 {
@@ -1139,6 +1154,18 @@ fn count_cliff_edges(volume: &VolumePlan) -> u32 {
     count_u32(cliffs)
 }
 
+fn surface_material_at(volume: &VolumePlan, position: TilePos) -> Option<SolidMaterialRole> {
+    volume.columns.get(&position.coord).and_then(|column| {
+        column.elements.iter().find_map(|element| {
+            let VolumeElement::Solid(mass) = element else {
+                return None;
+            };
+            (mass.levels.bottom <= position.level && position.level < mass.levels.top)
+                .then_some(mass.material)
+        })
+    })
+}
+
 fn mountain_view_hint(
     mask: &BTreeSet<HexCoord>,
     levels: &BTreeMap<HexCoord, Level>,
@@ -1229,7 +1256,7 @@ mod tests {
                 environment: V3EnvironmentSettings::Frozen,
                 recipe: V3RecipeSettings::Mountains(V3MountainsSettings {
                     base_level: 15,
-                    relief: 18,
+                    relief: 32,
                     peak_count: 5,
                 }),
                 overlays: Vec::new(),
@@ -1251,12 +1278,55 @@ mod tests {
         );
         assert!(first.metrics.mountain_coverage_percent >= 52);
         assert!(first.metrics.accessible_mountain_surfaces > 0);
-        assert_eq!(first.metrics.relief, 18);
+        assert_eq!(first.metrics.relief, 32);
         assert_eq!(first.metrics.peak_count, 5);
         assert!(first.metrics.cliff_edges > 0);
         assert!(first.metrics.high_pass_steps > 0);
         assert!(first.metrics.lower_bypass_steps > 0);
+        assert!(
+            percent(
+                usize::try_from(first.metrics.accessible_mountain_surfaces).unwrap_or(usize::MAX),
+                usize::try_from(first.metrics.mountain_surfaces).unwrap_or(usize::MAX)
+            ) >= 60
+        );
         assert!(first.validated.plan.liquids.bodies.is_empty());
+    }
+
+    #[test]
+    fn revised_mountains_validate_supported_radius_coverage() {
+        let settings = settings();
+        for radius in [12, 20, 40] {
+            let selected = generate(radius, 0.4, &settings, 1_592_598_566)
+                .unwrap_or_else(|error| panic!("Mountains radius {radius}: {error}"));
+            assert_eq!(selected.metrics.relief, 32);
+            assert!(
+                percent(
+                    usize::try_from(selected.metrics.accessible_mountain_surfaces)
+                        .unwrap_or(usize::MAX),
+                    usize::try_from(selected.metrics.mountain_surfaces).unwrap_or(usize::MAX)
+                ) >= 60
+            );
+        }
+    }
+
+    #[test]
+    fn revised_mountains_pr_corpus_validates_128_seeds_and_named_regression() {
+        let settings = settings();
+        let mut seeds = (0_u64..128).collect::<BTreeSet<_>>();
+        seeds.insert(1_592_598_566);
+        let mut fallback_seeds = Vec::new();
+        for seed in seeds {
+            let selected = generate(12, 0.4, &settings, seed)
+                .unwrap_or_else(|error| panic!("Mountains seed {seed}: {error}"));
+            assert_eq!(selected.candidates_evaluated, 8);
+            if selected.used_fallback {
+                fallback_seeds.push(seed);
+            }
+        }
+        assert!(
+            fallback_seeds.is_empty(),
+            "revised Mountains used fallback for seeds {fallback_seeds:?}"
+        );
     }
 
     #[test]

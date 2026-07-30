@@ -8,7 +8,7 @@
             environment: Frozen,
             recipe: Mountains((
                 base_level: 15,
-                relief: 24,
+                relief: 32,
                 peak_count: 7,
             )),
             overlays: [],
