@@ -5195,6 +5195,21 @@ mod tests {
             .iter()
             .any(|issue| issue.detail.contains("intersects semantic occupancy")));
 
+        let mut retagged = selected.validated.plan.clone();
+        retagged
+            .features
+            .by_id
+            .get_mut(&feature_id)
+            .expect("Caves should retain the selected vegetation")
+            .kind = FeatureKind::TallGrass;
+        let WorldValidation::Invalid(retagged_issues) = validate_caves(&retagged, cave_settings)
+        else {
+            panic!("Caves vegetation retagged as TallGrass must fail");
+        };
+        assert!(retagged_issues
+            .iter()
+            .any(|issue| issue.detail.contains("only nonblocking cave vegetation")));
+
         let mut missing_instance = selected.validated.plan;
         missing_instance.features.by_id.remove(&feature_id);
         let WorldValidation::Invalid(count_issues) =

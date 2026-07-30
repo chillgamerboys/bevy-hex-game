@@ -2032,6 +2032,73 @@ fn cave_vegetation_instances(app: &mut App) -> BTreeMap<TilePos, (String, u8)> {
         .collect()
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "invalid generated cave vegetation is a broken integration-test fixture"
+)]
+fn cave_vegetation_non_root_visual(app: &mut App) -> (TilePos, TilePos) {
+    let instance = {
+        let world = app.world_mut();
+        let mut query = world.query::<(&Name, &ObjectInstance)>();
+        query
+            .iter(world)
+            .find(|(name, _instance)| name.as_str() == "GeneratedCaveVegetation")
+            .map(|(_name, instance)| instance.clone())
+            .expect("Caves should publish sparse vegetation")
+    };
+    let visual_origin = instance.origin();
+    let root = TilePos::new(
+        visual_origin.coord,
+        visual_origin
+            .level
+            .checked_sub(1)
+            .expect("cave vegetation should sit above its exact footing"),
+    );
+    let catalog = app.world().resource::<RuntimeArtCatalog>();
+    let blueprint = catalog
+        .object(instance.object_id())
+        .expect("generated cave vegetation must resolve through the accepted art catalog");
+    let mut non_root = None;
+    for placement in &blueprint.placements {
+        let rotated = instance
+            .rotation()
+            .rotate_voxel(placement.position, blueprint.origin)
+            .expect("validated object rotation should remain projectable");
+        let delta_q = rotated
+            .q
+            .checked_sub(blueprint.origin.q)
+            .expect("validated local coordinates should remain projectable");
+        let delta_r = rotated
+            .r
+            .checked_sub(blueprint.origin.r)
+            .expect("validated local coordinates should remain projectable");
+        let coord = HexCoord::from_axial(
+            root.coord
+                .x()
+                .checked_add(delta_q)
+                .expect("generated object q coordinate should remain in range"),
+            root.coord
+                .y()
+                .checked_add(delta_r)
+                .expect("generated object r coordinate should remain in range"),
+        );
+        let relative_level = rotated
+            .level
+            .checked_sub(blueprint.origin.level)
+            .expect("validated local levels should remain projectable");
+        let level = visual_origin
+            .level
+            .checked_add(relative_level)
+            .expect("generated object level should remain in range");
+        let visual = TilePos::new(coord, level);
+        if visual.coord != root.coord {
+            non_root = Some((root, visual));
+            break;
+        }
+    }
+    non_root.expect("tracked cave vegetation should occupy at least one non-root coordinate")
+}
+
 fn liquid_presentations(app: &mut App) -> Vec<(Entity, Entity, Pickable)> {
     let world = app.world_mut();
     let mut query = world.query::<(Entity, &Name, &ChildOf, &Pickable, Option<&HexTile>)>();
@@ -3413,6 +3480,55 @@ fn terrain_edits_retire_cave_vegetation_with_invalidated_support() {
     let after = cave_vegetation_instances(&mut app);
     assert_eq!(after.len(), before.len().saturating_sub(1));
     assert!(!after.contains_key(&target));
+}
+
+#[test]
+fn clearing_non_root_support_retires_the_complete_cave_vegetation_feature() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let (root, visual) = cave_vegetation_non_root_visual(&mut app);
+    let support = TilePos::new(visual.coord, root.level);
+    assert!(app
+        .world()
+        .resource::<SubstanceTable>()
+        .is_diggable(app.world().resource::<VoxelMap>().get(support)));
+
+    app.world_mut()
+        .write_message(TerrainEdit::Clear { pos: support });
+    app.update();
+    app.update();
+
+    assert!(app.world().resource::<VoxelMap>().get(support).is_air());
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&root));
+}
+
+#[test]
+fn building_into_non_root_visual_cell_retires_the_complete_cave_vegetation_feature() {
+    let mut app = v3_caves_app();
+    enter_gameplay(&mut app);
+    let before = cave_vegetation_instances(&mut app);
+    let (root, visual) = cave_vegetation_non_root_visual(&mut app);
+    let stone = app
+        .world()
+        .resource::<SubstanceTable>()
+        .id("stone")
+        .expect("the fixture substance table should contain stone");
+    assert!(app.world().resource::<VoxelMap>().get(visual).is_air());
+
+    app.world_mut().write_message(TerrainEdit::Set {
+        pos: visual,
+        substance: stone,
+    });
+    app.update();
+    app.update();
+
+    assert_eq!(app.world().resource::<VoxelMap>().get(visual), stone);
+    let after = cave_vegetation_instances(&mut app);
+    assert_eq!(after.len(), before.len().saturating_sub(1));
+    assert!(!after.contains_key(&root));
 }
 
 #[test]
