@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use hex_core::{HexCoord, MapViewHint, SpecialMovementRegion, TilePos};
+use hex_core::{HexCoord, Level, MapViewHint, SpecialMovementRegion, TilePos};
 
 use super::composition::{compose_single_patch, GeneratedPatchPlan};
 use super::layout::{resolve_layout, PatchId, ResolvedLayoutPlan};
@@ -39,7 +39,8 @@ use crate::settings::{
 const HIGH_LAND_LEVEL: i32 = 27;
 const LOW_LAND_LEVEL: i32 = 16;
 const HIGH_WATER_LEVEL: i32 = HIGH_LAND_LEVEL - 1;
-const LOW_WATER_LEVEL: i32 = LOW_LAND_LEVEL - 1;
+const LOW_WATER_LEVEL: i32 = LOW_LAND_LEVEL - 3;
+const COMPOSITE_LOW_WATER_LEVEL: i32 = LOW_LAND_LEVEL - 1;
 const FALL_SOURCE_X: i32 = -1;
 const FALL_TARGET_X: i32 = 0;
 const WATER_HALF_WIDTH: i32 = 1;
@@ -322,6 +323,11 @@ pub(crate) fn construct_patch(
     let secondary_bypass = secondary_bypass_tiles(patch_radius, &mask)?;
     let secondary_apron = secondary_slope_apron(patch_radius, &mask)?;
     let composite_layout = patch.layout().kind.is_composite();
+    let low_water_level = if composite_layout {
+        COMPOSITE_LOW_WATER_LEVEL
+    } else {
+        LOW_WATER_LEVEL
+    };
     let ring_secondary_flank = if composite_layout {
         ring_secondary_flank_apron(patch_radius, &mask)?
     } else {
@@ -430,15 +436,15 @@ pub(crate) fn construct_patch(
     for lane in &watercourse.main_lanes {
         for (index, coord) in lane.iter().copied().enumerate() {
             let next = lane.get(index.saturating_add(1)).copied();
-            let cell = water_cell(coord, next);
+            let cell = water_cell(coord, next, low_water_level);
             water_by_coord.insert(coord, cell);
         }
     }
     for coord in &watercourse.basin {
         water_by_coord.entry(*coord).or_insert(WaterCell {
-            bed_level: LOW_WATER_LEVEL - 1,
-            fill_bottom: LOW_WATER_LEVEL,
-            top: TilePos::new(*coord, LOW_WATER_LEVEL),
+            bed_level: low_water_level - 1,
+            fill_bottom: low_water_level,
+            top: TilePos::new(*coord, low_water_level),
             state: LiquidFlowState::Still,
             downstream: None,
         });
@@ -744,7 +750,7 @@ fn waterfall_view_hint(
         ))]
     })?;
     let focus_height = 21.5 * level_height;
-    let frame = (f32::from(radius) * 3.5).max(11.0 * level_height * 3.0);
+    let frame = (f32::from(radius) * 3.5).max(13.0 * level_height * 3.0);
     Ok(MapViewHint::new(
         (frame, focus_height + frame, 0.0),
         (0.0, focus_height, 0.0),
@@ -760,7 +766,7 @@ struct WaterCell {
     downstream: Option<TilePos>,
 }
 
-fn water_cell(coord: HexCoord, next: Option<HexCoord>) -> WaterCell {
+fn water_cell(coord: HexCoord, next: Option<HexCoord>, low_water_level: Level) -> WaterCell {
     let (bed_level, fill_bottom, top_level, state) = if coord.x() < FALL_SOURCE_X {
         let state = if coord.x() <= BYPASS_HIGH_X {
             LiquidFlowState::Still
@@ -775,8 +781,8 @@ fn water_cell(coord: HexCoord, next: Option<HexCoord>) -> WaterCell {
         )
     } else if coord.x() == FALL_SOURCE_X {
         (
-            LOW_WATER_LEVEL - 1,
-            LOW_WATER_LEVEL,
+            low_water_level - 1,
+            low_water_level,
             HIGH_WATER_LEVEL,
             LiquidFlowState::Fall,
         )
@@ -788,14 +794,14 @@ fn water_cell(coord: HexCoord, next: Option<HexCoord>) -> WaterCell {
         } else {
             LiquidFlowState::Still
         };
-        (LOW_WATER_LEVEL - 1, LOW_WATER_LEVEL, LOW_WATER_LEVEL, state)
+        (low_water_level - 1, low_water_level, low_water_level, state)
     };
     let top = TilePos::new(coord, top_level);
     let downstream = next.map(|next_coord| {
         let next_level = if next_coord.x() < FALL_TARGET_X {
             HIGH_WATER_LEVEL
         } else {
-            LOW_WATER_LEVEL
+            low_water_level
         };
         TilePos::new(next_coord, next_level)
     });
@@ -1495,7 +1501,12 @@ fn validate_stitched_waterfall(
             None
         }
     };
-    validate_flow_stages(body, watercourse.as_ref(), issues);
+    validate_flow_stages(
+        body,
+        watercourse.as_ref(),
+        COMPOSITE_LOW_WATER_LEVEL,
+        issues,
+    );
     let fall_nodes = body
         .nodes
         .iter()
@@ -1503,7 +1514,7 @@ fn validate_stitched_waterfall(
             (node.state == LiquidFlowState::Fall).then_some((*position, node.downstream))
         })
         .collect::<Vec<_>>();
-    validate_fall(&fall_nodes, issues);
+    validate_fall(&fall_nodes, COMPOSITE_LOW_WATER_LEVEL, issues);
     if !body
         .nodes
         .values()
@@ -2166,6 +2177,11 @@ fn ordinary_components(ordinary: &OrdinaryGraph) -> Vec<BTreeSet<TilePos>> {
 
 pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<WaterfallMetrics> {
     let mut issues = Vec::new();
+    let low_water_level = if plan.layout.kind.is_composite() {
+        COMPOSITE_LOW_WATER_LEVEL
+    } else {
+        LOW_WATER_LEVEL
+    };
     let Some(body) = plan.liquids.bodies.get(&LiquidBodyId(0)) else {
         return WorldValidation::Invalid(vec![recipe_issue(
             "Waterfall has no canonical water body",
@@ -2196,13 +2212,18 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
             None
         }
     };
-    validate_flow_stages(body, expected_watercourse.as_ref(), &mut issues);
+    validate_flow_stages(
+        body,
+        expected_watercourse.as_ref(),
+        low_water_level,
+        &mut issues,
+    );
     if calm_nodes < 9 || current_nodes < 3 || rapid_nodes < 3 {
         issues.push(recipe_issue(
             "Waterfall must realize calm inlet/basin, rapid, and current stages",
         ));
     }
-    let fall_height = validate_fall(&fall_nodes, &mut issues);
+    let fall_height = validate_fall(&fall_nodes, low_water_level, &mut issues);
     let mut surfaces_by_coord = BTreeMap::<HexCoord, Vec<(TilePos, SurfaceMetadata)>>::new();
     for (position, metadata) in &plan.volume.surfaces {
         surfaces_by_coord
@@ -2395,6 +2416,7 @@ pub(crate) fn validate_waterfall(plan: &GeneratedWorldPlan) -> WorldValidation<W
 fn validate_flow_stages(
     body: &LiquidBodyPlan,
     watercourse: Option<&Watercourse>,
+    low_water_level: Level,
     issues: &mut Vec<WorldValidationIssue>,
 ) {
     let Some(watercourse) = watercourse else {
@@ -2413,7 +2435,7 @@ fn validate_flow_stages(
         for (index, coord) in lane.iter().copied().enumerate() {
             main_coords.insert(coord);
             let next = lane.get(index.saturating_add(1)).copied();
-            let expected = water_cell(coord, next);
+            let expected = water_cell(coord, next, low_water_level);
             let Some(node) = body.nodes.get(&expected.top) else {
                 issues.push(recipe_issue(format!(
                     "Waterfall main lane is missing exact node {:?}",
@@ -2434,7 +2456,7 @@ fn validate_flow_stages(
         .iter()
         .filter(|coord| !main_coords.contains(coord))
     {
-        let position = TilePos::new(*coord, LOW_WATER_LEVEL);
+        let position = TilePos::new(*coord, low_water_level);
         if !matches!(
             body.nodes.get(&position),
             Some(LiquidNode {
@@ -2453,7 +2475,7 @@ fn validate_flow_stages(
             continue;
         };
         if let Some(last) = lane.last() {
-            let terminal = TilePos::new(*last, LOW_WATER_LEVEL);
+            let terminal = TilePos::new(*last, low_water_level);
             let leaves_west = !watercourse.coordinates().contains(&HexCoord::from_axial(
                 first.x().saturating_sub(1),
                 first.y(),
@@ -2487,6 +2509,7 @@ fn validate_flow_stages(
 
 fn validate_fall(
     fall_nodes: &[(TilePos, Option<TilePos>)],
+    low_water_level: Level,
     issues: &mut Vec<WorldValidationIssue>,
 ) -> u32 {
     if fall_nodes.len() != 3 {
@@ -2516,7 +2539,7 @@ fn validate_fall(
             downstream.map(|downstream| position.level.saturating_sub(downstream.level))
         })
         .collect();
-    let expected = HIGH_WATER_LEVEL.saturating_sub(LOW_WATER_LEVEL);
+    let expected = HIGH_WATER_LEVEL.saturating_sub(low_water_level);
     if drops != BTreeSet::from([expected]) {
         issues.push(recipe_issue(format!(
             "Waterfall fall must descend exactly {expected} levels in every lane"
@@ -3168,7 +3191,7 @@ mod tests {
                     generate(radius, 0.4, &settings(), seed).expect("Waterfall should generate");
                 assert!(!selected.used_fallback);
                 assert_eq!(selected.metrics.fall_nodes, 3);
-                assert_eq!(selected.metrics.fall_height, 11);
+                assert_eq!(selected.metrics.fall_height, 13);
                 assert_eq!(selected.metrics.bypass_steps, 11);
                 assert_eq!(selected.validated.plan.validate(), Vec::new());
             }
@@ -3203,7 +3226,7 @@ mod tests {
         assert!(metrics.current_nodes >= 3);
         assert!(metrics.rapid_nodes >= 3);
         assert_eq!(metrics.fall_nodes, 3);
-        assert_eq!(metrics.fall_height, 11);
+        assert_eq!(metrics.fall_height, 13);
         assert!(metrics.water_nodes > 60);
     }
 
@@ -3318,7 +3341,7 @@ mod tests {
                     lane.first()
                         .zip(lane.last())
                         .map_or(0, |(first, last)| first.level.saturating_sub(last.level)),
-                    11
+                    HIGH_LAND_LEVEL.saturating_sub(LOW_LAND_LEVEL)
                 );
                 assert!(lane.windows(2).all(|pair| {
                     matches!(
@@ -3604,7 +3627,7 @@ mod tests {
         assert_eq!(selected.selected_candidate, None);
         assert_eq!(selected.valid_candidates, 0);
         assert_eq!(selected.metrics.raised_terrain, 0);
-        assert_eq!(selected.metrics.fall_height, 11);
+        assert_eq!(selected.metrics.fall_height, 13);
     }
 
     #[test]
