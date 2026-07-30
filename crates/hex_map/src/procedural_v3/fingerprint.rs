@@ -267,6 +267,7 @@ fn encode_ring19_settings(
         encoder.u8(connection.source_region);
         encoder.u8(connection.sink_region);
         encoder.u32(connection.width);
+        encoder.i32(connection.level);
     }
 
     let mut outlets = ring.boundary_outlets.clone();
@@ -276,6 +277,7 @@ fn encode_ring19_settings(
         encoder.u8(outlet.source_region);
         encoder.tag(ring19_boundary_side_tag(outlet.side));
         encoder.u32(outlet.width);
+        encoder.i32(outlet.level);
     }
     Ok(())
 }
@@ -1233,11 +1235,13 @@ mod tests {
                         source_region: 0,
                         sink_region: 1,
                         width: 3,
+                        level: 16,
                     },
                     Ring19LiquidConnectionSettings {
                         source_region: 1,
                         sink_region: 7,
                         width: 3,
+                        level: 16,
                     },
                 ],
                 boundary_outlets: vec![
@@ -1245,11 +1249,13 @@ mod tests {
                         source_region: 7,
                         side: Ring19BoundarySide::NorthEast,
                         width: 3,
+                        level: 16,
                     },
                     Ring19BoundaryOutletSettings {
                         source_region: 9,
                         side: Ring19BoundarySide::East,
                         width: 2,
+                        level: 16,
                     },
                 ],
             }),
@@ -1266,6 +1272,34 @@ mod tests {
             settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
             settings_fingerprint(55, 0.4, &reordered).expect("the settings encode"),
             "connection and outlet declaration order is not semantic"
+        );
+
+        let mut changed_connection_level = original.clone();
+        let V3LayoutSettings::Ring19(ring) = &mut changed_connection_level.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        ring.liquid_connections
+            .first_mut()
+            .expect("the fixture has internal liquid")
+            .level += 1;
+        assert_ne!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &changed_connection_level).expect("the settings encode"),
+            "exact internal liquid levels are semantic"
+        );
+
+        let mut changed_outlet_level = original.clone();
+        let V3LayoutSettings::Ring19(ring) = &mut changed_outlet_level.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        ring.boundary_outlets
+            .first_mut()
+            .expect("the fixture has a boundary outlet")
+            .level += 1;
+        assert_ne!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &changed_outlet_level).expect("the settings encode"),
+            "exact boundary liquid levels are semantic"
         );
 
         let V3LayoutSettings::Ring19(ring) = &mut reordered.layout else {

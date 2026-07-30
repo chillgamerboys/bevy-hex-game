@@ -513,6 +513,8 @@ pub struct Ring19LiquidConnectionSettings {
     pub sink_region: u8,
     /// Exact reciprocal seam width.
     pub width: u32,
+    /// Exact liquid level shared by both sides of the seam.
+    pub level: Level,
 }
 
 /// One directed liquid outlet through the Ring19 world boundary.
@@ -525,6 +527,8 @@ pub struct Ring19BoundaryOutletSettings {
     pub side: Ring19BoundarySide,
     /// Exact boundary outlet width.
     pub width: u32,
+    /// Exact liquid level at the terminal boundary lanes.
+    pub level: Level,
 }
 
 /// Clockwise side names used by Ring19 boundary outlets.
@@ -1628,6 +1632,8 @@ impl V3Ring19Settings {
         let mut occupied_liquid_seams = BTreeSet::new();
         let mut outgoing_regions = BTreeSet::new();
         let mut directed_edges = Vec::new();
+        let mut liquid_regions = BTreeSet::new();
+        let mut downstream = BTreeMap::new();
         for connection in &self.liquid_connections {
             let source = usize::from(connection.source_region);
             let sink = usize::from(connection.sink_region);
@@ -1650,6 +1656,7 @@ impl V3Ring19Settings {
                 ));
             }
             validate_ring19_liquid_width(connection.width, "liquid connection")?;
+            validate_ring19_liquid_level(connection.level, "liquid connection")?;
             let seam = if source < sink {
                 (source, sink)
             } else {
@@ -1666,9 +1673,12 @@ impl V3Ring19Settings {
                 ));
             }
             directed_edges.push((source, sink));
+            liquid_regions.extend([source, sink]);
+            downstream.insert(source, sink);
         }
 
         let mut boundary_ports = BTreeSet::new();
+        let mut boundary_sources = BTreeSet::new();
         for outlet in &self.boundary_outlets {
             let source = usize::from(outlet.source_region);
             if source >= V3_RING19_REGION_COUNT {
@@ -1685,6 +1695,7 @@ impl V3Ring19Settings {
                 ));
             }
             validate_ring19_liquid_width(outlet.width, "boundary outlet")?;
+            validate_ring19_liquid_level(outlet.level, "boundary outlet")?;
             if !boundary_ports.insert((outlet.source_region, outlet.side)) {
                 return Err(format!(
                     "V3 Ring19 repeats boundary outlet region {source} side {:?}",
@@ -1696,12 +1707,24 @@ impl V3Ring19Settings {
                     "V3 Ring19 region {source} has more than one liquid outlet"
                 ));
             }
+            boundary_sources.insert(source);
         }
         if self.boundary_outlets.is_empty() {
             return Err("V3 Ring19 requires at least one explicit boundary outlet".to_owned());
         }
         if !directed_graph_is_acyclic(V3_RING19_REGION_COUNT, directed_edges) {
             return Err("V3 Ring19 directed liquid connections must be acyclic".to_owned());
+        }
+        for origin in liquid_regions {
+            let mut current = origin;
+            while !boundary_sources.contains(&current) {
+                let Some(next) = downstream.get(&current).copied() else {
+                    return Err(format!(
+                        "V3 Ring19 liquid component containing region {origin} does not terminate at a boundary outlet"
+                    ));
+                };
+                current = next;
+            }
         }
         Ok(())
     }
@@ -1814,6 +1837,15 @@ fn validate_ring19_liquid_width(width: u32, label: &str) -> Result<(), String> {
     if !(2..=MAX_SEAM_PORT_WIDTH).contains(&width) {
         return Err(format!(
             "V3 Ring19 {label} width must be between 2 and {MAX_SEAM_PORT_WIDTH}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_ring19_liquid_level(level: Level, label: &str) -> Result<(), String> {
+    if !(3..=MAX_PROCEDURAL_LEVEL).contains(&level) {
+        return Err(format!(
+            "V3 Ring19 {label} level must be between 3 and {MAX_PROCEDURAL_LEVEL}"
         ));
     }
     Ok(())
@@ -3146,11 +3178,13 @@ mod tests {
                 source_region: 1,
                 sink_region: 7,
                 width: 3,
+                level: 16,
             }],
             boundary_outlets: vec![Ring19BoundaryOutletSettings {
                 source_region: 7,
                 side: Ring19BoundarySide::NorthEast,
                 width: 3,
+                level: 16,
             }],
         }
     }
@@ -3450,22 +3484,67 @@ mod tests {
             "a boundary outlet must name an exact outer side"
         );
 
+        for invalid_level in [2, MAX_PROCEDURAL_LEVEL + 1] {
+            let mut invalid_connection_level = valid_ring19();
+            invalid_connection_level
+                .liquid_connections
+                .first_mut()
+                .expect("the fixture has one liquid connection")
+                .level = invalid_level;
+            assert!(
+                invalid_connection_level.validate().is_err(),
+                "internal liquid level {invalid_level} must fail closed"
+            );
+
+            let mut invalid_outlet_level = valid_ring19();
+            invalid_outlet_level
+                .boundary_outlets
+                .first_mut()
+                .expect("the fixture has one boundary outlet")
+                .level = invalid_level;
+            assert!(
+                invalid_outlet_level.validate().is_err(),
+                "boundary liquid level {invalid_level} must fail closed"
+            );
+        }
+
+        let mut dangling = valid_ring19();
+        let outlet = dangling
+            .boundary_outlets
+            .first_mut()
+            .expect("the fixture has one boundary outlet");
+        outlet.source_region = 9;
+        outlet.side = Ring19BoundarySide::East;
+        assert!(
+            dangling.validate().is_err(),
+            "every internal liquid component must terminate at a boundary outlet"
+        );
+
+        let mut boundary_only = valid_ring19();
+        boundary_only.liquid_connections.clear();
+        boundary_only
+            .validate()
+            .expect("an independent boundary-only Volcano outlet is valid");
+
         let mut cycle = valid_ring19();
         cycle.liquid_connections = vec![
             Ring19LiquidConnectionSettings {
                 source_region: 0,
                 sink_region: 1,
                 width: 3,
+                level: 16,
             },
             Ring19LiquidConnectionSettings {
                 source_region: 1,
                 sink_region: 2,
                 width: 3,
+                level: 16,
             },
             Ring19LiquidConnectionSettings {
                 source_region: 2,
                 sink_region: 0,
                 width: 3,
+                level: 16,
             },
         ];
         assert!(
