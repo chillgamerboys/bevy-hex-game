@@ -1,12 +1,17 @@
 //! Versioned deterministic Combat Lab reports and bounded local history.
 
 use std::collections::BTreeSet;
+use std::io;
 
+use bevy::prelude::*;
 use hex_assets::{CombatRulesProfile, CombatSettings};
 use hex_combat::{CombatSummary, EncounterOutcome, MAX_COMBAT_SUMMARY_DETAILS};
 use hex_core::TilePos;
+use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
 use xxhash_rust::xxh3::xxh3_64;
+
+use crate::storage::{read, write_atomic, StoragePaths};
 
 /// Current serialized report schema.
 pub const COMBAT_LAB_REPORT_VERSION: u16 = 1;
@@ -290,8 +295,149 @@ impl CombatLabReportHistory {
     }
 }
 
+/// Loaded local report history and the last non-destructive storage problem.
+#[derive(Resource, Debug, Clone, Default)]
+pub(crate) struct CombatLabReportStore {
+    /// Valid explicitly saved history.
+    pub(crate) history: CombatLabReportHistory,
+    /// Parse, validation, read, or write failure shown by Combat Lab.
+    pub(crate) error: Option<String>,
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the outcome report controls consume these methods in the next UI slice"
+    )
+)]
+impl CombatLabReportStore {
+    /// Explicitly saves one validated report and returns its monotonic local id.
+    pub(crate) fn save(
+        &mut self,
+        report: CombatLabReport,
+        shipped: &CombatSettings,
+        paths: &StoragePaths,
+    ) -> Result<CombatLabReportId, String> {
+        report.validate(shipped)?;
+        if self.history.reports.len() >= MAX_COMBAT_LAB_REPORTS {
+            return Err(format!(
+                "report history is full; delete a report before saving another ({MAX_COMBAT_LAB_REPORTS} maximum)"
+            ));
+        }
+        let before = self.history.clone();
+        let id = CombatLabReportId(self.history.next_id);
+        self.history.next_id = self.history.next_id.saturating_add(1);
+        self.history
+            .reports
+            .push(SavedCombatLabReport { id, report });
+        self.persist_or_restore(before, shipped, paths)?;
+        Ok(id)
+    }
+
+    /// Deletes one confirmed report while preserving all data on write failure.
+    pub(crate) fn delete(
+        &mut self,
+        id: CombatLabReportId,
+        shipped: &CombatSettings,
+        paths: &StoragePaths,
+    ) -> Result<(), String> {
+        let before = self.history.clone();
+        let original_len = self.history.reports.len();
+        self.history.reports.retain(|saved| saved.id != id);
+        if self.history.reports.len() == original_len {
+            return Err(format!("saved report {} does not exist", id.0));
+        }
+        self.persist_or_restore(before, shipped, paths)
+    }
+
+    fn persist_or_restore(
+        &mut self,
+        before: CombatLabReportHistory,
+        shipped: &CombatSettings,
+        paths: &StoragePaths,
+    ) -> Result<(), String> {
+        match persist_history(&self.history, shipped, paths) {
+            Ok(()) => {
+                self.error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.history = before;
+                self.error = Some(error.clone());
+                Err(error)
+            }
+        }
+    }
+}
+
+pub(super) fn plugin(app: &mut App) {
+    app.init_resource::<StoragePaths>()
+        .init_resource::<CombatLabReportStore>()
+        .add_systems(Startup, load_report_history);
+}
+
+fn load_report_history(
+    paths: Res<StoragePaths>,
+    shipped: Option<Res<CombatSettings>>,
+    mut store: ResMut<CombatLabReportStore>,
+) {
+    let Some(shipped) = shipped.as_deref() else {
+        store.error = Some("combat reports could not load before shipped rules".to_owned());
+        return;
+    };
+    match read(&paths.combat_reports) {
+        Ok(contents) => match ron::from_str::<CombatLabReportHistory>(&contents) {
+            Ok(history) => match history.validate(shipped) {
+                Ok(()) => {
+                    store.history = history;
+                    store.error = None;
+                }
+                Err(error) => {
+                    store.error = Some(format!(
+                        "combat-reports.ron was preserved but refused: {error}"
+                    ));
+                }
+            },
+            Err(error) => {
+                store.error = Some(format!(
+                    "combat-reports.ron was preserved but could not be parsed: {error}"
+                ));
+            }
+        },
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            store.history = CombatLabReportHistory::default();
+            store.error = None;
+        }
+        Err(error) => {
+            store.error = Some(format!("could not read combat-reports.ron: {error}"));
+        }
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the outcome report controls consume this writer in the next UI slice"
+    )
+)]
+fn persist_history(
+    history: &CombatLabReportHistory,
+    shipped: &CombatSettings,
+    paths: &StoragePaths,
+) -> Result<(), String> {
+    history.validate(shipped)?;
+    let serialized = ron::ser::to_string_pretty(history, PrettyConfig::new())
+        .map_err(|error| format!("could not serialize combat reports: {error}"))?;
+    write_atomic(&paths.combat_reports, &serialized)
+        .map_err(|error| format!("could not save combat reports: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use hex_assets::CombatRulesProfile;
     use hex_combat::CombatEvent;
     use hex_core::HexCoord;
@@ -333,6 +479,15 @@ mod tests {
             EncounterOutcome::Victory,
             summary,
         )
+    }
+
+    fn paths(root: PathBuf) -> StoragePaths {
+        StoragePaths {
+            preferences: root.join("preferences.ron"),
+            resume: root.join("resume.ron"),
+            creations: root.join("creations.ron"),
+            combat_reports: root.join("combat-reports.ron"),
+        }
     }
 
     #[test]
@@ -395,5 +550,66 @@ mod tests {
         assert_eq!(report.validate(&settings), Ok(()));
         assert_eq!(report.rosters.players.len(), 1);
         assert_eq!(report.rosters.hostiles.len(), 1);
+    }
+
+    #[test]
+    fn explicitly_saved_reports_round_trip_and_confirmed_delete_persists() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-game-combat-reports-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let paths = paths(root);
+        let shipped = CombatSettings::default();
+        let mut store = CombatLabReportStore::default();
+        let id = store
+            .save(complete_report(), &shipped, &paths)
+            .expect("explicit save");
+        let loaded: CombatLabReportHistory =
+            ron::from_str(&read(&paths.combat_reports).expect("read")).expect("parse");
+        assert_eq!(loaded, store.history);
+
+        store
+            .delete(id, &shipped, &paths)
+            .expect("confirmed delete");
+        let deleted: CombatLabReportHistory =
+            ron::from_str(&read(&paths.combat_reports).expect("read")).expect("parse");
+        assert!(deleted.reports.is_empty());
+        drop(std::fs::remove_file(&paths.combat_reports));
+        if let Some(parent) = paths.combat_reports.parent() {
+            drop(std::fs::remove_dir(parent));
+        }
+    }
+
+    #[test]
+    fn corrupt_history_is_preserved_and_never_replaces_valid_memory() {
+        let root = std::env::temp_dir().join(format!(
+            "hex-game-corrupt-combat-reports-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let paths = paths(root);
+        write_atomic(&paths.combat_reports, "not valid ron").expect("write corruption");
+        let mut app = App::new();
+        app.insert_resource(paths.clone())
+            .insert_resource(CombatSettings::default())
+            .init_resource::<CombatLabReportStore>()
+            .add_systems(Startup, load_report_history);
+        app.update();
+
+        let store = app.world().resource::<CombatLabReportStore>();
+        assert!(store.history.reports.is_empty());
+        assert!(store
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("preserved")));
+        assert_eq!(
+            read(&paths.combat_reports).expect("corruption remains on disk"),
+            "not valid ron"
+        );
+        drop(std::fs::remove_file(&paths.combat_reports));
+        if let Some(parent) = paths.combat_reports.parent() {
+            drop(std::fs::remove_dir(parent));
+        }
     }
 }

@@ -17,6 +17,7 @@ pub(crate) struct StoragePaths {
     pub(crate) preferences: PathBuf,
     pub(crate) resume: PathBuf,
     pub(crate) creations: PathBuf,
+    pub(crate) combat_reports: PathBuf,
 }
 
 impl Default for StoragePaths {
@@ -26,6 +27,7 @@ impl Default for StoragePaths {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
             creations: root.join("creations.ron"),
+            combat_reports: root.join("combat-reports.ron"),
         }
     }
 }
@@ -94,6 +96,7 @@ mod tests {
             preferences: root.join("preferences.ron"),
             resume: root.join("resume.ron"),
             creations: root.join("creations.ron"),
+            combat_reports: root.join("combat-reports.ron"),
         };
         assert_eq!(
             paths.preferences.file_name(),
@@ -103,6 +106,10 @@ mod tests {
         assert_eq!(
             paths.creations.file_name(),
             Some(OsStr::new("creations.ron"))
+        );
+        assert_eq!(
+            paths.combat_reports.file_name(),
+            Some(OsStr::new("combat-reports.ron"))
         );
     }
 }

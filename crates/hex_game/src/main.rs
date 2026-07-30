@@ -216,6 +216,7 @@ impl Plugin for AppPlugin {
                 .in_set(GameplaySetup::Perception),
         );
 
+        app.add_plugins(combat_reports::plugin);
         app.add_plugins((
             hex_assets::plugin,
             creation_store::plugin,
