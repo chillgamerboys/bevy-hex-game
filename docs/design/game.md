@@ -242,9 +242,12 @@ The sun, moon, caves, local lights, faction memory, and loss of contact follow t
 [perception contract](../systems/perception.md). Divination changes the separate
 lattice-information channel.
 
-Observation gates combat without replacing distance: an observed hostile pair must
-also satisfy `engage_range` to start combat. The existing `disengage_margin` handles
-an observed retreat, while losing sight starts a separate one-round search.
+Observation is intended to gate combat without replacing distance: an observed
+hostile pair must also satisfy `engage_range` to start combat. Casting anchors,
+hostile identities, and AI already consume authoritative observation. The remaining
+engagement, ordinary-attack, and one-round lost-contact adapters are not wired yet;
+the prototype currently starts and ends combat from distance and
+`disengage_margin` alone.
 
 - What a divination reveals scales with tier: full lattice or partial, one enemy or
   all, everything in a radius.
@@ -379,23 +382,30 @@ the other end.
 
 Brakes already proposed by the design: rituals can function on a degraded lattice,
 channelling can remain available, rout and surrender can end fights before the slog,
-and healing can restore hexes mid-combat. These are not all implemented: Channel,
-Restore, rout, and surrender are currently deferred.
+and healing can restore hexes mid-combat. Two are now playable: Channel spends one
+action to recover live, unlocked gems, and Renewal can restore chosen disabled cells
+and return a downed unit at the next round boundary. Rituals, rout, and surrender
+remain deferred.
 
 Additional candidates: desperation effects that strengthen as a lattice weakens, a
 floor on boss action count, and cheap partial recovery as a standard action.
 
-**Ruled 2026-07-27: all of the missing brakes are deferred.** Not because they are
-wrong, but because you cannot tune a spiral you have not felt. Wave 3 has now shipped
-the loop that produces the spiral: defender-chosen disables, downing, Burn, Reveal,
-and the combat readouts are playable. Whether it actually reads as *nothing, nothing,
-nothing, collapse* is now a manual-play question, not an implementation prerequisite.
-Fitting brakes before that evidence would still be tuning against a guess, and each
-one changes what the others need to do.
+**Ruled 2026-07-27, updated 2026-07-30:** the initial missing brakes were deferred
+because you cannot tune a spiral you have not felt. Channel and Renewal/Restore have
+since landed as provisional playable brakes without deciding the remaining policy.
+The loop now includes defender-chosen disables, downing, Burn, Reveal, recovery, and
+the combat readouts. Whether it reads as *nothing, nothing, nothing, collapse* is a
+Combat Lab simulation and manual-play question. Rituals, rout, surrender, and any
+additional brake should answer that evidence rather than precede it.
 
 ### Initiative
 
 Unresolved and crucial.
+
+The current prototype is a deterministic baseline: each active unit has one slot,
+ordered by its authored initiative and then stable unit id. It has no roll, round
+reroll, hold/delay action, or boss multi-slot rule. Combat Lab should compare
+alternatives against that baseline rather than treating it as the final design.
 
 - **One roll per combat, fixed.** Plannable, but a bad roll can kill a character under
   permadeath, and "improvable by air spells" has a timing problem — order locks before
@@ -414,6 +424,12 @@ broken by a well-placed hit before the third caster contributes.
 ### Action economy
 
 The same question as initiative in disguise: how scarce is a turn?
+
+The current prototype permits up to four movement steps plus one action and offers a
+two-step and bounded Custom profile in Combat Lab. Wave 7 retained the four-step
+shipping value because the deterministic matrix proved profile fidelity but supplied
+no balance preference. That is an experimental baseline, not a settled answer; see
+the [tempo decision audit](../development/wave-7-tempo-decision.md).
 
 - **Strict one action** (move *or* cast *or* channel). Maximum tension, but movement
   effectively stops happening — which strands elevation, illumination and terrain.
