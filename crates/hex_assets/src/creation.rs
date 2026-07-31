@@ -694,11 +694,12 @@ mod tests {
             ron::from_str(&encoded).expect("legacy ClearTerrain remains decode-compatible");
         assert!(decoded.validate_integrity().is_ok());
 
+        let saved = decoded
+            .spells
+            .first()
+            .expect("the decoded library retains its legacy spell");
         let mut spells = HashMap::default();
-        spells.insert(
-            decoded.spells[0].name.clone(),
-            decoded.spells[0].spell.clone(),
-        );
+        spells.insert(saved.name.clone(), saved.spell.clone());
         let issue = (SpellFile { spells })
             .validate()
             .expect_err("legacy effect is retained only as an invalid draft");
