@@ -20,6 +20,7 @@ mod screens;
 mod shell;
 mod theme;
 mod title;
+mod unit_badges;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
 pub use lattice::{
@@ -31,10 +32,10 @@ pub use layout::{
     READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, CombatLogLineView, CombatLogView,
-    GameplayAction, GameplayChromeView, GameplayHudView, InitiativeEntryView, InitiativeSide,
-    InitiativeView, PauseView, ResumeView, TitleIntent, TitleScenarioView, TitleView, UiIntent,
-    UiSetting, UiSettingRow, UiSettingsView,
+    ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CombatLogLineView,
+    CombatLogView, GameplayAction, GameplayChromeView, GameplayHudView, InitiativeEntryView,
+    InitiativeSide, InitiativeView, PauseView, ResumeView, TitleIntent, TitleScenarioView,
+    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -56,6 +57,8 @@ pub struct UiPlugin;
 pub enum UiSystems {
     /// Pointer and keyboard interactions have been translated into [`UiIntent`].
     EmitIntents,
+    /// Immutable projections have been converted into runtime presentation.
+    Render,
 }
 
 /// Ordered gameplay UI construction stages shared with application adapters that
@@ -82,6 +85,7 @@ impl Plugin for UiPlugin {
         .init_resource::<PauseView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
+        .init_resource::<UnitBadgesView>()
         .init_resource::<ResumeView>()
         .add_plugins((
             theme::plugin,
@@ -94,6 +98,7 @@ impl Plugin for UiPlugin {
             screens::plugin,
             action_rail::plugin,
             title::plugin,
+            unit_badges::plugin,
         ));
     }
 }

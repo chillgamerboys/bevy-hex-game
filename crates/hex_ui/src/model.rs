@@ -115,6 +115,37 @@ pub struct CombatLogView {
     pub lines: Vec<CombatLogLineView>,
 }
 
+/// Semantic unit-badge treatment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BadgeKind {
+    /// Current initiative actor.
+    Acting,
+    /// Current disclosed target.
+    Target,
+}
+
+/// One screen-space identity badge projection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnitBadgeView {
+    /// Canonical identity retained for immutable observation.
+    pub unit: UnitId,
+    /// Presentation role.
+    pub kind: BadgeKind,
+    /// Disclosure-safe player-facing label.
+    pub label: String,
+    /// Projected viewport anchor, or `None` when the unit is offscreen.
+    pub anchor: Option<Vec2>,
+}
+
+/// Immutable acting and target badge projections.
+#[derive(Resource, Debug, Default, Clone, PartialEq)]
+pub struct UnitBadgesView {
+    /// Acting-unit badge.
+    pub acting: Option<UnitBadgeView>,
+    /// Target badge.
+    pub target: Option<UnitBadgeView>,
+}
+
 /// Disclosed side label used by the initiative renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativeSide {
