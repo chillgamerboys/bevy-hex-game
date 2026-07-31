@@ -5,8 +5,8 @@ use hex_core::Screen;
 
 use crate::{
     blurb, fine, heading, layout::is_ultra_constrained, panel, row_button, DevTimeIntent,
-    DevTimeView, HudElement, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent, UiRegionRole,
-    UiSystems, UiViewportClass,
+    DevTimeView, GameplayChromeView, HudElement, ResolvedUiMetrics, UiAssets, UiHudSetup, UiIntent,
+    UiRegionRole, UiSystems, UiViewportClass,
 };
 
 const CONTROLS: [(&str, &str, DevTimeIntent); 6] = [
@@ -63,6 +63,7 @@ fn spawn_panel(
     mut commands: Commands,
     assets: Res<UiAssets>,
     metrics: Res<ResolvedUiMetrics>,
+    chrome: Res<GameplayChromeView>,
     regions: Query<(Entity, &UiRegionRole, Option<&ChildOf>)>,
 ) {
     let Some((inspector, frame)) = regions.iter().find_map(|(entity, role, parent)| {
@@ -80,7 +81,7 @@ fn spawn_panel(
             Pickable::IGNORE,
             GlobalZIndex(3),
         ))
-        .insert(panel_node(*metrics))
+        .insert(panel_node(*metrics, chrome.decision_required))
         .with_children(|panel| {
             panel.spawn((DevTimeHeading, heading(&assets, "DEV · TIME")));
             panel.spawn((DevTimeStatus, blurb(&assets, "Checking cyclic time…")));
@@ -103,7 +104,7 @@ fn panel_parent(viewport: UiViewportClass, inspector: Entity, frame: Option<Enti
     }
 }
 
-fn panel_node(metrics: ResolvedUiMetrics) -> Node {
+fn panel_node(metrics: ResolvedUiMetrics, decision_required: bool) -> Node {
     let mut node = Node {
         width: Val::Percent(100.0),
         flex_direction: FlexDirection::Column,
@@ -138,6 +139,9 @@ fn panel_node(metrics: ResolvedUiMetrics) -> Node {
             node.padding = UiRect::all(Val::Px(6.0));
         }
     }
+    if is_ultra_constrained(metrics) && decision_required {
+        node.display = Display::None;
+    }
     node
 }
 
@@ -168,6 +172,7 @@ fn controls_node(metrics: ResolvedUiMetrics) -> Node {
 fn reconcile_layout(
     mut commands: Commands,
     metrics: Res<ResolvedUiMetrics>,
+    chrome: Res<GameplayChromeView>,
     added_panels: Query<(), Added<DevTimePanel>>,
     added_roots: Query<(), Added<DevTimeControls>>,
     added_controls: Query<(), Added<DevTimeControl>>,
@@ -202,6 +207,7 @@ fn reconcile_layout(
     >,
 ) {
     if !metrics.is_changed()
+        && !chrome.is_changed()
         && added_panels.is_empty()
         && added_roots.is_empty()
         && added_controls.is_empty()
@@ -219,7 +225,7 @@ fn reconcile_layout(
         if current_parent.parent() != wanted_parent {
             commands.entity(wanted_parent).add_child(panel);
         }
-        *node = panel_node(*metrics);
+        *node = panel_node(*metrics, chrome.decision_required);
     }
     if let Ok(mut node) = roots.single_mut() {
         *node = controls_node(*metrics);
@@ -444,6 +450,7 @@ mod tests {
     fn controls_are_focusable_accessible_inspector_descendants() {
         let mut app = App::new();
         app.insert_resource(DevTimeView::Available { hours: 12.0 })
+            .init_resource::<GameplayChromeView>()
             .insert_resource(crate::resolve_ui_metrics(
                 Vec2::new(1920.0, 1080.0),
                 crate::UiScaleMode::Auto,
@@ -495,6 +502,7 @@ mod tests {
     fn compact_panel_leaves_the_hidden_inspector_without_recreating_controls() {
         let mut app = App::new();
         app.insert_resource(DevTimeView::Available { hours: 12.0 })
+            .init_resource::<GameplayChromeView>()
             .insert_resource(crate::resolve_ui_metrics(
                 Vec2::new(1280.0, 720.0),
                 crate::UiScaleMode::Auto,
@@ -563,7 +571,7 @@ mod tests {
             crate::resolve_ui_metrics(Vec2::new(960.0, 540.0), crate::UiScaleMode::Percent200);
         assert_eq!(metrics.viewport, UiViewportClass::Compact);
         assert!(!uses_ultra_middle_band(metrics));
-        let panel = panel_node(metrics);
+        let panel = panel_node(metrics, false);
         let Val::Px(width) = panel.width else {
             panic!("the compact panel must have a bounded width");
         };
@@ -592,7 +600,7 @@ mod tests {
         let metrics =
             crate::resolve_ui_metrics(Vec2::new(1280.0, 720.0), crate::UiScaleMode::Percent200);
         assert!(uses_ultra_middle_band(metrics));
-        let panel = panel_node(metrics);
+        let panel = panel_node(metrics, false);
         assert_eq!(panel.left, Val::Px(196.0));
         assert_eq!(panel.right, Val::Px(12.0));
         assert_eq!(panel.top, Val::Px(138.0));
@@ -698,6 +706,75 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn required_choice_hides_ultra_constrained_controls_and_preserves_their_entities() {
+        let mut app = App::new();
+        app.add_plugins(crate::test_support::HeadlessUiPlugin::new(1280, 720));
+        app.world_mut()
+            .insert_resource(crate::UiScalePreference(crate::UiScaleMode::Percent200));
+        app.world_mut()
+            .insert_resource(DevTimeView::Available { hours: 12.0 });
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Gameplay);
+        for _ in 0..8 {
+            app.update();
+        }
+
+        let mut before = control_entities(app.world_mut());
+        before.sort_by_key(|entity| entity.to_bits());
+        assert_eq!(before.len(), 6);
+        let focused = before
+            .first()
+            .copied()
+            .expect("available time controls must be focusable");
+        app.insert_resource(InputFocus::from_entity(focused));
+        app.insert_resource(required_hud());
+        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView {
+            shown: true,
+            decision_required: true,
+            encounter_complete: false,
+        };
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let required = crate::test_support::ui_tree_snapshot(app.world_mut());
+        assert!(required
+            .nodes
+            .iter()
+            .all(|node| node.name != "Dev Time Panel"));
+        assert!(CONTROLS
+            .iter()
+            .all(|(name, _, _)| required.nodes.iter().all(|node| node.name != *name)));
+        assert_eq!(app.world().resource::<InputFocus>().get(), None);
+        let rail = required
+            .nodes
+            .iter()
+            .find(|node| node.name == "Primary Action Rail")
+            .expect("the required action rail must remain visible");
+        assert!(rail.size.cmpgt(Vec2::ZERO).all());
+
+        *app.world_mut().resource_mut::<GameplayChromeView>() = GameplayChromeView {
+            shown: true,
+            decision_required: false,
+            encounter_complete: false,
+        };
+        app.insert_resource(crate::GameplayHudView::default());
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let restored = crate::test_support::ui_tree_snapshot(app.world_mut());
+        assert!(restored
+            .nodes
+            .iter()
+            .any(|node| node.name == "Dev Time Panel"));
+        let mut after = control_entities(app.world_mut());
+        after.sort_by_key(|entity| entity.to_bits());
+        assert_eq!(after, before);
     }
 
     #[test]
@@ -811,5 +888,43 @@ mod tests {
             && left_max.x > right_min.x
             && left_min.y < right_max.y
             && left_max.y > right_min.y
+    }
+
+    fn required_hud() -> crate::GameplayHudView {
+        let disabled = |reason: &str| crate::ActionAvailability::Disabled {
+            reason: reason.to_owned(),
+        };
+        crate::GameplayHudView {
+            phase: hex_core::GameplayPhase::Active,
+            actor: Some(hex_core::UnitId(0)),
+            actor_label: "Hedge Mage".to_owned(),
+            round: "Round 1".to_owned(),
+            movement_remaining: 2,
+            action_remaining: true,
+            required_prompt: Some("Choose the required cells in the lattice".to_owned()),
+            actions: vec![
+                crate::ActionAffordance {
+                    action: crate::GameplayAction::ConfirmDecision,
+                    label: "Confirm choice".to_owned(),
+                    shortcut: Some("Enter".to_owned()),
+                    availability: disabled("Choose the required cells in the lattice"),
+                    priority: crate::ActionPriority::Required,
+                },
+                crate::ActionAffordance {
+                    action: crate::GameplayAction::Channel,
+                    label: "Channel".to_owned(),
+                    shortcut: None,
+                    availability: disabled("Resolve the required choice first"),
+                    priority: crate::ActionPriority::Primary,
+                },
+                crate::ActionAffordance {
+                    action: crate::GameplayAction::EndTurn,
+                    label: "End turn".to_owned(),
+                    shortcut: Some("Space".to_owned()),
+                    availability: disabled("Resolve the required choice first"),
+                    priority: crate::ActionPriority::Primary,
+                },
+            ],
+        }
     }
 }
