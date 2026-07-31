@@ -506,36 +506,35 @@ fn name_input(
     value: &str,
     field: CreatorNameField,
 ) {
-    parent
-        .spawn((
-            Name::new(match field {
-                CreatorNameField::Character => "Character Name",
-                CreatorNameField::Spell => "Spell Name",
-            }),
-            EditableText {
-                max_characters: Some(MAX_CREATION_NAME_CHARS),
-                visible_width: Some(24.0),
-                ..EditableText::new(value)
-            },
-            TextFont {
-                font: assets.body.clone().into(),
-                ..TextFont::from_font_size(18.0)
-            },
-            TextColor(LABEL),
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-            BorderColor::all(ACCENT_EDGE),
-            Node {
-                width: Val::Percent(100.0),
-                min_height: Val::Px(44.0),
-                padding: UiRect::all(Val::Px(9.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            field,
-        ))
-        .observe(|focus: On<Pointer<Click>>, mut commands: Commands| {
-            commands.entity(focus.entity).insert(TabIndex(0));
-        });
+    let accessible = match field {
+        CreatorNameField::Character => "Character Name",
+        CreatorNameField::Spell => "Spell Name",
+    };
+    parent.spawn((
+        Name::new(accessible),
+        AccessibleLabel::new(accessible),
+        TabIndex(0),
+        EditableText {
+            max_characters: Some(MAX_CREATION_NAME_CHARS),
+            visible_width: Some(24.0),
+            ..EditableText::new(value)
+        },
+        TextFont {
+            font: assets.body.clone().into(),
+            ..TextFont::from_font_size(18.0)
+        },
+        TextColor(LABEL),
+        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+        BorderColor::all(ACCENT_EDGE),
+        Node {
+            width: Val::Percent(100.0),
+            min_height: Val::Px(44.0),
+            padding: UiRect::all(Val::Px(9.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            ..default()
+        },
+        field,
+    ));
 }
 
 #[expect(

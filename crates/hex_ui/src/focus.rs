@@ -65,13 +65,13 @@ fn activate_focused_button(
 fn paint_keyboard_focus(
     focus: Res<InputFocus>,
     visible: Res<InputFocusVisible>,
-    buttons: Query<Entity, With<Button>>,
+    focusable: Query<Entity, With<TabIndex>>,
     mut commands: Commands,
 ) {
     if !focus.is_changed() && !visible.is_changed() {
         return;
     }
-    for entity in &buttons {
+    for entity in &focusable {
         if visible.0 && focus.get() == Some(entity) {
             commands.entity(entity).insert(Outline {
                 color: FOCUS_COLOR,

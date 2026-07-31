@@ -6,21 +6,19 @@ use bevy::ecs::system::SystemParam;
 use bevy::picking::events::{Click, Pointer};
 use bevy::picking::Pickable;
 use bevy::prelude::*;
-use bevy::text::EditableText;
-use bevy::ui_widgets::ScrollArea;
 use hex_assets::{
     character_lattice_file, character_runtime_key, combined_spell_file, AcceptedContentRevision,
     CombatLabDeploymentRegion, CombatLabMapCatalog, CombatLabMapDefinition, CombatLabRegionCenter,
-    CombatRuleField, CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex,
-    CreationCellKind, CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter,
-    EncounterFaction, EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary,
-    PlayerSettings, PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary,
-    SpellBook, SpellFile, SpellReference, SubstanceTable,
+    CombatRulesPreset, CombatRulesProfile, CombatSettings, ContentIndex, CreationCellKind,
+    CreationPresetCatalog, CustomCharacterId, ElementCatalog, Encounter, EncounterFaction,
+    EncounterPlacement, FormationCenter, GameAssets, LatticeFile, LatticeLibrary, PlayerSettings,
+    PresetAudience, Roster, RosterEntry, SavedCharacter, Scenario, ScenarioLibrary, SpellBook,
+    SpellFile, SpellReference, SubstanceTable,
 };
 use hex_core::{
     combat_lab_fixture, GameplayPhase, GameplaySetup, GameplaySetupFailure, Headroom, HexCoord,
     HexSpan, HexTile, MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos,
-    TraversalBlockers, TraversalProfile, COMBAT_LAB_FIXTURES,
+    TraversalBlockers, TraversalProfile,
 };
 use hex_gameplay_model::{
     CombatLabEdit, CombatLabModel, LabTab, RosterChoice as ModelRosterChoice, SandboxRestore,
@@ -35,15 +33,18 @@ use crate::combat_reports::{
     CombatLabReportStore,
 };
 use crate::creation_store::CreationStore;
-use crate::menus::lattice_view::short_name;
 use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
 use crate::storage::StoragePaths;
 use hex_ui::{
-    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button,
-    CharacterBuildSummary, UiAssets, DANGER, FUSION_COLOR, LABEL,
+    CombatLabComparisonView, CombatLabIntent as LabAction, CombatLabReportCardView,
+    CombatLabReportField, CombatLabReportsView, CombatLabScreenView, CreatorLibraryView,
+    DeploymentIntent as DeploymentAction, DeploymentRosterEntryView, DeploymentView, UiIntent,
+    UiSystems,
 };
 
-use super::{despawn_screen, screen_root, screen_root_node};
+use super::despawn_screen;
+
+pub(crate) use hex_ui::CombatLabRulesVariant as FixtureRulesVariant;
 
 const MAX_ROSTER: usize = MAX_COMBAT_LAB_ROSTER;
 
@@ -306,94 +307,6 @@ struct DeploymentMarkerMaterials {
 #[derive(Component)]
 struct DeploymentHidden;
 
-#[derive(Component)]
-struct DeploymentHud;
-
-#[derive(Component)]
-struct DeploymentSummary;
-
-#[derive(Component)]
-struct DeploymentSide;
-
-#[derive(Component)]
-struct DeploymentActions;
-
-#[derive(Component, Debug, Clone, Copy)]
-enum DeploymentAction {
-    Select { player: bool, index: usize },
-    Undo,
-    ClearPlayer,
-    ClearHostile,
-    AutoPlace,
-    Back,
-    StartCombat,
-}
-
-#[derive(Component, Debug, Clone)]
-enum LabAction {
-    Tab(LabTab),
-    Back,
-    ShowSandboxStep(SandboxStep),
-    SelectMap(String),
-    AddPlayerTemplate(String),
-    AddHostileTemplate(String),
-    AddPlayerCustom(CustomCharacterId),
-    AddHostileCustom(CustomCharacterId),
-    RemovePlayer(usize),
-    RemoveHostile(usize),
-    MovePlayer(usize, i8),
-    MoveHostile(usize, i8),
-    EditCustom(CustomCharacterId),
-    SelectRulesPreset(CombatRulesPreset),
-    AdjustRule(CombatRuleField, i8),
-    ResetRules,
-    PrepareDeployment,
-    StartFixture(String, FixtureRulesVariant),
-    SelectCompareLeft(CombatLabReportId),
-    SelectCompareRight(CombatLabReportId),
-    RequestReportDelete(CombatLabReportId),
-    ConfirmReportDelete(CombatLabReportId),
-    CancelReportDelete,
-}
-
-#[derive(Component)]
-struct LabRoot;
-
-#[derive(Component)]
-struct LabResponsiveBody;
-
-#[derive(Component, Debug, Clone, Copy)]
-enum LabBodyPanel {
-    Sidebar(f32),
-    Main,
-}
-
-#[derive(Component)]
-struct SavedReportComparison;
-
-#[derive(Component)]
-struct FixtureFilter;
-
-#[derive(Component)]
-struct ReportLabelInput(CombatLabReportId);
-
-#[derive(Component)]
-struct ReportNotesInput(CombatLabReportId);
-
-#[derive(Component)]
-struct FixtureCard {
-    #[cfg(any(test, feature = "test-support"))]
-    id: &'static str,
-    searchable: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FixtureRulesVariant {
-    Shipped,
-    TacticalTwoStep,
-    CustomThreeStep,
-}
-
 /// Scenario name behind a stable automated fixture id.
 #[cfg(feature = "visual-walk")]
 pub(crate) fn fixture_scenario_name(id: &str) -> Option<&'static str> {
@@ -551,62 +464,30 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            (handle_deployment_actions, apply_deployment_layout).run_if(in_state(Screen::Gameplay)),
+            (
+                handle_deployment_actions.after(UiSystems::EmitIntents),
+                publish_deployment_view,
+            )
+                .chain()
+                .run_if(in_state(Screen::Gameplay)),
         )
         .add_observer(on_deployment_surface_clicked)
         .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
         .add_systems(OnExit(Screen::Gameplay), restore_shipped_combat_rules)
         .add_systems(
             OnEnter(Screen::CombatLab),
-            (initialize_lab, spawn_lab).chain(),
+            (initialize_lab, publish_combat_lab_view).chain(),
         )
         .add_systems(
             Update,
             (
-                sync_fixture_filter,
-                sync_report_annotations,
-                handle_lab_actions,
-                rebuild_lab,
-                apply_lab_screen_layout,
+                handle_lab_actions.after(UiSystems::EmitIntents),
+                publish_combat_lab_view,
             )
                 .chain()
                 .run_if(in_state(Screen::CombatLab)),
         )
         .add_systems(OnExit(Screen::CombatLab), despawn_screen(Screen::CombatLab));
-}
-
-fn apply_lab_screen_layout(
-    metrics: Res<hex_ui::ResolvedUiMetrics>,
-    added_bodies: Query<(), Added<LabResponsiveBody>>,
-    mut bodies: Query<&mut Node, With<LabResponsiveBody>>,
-    mut panels: Query<(&LabBodyPanel, &mut Node), Without<LabResponsiveBody>>,
-) {
-    if !metrics.is_changed() && added_bodies.is_empty() {
-        return;
-    }
-    let compact = metrics.viewport == hex_ui::UiViewportClass::Compact;
-    for mut node in &mut bodies {
-        node.flex_direction = if compact {
-            FlexDirection::Column
-        } else {
-            FlexDirection::Row
-        };
-        node.overflow = if compact {
-            Overflow::scroll_y()
-        } else {
-            Overflow::default()
-        };
-    }
-    for (role, mut node) in &mut panels {
-        node.width = if compact {
-            Val::Percent(100.0)
-        } else {
-            match role {
-                LabBodyPanel::Sidebar(width) => Val::Px(*width),
-                LabBodyPanel::Main => Val::Auto,
-            }
-        };
-    }
 }
 
 pub(crate) fn initialize_lab(
@@ -695,10 +576,11 @@ pub(crate) fn roster_choice_key(choice: &RosterChoice) -> String {
     }
 }
 
-fn spawn_lab(
-    mut commands: Commands,
-    assets: Res<UiAssets>,
-    asset_server: Res<AssetServer>,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the composition root freezes every Lab catalog into one immutable presentation view"
+)]
+fn publish_combat_lab_view(
     state: Res<CombatLabState>,
     store: Res<CreationStore>,
     elements: Option<Res<ElementCatalog>>,
@@ -707,1386 +589,159 @@ fn spawn_lab(
     maps: Option<Res<CombatLabMapCatalog>>,
     combat: Option<Res<CombatSettings>>,
     reports: Res<CombatLabReportStore>,
-) {
-    spawn_lab_ui(
-        &mut commands,
-        &assets,
-        &state,
-        &store,
-        elements.as_deref(),
-        spells.as_deref(),
-        presets.as_deref(),
-        maps.as_deref(),
-        combat.as_deref(),
-        &reports,
-        &asset_server,
-    );
-}
-
-fn rebuild_lab(
-    mut commands: Commands,
-    roots: Query<Entity, With<LabRoot>>,
-    assets: Res<UiAssets>,
-    asset_server: Res<AssetServer>,
-    state: Res<CombatLabState>,
-    store: Res<CreationStore>,
-    elements: Option<Res<ElementCatalog>>,
-    spells: Option<Res<SpellBook>>,
-    presets: Option<Res<CreationPresetCatalog>>,
-    maps: Option<Res<CombatLabMapCatalog>>,
-    combat: Option<Res<CombatSettings>>,
-    reports: Res<CombatLabReportStore>,
+    mut view: ResMut<CombatLabScreenView>,
     mut last_revision: Local<u64>,
 ) {
-    if roots.is_empty() || *last_revision != state.revision {
-        for root in &roots {
-            commands.entity(root).despawn();
-        }
-        spawn_lab_ui(
-            &mut commands,
-            &assets,
-            &state,
-            &store,
-            elements.as_deref(),
-            spells.as_deref(),
-            presets.as_deref(),
-            maps.as_deref(),
-            combat.as_deref(),
-            &reports,
-            &asset_server,
+    let catalog_changed = elements.as_ref().is_some_and(|value| value.is_changed())
+        || spells.as_ref().is_some_and(|value| value.is_changed())
+        || presets.as_ref().is_some_and(|value| value.is_changed())
+        || maps.as_ref().is_some_and(|value| value.is_changed())
+        || combat.as_ref().is_some_and(|value| value.is_changed());
+    if *last_revision == state.revision && !store.is_changed() && !catalog_changed {
+        return;
+    }
+
+    let mut map_ready_choices = Vec::new();
+    if let (Some(elements), Some(spells)) = (elements.as_deref(), spells.as_deref()) {
+        map_ready_choices.extend(
+            store
+                .file
+                .characters
+                .iter()
+                .filter(|character| {
+                    character_is_map_ready(character, &store.file, elements, spells)
+                })
+                .map(|character| RosterChoice::Custom(character.id)),
         );
-        *last_revision = state.revision;
-    }
-}
-
-fn spawn_lab_ui(
-    commands: &mut Commands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-    store: &CreationStore,
-    elements: Option<&ElementCatalog>,
-    spells: Option<&SpellBook>,
-    presets: Option<&CreationPresetCatalog>,
-    maps: Option<&CombatLabMapCatalog>,
-    combat: Option<&CombatSettings>,
-    reports: &CombatLabReportStore,
-    asset_server: &AssetServer,
-) {
-    commands
-        .spawn((screen_root(Screen::CombatLab, "Combat Lab Screen"), LabRoot))
-        .insert(Node {
-            padding: UiRect::all(Val::Px(18.0)),
-            justify_content: JustifyContent::FlexStart,
-            ..screen_root_node()
-        })
-        .with_children(|root| {
-            root.spawn(display(assets, "Combat Lab"));
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .with_children(|tabs| {
-                lab_button(
-                    tabs,
-                    assets,
-                    "Sandbox",
-                    LabAction::Tab(LabTab::Sandbox),
-                    170.0,
-                );
-                lab_button(
-                    tabs,
-                    assets,
-                    "Fixed Fixtures",
-                    LabAction::Tab(LabTab::Fixtures),
-                    170.0,
-                );
-                lab_button(
-                    tabs,
-                    assets,
-                    "Saved Reports",
-                    LabAction::Tab(LabTab::Reports),
-                    170.0,
-                );
-                lab_button(tabs, assets, "Back", LabAction::Back, 100.0);
-            });
-            if !state.notice.is_empty() {
-                root.spawn(blurb(assets, state.notice.clone()));
-            }
-            match state.tab {
-                LabTab::Sandbox => {
-                    spawn_sandbox_progress(root, assets, state.sandbox_step);
-                    match state.sandbox_step {
-                        SandboxStep::Map => {
-                            spawn_map_setup(root, assets, state, maps, asset_server);
-                        }
-                        SandboxStep::Rosters => spawn_sandbox_setup(
-                            root,
-                            assets,
-                            state,
-                            store,
-                            elements,
-                            spells,
-                            presets,
-                            maps,
-                            asset_server,
-                        ),
-                        SandboxStep::Rules => {
-                            spawn_rules_setup(root, assets, state, maps, combat);
-                        }
-                    }
-                }
-                LabTab::Fixtures => spawn_fixture_selector(root, assets, state),
-                LabTab::Reports => spawn_saved_reports(root, assets, state, reports),
-            }
-        });
-}
-
-fn lab_button(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    text: impl Into<String>,
-    action: LabAction,
-    width: f32,
-) {
-    let text = text.into();
-    parent
-        .spawn((row_button(text.clone(), width), action))
-        .with_child(label(assets, text));
-}
-
-fn map_button(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    map: &CombatLabMapDefinition,
-    selected: bool,
-) {
-    let text = if selected {
-        format!("SELECTED · {}", map.display_name)
-    } else {
-        map.display_name.clone()
-    };
-    parent
-        .spawn((
-            row_button(map.display_name.clone(), 280.0),
-            LabAction::SelectMap(map.id.clone()),
-        ))
-        .insert(BorderColor::all(if selected {
-            Color::srgba(0.49, 0.68, 0.86, 1.0)
-        } else {
-            Color::srgba(0.26, 0.29, 0.34, 0.9)
-        }))
-        .with_child(label(assets, text));
-}
-
-fn map_seed_label(map: &CombatLabMapDefinition) -> String {
-    map.fixed_seed.map_or_else(
-        || "Authored / embedded seed".to_owned(),
-        |seed| format!("Seed {seed}"),
-    )
-}
-
-fn deployment_summary(map: &CombatLabMapDefinition) -> String {
-    format!(
-        "Deploy P {} r{} · H {} r{}",
-        region_center_label(&map.player_region.center),
-        map.player_region.radius,
-        region_center_label(&map.hostile_region.center),
-        map.hostile_region.radius,
-    )
-}
-
-fn region_center_label(center: &CombatLabRegionCenter) -> String {
-    match center {
-        CombatLabRegionCenter::Fixed(coord) => {
-            format!("({},{},{})", coord.x, coord.y, coord.z)
-        }
-        CombatLabRegionCenter::Anchor(anchor) => format!("@{anchor}"),
-    }
-}
-
-fn spawn_sandbox_progress(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    current: SandboxStep,
-) {
-    root.spawn(Node {
-        flex_direction: FlexDirection::Row,
-        column_gap: Val::Px(10.0),
-        ..default()
-    })
-    .with_children(|progress| {
-        for (step, text) in [
-            (SandboxStep::Map, "1 · MAP"),
-            (SandboxStep::Rosters, "2 · ROSTERS"),
-            (SandboxStep::Rules, "3 · RULES"),
-        ] {
-            let status = if step == current { "ACTIVE" } else { "STEP" };
-            progress
-                .spawn(fine(assets, format!("{status} · {text}")))
-                .insert(TextColor(if step == current {
-                    Color::srgba(0.93, 0.79, 0.46, 1.0)
-                } else {
-                    Color::srgba(0.67, 0.71, 0.77, 1.0)
-                }));
-        }
-        progress.spawn(fine(assets, "4 · DEPLOY"));
-    });
-}
-
-fn spawn_map_setup(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-    maps: Option<&CombatLabMapCatalog>,
-    asset_server: &AssetServer,
-) {
-    root.spawn((
-        LabResponsiveBody,
-        ScrollArea,
-        Node {
-            width: Val::Percent(96.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(12.0),
-            ..default()
-        },
-    ))
-    .with_children(|body| {
-        body.spawn((panel(), LabBodyPanel::Sidebar(360.0)))
-            .insert(Node {
-                width: Val::Px(360.0),
-                min_height: Val::Px(0.0),
-                ..panel_node()
-            })
-            .with_children(|list| {
-                list.spawn(heading(assets, "1 · choose map"));
-                list.spawn(blurb(
-                    assets,
-                    "The selected map and resolved seed are frozen into every run and report.",
-                ));
-                list.spawn((
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(6.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|buttons| {
-                    if let Some(maps) = maps {
-                        for map in &maps.maps {
-                            map_button(buttons, assets, map, state.map == map.id);
-                        }
-                    }
-                });
-            });
-        body.spawn((panel(), LabBodyPanel::Main))
-            .insert(Node {
-                min_width: Val::Px(0.0),
-                min_height: Val::Px(0.0),
-                flex_grow: 1.0,
-                ..panel_node()
-            })
-            .with_children(|preview| {
-                preview.spawn(heading(assets, "frozen map preview"));
-                if let Some(record) = maps.and_then(|catalog| catalog.get(&state.map)) {
-                    preview.spawn((
-                        Name::new(format!("Map Preview: {}", record.display_name)),
-                        ImageNode::new(asset_server.load(record.preview.clone())),
-                        Node {
-                            width: Val::Percent(100.0),
-                            max_width: Val::Px(720.0),
-                            height: Val::Px(360.0),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::srgba(0.49, 0.68, 0.86, 0.85)),
-                    ));
-                    preview.spawn(heading(assets, record.display_name.clone()));
-                    preview.spawn(fine(assets, record.tags.join("  ·  ")));
-                    preview.spawn(blurb(assets, record.description.clone()));
-                    preview.spawn(fine(
-                        assets,
-                        format!(
-                            "{}  ·  {}",
-                            map_seed_label(record),
-                            deployment_summary(record)
-                        ),
-                    ));
-                    lab_button(
-                        preview,
-                        assets,
-                        "Continue to Rosters",
-                        LabAction::ShowSandboxStep(SandboxStep::Rosters),
-                        220.0,
-                    );
-                } else {
-                    preview
-                        .spawn(blurb(assets, "The packaged map catalog is still loading."))
-                        .insert(TextColor(DANGER));
-                }
-            });
-    });
-}
-
-fn spawn_rules_setup(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-    maps: Option<&CombatLabMapCatalog>,
-    shipped: Option<&CombatSettings>,
-) {
-    let Some(shipped) = shipped else {
-        root.spawn(blurb(assets, "Shipped combat rules are still loading."))
-            .insert(TextColor(DANGER));
-        return;
-    };
-    let profile = state
-        .rules
-        .clone()
-        .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
-    let changes = profile.changed_from_shipped(shipped);
-    root.spawn((
-        LabResponsiveBody,
-        ScrollArea,
-        Node {
-            width: Val::Percent(96.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(12.0),
-            ..default()
-        },
-    ))
-    .with_children(|body| {
-        body.spawn((panel(), LabBodyPanel::Sidebar(285.0)))
-            .insert(Node {
-                width: Val::Px(285.0),
-                ..panel_node()
-            })
-            .with_children(|summary| {
-                summary.spawn(heading(assets, "frozen run summary"));
-                let map = maps
-                    .and_then(|catalog| catalog.get(&state.map))
-                    .map_or("Loading map", |map| map.display_name.as_str());
-                summary.spawn(blurb(
-                    assets,
-                    format!(
-                        "{map}\nPlayer {} · Hostile {}\n{} field{} changed from shipped",
-                        state.players.len(),
-                        state.hostiles.len(),
-                        changes.len(),
-                        if changes.len() == 1 { "" } else { "s" }
-                    ),
-                ));
-                for change in &changes {
-                    summary.spawn(fine(
-                        assets,
-                        format!(
-                            "CHANGED · {} {} → {}",
-                            change.field.label(),
-                            change.shipped,
-                            change.selected
-                        ),
-                    ));
-                }
-                lab_button(
-                    summary,
-                    assets,
-                    "Back to Rosters",
-                    LabAction::ShowSandboxStep(SandboxStep::Rosters),
-                    190.0,
-                );
-            });
-        body.spawn((panel(), LabBodyPanel::Main))
-            .insert(Node {
-                min_width: Val::Px(0.0),
-                min_height: Val::Px(0.0),
-                flex_grow: 1.0,
-                ..panel_node()
-            })
-            .with_children(|rules| {
-                rules.spawn(heading(assets, "3 · rules profile"));
-                rules
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(7.0),
-                        ..default()
-                    })
-                    .with_children(|presets| {
-                        for (preset, text) in [
-                            (CombatRulesPreset::Shipped, "Shipped"),
-                            (CombatRulesPreset::TacticalTwoStep, "Tactical two-step"),
-                            (CombatRulesPreset::Custom, "Custom"),
-                        ] {
-                            let selected = profile.preset == preset;
-                            lab_button(
-                                presets,
-                                assets,
-                                if selected {
-                                    format!("SELECTED · {text}")
-                                } else {
-                                    text.to_owned()
-                                },
-                                LabAction::SelectRulesPreset(preset),
-                                205.0,
-                            );
-                        }
-                    });
-                rules
-                    .spawn((
-                        ScrollArea,
-                        Node {
-                            min_height: Val::Px(0.0),
-                            flex_grow: 1.0,
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(5.0),
-                            overflow: Overflow::scroll_y(),
-                            ..default()
-                        },
-                    ))
-                    .with_children(|fields| {
-                        for field in CombatRuleField::ALL {
-                            let bounds = field.bounds();
-                            let value = profile.value(field);
-                            let shipped_value = CombatRulesProfile::shipped(shipped).value(field);
-                            fields
-                                .spawn(panel())
-                                .insert(Node {
-                                    width: Val::Percent(100.0),
-                                    ..panel_node()
-                                })
-                                .with_children(|row| {
-                                    row.spawn(heading(assets, field.label()));
-                                    row.spawn(fine(assets, field.description()));
-                                    row.spawn(Node {
-                                        flex_direction: FlexDirection::Row,
-                                        align_items: AlignItems::Center,
-                                        column_gap: Val::Px(7.0),
-                                        ..default()
-                                    })
-                                    .with_children(
-                                        |stepper| {
-                                            lab_button(
-                                                stepper,
-                                                assets,
-                                                "−",
-                                                LabAction::AdjustRule(field, -1),
-                                                46.0,
-                                            );
-                                            stepper.spawn(label(assets, value.to_string()));
-                                            lab_button(
-                                                stepper,
-                                                assets,
-                                                "+",
-                                                LabAction::AdjustRule(field, 1),
-                                                46.0,
-                                            );
-                                            stepper.spawn(fine(
-                                                assets,
-                                                format!(
-                                                    "VALID {}–{} · {}",
-                                                    bounds.min,
-                                                    bounds.max,
-                                                    if value == shipped_value {
-                                                        "SHIPPED".to_owned()
-                                                    } else {
-                                                        format!(
-                                                            "CHANGED {} → {}",
-                                                            shipped_value, value
-                                                        )
-                                                    }
-                                                ),
-                                            ));
-                                        },
-                                    );
-                                });
-                        }
-                    });
-                rules
-                    .spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(7.0),
-                        ..default()
-                    })
-                    .with_children(|actions| {
-                        lab_button(
-                            actions,
-                            assets,
-                            "Reset to Shipped",
-                            LabAction::ResetRules,
-                            180.0,
-                        );
-                        lab_button(
-                            actions,
-                            assets,
-                            "Load Map & Deploy",
-                            LabAction::PrepareDeployment,
-                            210.0,
-                        );
-                    });
-            });
-    });
-}
-
-fn spawn_sandbox_setup(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-    store: &CreationStore,
-    elements: Option<&ElementCatalog>,
-    spells: Option<&SpellBook>,
-    presets: Option<&CreationPresetCatalog>,
-    maps: Option<&CombatLabMapCatalog>,
-    asset_server: &AssetServer,
-) {
-    root.spawn((
-        LabResponsiveBody,
-        ScrollArea,
-        Node {
-            width: Val::Percent(96.0),
-            height: Val::Px(0.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(12.0),
-            ..default()
-        },
-    ))
-    .with_children(|body| {
-        body.spawn((panel(), LabBodyPanel::Sidebar(320.0)))
-            .insert(Node {
-                width: Val::Px(320.0),
-                min_height: Val::Px(0.0),
-                ..panel_node()
-            })
-            .with_children(|map_panel| {
-                map_panel.spawn(heading(assets, "selected map"));
-                if let Some(record) = maps.and_then(|catalog| catalog.get(&state.map)) {
-                    map_panel.spawn((
-                        Name::new(format!("Map Preview: {}", record.display_name)),
-                        ImageNode::new(asset_server.load(record.preview.clone())),
-                        Node {
-                            width: Val::Px(280.0),
-                            height: Val::Px(158.0),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(Color::srgba(0.49, 0.68, 0.86, 0.85)),
-                    ));
-                    map_panel.spawn(heading(assets, record.display_name.clone()));
-                    map_panel.spawn(fine(assets, record.tags.join("  ·  ")));
-                    map_panel.spawn(blurb(assets, record.description.clone()));
-                    map_panel.spawn(fine(
-                        assets,
-                        format!(
-                            "{}  ·  {}",
-                            map_seed_label(record),
-                            deployment_summary(record)
-                        ),
-                    ));
-                } else {
-                    map_panel
-                        .spawn(blurb(assets, "The packaged map catalog is still loading."))
-                        .insert(TextColor(DANGER));
-                }
-                lab_button(
-                    map_panel,
-                    assets,
-                    "Back to Map",
-                    LabAction::ShowSandboxStep(SandboxStep::Map),
-                    170.0,
-                );
-            });
-
-        body.spawn((panel(), LabBodyPanel::Main))
-            .insert(Node {
-                min_width: Val::Px(0.0),
-                min_height: Val::Px(0.0),
-                flex_grow: 1.0,
-                ..panel_node()
-            })
-            .with_children(|rosters| {
-                let map_label = maps
-                    .and_then(|catalog| catalog.get(&state.map))
-                    .map_or("Loading map", |record| record.display_name.as_str());
-                rosters.spawn(heading(assets, format!("{map_label} · rosters")));
-                rosters
-                    .spawn(Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(12.0),
-                        ..default()
-                    })
-                    .with_children(|columns| {
-                        spawn_roster_column(
-                            columns,
-                            assets,
-                            "Player",
-                            &state.players,
-                            true,
-                            store,
-                            elements,
-                            spells,
-                            presets,
-                        );
-                        spawn_roster_column(
-                            columns,
-                            assets,
-                            "Hostile · baseline AI",
-                            &state.hostiles,
-                            false,
-                            store,
-                            elements,
-                            spells,
-                            presets,
-                        );
-                    });
-                let ready = !state.players.is_empty()
-                    && !state.hostiles.is_empty()
-                    && state.players.len() <= MAX_ROSTER
-                    && state.hostiles.len() <= MAX_ROSTER;
-                if ready {
-                    lab_button(
-                        rosters,
-                        assets,
-                        "Continue to Rules",
-                        LabAction::ShowSandboxStep(SandboxStep::Rules),
-                        230.0,
-                    );
-                } else {
-                    rosters
-                        .spawn(blurb(assets, "Each side needs 1–6 Map-ready characters."))
-                        .insert(TextColor(DANGER));
-                }
-            });
-    });
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one roster column presents both packaged and saved choices"
-)]
-fn spawn_roster_column(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    title: &str,
-    roster: &[RosterChoice],
-    player: bool,
-    store: &CreationStore,
-    elements: Option<&ElementCatalog>,
-    spells: Option<&SpellBook>,
-    presets: Option<&CreationPresetCatalog>,
-) {
-    parent
-        .spawn(panel())
-        .insert(Node {
-            min_width: Val::Px(0.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|column| {
-            column.spawn(heading(assets, title));
-            column
-                .spawn((
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(7.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    for (index, choice) in roster.iter().enumerate() {
-                        let (up, down, remove) = if player {
-                            (
-                                LabAction::MovePlayer(index, -1),
-                                LabAction::MovePlayer(index, 1),
-                                LabAction::RemovePlayer(index),
-                            )
-                        } else {
-                            (
-                                LabAction::MoveHostile(index, -1),
-                                LabAction::MoveHostile(index, 1),
-                                LabAction::RemoveHostile(index),
-                            )
-                        };
-                        spawn_build_card(
-                            list,
-                            assets,
-                            choice,
-                            store,
-                            presets,
-                            elements,
-                            spells,
-                            Some((index + 1, up, down, remove)),
-                            None,
-                        );
-                    }
-                    if roster.len() < MAX_ROSTER {
-                        list.spawn(fine(assets, "ADD TEMPLATE"));
-                        for template in ["wolf", "raider", "hedge-mage"] {
-                            spawn_build_card(
-                                list,
-                                assets,
-                                &RosterChoice::Template(template.to_owned()),
-                                store,
-                                presets,
-                                elements,
-                                spells,
-                                None,
-                                Some(if player {
-                                    LabAction::AddPlayerTemplate(template.to_owned())
-                                } else {
-                                    LabAction::AddHostileTemplate(template.to_owned())
-                                }),
-                            );
-                        }
-                        list.spawn(fine(assets, "ADD SAVED CHARACTER"));
-                        for character in &store.file.characters {
-                            let ready = elements.zip(spells).is_some_and(|(elements, spells)| {
-                                character_is_map_ready(character, &store.file, elements, spells)
-                            });
-                            spawn_build_card(
-                                list,
-                                assets,
-                                &RosterChoice::Custom(character.id),
-                                store,
-                                presets,
-                                elements,
-                                spells,
-                                None,
-                                ready.then_some(if player {
-                                    LabAction::AddPlayerCustom(character.id)
-                                } else {
-                                    LabAction::AddHostileCustom(character.id)
-                                }),
-                            );
-                        }
-                    }
-                });
-        });
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the shared roster card renders a complete frozen build projection"
-)]
-fn spawn_build_card(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    choice: &RosterChoice,
-    store: &CreationStore,
-    presets: Option<&CreationPresetCatalog>,
-    elements: Option<&ElementCatalog>,
-    spells: Option<&SpellBook>,
-    roster_actions: Option<(usize, LabAction, LabAction, LabAction)>,
-    add_action: Option<LabAction>,
-) {
-    let Some((character, library, source)) = choice_record(choice, store, presets) else {
-        parent
-            .spawn(blurb(
-                assets,
-                format!("Missing record: {}", choice_name(choice, store)),
-            ))
-            .insert(TextColor(DANGER));
-        return;
-    };
-    let summary = CharacterBuildSummary::from_saved(&character, &library, elements, spells);
-    let ready = summary.ready()
-        && match choice {
-            RosterChoice::Template(_) => true,
-            RosterChoice::Custom(_) | RosterChoice::Packaged(_) => {
-                character_is_map_ready_optional(&character, &library, elements, spells)
-            }
-        };
-    parent
-        .spawn(panel())
-        .insert((
-            Node {
-                width: Val::Percent(100.0),
-                padding: UiRect::all(Val::Px(8.0)),
-                row_gap: Val::Px(3.0),
-                ..panel_node()
-            },
-            BorderColor::all(if ready {
-                Color::srgba(0.93, 0.79, 0.46, 0.42)
-            } else {
-                Color::srgba(0.94, 0.36, 0.30, 0.65)
-            }),
-        ))
-        .with_children(|card| {
-            card.spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(9.0),
-                ..default()
-            })
-            .with_children(|top| {
-                spawn_mini_lattice(top, assets, &character, elements);
-                top.spawn(Node {
-                    min_width: Val::Px(0.0),
-                    flex_grow: 1.0,
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(2.0),
-                    ..default()
-                })
-                .with_children(|text| {
-                    text.spawn(heading(
-                        assets,
-                        roster_actions.as_ref().map_or_else(
-                            || summary.name.clone(),
-                            |(slot, _, _, _)| format!("{slot}. {}", summary.name),
-                        ),
-                    ));
-                    text.spawn(fine(
-                        assets,
-                        format!("{source} · {}", summary.compact_line()),
-                    ));
-                    if !summary.attunement.is_empty() {
-                        text.spawn(fine(
-                            assets,
-                            format!("Attunement / channel · {}", summary.attunement.join(", ")),
-                        ));
-                    }
-                    for spell in &summary.spells {
-                        text.spawn(fine(assets, format!("{} · {}", spell.name, spell.sentence)));
-                    }
-                });
-            });
-            if !ready {
-                let reason = if summary.issues.is_empty() {
-                    "Needs at least one supported, fresh-cast spell.".to_owned()
-                } else {
-                    summary.issues.join(" · ")
-                };
-                card.spawn(fine(assets, format!("BLOCKED · {reason}")))
-                    .insert(TextColor(DANGER));
-            }
-            card.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(4.0),
-                ..default()
-            })
-            .with_children(|actions| {
-                if let Some((_, up, down, remove)) = roster_actions {
-                    lab_button(actions, assets, "↑", up, 42.0);
-                    lab_button(actions, assets, "↓", down, 42.0);
-                    lab_button(actions, assets, "Remove", remove, 78.0);
-                } else if let Some(add) = add_action {
-                    lab_button(actions, assets, "Add to roster", add, 132.0);
-                } else if !ready {
-                    if let RosterChoice::Custom(id) = choice {
-                        lab_button(
-                            actions,
-                            assets,
-                            "Edit in Creator",
-                            LabAction::EditCustom(*id),
-                            142.0,
-                        );
-                    }
-                }
-            });
-        });
-}
-
-fn choice_record(
-    choice: &RosterChoice,
-    store: &CreationStore,
-    presets: Option<&CreationPresetCatalog>,
-) -> Option<(
-    SavedCharacter,
-    hex_assets::CreationLibraryFile,
-    &'static str,
-)> {
-    match choice {
-        RosterChoice::Custom(id) => store
-            .file
-            .characters
-            .iter()
-            .find(|character| character.id == *id)
-            .cloned()
-            .map(|character| (character, store.file.clone(), "Custom")),
-        RosterChoice::Packaged(id) => {
-            let presets = presets?;
+        if let Some(presets) = presets.as_deref() {
             let library = presets.library_for(PresetAudience::AutomationFixture);
-            library
-                .characters
-                .iter()
-                .find(|character| character.id == *id)
-                .cloned()
-                .map(|character| (character, library, "Fixture"))
-        }
-        RosterChoice::Template(name) => {
-            let presets = presets?;
-            let library = presets.library_for(PresetAudience::HumanTemplate);
-            presets
-                .characters
-                .iter()
-                .find(|record| {
-                    record.audience == PresetAudience::HumanTemplate
-                        && record.key == format!("template-{name}")
-                })
-                .map(|record| (record.character.clone(), library, "Template"))
+            map_ready_choices.extend(
+                library
+                    .characters
+                    .iter()
+                    .filter(|character| {
+                        character_is_map_ready(character, &library, elements, spells)
+                    })
+                    .map(|character| RosterChoice::Packaged(character.id)),
+            );
         }
     }
+
+    *view = CombatLabScreenView {
+        active: true,
+        tab: state.tab,
+        sandbox_step: state.sandbox_step,
+        map: state.map.clone(),
+        players: state.players.clone(),
+        hostiles: state.hostiles.clone(),
+        fixture_filter: state.fixture_filter.clone(),
+        notice: state.notice.clone(),
+        rules: state.rules.clone(),
+        pending_report_delete: state.pending_report_delete,
+        library: CreatorLibraryView {
+            file: store.file.clone(),
+            error: store.error.clone(),
+        },
+        elements: elements.as_deref().cloned(),
+        spells: spells.as_deref().cloned(),
+        presets: presets.as_deref().cloned(),
+        maps: maps.as_deref().cloned(),
+        combat: combat.as_deref().cloned(),
+        map_ready_choices,
+        reports: project_combat_lab_reports(&state, &reports),
+    };
+    *last_revision = state.revision;
 }
 
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "creator coordinates are schema-bounded to 64 cells and miniature layout uses pixels"
-)]
-fn spawn_mini_lattice(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    character: &SavedCharacter,
-    elements: Option<&ElementCatalog>,
-) {
-    let cell_width = 20.0;
-    let cell_height = 23.0;
-    parent
-        .spawn(Node {
-            width: Val::Px(102.0),
-            height: Val::Px(76.0),
-            position_type: PositionType::Relative,
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|canvas| {
-            for cell in &character.cells {
-                let x = 40.0 + (cell.q as f32 + cell.r as f32 * 0.5) * cell_width * 0.88;
-                let y = 27.0 + cell.r as f32 * cell_height * 0.74;
-                let (color, text) = match &cell.kind {
-                    CreationCellKind::Gem(name) => (
-                        elements
-                            .map(|catalog| element_color(catalog.id(name), catalog))
-                            .unwrap_or(Color::srgb(0.16, 0.45, 0.52)),
-                        short_name(name),
-                    ),
-                    CreationCellKind::Fusion(name) => (FUSION_COLOR, short_name(name)),
-                    CreationCellKind::Spell(_) => {
-                        (Color::srgba(0.86, 0.80, 0.62, 0.94), "S".to_owned())
-                    }
-                    CreationCellKind::Blank => {
-                        (Color::srgba(0.36, 0.38, 0.42, 0.88), "·".to_owned())
-                    }
-                };
-                canvas
-                    .spawn((
-                        ImageNode::new(assets.hex_cell.clone()).with_color(color),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: Val::Px(x),
-                            top: Val::Px(y),
-                            width: Val::Px(cell_width),
-                            height: Val::Px(cell_height),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                    ))
-                    .with_child((
-                        Text::new(text),
-                        TextFont {
-                            font: assets.body.clone().into(),
-                            ..TextFont::from_font_size(7.0)
-                        },
-                        TextColor(Color::BLACK),
-                    ));
-            }
-        });
-}
-
-fn character_is_map_ready_optional(
-    character: &SavedCharacter,
-    library: &hex_assets::CreationLibraryFile,
-    elements: Option<&ElementCatalog>,
-    spells: Option<&SpellBook>,
-) -> bool {
-    elements.zip(spells).is_some_and(|(elements, spells)| {
-        character_is_map_ready(character, library, elements, spells)
-    })
-}
-
-fn spawn_fixture_selector(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    state: &CombatLabState,
-) {
-    root.spawn(panel())
-        .insert(Node {
-            width: Val::Percent(88.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            ..panel_node()
-        })
-        .with_children(|fixture_panel| {
-            fixture_panel.spawn(heading(assets, "fixed deterministic fixtures"));
-            fixture_panel.spawn(blurb(
-                assets,
-                "Immutable map, seed, roster, AI, and placement. Local creations are never read.",
-            ));
-            fixture_panel.spawn((
-                Name::new("Fixture Search"),
-                EditableText {
-                    max_characters: Some(48),
-                    visible_width: Some(32.0),
-                    ..EditableText::new(&state.fixture_filter)
-                },
-                TextFont {
-                    font: assets.body.clone().into(),
-                    ..TextFont::from_font_size(18.0)
-                },
-                TextColor(Color::WHITE),
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-                Node {
-                    width: Val::Percent(100.0),
-                    min_height: Val::Px(42.0),
-                    padding: UiRect::all(Val::Px(8.0)),
-                    ..default()
-                },
-                FixtureFilter,
-            ));
-            fixture_panel
-                .spawn((
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(8.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    let filter = state.fixture_filter.to_lowercase();
-                    for fixture in COMBAT_LAB_FIXTURES {
-                        let searchable = format!(
-                            "{} {} {} {} {} {}",
-                            fixture.id,
-                            fixture.name,
-                            fixture.tags,
-                            fixture.description,
-                            fixture.map_seed,
-                            fixture.roster
-                        )
-                        .to_lowercase();
-                        let visible = filter.is_empty() || searchable.contains(&filter);
-                        list.spawn((
-                            panel(),
-                            FixtureCard {
-                                #[cfg(any(test, feature = "test-support"))]
-                                id: fixture.id,
-                                searchable,
-                            },
-                        ))
-                        .insert(Node {
-                            width: Val::Percent(100.0),
-                            display: if visible {
-                                Display::Flex
-                            } else {
-                                Display::None
-                            },
-                            ..panel_node()
-                        })
-                        .with_children(|card| {
-                            card.spawn(heading(assets, fixture.name));
-                            card.spawn(fine(assets, format!("{} · {}", fixture.id, fixture.tags)));
-                            card.spawn(fine(
-                                assets,
-                                format!("{} · {}", fixture.map_seed, fixture.roster),
-                            ));
-                            card.spawn(blurb(assets, fixture.description));
-                            if fixture.profile_matrix {
-                                for (variant, label) in [
-                                    (FixtureRulesVariant::Shipped, "Run Shipped"),
-                                    (
-                                        FixtureRulesVariant::TacticalTwoStep,
-                                        "Run Tactical two-step",
-                                    ),
-                                    (
-                                        FixtureRulesVariant::CustomThreeStep,
-                                        "Run Custom three-step",
-                                    ),
-                                ] {
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        label,
-                                        LabAction::StartFixture(fixture.id.to_owned(), variant),
-                                        210.0,
-                                    );
-                                }
-                            } else {
-                                lab_button(
-                                    card,
-                                    assets,
-                                    "Run Fixture",
-                                    LabAction::StartFixture(
-                                        fixture.id.to_owned(),
-                                        FixtureRulesVariant::Shipped,
-                                    ),
-                                    150.0,
-                                );
-                            }
-                        });
-                    }
-                });
-        });
-}
-
-fn spawn_saved_reports(
-    root: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
+fn project_combat_lab_reports(
     state: &CombatLabState,
     store: &CombatLabReportStore,
-) {
-    root.spawn(panel())
-        .insert(Node {
-            width: Val::Percent(96.0),
-            min_height: Val::Px(0.0),
-            flex_grow: 1.0,
-            ..panel_node()
+) -> CombatLabReportsView {
+    let (left_id, right_id) = selected_compare_ids(state, store);
+    let reports = store
+        .history
+        .reports
+        .iter()
+        .map(|saved| CombatLabReportCardView {
+            id: saved.id,
+            heading: format!("REPORT {} · {:?}", saved.id.0, saved.report.termination),
+            label: saved.label.clone(),
+            notes: saved.notes.clone(),
+            metadata: format!(
+                "{:?} · {} · seed {} · P{} / H{} · {:016X}",
+                saved.report.profile.preset,
+                saved.report.map.scenario,
+                saved
+                    .report
+                    .map
+                    .resolved_seed
+                    .map_or_else(|| "authored".to_owned(), |seed| seed.to_string()),
+                saved.report.rosters.players.len(),
+                saved.report.rosters.hostiles.len(),
+                saved.report.summary_fingerprint,
+            ),
+            summary: format!(
+                "Rounds {} · commands {}/{} · move {} · Channel {} · applied disables {}",
+                saved.report.summary.rounds,
+                saved.report.summary.successful_commands,
+                saved.report.summary.refused_commands,
+                saved.report.summary.movement_distance,
+                saved.report.summary.channels,
+                saved.report.summary.applied_disables,
+            ),
+            left_selected: left_id == Some(saved.id),
+            right_selected: right_id == Some(saved.id),
+            pending_delete: state.pending_report_delete == Some(saved.id),
         })
-        .with_children(|history_panel| {
-            history_panel.spawn(heading(assets, "explicitly saved local reports"));
-            history_panel.spawn(blurb(
-                assets,
-                "Separate from Creator and Continue · fixed fixtures never consult this history.",
-            ));
-            if let Some(error) = &store.error {
-                history_panel
-                    .spawn(blurb(assets, error.clone()))
-                    .insert(TextColor(DANGER));
-            }
-            if store.history.reports.is_empty() {
-                history_panel.spawn(blurb(
-                    assets,
-                    "No saved reports. Finish a Lab run and choose Save Report.",
-                ));
-                return;
-            }
-            history_panel
-                .spawn((
-                    ScrollArea,
-                    Node {
-                        min_height: Val::Px(0.0),
-                        flex_grow: 1.0,
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(7.0),
-                        overflow: Overflow::scroll_y(),
-                        ..default()
-                    },
-                ))
-                .with_children(|list| {
-                    for saved in &store.history.reports {
-                        list.spawn(panel())
-                            .insert(Node {
-                                width: Val::Percent(100.0),
-                                ..panel_node()
-                            })
-                            .with_children(|card| {
-                                card.spawn(heading(
-                                    assets,
-                                    format!(
-                                        "REPORT {} · {:?}",
-                                        saved.id.0, saved.report.termination
-                                    ),
-                                ));
-                                card.spawn((
-                                    Name::new(format!("Report {} Label", saved.id.0)),
-                                    EditableText {
-                                        max_characters: Some(128),
-                                        visible_width: Some(32.0),
-                                        ..EditableText::new(&saved.label)
-                                    },
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(Color::WHITE),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(36.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    ReportLabelInput(saved.id),
-                                ));
-                                card.spawn((
-                                    Name::new(format!("Report {} Notes", saved.id.0)),
-                                    EditableText {
-                                        max_characters: Some(2_048),
-                                        visible_width: Some(52.0),
-                                        ..EditableText::new(&saved.notes)
-                                    },
-                                    TextFont {
-                                        font: assets.body.clone().into(),
-                                        ..TextFont::from_font_size(18.0)
-                                    },
-                                    TextColor(LABEL),
-                                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
-                                    Node {
-                                        width: Val::Percent(100.0),
-                                        min_height: Val::Px(44.0),
-                                        padding: UiRect::all(Val::Px(7.0)),
-                                        ..default()
-                                    },
-                                    ReportNotesInput(saved.id),
-                                ));
-                                card.spawn(fine(
-                                    assets,
-                                    format!(
-                                        "{:?} · {} · seed {} · P{} / H{} · {:016X}",
-                                        saved.report.profile.preset,
-                                        saved.report.map.scenario,
-                                        saved
-                                            .report
-                                            .map
-                                            .resolved_seed
-                                            .map_or_else(|| "authored".to_owned(), |seed| seed
-                                                .to_string()),
-                                        saved.report.rosters.players.len(),
-                                        saved.report.rosters.hostiles.len(),
-                                        saved.report.summary_fingerprint,
-                                    ),
-                                ));
-                                card.spawn(blurb(
-                                    assets,
-                                    format!(
-                                        "Rounds {} · commands {}/{} · move {} · Channel {} · applied disables {}",
-                                        saved.report.summary.rounds,
-                                        saved.report.summary.successful_commands,
-                                        saved.report.summary.refused_commands,
-                                        saved.report.summary.movement_distance,
-                                        saved.report.summary.channels,
-                                        saved.report.summary.applied_disables,
-                                    ),
-                                ));
-                                let left_selected = selected_compare_ids(state, store).0
-                                    == Some(saved.id);
-                                let right_selected = selected_compare_ids(state, store).1
-                                    == Some(saved.id);
-                                lab_button(
-                                    card,
-                                    assets,
-                                    if left_selected {
-                                        "LEFT · SELECTED"
-                                    } else {
-                                        "Use as Left"
-                                    },
-                                    LabAction::SelectCompareLeft(saved.id),
-                                    140.0,
-                                );
-                                lab_button(
-                                    card,
-                                    assets,
-                                    if right_selected {
-                                        "RIGHT · SELECTED"
-                                    } else {
-                                        "Use as Right"
-                                    },
-                                    LabAction::SelectCompareRight(saved.id),
-                                    140.0,
-                                );
-                                if state.pending_report_delete == Some(saved.id) {
-                                    card.spawn(fine(
-                                        assets,
-                                        "CONFIRM DELETE · this removes only this local report",
-                                    ))
-                                    .insert(TextColor(DANGER));
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Confirm Delete",
-                                        LabAction::ConfirmReportDelete(saved.id),
-                                        160.0,
-                                    );
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Cancel",
-                                        LabAction::CancelReportDelete,
-                                        100.0,
-                                    );
-                                } else {
-                                    lab_button(
-                                        card,
-                                        assets,
-                                        "Delete…",
-                                        LabAction::RequestReportDelete(saved.id),
-                                        110.0,
-                                    );
-                                }
-                            });
-                    }
-                });
-            if let Some((left, right)) = selected_compare_reports(state, store) {
-                history_panel.spawn(heading(
-                    assets,
-                    format!("compare reports {} vs {}", left.id.0, right.id.0),
-                ));
-                history_panel.spawn(fine(
-                    assets,
-                    format!(
-                        "FROZEN LEFT · {}\nFROZEN RIGHT · {}",
-                        frozen_report_header(&left.report),
-                        frozen_report_header(&right.report),
-                    ),
-                ));
-                history_panel.spawn((
-                    SavedReportComparison,
-                    blurb(
-                        assets,
-                        format!(
-                        "Stops: {:?} → {:?}\nRounds {:+} · turns {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+} · no-progress current/max {:+}/{:+}\n{}",
-                        left.report.termination,
-                        right.report.termination,
-                        signed_delta(right.report.summary.rounds, left.report.summary.rounds),
-                        signed_delta(right.report.summary.turns, left.report.summary.turns),
-                        signed_delta(
-                            right.report.summary.successful_commands,
-                            left.report.summary.successful_commands,
-                        ),
-                        signed_delta(
-                            right.report.summary.refused_commands,
-                            left.report.summary.refused_commands,
-                        ),
-                        signed_delta(
-                            right.report.summary.movement_distance,
-                            left.report.summary.movement_distance,
-                        ),
-                        signed_delta(right.report.summary.channels, left.report.summary.channels),
-                        signed_delta(
-                            right.report.summary.applied_disables,
-                            left.report.summary.applied_disables,
-                        ),
-                        signed_delta(
-                            right.report.summary.no_progress_current,
-                            left.report.summary.no_progress_current,
-                        ),
-                        signed_delta(
-                            right.report.summary.no_progress_max,
-                            left.report.summary.no_progress_max,
-                        ),
-                        detailed_report_deltas(&left.report, &right.report),
-                        ),
-                    ),
-                ));
-            }
-        });
+        .collect();
+    let comparison = selected_compare_reports(state, store).map(|(left, right)| {
+        CombatLabComparisonView {
+            heading: format!("compare reports {} vs {}", left.id.0, right.id.0),
+            frozen: format!(
+                "FROZEN LEFT · {}\nFROZEN RIGHT · {}",
+                frozen_report_header(&left.report),
+                frozen_report_header(&right.report),
+            ),
+            deltas: format!(
+                "Stops: {:?} → {:?}\nRounds {:+} · turns {:+} · successful commands {:+} · refused commands {:+} · movement {:+} · Channel {:+} · applied disables {:+} · no-progress current/max {:+}/{:+}\n{}",
+                left.report.termination,
+                right.report.termination,
+                signed_delta(right.report.summary.rounds, left.report.summary.rounds),
+                signed_delta(right.report.summary.turns, left.report.summary.turns),
+                signed_delta(
+                    right.report.summary.successful_commands,
+                    left.report.summary.successful_commands,
+                ),
+                signed_delta(
+                    right.report.summary.refused_commands,
+                    left.report.summary.refused_commands,
+                ),
+                signed_delta(
+                    right.report.summary.movement_distance,
+                    left.report.summary.movement_distance,
+                ),
+                signed_delta(right.report.summary.channels, left.report.summary.channels),
+                signed_delta(
+                    right.report.summary.applied_disables,
+                    left.report.summary.applied_disables,
+                ),
+                signed_delta(
+                    right.report.summary.no_progress_current,
+                    left.report.summary.no_progress_current,
+                ),
+                signed_delta(
+                    right.report.summary.no_progress_max,
+                    left.report.summary.no_progress_max,
+                ),
+                detailed_report_deltas(&left.report, &right.report),
+            ),
+        }
+    });
+    CombatLabReportsView {
+        error: store.error.clone(),
+        reports,
+        comparison,
+    }
 }
 
 fn frozen_report_header(report: &crate::combat_reports::CombatLabReport) -> String {
@@ -2275,126 +930,8 @@ fn signed_delta(right: u32, left: u32) -> i64 {
     i64::from(right) - i64::from(left)
 }
 
-fn sync_fixture_filter(
-    inputs: Query<&EditableText, (Changed<EditableText>, With<FixtureFilter>)>,
-    mut state: ResMut<CombatLabState>,
-    mut cards: Query<(&FixtureCard, &mut Node)>,
-) {
-    for input in &inputs {
-        let value = input.value().to_string();
-        let filter = value.to_lowercase();
-        if state.fixture_filter != value {
-            state.fixture_filter = value;
-        }
-        for (card, mut node) in &mut cards {
-            node.display = if filter.is_empty() || card.searchable.contains(&filter) {
-                Display::Flex
-            } else {
-                Display::None
-            };
-        }
-    }
-}
-
-fn sync_report_annotations(
-    changed_labels: Query<(&ReportLabelInput, Ref<EditableText>), Changed<EditableText>>,
-    changed_notes: Query<(&ReportNotesInput, Ref<EditableText>), Changed<EditableText>>,
-    labels: Query<(&ReportLabelInput, &EditableText)>,
-    notes: Query<(&ReportNotesInput, &EditableText)>,
-    shipped: Option<Res<CombatSettings>>,
-    paths: Res<StoragePaths>,
-    mut store: ResMut<CombatLabReportStore>,
-) {
-    let Some(shipped) = shipped.as_deref() else {
-        return;
-    };
-    let mut changed = changed_labels
-        .iter()
-        .filter(|(_, text)| !text.is_added())
-        .map(|(input, _)| input.0)
-        .chain(
-            changed_notes
-                .iter()
-                .filter(|(_, text)| !text.is_added())
-                .map(|(input, _)| input.0),
-        )
-        .collect::<Vec<_>>();
-    changed.sort_unstable();
-    changed.dedup();
-    for id in changed {
-        let label = labels
-            .iter()
-            .find(|(input, _)| input.0 == id)
-            .map(|(_, text)| text.value().to_string())
-            .unwrap_or_default();
-        let notes = notes
-            .iter()
-            .find(|(input, _)| input.0 == id)
-            .map(|(_, text)| text.value().to_string())
-            .unwrap_or_default();
-        if let Err(error) = store.annotate(id, label, notes, shipped, &paths) {
-            store.error = Some(error);
-        }
-    }
-}
-
-#[cfg(feature = "test-support")]
-pub(crate) fn observe_fixture_filter(query: &str) -> (Vec<String>, Vec<String>, bool) {
-    let mut app = App::new();
-    app.init_resource::<CombatLabState>()
-        .add_systems(Update, sync_fixture_filter);
-    let input = app
-        .world_mut()
-        .spawn((EditableText::new(query), FixtureFilter))
-        .id();
-    for fixture in COMBAT_LAB_FIXTURES {
-        app.world_mut().spawn((
-            Node::default(),
-            FixtureCard {
-                id: fixture.id,
-                searchable: format!(
-                    "{} {} {} {} {} {}",
-                    fixture.id,
-                    fixture.name,
-                    fixture.tags,
-                    fixture.description,
-                    fixture.map_seed,
-                    fixture.roster
-                )
-                .to_lowercase(),
-            },
-        ));
-    }
-    app.update();
-    let visible = visible_fixture_ids(app.world_mut());
-
-    app.world_mut()
-        .entity_mut(input)
-        .insert(EditableText::new(""));
-    app.update();
-    let after_clear = visible_fixture_ids(app.world_mut());
-    let input_survived = app.world().get_entity(input).is_ok();
-    (visible, after_clear, input_survived)
-}
-
-#[cfg(feature = "test-support")]
-fn visible_fixture_ids(world: &mut World) -> Vec<String> {
-    let mut cards = world.query::<(&FixtureCard, &Node)>();
-    let mut visible = cards
-        .iter(world)
-        .filter(|(_, node)| node.display != Display::None)
-        .map(|(card, _)| card.id.to_owned())
-        .collect::<Vec<_>>();
-    visible.sort();
-    visible
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "launch construction freezes all content catalogs in one reducer"
-)]
 fn handle_lab_actions(
-    clicked: Query<(&Interaction, &LabAction), Changed<Interaction>>,
+    mut intents: MessageReader<UiIntent>,
     mut state: ResMut<CombatLabState>,
     store: Res<CreationStore>,
     scenarios: Option<Res<ScenarioLibrary>>,
@@ -2411,10 +948,10 @@ fn handle_lab_actions(
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
-    for (interaction, action) in &clicked {
-        if *interaction != Interaction::Pressed {
+    for intent in intents.read() {
+        let UiIntent::CombatLab(action) = intent else {
             continue;
-        }
+        };
         match action {
             LabAction::Tab(tab) => {
                 state.apply(CombatLabEdit::Tab(*tab));
@@ -2710,6 +1247,37 @@ fn handle_lab_actions(
             }
             LabAction::CancelReportDelete => {
                 state.apply(CombatLabEdit::CancelReportDelete);
+                continue;
+            }
+            LabAction::SetFixtureFilter(value) => {
+                if state.fixture_filter != *value {
+                    state.fixture_filter.clone_from(value);
+                }
+                continue;
+            }
+            LabAction::SetReportField(field, value) => {
+                let id = match field {
+                    CombatLabReportField::Label(id) | CombatLabReportField::Notes(id) => *id,
+                };
+                let Some(saved) = reports.history.reports.iter().find(|saved| saved.id == id)
+                else {
+                    continue;
+                };
+                let (label, notes) = match field {
+                    CombatLabReportField::Label(_) => (value.clone(), saved.notes.clone()),
+                    CombatLabReportField::Notes(_) => (saved.label.clone(), value.clone()),
+                };
+                if label == saved.label && notes == saved.notes {
+                    continue;
+                }
+                let Some(shipped) = combat.as_deref() else {
+                    state.notice = "Shipped combat rules are still loading.".to_owned();
+                    state.bump();
+                    continue;
+                };
+                if let Err(error) = reports.annotate(id, label, notes, shipped, &paths) {
+                    reports.error = Some(error);
+                }
                 continue;
             }
         }
@@ -3015,6 +1583,43 @@ fn deployment_snapshot(session: &DeploymentSession) -> Option<CombatLabReportDep
     })
 }
 
+fn publish_deployment_view(
+    session: Option<Res<DeploymentSession>>,
+    store: Res<CreationStore>,
+    mut view: ResMut<DeploymentView>,
+) {
+    let session_changed = session.as_ref().is_some_and(|session| session.is_changed());
+    let Some(session) = session.as_deref() else {
+        if view.active {
+            *view = DeploymentView::default();
+        }
+        return;
+    };
+    if !session_changed && !store.is_changed() && view.active {
+        return;
+    }
+    let entries = |player: bool, roster: &[RosterChoice], placements: &[Option<TilePos>]| {
+        roster
+            .iter()
+            .enumerate()
+            .map(|(index, choice)| DeploymentRosterEntryView {
+                index,
+                name: choice_name(choice, &store),
+                selected: session.active_player == player && session.active_index == index,
+                position: placements.get(index).copied().flatten(),
+            })
+            .collect()
+    };
+    *view = DeploymentView {
+        active: true,
+        map_name: session.map_definition.display_name.clone(),
+        notice: session.notice.clone(),
+        players: entries(true, &session.players, &session.player_placements),
+        hostiles: entries(false, &session.hostiles, &session.hostile_placements),
+        complete: session.complete(),
+    };
+}
+
 type DeploymentTileQuery<'w, 's> = Query<
     'w,
     's,
@@ -3040,8 +1645,6 @@ fn enter_deployment(
     blockers: Option<Res<TraversalBlockers>>,
     anchors: Option<Res<MapAnchors>>,
     game_assets: Res<GameAssets>,
-    ui_assets: Res<UiAssets>,
-    store: Res<CreationStore>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut hidden: Query<
         (Entity, &mut Visibility),
@@ -3069,7 +1672,6 @@ fn enter_deployment(
         anchors.as_deref(),
     ) else {
         session.notice = "Player deployment region could not resolve on this terrain.".to_owned();
-        spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
         return;
     };
     let Some(hostile_center) = deployment_center(
@@ -3078,7 +1680,6 @@ fn enter_deployment(
         anchors.as_deref(),
     ) else {
         session.notice = "Hostile deployment region could not resolve on this terrain.".to_owned();
-        spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
         return;
     };
     session.player_surfaces = ordered_deployment_surfaces(
@@ -3157,7 +1758,6 @@ fn enter_deployment(
             ));
         }
     }
-    spawn_deployment_hud(&mut commands, &ui_assets, session, &store);
 }
 
 fn deployment_footing(
@@ -3220,267 +1820,11 @@ fn deployment_marker_material(color: Color) -> StandardMaterial {
     }
 }
 
-fn spawn_deployment_hud(
-    commands: &mut Commands,
-    assets: &UiAssets,
-    session: &DeploymentSession,
-    store: &CreationStore,
-) {
-    commands
-        .spawn((
-            Name::new("Combat Lab Deployment HUD"),
-            DeploymentHud,
-            DeploymentWorldEntity,
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(22.0),
-                right: Val::Px(22.0),
-                top: Val::Px(18.0),
-                min_height: Val::Px(126.0),
-                padding: UiRect::all(Val::Px(13.0)),
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(18.0),
-                border_radius: BorderRadius::all(Val::Px(7.0)),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.015, 0.022, 0.035, 0.94)),
-            BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.52)),
-        ))
-        .with_children(|hud| {
-            hud.spawn((
-                DeploymentSummary,
-                Node {
-                    width: Val::Px(300.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(3.0),
-                    ..default()
-                },
-            ))
-            .with_children(|summary| {
-                summary.spawn(heading(
-                    assets,
-                    format!("DEPLOY · {}", session.map_definition.display_name),
-                ));
-                summary.spawn(blurb(assets, session.notice.clone()));
-                summary.spawn(fine(
-                    assets,
-                    "CLICK BLUE for Player · CLICK RED for Hostile · solid tokens show placements",
-                ));
-            });
-            for (player, title, roster, placements) in [
-                (
-                    true,
-                    "PLAYER",
-                    session.players.as_slice(),
-                    session.player_placements.as_slice(),
-                ),
-                (
-                    false,
-                    "HOSTILE",
-                    session.hostiles.as_slice(),
-                    session.hostile_placements.as_slice(),
-                ),
-            ] {
-                hud.spawn((
-                    DeploymentSide,
-                    Node {
-                        width: Val::Px(245.0),
-                        flex_direction: FlexDirection::Column,
-                        row_gap: Val::Px(2.0),
-                        ..default()
-                    },
-                ))
-                .with_children(|side| {
-                    side.spawn(fine(assets, title));
-                    for (index, choice) in roster.iter().enumerate() {
-                        let placement = placements.get(index).copied().flatten();
-                        let selected =
-                            session.active_player == player && session.active_index == index;
-                        let text = format!(
-                            "{} [{}{}] {}\n{}",
-                            if selected { "SELECTED" } else { "SELECT" },
-                            if player { "P" } else { "H" },
-                            index + 1,
-                            choice_name(choice, store),
-                            placement.map_or_else(
-                                || "choose surface".to_owned(),
-                                |pos| format!(
-                                    "({},{},{}) · elevation {}",
-                                    pos.coord.x(),
-                                    pos.coord.y(),
-                                    pos.coord.z(),
-                                    pos.level
-                                )
-                            )
-                        );
-                        side.spawn((
-                            row_button(text.clone(), 235.0),
-                            DeploymentAction::Select { player, index },
-                        ))
-                        .insert(BorderColor::all(if selected {
-                            Color::srgba(0.93, 0.79, 0.46, 0.95)
-                        } else {
-                            Color::srgba(0.26, 0.29, 0.34, 0.9)
-                        }))
-                        .with_child(fine(assets, text));
-                    }
-                });
-            }
-            hud.spawn((
-                DeploymentActions,
-                Node {
-                    width: Val::Px(340.0),
-                    flex_direction: FlexDirection::Row,
-                    flex_wrap: FlexWrap::Wrap,
-                    align_content: AlignContent::FlexStart,
-                    column_gap: Val::Px(5.0),
-                    row_gap: Val::Px(5.0),
-                    ..default()
-                },
-            ))
-            .with_children(|actions| {
-                deployment_button(actions, assets, "Undo", DeploymentAction::Undo);
-                deployment_button(
-                    actions,
-                    assets,
-                    "Clear Player",
-                    DeploymentAction::ClearPlayer,
-                );
-                deployment_button(
-                    actions,
-                    assets,
-                    "Clear Hostile",
-                    DeploymentAction::ClearHostile,
-                );
-                deployment_button(
-                    actions,
-                    assets,
-                    "Deterministic Auto-place",
-                    DeploymentAction::AutoPlace,
-                );
-                deployment_button(actions, assets, "Back to Rules", DeploymentAction::Back);
-                if session.complete() {
-                    deployment_button(
-                        actions,
-                        assets,
-                        "Start Combat",
-                        DeploymentAction::StartCombat,
-                    );
-                } else {
-                    actions
-                        .spawn(fine(
-                            assets,
-                            "START COMBAT · DISABLED — place every roster entry",
-                        ))
-                        .insert(TextColor(DANGER));
-                }
-            });
-        });
-}
-
-fn apply_deployment_layout(
-    metrics: Res<hex_ui::ResolvedUiMetrics>,
-    added_roots: Query<(), Added<DeploymentHud>>,
-    mut roots: Query<&mut Node, With<DeploymentHud>>,
-    mut summary: Query<
-        &mut Node,
-        (
-            With<DeploymentSummary>,
-            Without<DeploymentHud>,
-            Without<DeploymentSide>,
-            Without<DeploymentActions>,
-        ),
-    >,
-    mut sides: Query<
-        &mut Node,
-        (
-            With<DeploymentSide>,
-            Without<DeploymentHud>,
-            Without<DeploymentSummary>,
-            Without<DeploymentActions>,
-        ),
-    >,
-    mut actions: Query<
-        &mut Node,
-        (
-            With<DeploymentActions>,
-            Without<DeploymentHud>,
-            Without<DeploymentSummary>,
-            Without<DeploymentSide>,
-        ),
-    >,
-) {
-    if !metrics.is_changed() && added_roots.is_empty() {
-        return;
-    }
-    let compact = metrics.viewport == hex_ui::UiViewportClass::Compact;
-    for mut node in &mut roots {
-        node.left = Val::Px(if compact { 12.0 } else { 22.0 });
-        node.right = Val::Px(if compact { 12.0 } else { 22.0 });
-        node.top = Val::Px(if compact { 12.0 } else { 18.0 });
-        node.bottom = if compact {
-            Val::Px(hex_ui::action_rail_clearance(metrics.viewport))
-        } else {
-            Val::Auto
-        };
-        node.min_height = if compact {
-            Val::Px(0.0)
-        } else {
-            Val::Px(126.0)
-        };
-        node.flex_direction = if compact {
-            FlexDirection::Column
-        } else {
-            FlexDirection::Row
-        };
-        node.overflow = if compact {
-            Overflow::scroll_y()
-        } else {
-            Overflow::default()
-        };
-    }
-    for mut node in &mut summary {
-        node.width = if compact {
-            Val::Percent(100.0)
-        } else {
-            Val::Px(300.0)
-        };
-    }
-    for mut node in &mut sides {
-        node.width = if compact {
-            Val::Percent(100.0)
-        } else {
-            Val::Px(245.0)
-        };
-    }
-    for mut node in &mut actions {
-        node.width = if compact {
-            Val::Percent(100.0)
-        } else {
-            Val::Px(340.0)
-        };
-    }
-}
-
-fn deployment_button(
-    parent: &mut ChildSpawnerCommands,
-    assets: &UiAssets,
-    text: &'static str,
-    action: DeploymentAction,
-) {
-    parent
-        .spawn((row_button(text, 166.0), action))
-        .with_child(label(assets, text));
-}
-
 fn on_deployment_surface_clicked(
     click: On<Pointer<Click>>,
     surfaces: Query<&DeploymentSurface>,
     mut session: Option<ResMut<DeploymentSession>>,
-    hud: Query<Entity, With<DeploymentHud>>,
     mut commands: Commands,
-    assets: Res<UiAssets>,
-    store: Res<CreationStore>,
     markers: DeploymentMarkerRuntime,
 ) {
     if click.button != PointerButton::Primary {
@@ -3503,14 +1847,12 @@ fn on_deployment_surface_clicked(
             session.active_index + 1,
             if session.active_player { "BLUE" } else { "RED" }
         );
-        rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
         return;
     }
     let active = deployment_unit_id(session.active_player, session.active_index);
     let occupied = deployment_occupancy(session).is_occupied(surface.pos, Some(active));
     if occupied {
         session.notice = "That exact surface is already occupied.".to_owned();
-        rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
         return;
     }
     let placements = if session.active_player {
@@ -3527,7 +1869,6 @@ fn on_deployment_surface_clicked(
     }
     advance_deployment_cursor(session);
     rebuild_deployment_markers(&mut commands, &markers, session);
-    rebuild_deployment_hud(&mut commands, &hud, &assets, session, &store);
 }
 
 fn deployment_unit_id(player: bool, index: usize) -> hex_core::UnitId {
@@ -3570,19 +1911,6 @@ fn advance_deployment_cursor(session: &mut DeploymentSession) {
             "DEPLOYMENT COMPLETE · Solid blue/red tokens mark the resolved surfaces. Start Combat or reposition with Undo."
                 .to_owned();
     }
-}
-
-fn rebuild_deployment_hud(
-    commands: &mut Commands,
-    roots: &Query<Entity, With<DeploymentHud>>,
-    assets: &UiAssets,
-    session: &DeploymentSession,
-    store: &CreationStore,
-) {
-    for root in roots {
-        commands.entity(root).despawn();
-    }
-    spawn_deployment_hud(commands, assets, session, store);
 }
 
 #[derive(SystemParam)]
@@ -3696,7 +2024,6 @@ struct DeploymentRuntime<'w, 's> {
     >,
     hidden_presentation: Query<'w, 's, (Entity, &'static mut Visibility), With<DeploymentHidden>>,
     world_entities: Query<'w, 's, Entity, With<DeploymentWorldEntity>>,
-    hud: Query<'w, 's, Entity, With<DeploymentHud>>,
     encounter: Option<ResMut<'w, Encounter>>,
     active: Option<ResMut<'w, crate::scenarios::ActiveScenario>>,
     lab: Option<Res<'w, CombatLabSession>>,
@@ -3704,23 +2031,21 @@ struct DeploymentRuntime<'w, 's> {
 }
 
 fn handle_deployment_actions(
-    clicked: Query<(&Interaction, &DeploymentAction), Changed<Interaction>>,
+    mut intents: MessageReader<UiIntent>,
     mut session: Option<ResMut<DeploymentSession>>,
     mut lab_state: ResMut<CombatLabState>,
     mut phase: ResMut<GameplayPhase>,
     mut runtime: DeploymentRuntime,
-    assets: Res<UiAssets>,
-    store: Res<CreationStore>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
     let Some(session) = session.as_deref_mut() else {
         return;
     };
-    for (interaction, action) in &clicked {
-        if *interaction != Interaction::Pressed {
+    for intent in intents.read() {
+        let UiIntent::Deployment(action) = intent else {
             continue;
-        }
+        };
         match action {
             DeploymentAction::Select { player, index } => {
                 let valid = if *player {
@@ -3909,7 +2234,6 @@ fn handle_deployment_actions(
             }
         }
         rebuild_deployment_markers(&mut commands, &runtime.markers, session);
-        rebuild_deployment_hud(&mut commands, &runtime.hud, &assets, session, &store);
     }
 }
 
@@ -4218,11 +2542,11 @@ fn apply_fixture_cast(
 
 #[cfg(test)]
 mod tests {
-    use bevy::ecs::world::CommandQueue;
     use bevy::state::app::StatesPlugin;
     use hex_assets::{
         AcceptedContentRevision, ArtPalette, ElementFile, SubstanceFile, SubstanceTable,
     };
+    use hex_core::COMBAT_LAB_FIXTURES;
 
     use super::*;
 
@@ -4239,78 +2563,6 @@ mod tests {
             },
             initial_state: None,
         }
-    }
-
-    #[test]
-    fn fixture_selector_keeps_every_card_mounted_for_in_place_filtering() {
-        let mut world = World::new();
-        let assets = UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        };
-        let state = CombatLabState {
-            tab: LabTab::Fixtures,
-            fixture_filter: "tempo".to_owned(),
-            ..default()
-        };
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, &world);
-        commands.spawn(Node::default()).with_children(|root| {
-            spawn_fixture_selector(root, &assets, &state);
-        });
-        queue.apply(&mut world);
-
-        let mut cards = world.query::<(&FixtureCard, &Node)>();
-        let mounted = cards.iter(&world).count();
-        let visible = cards
-            .iter(&world)
-            .filter(|(_, node)| node.display != Display::None)
-            .map(|(card, _)| card.id)
-            .collect::<Vec<_>>();
-        assert_eq!(mounted, COMBAT_LAB_FIXTURES.len());
-        assert_eq!(visible, vec!["tempo-matrix"]);
-    }
-
-    #[test]
-    fn rules_step_exposes_presets_every_bounded_stepper_reset_and_forward_gate() {
-        let mut world = World::new();
-        let assets = UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        };
-        let state = CombatLabState {
-            sandbox_step: SandboxStep::Rules,
-            ..default()
-        };
-        let shipped = CombatSettings::default();
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, &world);
-        commands.spawn(Node::default()).with_children(|root| {
-            spawn_rules_setup(root, &assets, &state, None, Some(&shipped));
-        });
-        queue.apply(&mut world);
-
-        let mut presets = 0;
-        let mut adjustments = 0;
-        let mut resets = 0;
-        let mut forwards = 0;
-        let mut backs = 0;
-        let mut actions = world.query::<&LabAction>();
-        for action in actions.iter(&world) {
-            match action {
-                LabAction::SelectRulesPreset(_) => presets += 1,
-                LabAction::AdjustRule(_, _) => adjustments += 1,
-                LabAction::ResetRules => resets += 1,
-                LabAction::PrepareDeployment => forwards += 1,
-                LabAction::ShowSandboxStep(SandboxStep::Rosters) => backs += 1,
-                _ => {}
-            }
-        }
-        assert_eq!(presets, 3);
-        assert_eq!(adjustments, CombatRuleField::ALL.len() * 2);
-        assert_eq!((resets, forwards, backs), (1, 1, 1));
     }
 
     #[test]
@@ -4361,124 +2613,6 @@ mod tests {
         );
         assert_eq!(launch.deployment.players, vec![player]);
         assert_eq!(launch.deployment.hostiles, vec![hostile]);
-    }
-
-    #[test]
-    fn saved_reports_render_comparison_and_require_confirmed_delete() {
-        let shipped = CombatSettings::default();
-        let session = rules_session(CombatRulesProfile::shipped(&shipped), shipped);
-        let launch = report_launch(
-            &session,
-            77,
-            vec![
-                (
-                    hex_core::UnitId(1),
-                    Faction::Player,
-                    "hedge-mage".to_owned(),
-                    "Hedge Mage".to_owned(),
-                    TilePos::new(HexCoord::ORIGIN, 1),
-                ),
-                (
-                    hex_core::UnitId(2),
-                    Faction::Hostile,
-                    "raider".to_owned(),
-                    "Raider".to_owned(),
-                    TilePos::new(HexCoord::from_axial(1, 0), 1),
-                ),
-            ],
-        );
-        let report = |rounds| {
-            let mut summary = hex_combat::CombatSummary::default();
-            summary.rounds = rounds;
-            summary.outcome = Some(hex_combat::EncounterOutcome::Victory);
-            crate::combat_reports::CombatLabReport::new(
-                session.profile.clone(),
-                launch.origin.clone(),
-                launch.map.clone(),
-                launch.content_revision,
-                launch.rosters.clone(),
-                launch.deployment.clone(),
-                crate::combat_reports::CombatLabReportTermination::Outcome(
-                    hex_combat::EncounterOutcome::Victory,
-                ),
-                summary,
-            )
-            .expect("fixture report evidence")
-        };
-        let first = CombatLabReportId(1);
-        let store = CombatLabReportStore {
-            history: crate::combat_reports::CombatLabReportHistory {
-                version: crate::combat_reports::COMBAT_LAB_REPORT_HISTORY_VERSION,
-                next_id: 3,
-                reports: vec![
-                    crate::combat_reports::SavedCombatLabReport {
-                        id: first,
-                        label: "first".to_owned(),
-                        notes: String::new(),
-                        report: report(8),
-                    },
-                    crate::combat_reports::SavedCombatLabReport {
-                        id: CombatLabReportId(2),
-                        label: "second".to_owned(),
-                        notes: String::new(),
-                        report: report(6),
-                    },
-                ],
-            },
-            error: None,
-        };
-        let state = CombatLabState {
-            tab: LabTab::Reports,
-            pending_report_delete: Some(first),
-            ..default()
-        };
-        let assets = UiAssets {
-            display: Handle::default(),
-            body: Handle::default(),
-            hex_cell: Handle::default(),
-        };
-        let mut world = World::new();
-        let mut queue = CommandQueue::default();
-        let mut commands = Commands::new(&mut queue, &world);
-        commands.spawn(Node::default()).with_children(|root| {
-            spawn_saved_reports(root, &assets, &state, &store);
-        });
-        queue.apply(&mut world);
-
-        let mut comparisons = world.query_filtered::<Entity, With<SavedReportComparison>>();
-        assert_eq!(comparisons.iter(&world).count(), 1);
-        let mut actions = world.query::<&LabAction>();
-        assert_eq!(
-            actions
-                .iter(&world)
-                .filter(|action| matches!(action, LabAction::SelectCompareLeft(_)))
-                .count(),
-            2
-        );
-        assert_eq!(
-            actions
-                .iter(&world)
-                .filter(|action| matches!(action, LabAction::SelectCompareRight(_)))
-                .count(),
-            2
-        );
-        assert_eq!(
-            actions
-                .iter(&world)
-                .filter(
-                    |action| matches!(action, LabAction::ConfirmReportDelete(id) if *id == first)
-                )
-                .count(),
-            1
-        );
-        assert_eq!(
-            actions
-                .iter(&world)
-                .filter(|action| matches!(action, LabAction::CancelReportDelete))
-                .count(),
-            1
-        );
-        assert_eq!(signed_delta(6, 8), -2);
     }
 
     #[test]

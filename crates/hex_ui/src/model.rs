@@ -731,6 +731,246 @@ pub enum CreatorIntent {
     SetName(CreatorNameField, String),
 }
 
+/// Rules profile used for one fixed-fixture launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatLabRulesVariant {
+    /// Authored shipping rules.
+    Shipped,
+    /// Authored tactical two-step preset.
+    TacticalTwoStep,
+    /// Custom three-step movement profile.
+    CustomThreeStep,
+}
+
+/// Editable saved-report annotation field.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombatLabReportField {
+    /// Short report label.
+    Label(hex_gameplay_model::CombatLabReportId),
+    /// Longer free-form notes.
+    Notes(hex_gameplay_model::CombatLabReportId),
+}
+
+/// One frozen report card.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatLabReportCardView {
+    /// Stable local report identity.
+    pub id: hex_gameplay_model::CombatLabReportId,
+    /// Termination heading.
+    pub heading: String,
+    /// Editable label.
+    pub label: String,
+    /// Editable notes.
+    pub notes: String,
+    /// Frozen launch identity and fingerprint.
+    pub metadata: String,
+    /// Canonical summary metrics.
+    pub summary: String,
+    /// Whether selected on the left comparison axis.
+    pub left_selected: bool,
+    /// Whether selected on the right comparison axis.
+    pub right_selected: bool,
+    /// Whether destructive confirmation is open.
+    pub pending_delete: bool,
+}
+
+/// Frozen comparison presentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatLabComparisonView {
+    /// Comparison heading naming both stable IDs.
+    pub heading: String,
+    /// Frozen launch headers.
+    pub frozen: String,
+    /// Canonical metric deltas.
+    pub deltas: String,
+}
+
+/// Saved-report surface projection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CombatLabReportsView {
+    /// Last report persistence error.
+    pub error: Option<String>,
+    /// Saved reports in stable local order.
+    pub reports: Vec<CombatLabReportCardView>,
+    /// Independent two-report comparison.
+    pub comparison: Option<CombatLabComparisonView>,
+}
+
+/// Immutable Combat Lab setup presentation.
+#[derive(Resource, Debug, Clone)]
+pub struct CombatLabScreenView {
+    /// Whether the Combat Lab screen is active.
+    pub active: bool,
+    /// Active top-level Lab surface.
+    pub tab: hex_gameplay_model::LabTab,
+    /// Active Sandbox step.
+    pub sandbox_step: hex_gameplay_model::SandboxStep,
+    /// Selected packaged map ID.
+    pub map: String,
+    /// Ordered player roster.
+    pub players: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
+    /// Ordered hostile roster.
+    pub hostiles: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
+    /// Fixture search query.
+    pub fixture_filter: String,
+    /// Player-facing setup notice.
+    pub notice: String,
+    /// Selected combat rules.
+    pub rules: Option<hex_assets::CombatRulesProfile>,
+    /// Report awaiting destructive confirmation.
+    pub pending_report_delete: Option<hex_gameplay_model::CombatLabReportId>,
+    /// Saved Creator content.
+    pub library: CreatorLibraryView,
+    /// Accepted element catalog.
+    pub elements: Option<hex_assets::ElementCatalog>,
+    /// Accepted spell catalog.
+    pub spells: Option<hex_assets::SpellBook>,
+    /// Packaged Creator content.
+    pub presets: Option<hex_assets::CreationPresetCatalog>,
+    /// Packaged Combat Lab map catalog.
+    pub maps: Option<hex_assets::CombatLabMapCatalog>,
+    /// Authored combat settings.
+    pub combat: Option<hex_assets::CombatSettings>,
+    /// Choices admitted by the canonical map-readiness oracle.
+    pub map_ready_choices: Vec<hex_gameplay_model::RosterChoice<hex_assets::CustomCharacterId>>,
+    /// Frozen saved-report presentation.
+    pub reports: CombatLabReportsView,
+}
+
+impl Default for CombatLabScreenView {
+    fn default() -> Self {
+        Self {
+            active: false,
+            tab: hex_gameplay_model::LabTab::Sandbox,
+            sandbox_step: hex_gameplay_model::SandboxStep::Map,
+            map: String::new(),
+            players: Vec::new(),
+            hostiles: Vec::new(),
+            fixture_filter: String::new(),
+            notice: String::new(),
+            rules: None,
+            pending_report_delete: None,
+            library: CreatorLibraryView::default(),
+            elements: None,
+            spells: None,
+            presets: None,
+            maps: None,
+            combat: None,
+            map_ready_choices: Vec::new(),
+            reports: CombatLabReportsView::default(),
+        }
+    }
+}
+
+/// Typed Combat Lab setup actions interpreted by the composition root.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub enum CombatLabIntent {
+    /// Select a top-level Lab surface.
+    Tab(hex_gameplay_model::LabTab),
+    /// Return to the title screen.
+    Back,
+    /// Select one Sandbox step.
+    ShowSandboxStep(hex_gameplay_model::SandboxStep),
+    /// Select a packaged map.
+    SelectMap(String),
+    /// Add a packaged player template.
+    AddPlayerTemplate(String),
+    /// Add a packaged hostile template.
+    AddHostileTemplate(String),
+    /// Add a saved player character.
+    AddPlayerCustom(hex_assets::CustomCharacterId),
+    /// Add a saved hostile character.
+    AddHostileCustom(hex_assets::CustomCharacterId),
+    /// Remove an ordered player entry.
+    RemovePlayer(usize),
+    /// Remove an ordered hostile entry.
+    RemoveHostile(usize),
+    /// Move an ordered player entry.
+    MovePlayer(usize, i8),
+    /// Move an ordered hostile entry.
+    MoveHostile(usize, i8),
+    /// Open one blocked saved character in Creator.
+    EditCustom(hex_assets::CustomCharacterId),
+    /// Select an authored rules preset.
+    SelectRulesPreset(hex_assets::CombatRulesPreset),
+    /// Adjust one custom rules field.
+    AdjustRule(hex_assets::CombatRuleField, i8),
+    /// Restore shipped rules.
+    ResetRules,
+    /// Load terrain and enter deployment.
+    PrepareDeployment,
+    /// Launch one deterministic fixture.
+    StartFixture(String, CombatLabRulesVariant),
+    /// Select the left report comparison.
+    SelectCompareLeft(hex_gameplay_model::CombatLabReportId),
+    /// Select the right report comparison.
+    SelectCompareRight(hex_gameplay_model::CombatLabReportId),
+    /// Open report-delete confirmation.
+    RequestReportDelete(hex_gameplay_model::CombatLabReportId),
+    /// Delete one confirmed report.
+    ConfirmReportDelete(hex_gameplay_model::CombatLabReportId),
+    /// Close report-delete confirmation.
+    CancelReportDelete,
+    /// Replace the fixture search query.
+    SetFixtureFilter(String),
+    /// Replace one saved-report annotation field.
+    SetReportField(CombatLabReportField, String),
+}
+
+/// One immutable roster row in the Combat Lab deployment HUD.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentRosterEntryView {
+    /// Stable side-local row index.
+    pub index: usize,
+    /// Player-facing build name.
+    pub name: String,
+    /// Whether this row owns the next surface click.
+    pub selected: bool,
+    /// Exact chosen surface rendered as a disclosed label.
+    pub position: Option<hex_core::TilePos>,
+}
+
+/// Immutable Combat Lab deployment presentation.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeploymentView {
+    /// Whether a deployment session is active.
+    pub active: bool,
+    /// Packaged map display name.
+    pub map_name: String,
+    /// Current placement instruction or refusal.
+    pub notice: String,
+    /// Ordered player roster.
+    pub players: Vec<DeploymentRosterEntryView>,
+    /// Ordered hostile roster.
+    pub hostiles: Vec<DeploymentRosterEntryView>,
+    /// Whether every exact placement passes the canonical start gate.
+    pub complete: bool,
+}
+
+/// Typed deployment actions interpreted by the composition root.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentIntent {
+    /// Select a side-local roster row.
+    Select {
+        /// Player or hostile side.
+        player: bool,
+        /// Side-local roster index.
+        index: usize,
+    },
+    /// Restore the last changed placement.
+    Undo,
+    /// Clear every player placement.
+    ClearPlayer,
+    /// Clear every hostile placement.
+    ClearHostile,
+    /// Apply deterministic canonical placement order.
+    AutoPlace,
+    /// Return to Combat Lab rules.
+    Back,
+    /// Confirm the complete exact deployment.
+    StartCombat,
+}
+
 /// Typed gameplay-lattice inputs emitted by presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LatticeIntent {
@@ -926,6 +1166,10 @@ pub enum UiIntent {
     LatticeDemo(LatticeDemoIntent),
     /// Act on Character or Spell Creator presentation.
     Creator(CreatorIntent),
+    /// Act on Combat Lab setup or saved reports.
+    CombatLab(CombatLabIntent),
+    /// Act on the exact Combat Lab deployment surface.
+    Deployment(DeploymentIntent),
     /// Navigate back through the current screen's canonical route.
     Back,
     /// Cycle one Settings value.

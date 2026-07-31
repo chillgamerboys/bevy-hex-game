@@ -8,9 +8,11 @@ use bevy::prelude::*;
 
 mod action_rail;
 mod casting_panel;
+mod combat_lab;
 mod combat_log;
 mod creation_presentation;
 mod creator;
+mod deployment;
 mod focus;
 mod gameplay_frame;
 mod gameplay_lattices;
@@ -41,16 +43,18 @@ pub use layout::{
 };
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, BadgeKind, CastingAimView, CastingIntent,
-    CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLogLineView, CombatLogView,
+    CastingPanelContentView, CastingPanelView, CastingSpellView, CombatLabComparisonView,
+    CombatLabIntent, CombatLabReportCardView, CombatLabReportField, CombatLabReportsView,
+    CombatLabRulesVariant, CombatLabScreenView, CombatLogLineView, CombatLogView,
     CreatorEffectKind, CreatorIntent, CreatorLibraryView, CreatorNameField, CreatorScreenView,
-    CreatorWorkspace, DecisionChoiceView, FormationSlotView, GameplayAction, GameplayChromeView,
-    GameplayHudView, GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView,
-    LabStatisticsIntent, LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView,
-    LatticeDemoView, LatticeIntent, OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView,
-    OutcomeIntent, OutcomeReportView, OwnLatticeView, PartyIntent, PartyMemberView, PartyView,
-    PauseView, ResumeView, TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent,
-    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView,
-    UnitBadgesView,
+    CreatorWorkspace, DecisionChoiceView, DeploymentIntent, DeploymentRosterEntryView,
+    DeploymentView, FormationSlotView, GameplayAction, GameplayChromeView, GameplayHudView,
+    GameplayLatticesView, InitiativeEntryView, InitiativeSide, InitiativeView, LabStatisticsIntent,
+    LabStatisticsView, LatticeDemoIntent, LatticeDemoSpellView, LatticeDemoView, LatticeIntent,
+    OutcomeAction, OutcomeActionView, OutcomeCompareChoiceView, OutcomeIntent, OutcomeReportView,
+    OwnLatticeView, PartyIntent, PartyMemberView, PartyView, PauseView, ResumeView,
+    TargetLatticeStateView, TargetLatticeView, TargetPulseView, TitleIntent, TitleScenarioView,
+    TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView, UnitBadgeView, UnitBadgesView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -105,6 +109,8 @@ impl Plugin for UiPlugin {
         .init_resource::<OutcomeReportView>()
         .init_resource::<LatticeDemoView>()
         .init_resource::<CreatorScreenView>()
+        .init_resource::<CombatLabScreenView>()
+        .init_resource::<DeploymentView>()
         .init_resource::<InitiativeView>()
         .init_resource::<TitleView>()
         .init_resource::<TargetPulseView>()
@@ -128,9 +134,11 @@ impl Plugin for UiPlugin {
             unit_badges::plugin,
         ))
         .add_plugins((
+            combat_lab::plugin,
             outcome_report::plugin,
             lattice_demo::plugin,
             creator::plugin,
+            deployment::plugin,
         ));
     }
 }
@@ -247,6 +255,21 @@ pub mod test_support {
             focus_order: focus_nodes.into_iter().map(|(_, name)| name).collect(),
             action_priority,
         }
+    }
+
+    /// Returns the stable identities of visible Combat Lab fixture cards.
+    ///
+    /// This observes presentation filtering only; fixture behavior remains a
+    /// canonical gameplay-model concern.
+    #[must_use]
+    pub fn visible_combat_lab_fixture_ids(world: &mut World) -> Vec<String> {
+        crate::combat_lab::visible_fixture_ids(world)
+    }
+
+    /// Exercises the production fixture filter and clear cycle.
+    #[must_use]
+    pub fn combat_lab_fixture_filter_cycle(query: &str) -> (Vec<String>, Vec<String>, bool) {
+        crate::combat_lab::observe_fixture_filter(query)
     }
 
     #[cfg(test)]

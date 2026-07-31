@@ -27,6 +27,11 @@ The public seam is deliberately small:
 
 Creator and Combat Lab transitions remain in `hex_gameplay_model`. A widget may
 select or submit a transition, but it must not duplicate the transition policy.
+Combat Lab setup, saved-report controls, and the deployment HUD are rendered from
+`CombatLabScreenView` and `DeploymentView`; `hex_game` alone validates map readiness,
+persists report annotations, resolves exact surfaces, and admits Start Combat. The
+3D deployment highlights and placement tokens remain spatial world presentation,
+not runtime UI.
 
 ## Information hierarchy
 

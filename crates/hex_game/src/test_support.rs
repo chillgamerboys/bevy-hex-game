@@ -254,7 +254,8 @@ pub struct FixtureFilterSnapshot {
 /// Exercises the production fixture-filter system without exposing screen state.
 #[must_use]
 pub fn fixture_filter_snapshot(query: &str) -> FixtureFilterSnapshot {
-    let (visible, visible_after_clear, input_survived) = combat_lab::observe_fixture_filter(query);
+    let (visible, visible_after_clear, input_survived) =
+        hex_ui::test_support::combat_lab_fixture_filter_cycle(query);
     FixtureFilterSnapshot {
         visible,
         visible_after_clear,
