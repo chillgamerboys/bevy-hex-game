@@ -205,6 +205,10 @@ branch; wave branches die after their one merge — `dev` never does.
 The complete decision table, manifest, review budget, stale-parent reconciliation,
 and cleanup rules are in
 [parallel development and integration waves](docs/development/parallel-development.md).
+Before declaring a PR or wave complete, also reconcile implementation,
+status/design/roadmap docs, GitHub, and—when available—Linear using
+[the delivery-state contract](docs/development/delivery-state.md). Linear is strongly
+recommended for cross-owner visibility but never blocks a valid contribution.
 
 `main` moves only by merging `dev` into it, as a deliberate promotion after someone
 has actually played the game. That gap exists for a specific reason: **CI cannot see

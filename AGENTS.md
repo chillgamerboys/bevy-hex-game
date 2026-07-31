@@ -19,6 +19,25 @@ runtime state is meaningful to review.
 The canonical rules and decision table are in
 `docs/development/parallel-development.md`.
 
+## Keep delivery state reconciled
+
+Strongly prefer `$reconcile-delivery-state` before calling a PR or wave complete,
+after it lands on `dev`, and whenever roadmap/design work relies on existing Linear
+tickets. Code, status/design/roadmap docs, GitHub, and Linear are projections of one
+delivery; compare them rather than trusting a branch name or ticket state.
+
+For broad planning and architecture passes, inspect every non-completed Hex Game
+ticket when Linear is connected, not only tickets referenced by the current branch.
+Before merge, include documentation corrections in the candidate. After merge, verify
+the exact `dev` SHA, then recommend or apply ticket updates for delivered, partial,
+and obsolete work.
+
+Linear is strongly advised for coordination but is a soft signal. Missing access or
+an owner who does not use Linear must never block a valid PR. Emit a visible warning
+and put the exact recommended ticket updates in the handoff. The canonical workflow
+and optional Codex setup are in
+`docs/development/delivery-state.md`.
+
 ## Ownership and shared concerns
 
 - The world owner controls `hex_map`, `hex_world`, `hex_perception`, and their

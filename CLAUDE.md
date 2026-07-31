@@ -177,6 +177,13 @@ rather than a veto — the owner decides, writes down why, and moves. Contract b
 broken boundaries are the exception and should block. See
 `docs/architecture.md#ownership-cuts-both-ways`.
 
+**Delivery state has several projections.** Before planning from old tickets or
+calling work complete, compare the implementation with status/design/roadmap docs,
+GitHub, and Linear when it is connected. Linear is strongly recommended for
+cross-owner visibility but never blocks a contribution from an owner who does not use
+it. The tool-neutral contract is `docs/development/delivery-state.md`; Codex uses
+`$reconcile-delivery-state`.
+
 `hex_core` depends on Bevy sub-crates rather than the `bevy` facade, so it builds
 and tests without a renderer. It holds the largest share of the test suite.
 
