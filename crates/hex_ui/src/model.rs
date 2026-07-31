@@ -76,6 +76,37 @@ pub struct GameplayHudView {
     pub actions: Vec<ActionAffordance>,
 }
 
+/// Disclosed side label used by the initiative renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitiativeSide {
+    /// Player-controlled combatant.
+    Ally,
+    /// Hostile combatant.
+    Hostile,
+}
+
+/// One immutable initiative row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitiativeEntryView {
+    /// Stable canonical unit identity used only for observation names.
+    pub unit: UnitId,
+    /// Already-disclosed player-facing name.
+    pub name: String,
+    /// Disclosed faction side.
+    pub side: InitiativeSide,
+    /// Whether this is the current actor.
+    pub current: bool,
+}
+
+/// Immutable initiative presentation supplied by the game adapter.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct InitiativeView {
+    /// Player-facing heading such as “your turn” or “enemy turn”.
+    pub heading: String,
+    /// Stable combat order.
+    pub entries: Vec<InitiativeEntryView>,
+}
+
 /// One configurable setting rendered by the Settings screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiSetting {

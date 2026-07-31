@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::UiViewportClass;
 
 /// Semantic role of one persistent gameplay region.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UiRegionRole {
     /// Party identity and selection.
     Party,
@@ -18,6 +18,13 @@ pub enum UiRegionRole {
     /// Event feed and expanded history.
     Events,
 }
+
+/// Ordinary gameplay chrome controlled by the composition root's HUD preference.
+#[derive(Component)]
+pub struct HudElement;
+
+/// Picking policy for read-only HUD surfaces above the native world.
+pub const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 
 /// Logical space reserved above the persistent action rail.
 #[must_use]

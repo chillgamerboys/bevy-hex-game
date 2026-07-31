@@ -3,6 +3,9 @@
 use bevy::prelude::*;
 use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
+pub(crate) use hex_ui::{
+    HudElement, UiHudSetup as HudSetup, UiRegionRole as HudRegion, READ_ONLY_HUD,
+};
 
 mod badges;
 mod context;
@@ -12,37 +15,6 @@ mod log;
 
 pub(crate) use context::{GameplayUiContext, InspectorRole, TargetProvenance, UiUnitIdentity};
 pub(crate) use lattice::{spawn_decision_controls, DecisionHud, DisableSelection};
-
-/// Ordered setup stages for the one shared gameplay HUD.
-///
-/// The frame must exist before feature panels attach themselves to its regions. Keeping
-/// this ordering explicit prevents the independent absolute roots that previously
-/// overlapped at the minimum review viewport.
-#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum HudSetup {
-    Frame,
-    Panels,
-}
-
-/// A named safe-frame region. Feature modules attach their panel roots here.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HudRegion {
-    Party,
-    Turn,
-    Inspector,
-    Actions,
-    Events,
-}
-
-/// An ordinary gameplay UI root controlled by the `H` toggle.
-#[derive(Component)]
-pub(crate) struct HudElement;
-
-/// Picking policy for informational chrome with no pointer controls.
-///
-/// Buttons below one of these roots remain pickable; only the read-only surface itself
-/// passes through to the battlefield.
-pub(crate) const READ_ONLY_HUD: Pickable = Pickable::IGNORE;
 
 /// Whether ordinary gameplay chrome is currently shown.
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]

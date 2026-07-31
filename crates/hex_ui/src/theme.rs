@@ -167,6 +167,16 @@ pub fn small_button(name: impl Into<String>) -> impl Bundle {
 /// Row action with a caller-selected width and shared minimum height.
 #[must_use]
 pub fn row_button(name: impl Into<String>, width: f32) -> impl Bundle {
+    row_button_with_height(name, width, 48.0)
+}
+
+/// Row action sized for a label plus wrapped supporting text.
+#[must_use]
+pub fn stacked_row_button(name: impl Into<String>, width: f32) -> impl Bundle {
+    row_button_with_height(name, width, 74.0)
+}
+
+fn row_button_with_height(name: impl Into<String>, width: f32, height: f32) -> impl Bundle {
     let name = name.into();
     (
         Name::new(name.clone()),
@@ -176,7 +186,7 @@ pub fn row_button(name: impl Into<String>, width: f32) -> impl Bundle {
         Node {
             width: Val::Px(width),
             min_width: Val::Px(44.0),
-            height: Val::Px(48.0),
+            height: Val::Px(height),
             align_items: AlignItems::Center,
             justify_content: JustifyContent::Center,
             flex_direction: FlexDirection::Column,

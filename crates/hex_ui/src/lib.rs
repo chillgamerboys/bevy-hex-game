@@ -9,6 +9,7 @@ use bevy::prelude::*;
 mod action_rail;
 mod creation_presentation;
 mod focus;
+mod initiative;
 mod lattice;
 mod layout;
 mod model;
@@ -23,11 +24,13 @@ pub use lattice::{
     paint_interactions as paint_lattice_interactions, short_name, spawn_lattice_cells,
     CellInteraction, LatticeCellView, LatticeScale,
 };
-pub use layout::{action_rail_clearance, apply_region_layout, UiRegionRole};
+pub use layout::{
+    action_rail_clearance, apply_region_layout, HudElement, UiRegionRole, READ_ONLY_HUD,
+};
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
-    PauseView, ResumeView, TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting,
-    UiSettingRow, UiSettingsView,
+    InitiativeEntryView, InitiativeSide, InitiativeView, PauseView, ResumeView, TitleIntent,
+    TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -36,9 +39,9 @@ pub use scale::{
 pub use shell::{despawn_screen, overlay_root, screen_root, screen_root_node, DespawnOnExit};
 pub use theme::{
     blurb, button, display, divider, element_color, fine, heading, label, panel, panel_node,
-    row_button, screen_title, small_button, OwnColors, UiAssets, ACCENT, ACCENT_EDGE, BLURB_SIZE,
-    DANGER, DISPLAY_SIZE, EDGE, FINE_SIZE, FUSION_COLOR, GEM_COLOR, LABEL, LABEL_SIZE, MUTED,
-    PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
+    row_button, screen_title, small_button, stacked_row_button, OwnColors, UiAssets, ACCENT,
+    ACCENT_EDGE, BLURB_SIZE, DANGER, DISPLAY_SIZE, EDGE, FINE_SIZE, FUSION_COLOR, GEM_COLOR, LABEL,
+    LABEL_SIZE, MUTED, PANEL_BG, SCREEN_TITLE_SIZE, SMALL_BUTTON_WIDTH, TITLE_SIZE,
 };
 
 /// Installs the shared runtime design system, responsive scale, focus, and intents.
@@ -51,23 +54,39 @@ pub enum UiSystems {
     EmitIntents,
 }
 
+/// Ordered gameplay UI construction stages shared with application adapters that
+/// still attach domain-specific projections to renderer-owned regions.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum UiHudSetup {
+    /// Create the responsive safe-frame regions.
+    Frame,
+    /// Attach presentation panels to those regions.
+    Panels,
+}
+
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<UiIntent>()
-            .init_resource::<GameplayHudView>()
-            .init_resource::<UiSettingsView>()
-            .init_resource::<PauseView>()
-            .init_resource::<TitleView>()
-            .init_resource::<ResumeView>()
-            .add_plugins((
-                theme::plugin,
-                scale::plugin,
-                focus::plugin,
-                shell::plugin,
-                screens::plugin,
-                action_rail::plugin,
-                title::plugin,
-            ));
+        app.configure_sets(
+            OnEnter(hex_core::Screen::Gameplay),
+            (UiHudSetup::Frame, UiHudSetup::Panels).chain(),
+        )
+        .add_message::<UiIntent>()
+        .init_resource::<GameplayHudView>()
+        .init_resource::<UiSettingsView>()
+        .init_resource::<PauseView>()
+        .init_resource::<InitiativeView>()
+        .init_resource::<TitleView>()
+        .init_resource::<ResumeView>()
+        .add_plugins((
+            theme::plugin,
+            scale::plugin,
+            focus::plugin,
+            initiative::plugin,
+            shell::plugin,
+            screens::plugin,
+            action_rail::plugin,
+            title::plugin,
+        ));
     }
 }
 

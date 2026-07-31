@@ -36,7 +36,10 @@ use crate::readouts::{
     region, spawn_decision_controls, DecisionHud, DisableSelection, GameplayUiContext, HudElement,
     HudRegion,
 };
-use hex_ui::{blurb, fine, heading, row_button, UiAssets, EDGE, LABEL, PANEL_BG};
+use hex_ui::{
+    blurb, fine, heading, row_button, stacked_row_button, UiAssets, BLURB_SIZE, EDGE, LABEL,
+    PANEL_BG,
+};
 
 use super::preview::AimVolume;
 use super::{AimControl, Aiming, AimsSpell, CastReadout, SpellRow};
@@ -96,7 +99,7 @@ pub(super) fn spawn_panel(
                 top: Val::Px(0.0),
                 left: Val::Px(0.0),
                 right: Val::Px(0.0),
-                height: Val::Px(98.0),
+                height: Val::Px(126.0),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::axes(Val::Px(9.0), Val::Px(6.0)),
@@ -242,7 +245,7 @@ pub(super) fn rebuild_panel(
 }
 
 fn spawn_turn_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
-    rows.spawn((row_button("Channel", 94.0), ChannelControl))
+    rows.spawn((stacked_row_button("Channel", 94.0), ChannelControl))
         .with_children(|button| {
             button.spawn(blurb(assets, "channel"));
             button.spawn(fine(assets, "restore mana"));
@@ -251,7 +254,7 @@ fn spawn_turn_controls(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
 }
 
 fn spawn_end_turn(rows: &mut ChildSpawnerCommands, assets: &UiAssets) {
-    rows.spawn((row_button("End Turn", 94.0), EndTurnControl))
+    rows.spawn((stacked_row_button("End Turn", 94.0), EndTurnControl))
         .with_children(|button| {
             button.spawn(blurb(assets, "end turn"));
             button.spawn(fine(assets, "SPACE"));
@@ -282,7 +285,7 @@ fn spawn_row(
         entry.spawn((
             Node {
                 width: Val::Px(SWATCH_WIDTH),
-                height: Val::Px(56.0),
+                height: Val::Px(74.0),
                 border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
@@ -305,7 +308,7 @@ fn spawn_row(
                             width: Val::Px(148.0),
                             max_width: Val::Px(148.0),
                             flex_grow: 1.0,
-                            height: Val::Px(56.0),
+                            height: Val::Px(74.0),
                             padding: UiRect::all(Val::Px(7.0)),
                             flex_direction: FlexDirection::Column,
                             justify_content: JustifyContent::Center,
@@ -322,7 +325,7 @@ fn spawn_row(
                             Text::new(row.name.clone()),
                             TextFont {
                                 font: assets.body.clone().into(),
-                                ..TextFont::from_font_size(18.0)
+                                ..TextFont::from_font_size(BLURB_SIZE)
                             },
                             TextColor(LABEL),
                             Pickable::IGNORE,
@@ -341,7 +344,7 @@ fn spawn_row(
                         width: Val::Px(148.0),
                         max_width: Val::Px(148.0),
                         flex_grow: 1.0,
-                        height: Val::Px(56.0),
+                        height: Val::Px(74.0),
                         padding: UiRect::all(Val::Px(7.0)),
                         flex_direction: FlexDirection::Column,
                         justify_content: JustifyContent::Center,
