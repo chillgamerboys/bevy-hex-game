@@ -2003,6 +2003,7 @@ fn restore_connected_relief(
     frozen_approaches: &BTreeSet<HexCoord>,
     levels: &mut BTreeMap<HexCoord, Level>,
 ) {
+    let mut connectivity = ShapedHillsConnectivity::new(levels, crossings, valley, seam_shape);
     loop {
         let candidates = authored
             .iter()
@@ -2022,11 +2023,14 @@ fn restore_connected_relief(
             .collect::<Vec<_>>();
         let mut changed = false;
         for (coord, current, target) in candidates {
-            levels.insert(coord, current.saturating_add(1).min(target));
-            if hills_shaped_levels_connected(levels, crossings, valley, seam_shape) {
+            let raised = current.saturating_add(1).min(target);
+            levels.insert(coord, raised);
+            connectivity.set_level(coord, raised);
+            if connectivity.is_valid() {
                 changed = true;
             } else {
                 levels.insert(coord, current);
+                connectivity.set_level(coord, current);
             }
         }
         if !changed {
@@ -2035,137 +2039,311 @@ fn restore_connected_relief(
     }
 }
 
-fn hills_shaped_levels_connected(
-    levels: &BTreeMap<HexCoord, Level>,
-    crossings: &CrossingGeometry,
-    valley: Level,
-    seam_shape: &WalkerSeamShape,
-) -> bool {
-    let ordinary_by_coord = levels
-        .iter()
-        .filter_map(|(coord, level)| {
-            let position = if crossings.river.contains(coord) {
-                if crossings.bridge_deck.contains(coord) {
-                    Some(TilePos::new(*coord, valley.saturating_add(1)))
-                } else if crossings.ford_deck.contains(coord)
-                    || crossings.auxiliary_fords.contains(coord)
-                {
-                    Some(TilePos::new(*coord, valley))
-                } else {
-                    None
-                }
-            } else {
-                Some(TilePos::new(*coord, *level))
-            }?;
-            (seam_shape.access_for(position, SurfaceAccess::Ordinary) == SurfaceAccess::Ordinary)
-                .then_some((*coord, position.level))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let Some(start) = ordinary_by_coord.keys().next().copied() else {
-        return false;
-    };
-    let mut visited = BTreeSet::from([start]);
-    let mut frontier = VecDeque::from([start]);
-    while let Some(coord) = frontier.pop_front() {
-        let Some(level) = ordinary_by_coord.get(&coord).copied() else {
-            continue;
-        };
-        for neighbor in coord.neighbors() {
-            let Some(neighbor_level) = ordinary_by_coord.get(&neighbor).copied() else {
-                continue;
-            };
-            if level.abs_diff(neighbor_level) <= 1 && visited.insert(neighbor) {
-                frontier.push_back(neighbor);
-            }
-        }
-    }
-    visited.len() == ordinary_by_coord.len()
-        && confluence_bank_authority_is_valid(&ordinary_by_coord, crossings)
+#[derive(Debug)]
+struct ShapedHillsConnectivity {
+    index_by_coord: BTreeMap<HexCoord, usize>,
+    levels: Vec<Level>,
+    mutable_level: Vec<bool>,
+    neighbors: Vec<[Option<usize>; 6]>,
+    wet: Vec<bool>,
+    authorities: Vec<Vec<usize>>,
+    visited: Vec<bool>,
+    components: Vec<usize>,
+    frontier: Vec<usize>,
+    edges: Vec<(usize, usize)>,
 }
 
-fn confluence_bank_authority_is_valid(
-    ordinary_by_coord: &BTreeMap<HexCoord, Level>,
-    crossings: &CrossingGeometry,
-) -> bool {
-    let bridge = crossings
-        .bridge_deck
-        .intersection(&crossings.river)
-        .copied()
-        .collect::<BTreeSet<_>>();
-    let alternate = crossings
-        .ford_deck
-        .intersection(&crossings.river)
-        .copied()
-        .collect::<BTreeSet<_>>();
-    let wet = bridge
-        .union(&alternate)
-        .copied()
-        .chain(crossings.auxiliary_fords.iter().copied())
-        .collect::<BTreeSet<_>>();
-    let mut component_by_coord = BTreeMap::new();
-    let mut component_count = 0_usize;
-    for start in ordinary_by_coord
-        .keys()
-        .copied()
-        .filter(|coord| !wet.contains(coord))
-    {
-        if component_by_coord.contains_key(&start) {
-            continue;
-        }
-        let mut reachable = BTreeSet::from([start]);
-        let mut frontier = VecDeque::from([start]);
-        while let Some(coord) = frontier.pop_front() {
-            let Some(level) = ordinary_by_coord.get(&coord).copied() else {
-                continue;
-            };
-            for neighbor in coord.neighbors() {
-                let Some(neighbor_level) = ordinary_by_coord.get(&neighbor).copied() else {
-                    continue;
-                };
-                if !wet.contains(&neighbor)
-                    && level.abs_diff(neighbor_level) <= 1
-                    && reachable.insert(neighbor)
-                {
-                    frontier.push_back(neighbor);
-                }
-            }
-        }
-        for coord in reachable {
-            component_by_coord.insert(coord, component_count);
-        }
-        component_count = component_count.saturating_add(1);
-    }
-    let authorities = [bridge, alternate]
-        .into_iter()
-        .chain(
+impl ShapedHillsConnectivity {
+    fn new(
+        levels: &BTreeMap<HexCoord, Level>,
+        crossings: &CrossingGeometry,
+        valley: Level,
+        seam_shape: &WalkerSeamShape,
+    ) -> Self {
+        let projected = levels
+            .iter()
+            .filter_map(|(coord, level)| {
+                let position = if crossings.river.contains(coord) {
+                    if crossings.bridge_deck.contains(coord) {
+                        Some(TilePos::new(*coord, valley.saturating_add(1)))
+                    } else if crossings.ford_deck.contains(coord)
+                        || crossings.auxiliary_fords.contains(coord)
+                    {
+                        Some(TilePos::new(*coord, valley))
+                    } else {
+                        None
+                    }
+                } else {
+                    Some(TilePos::new(*coord, *level))
+                }?;
+                (seam_shape.access_for(position, SurfaceAccess::Ordinary)
+                    == SurfaceAccess::Ordinary)
+                    .then_some((*coord, position.level, !crossings.river.contains(coord)))
+            })
+            .collect::<Vec<_>>();
+        let index_by_coord = projected
+            .iter()
+            .enumerate()
+            .map(|(index, (coord, _, _))| (*coord, index))
+            .collect::<BTreeMap<_, _>>();
+        let projected_levels = projected
+            .iter()
+            .map(|(_, level, _)| *level)
+            .collect::<Vec<_>>();
+        let mutable_level = projected
+            .iter()
+            .map(|(_, _, mutable)| *mutable)
+            .collect::<Vec<_>>();
+        let neighbors = projected
+            .iter()
+            .map(|(coord, _, _)| {
+                coord
+                    .neighbors()
+                    .map(|neighbor| index_by_coord.get(&neighbor).copied())
+            })
+            .collect::<Vec<_>>();
+        let wet_coords = crossings
+            .bridge_deck
+            .intersection(&crossings.river)
+            .copied()
+            .chain(crossings.ford_deck.intersection(&crossings.river).copied())
+            .chain(crossings.auxiliary_fords.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let wet = projected
+            .iter()
+            .map(|(coord, _, _)| wet_coords.contains(coord))
+            .collect::<Vec<_>>();
+        let mut authority_coords = vec![
+            crossings
+                .bridge_deck
+                .intersection(&crossings.river)
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            crossings
+                .ford_deck
+                .intersection(&crossings.river)
+                .copied()
+                .collect::<BTreeSet<_>>(),
+        ];
+        authority_coords.extend(
             crossings
                 .auxiliary_fords
                 .iter()
                 .copied()
                 .map(|coord| BTreeSet::from([coord])),
-        )
-        .collect::<Vec<_>>();
-    let mut edges = Vec::with_capacity(authorities.len());
-    for authority in authorities {
-        let banks = authority
-            .iter()
-            .flat_map(|coord| coord.neighbors())
-            .filter(|coord| !wet.contains(coord))
-            .filter_map(|coord| component_by_coord.get(&coord).copied())
-            .collect::<BTreeSet<_>>();
-        let banks = banks.into_iter().collect::<Vec<_>>();
-        let [first, second] = banks.as_slice() else {
+        );
+        let authorities = authority_coords
+            .into_iter()
+            .map(|authority| {
+                authority
+                    .iter()
+                    .flat_map(HexCoord::neighbors)
+                    .filter(|coord| !wet_coords.contains(coord))
+                    .filter_map(|coord| index_by_coord.get(&coord).copied())
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let node_count = projected.len();
+        Self {
+            index_by_coord,
+            levels: projected_levels,
+            mutable_level,
+            neighbors,
+            wet,
+            authorities,
+            visited: vec![false; node_count],
+            components: vec![usize::MAX; node_count],
+            frontier: Vec::with_capacity(node_count),
+            edges: Vec::with_capacity(node_count),
+        }
+    }
+
+    fn set_level(&mut self, coord: HexCoord, level: Level) {
+        let Some(index) = self.index_by_coord.get(&coord).copied() else {
+            return;
+        };
+        if self.mutable_level.get(index).copied().unwrap_or(false) {
+            if let Some(current) = self.levels.get_mut(index) {
+                *current = level;
+            }
+        }
+    }
+
+    fn is_valid(&mut self) -> bool {
+        if self.levels.is_empty() || !self.all_ordinary_surfaces_are_connected() {
+            return false;
+        }
+        self.confluence_bank_authority_is_valid()
+    }
+
+    fn all_ordinary_surfaces_are_connected(&mut self) -> bool {
+        self.visited.fill(false);
+        self.frontier.clear();
+        let Some(first) = self.visited.first_mut() else {
             return false;
         };
-        edges.push((*first, *second));
+        *first = true;
+        self.frontier.push(0);
+        let mut reachable = 1_usize;
+        while let Some(current) = self.frontier.pop() {
+            let Some(level) = self.levels.get(current).copied() else {
+                return false;
+            };
+            let Some(neighbors) = self.neighbors.get(current).copied() else {
+                return false;
+            };
+            for neighbor in neighbors.into_iter().flatten() {
+                let Some(neighbor_level) = self.levels.get(neighbor).copied() else {
+                    return false;
+                };
+                let Some(was_visited) = self.visited.get(neighbor).copied() else {
+                    return false;
+                };
+                if was_visited || level.abs_diff(neighbor_level) > 1 {
+                    continue;
+                }
+                let Some(visited) = self.visited.get_mut(neighbor) else {
+                    return false;
+                };
+                *visited = true;
+                reachable = reachable.saturating_add(1);
+                self.frontier.push(neighbor);
+            }
+        }
+        reachable == self.levels.len()
     }
-    bank_graph_is_connected(component_count, &edges, &BTreeSet::new())
-        && bank_graph_is_connected(component_count, &edges, &BTreeSet::from([0]))
-        && bank_graph_is_connected(component_count, &edges, &BTreeSet::from([1]))
-        && !bank_graph_is_connected(component_count, &edges, &BTreeSet::from([0, 1]))
-        && (2..edges.len()).all(|index| {
-            !bank_graph_is_connected(component_count, &edges, &BTreeSet::from([index]))
-        })
+
+    fn confluence_bank_authority_is_valid(&mut self) -> bool {
+        self.components.fill(usize::MAX);
+        let mut component_count = 0_usize;
+        for start in 0..self.levels.len() {
+            let Some(is_wet) = self.wet.get(start).copied() else {
+                return false;
+            };
+            let Some(component) = self.components.get(start).copied() else {
+                return false;
+            };
+            if is_wet || component != usize::MAX {
+                continue;
+            }
+            let Some(component) = self.components.get_mut(start) else {
+                return false;
+            };
+            *component = component_count;
+            self.frontier.clear();
+            self.frontier.push(start);
+            while let Some(current) = self.frontier.pop() {
+                let Some(level) = self.levels.get(current).copied() else {
+                    return false;
+                };
+                let Some(neighbors) = self.neighbors.get(current).copied() else {
+                    return false;
+                };
+                for neighbor in neighbors.into_iter().flatten() {
+                    let Some(is_wet) = self.wet.get(neighbor).copied() else {
+                        return false;
+                    };
+                    let Some(neighbor_component) = self.components.get(neighbor).copied() else {
+                        return false;
+                    };
+                    let Some(neighbor_level) = self.levels.get(neighbor).copied() else {
+                        return false;
+                    };
+                    if is_wet
+                        || neighbor_component != usize::MAX
+                        || level.abs_diff(neighbor_level) > 1
+                    {
+                        continue;
+                    }
+                    let Some(component) = self.components.get_mut(neighbor) else {
+                        return false;
+                    };
+                    *component = component_count;
+                    self.frontier.push(neighbor);
+                }
+            }
+            component_count = component_count.saturating_add(1);
+        }
+
+        self.edges.clear();
+        for authority in &self.authorities {
+            let mut banks = Vec::with_capacity(2);
+            for node in authority {
+                let Some(component) = self.components.get(*node).copied() else {
+                    return false;
+                };
+                if component == usize::MAX || banks.contains(&component) {
+                    continue;
+                }
+                if banks.len() == 2 {
+                    return false;
+                }
+                banks.push(component);
+            }
+            let mut banks = banks.into_iter();
+            let (Some(first), Some(second), None) = (banks.next(), banks.next(), banks.next())
+            else {
+                return false;
+            };
+            self.edges.push((first, second));
+        }
+
+        dense_bank_graph_is_connected(component_count, &self.edges, &[])
+            && dense_bank_graph_is_connected(component_count, &self.edges, &[0])
+            && dense_bank_graph_is_connected(component_count, &self.edges, &[1])
+            && !dense_bank_graph_is_connected(component_count, &self.edges, &[0, 1])
+            && (2..self.edges.len())
+                .all(|index| !dense_bank_graph_is_connected(component_count, &self.edges, &[index]))
+    }
+}
+
+fn dense_bank_graph_is_connected(
+    component_count: usize,
+    edges: &[(usize, usize)],
+    removed_edges: &[usize],
+) -> bool {
+    if component_count == 0 {
+        return false;
+    }
+    let mut reachable = vec![false; component_count];
+    let mut frontier = Vec::with_capacity(component_count);
+    let Some(first) = reachable.first_mut() else {
+        return false;
+    };
+    *first = true;
+    frontier.push(0_usize);
+    let mut reachable_count = 1_usize;
+    while let Some(component) = frontier.pop() {
+        for (index, (first, second)) in edges.iter().copied().enumerate() {
+            if removed_edges.contains(&index) {
+                continue;
+            }
+            let neighbor = if first == component {
+                Some(second)
+            } else if second == component {
+                Some(first)
+            } else {
+                None
+            };
+            if let Some(neighbor) = neighbor {
+                let Some(was_reachable) = reachable.get(neighbor).copied() else {
+                    return false;
+                };
+                if was_reachable {
+                    continue;
+                }
+                let Some(is_reachable) = reachable.get_mut(neighbor) else {
+                    return false;
+                };
+                *is_reachable = true;
+                reachable_count = reachable_count.saturating_add(1);
+                frontier.push(neighbor);
+            }
+        }
+    }
+    reachable_count == component_count
 }
 
 fn add_irregular_shelves(
