@@ -1,17 +1,17 @@
 //! Frozen, session-local Combat Lab rule profiles.
 //!
 //! Authored [`CombatSettings`] remain the shipped source of truth. A profile copies
-//! only the six numeric seams the Lab is allowed to tune, validates them against
-//! explicit bounds, and produces an effective session value without writing
-//! `combat.ron`.
+//! every shipping authority input. The seven numeric seams the Lab may tune are
+//! bounded explicitly; typed policy variants preserve the currently implemented
+//! algorithms. Effective values remain session-local and never write `combat.ron`.
 
 use bevy::prelude::Reflect;
 use serde::{Deserialize, Serialize};
 
-use crate::CombatSettings;
+use crate::{ActionEconomy, ChannellingTrickle, CombatSettings, InitiativePolicy, RoutPolicy};
 
 /// Current serialized Combat Lab rules-profile schema.
-pub const COMBAT_RULES_PROFILE_VERSION: u16 = 1;
+pub const COMBAT_RULES_PROFILE_VERSION: u16 = 2;
 
 /// Named profile identity shown by Combat Lab.
 #[derive(Reflect, Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,8 @@ pub enum CombatRuleField {
     MovementPerTurn,
     /// Raw lattice cells disabled by a basic strike.
     StrikeDisables,
+    /// Initiative used by an archetype that declares none.
+    DefaultInitiative,
     /// Horizontal range at which combat begins.
     EngageRange,
     /// Extra separation required before combat ends.
@@ -43,9 +45,10 @@ pub enum CombatRuleField {
 
 impl CombatRuleField {
     /// Every exposed field in stable UI and serialization order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::MovementPerTurn,
         Self::StrikeDisables,
+        Self::DefaultInitiative,
         Self::EngageRange,
         Self::DisengageMargin,
         Self::LevelsPerBonusRange,
@@ -58,6 +61,7 @@ impl CombatRuleField {
         match self {
             Self::MovementPerTurn => "Movement per turn",
             Self::StrikeDisables => "Strike disables",
+            Self::DefaultInitiative => "Default initiative",
             Self::EngageRange => "Engage range",
             Self::DisengageMargin => "Disengage margin",
             Self::LevelsPerBonusRange => "Levels per bonus range",
@@ -72,6 +76,9 @@ impl CombatRuleField {
             Self::MovementPerTurn => "How many surface steps a unit may spend each turn.",
             Self::StrikeDisables => {
                 "How many lattice cells a basic strike threatens before prevention."
+            }
+            Self::DefaultInitiative => {
+                "Initiative used when an authored combatant declares no override."
             }
             Self::EngageRange => "How close opposing units must be before the game enters combat.",
             Self::DisengageMargin => {
@@ -92,6 +99,7 @@ impl CombatRuleField {
         match self {
             Self::MovementPerTurn => CombatRuleBounds { min: 1, max: 12 },
             Self::StrikeDisables => CombatRuleBounds { min: 1, max: 12 },
+            Self::DefaultInitiative => CombatRuleBounds { min: 0, max: 1_000 },
             Self::EngageRange => CombatRuleBounds { min: 1, max: 24 },
             Self::DisengageMargin => CombatRuleBounds { min: 1, max: 12 },
             Self::LevelsPerBonusRange => CombatRuleBounds { min: 1, max: 32 },
@@ -140,6 +148,9 @@ pub struct CombatRulesProfile {
     pub movement_per_turn: u32,
     /// Raw lattice cells disabled by a basic strike.
     pub strike_disables: u16,
+    /// Initiative used by an archetype that declares none.
+    #[serde(default = "default_initiative")]
+    pub default_initiative: u32,
     /// Horizontal range at which combat begins.
     pub engage_range: u32,
     /// Extra separation required before combat ends.
@@ -148,10 +159,22 @@ pub struct CombatRulesProfile {
     pub levels_per_bonus_range: u32,
     /// Further round rollovers a tier of Reveal survives.
     pub reveal_duration: u32,
+    /// Typed initiative algorithm; currently fixed to shipping behavior.
+    #[serde(default = "flat_component")]
+    pub initiative_policy: InitiativePolicy,
+    /// Typed action economy; currently fixed to shipping behavior.
+    #[serde(default = "move_and_action")]
+    pub action_economy: ActionEconomy,
+    /// Typed channelling cadence; currently fixed to shipping behavior.
+    #[serde(default = "burst_only")]
+    pub channelling_trickle: ChannellingTrickle,
+    /// Typed non-annihilation outcome policy; currently fixed to shipping behavior.
+    #[serde(default = "fight_to_the_end")]
+    pub rout_policy: RoutPolicy,
 }
 
 impl CombatRulesProfile {
-    /// Captures the six exposed values from shipped settings.
+    /// Captures every authority input from shipped settings.
     #[must_use]
     pub const fn shipped(settings: &CombatSettings) -> Self {
         Self {
@@ -159,10 +182,15 @@ impl CombatRulesProfile {
             preset: CombatRulesPreset::Shipped,
             movement_per_turn: settings.movement_per_turn,
             strike_disables: settings.strike_disables,
+            default_initiative: settings.default_initiative,
             engage_range: settings.engage_range,
             disengage_margin: settings.disengage_margin,
             levels_per_bonus_range: settings.levels_per_bonus_range,
             reveal_duration: settings.divination_rounds_per_tier,
+            initiative_policy: settings.initiative_policy,
+            action_economy: settings.action_economy,
+            channelling_trickle: settings.channelling_trickle,
+            rout_policy: settings.rout_policy,
         }
     }
 
@@ -190,6 +218,7 @@ impl CombatRulesProfile {
         match field {
             CombatRuleField::MovementPerTurn => self.movement_per_turn,
             CombatRuleField::StrikeDisables => self.strike_disables as u32,
+            CombatRuleField::DefaultInitiative => self.default_initiative,
             CombatRuleField::EngageRange => self.engage_range,
             CombatRuleField::DisengageMargin => self.disengage_margin,
             CombatRuleField::LevelsPerBonusRange => self.levels_per_bonus_range,
@@ -208,6 +237,7 @@ impl CombatRulesProfile {
                     format!("{} does not fit its storage type: {error}", field.label())
                 })?;
             }
+            CombatRuleField::DefaultInitiative => self.default_initiative = value,
             CombatRuleField::EngageRange => self.engage_range = value,
             CombatRuleField::DisengageMargin => self.disengage_margin = value,
             CombatRuleField::LevelsPerBonusRange => self.levels_per_bonus_range = value,
@@ -226,6 +256,16 @@ impl CombatRulesProfile {
         }
         for field in CombatRuleField::ALL {
             validate_value(field, self.value(field))?;
+        }
+        if self.initiative_policy != shipped.initiative_policy
+            || self.action_economy != shipped.action_economy
+            || self.channelling_trickle != shipped.channelling_trickle
+            || self.rout_policy != shipped.rout_policy
+        {
+            return Err(
+                "Combat Lab policy variants must preserve the currently implemented shipping algorithms"
+                    .to_owned(),
+            );
         }
         let expected = match self.preset {
             CombatRulesPreset::Shipped => Some(Self::shipped(shipped)),
@@ -272,13 +312,38 @@ impl CombatRulesProfile {
         let mut effective = shipped.clone();
         effective.movement_per_turn = self.movement_per_turn;
         effective.strike_disables = self.strike_disables;
+        effective.default_initiative = self.default_initiative;
         effective.engage_range = self.engage_range;
         effective.disengage_margin = self.disengage_margin;
         effective.levels_per_bonus_range = self.levels_per_bonus_range;
         effective.divination_rounds_per_tier = self.reveal_duration;
+        effective.initiative_policy = self.initiative_policy;
+        effective.action_economy = self.action_economy;
+        effective.channelling_trickle = self.channelling_trickle;
+        effective.rout_policy = self.rout_policy;
         effective.validate()?;
         Ok(effective)
     }
+}
+
+const fn default_initiative() -> u32 {
+    10
+}
+
+const fn flat_component() -> InitiativePolicy {
+    InitiativePolicy::FlatComponent
+}
+
+const fn move_and_action() -> ActionEconomy {
+    ActionEconomy::MoveAndAction
+}
+
+const fn burst_only() -> ChannellingTrickle {
+    ChannellingTrickle::BurstOnly
+}
+
+const fn fight_to_the_end() -> RoutPolicy {
+    RoutPolicy::FightToTheEnd
 }
 
 fn validate_value(field: CombatRuleField, value: u32) -> Result<(), String> {
@@ -338,9 +403,9 @@ mod tests {
             assert_eq!(profile.validate(&settings), Ok(()));
             assert_eq!(profile.set_custom(field, bounds.max), Ok(()));
             assert_eq!(profile.validate(&settings), Ok(()));
-            assert!(profile
-                .set_custom(field, bounds.min.saturating_sub(1))
-                .is_err());
+            if bounds.min > 0 {
+                assert!(profile.set_custom(field, bounds.min - 1).is_err());
+            }
             assert!(profile
                 .set_custom(field, bounds.max.saturating_add(1))
                 .is_err());

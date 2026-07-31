@@ -3264,6 +3264,7 @@ dependencies = [
  "bevy_ecs",
  "hex_core",
  "hex_lattice",
+ "ron",
  "serde",
  "serde_json",
  "xxhash-rust",
