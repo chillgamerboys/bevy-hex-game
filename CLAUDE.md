@@ -1,6 +1,6 @@
 # Context for Claude Code
 
-A hex-grid game on **Bevy 0.19**, organised as a fifteen-crate cargo workspace.
+A hex-grid game on **Bevy 0.19**, organised as a multi-crate cargo workspace.
 
 Read **[docs/architecture.md](docs/architecture.md)** first — it explains the crate
 graph and, more usefully, the reasoning behind it. This file is the operational
@@ -113,6 +113,7 @@ hex_core → hex_assets → hex_objects ─────────────�
 {Bevy, bevy_egui, hex_core, hex_assets} → hex_editor  (standalone tool)
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
+{bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -125,6 +126,12 @@ spells, mana, disables, enchantments. Built like `hex_core` (Bevy sub-crates onl
 design's open questions. `hex_assets` resolves authored content into it, `hex_units`
 carries per-unit lattice state, and `hex_combat` drives casts, disables, and decisions.
 See `crates/hex_lattice`.
+
+**`hex_gameplay_model` is pure screen behavior** — Combat Lab editing, report
+selection and launch routing, plus Creator navigation and edit history. It does not
+depend on assets, combat, units, the game binary, or renderer. `hex_game` adapts typed
+model transitions to Bevy resources, persistence, and navigation instead of owning a
+second copy of those decisions.
 
 **`hex_map`, `hex_world` and `hex_units` must not depend on each other.** Shared
 types go in `hex_core`. Cargo enforces this; a violating `use` fails to compile.

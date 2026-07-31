@@ -22,6 +22,10 @@ use hex_core::{
     MapAnchorId, MapAnchors, ResolvedMapSeed, Screen, SubstanceId, TilePos, TraversalBlockers,
     TraversalProfile,
 };
+use hex_gameplay_model::{
+    CombatLabEdit, CombatLabModel, LabTab, RosterChoice as ModelRosterChoice, SandboxRestore,
+    SandboxStep, MAX_COMBAT_LAB_ROSTER,
+};
 use hex_lattice::SpellTable as _;
 use hex_units::{Archetype, Body, Faction, Footing, Reach, StandsOn, UnitOccupancy};
 
@@ -42,79 +46,13 @@ use crate::storage::StoragePaths;
 
 use super::{despawn_screen, screen_root, screen_root_node};
 
-const MAX_ROSTER: usize = 6;
+const MAX_ROSTER: usize = MAX_COMBAT_LAB_ROSTER;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum LabTab {
-    #[default]
-    Sandbox,
-    Fixtures,
-    Reports,
-}
+type RosterChoice = ModelRosterChoice<CustomCharacterId>;
+pub(crate) type CombatLabState = CombatLabModel<CombatRulesProfile, CustomCharacterId>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(crate) enum SandboxStep {
-    #[default]
-    Map,
-    Rosters,
-    Rules,
-}
-
-const DEFAULT_SANDBOX_MAP: &str = "flat-arena";
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum RosterChoice {
-    Template(String),
-    Custom(CustomCharacterId),
-    Packaged(CustomCharacterId),
-}
-
-#[derive(Resource, Debug)]
-pub(crate) struct CombatLabState {
-    pub(crate) tab: LabTab,
-    pub(crate) sandbox_step: SandboxStep,
-    pub(crate) map: String,
-    pub(crate) players: Vec<RosterChoice>,
-    pub(crate) hostiles: Vec<RosterChoice>,
-    pub(crate) fixture_filter: String,
-    pub(crate) creator_origin: bool,
-    pub(crate) rules: Option<CombatRulesProfile>,
-    pub(crate) preserved_deployment: Option<CombatLabReportDeployment>,
-    pub(crate) frozen_overlay: Option<CreatorContentOverlay>,
-    pub(crate) compare_left: Option<CombatLabReportId>,
-    pub(crate) compare_right: Option<CombatLabReportId>,
-    pub(crate) pending_report_delete: Option<CombatLabReportId>,
-    pub(crate) notice: String,
-    pub(crate) revision: u64,
-}
-
-impl Default for CombatLabState {
-    fn default() -> Self {
-        Self {
-            tab: LabTab::Sandbox,
-            sandbox_step: SandboxStep::Map,
-            map: DEFAULT_SANDBOX_MAP.to_owned(),
-            players: vec![RosterChoice::Template("hedge-mage".to_owned())],
-            hostiles: vec![RosterChoice::Template("raider".to_owned())],
-            fixture_filter: String::new(),
-            creator_origin: false,
-            rules: None,
-            preserved_deployment: None,
-            frozen_overlay: None,
-            compare_left: None,
-            compare_right: None,
-            pending_report_delete: None,
-            notice: String::new(),
-            revision: 1,
-        }
-    }
-}
-
-impl CombatLabState {
-    fn bump(&mut self) {
-        self.revision = self.revision.wrapping_add(1);
-    }
-}
+#[derive(Resource, Debug, Default)]
+pub(crate) struct FrozenSandboxOverlay(Option<CreatorContentOverlay>);
 
 /// Prefills the Sandbox when Test on Map originates in the Creator.
 #[derive(Resource, Debug, Clone, Copy)]
@@ -677,6 +615,7 @@ pub(crate) fn creator_fixture_payload(
 
 pub(super) fn plugin(app: &mut App) {
     app.init_resource::<CombatLabState>()
+        .init_resource::<FrozenSandboxOverlay>()
         .add_systems(
             OnEnter(Screen::Gameplay),
             (
@@ -711,6 +650,7 @@ pub(crate) fn initialize_lab(
     creator_request: Option<Res<CreatorTestRequest>>,
     sandbox_request: Option<Res<CombatLabSandboxRequest>>,
     mut state: ResMut<CombatLabState>,
+    mut frozen_overlay: ResMut<FrozenSandboxOverlay>,
     overlay: Option<Res<CreatorContentOverlay>>,
 ) {
     let sandbox_request = sandbox_request.as_deref().cloned();
@@ -720,44 +660,46 @@ pub(crate) fn initialize_lab(
     commands.remove_resource::<CombatLabReportLaunch>();
     commands.insert_resource(GameplayPhase::Active);
     if let Some(request) = sandbox_request {
-        state.tab = LabTab::Sandbox;
-        state.sandbox_step = SandboxStep::Rules;
-        state.map = request.report.map.catalog_id.clone();
         let packaged = matches!(
             request.report.origin,
             CombatLabReportOrigin::FixedFixture { ref stable_id }
                 if stable_id.starts_with("creator-")
         );
-        state.players = request
+        let players = request
             .report
             .rosters
             .players
             .iter()
             .map(|entry| report_roster_choice(entry, packaged))
             .collect();
-        state.hostiles = request
+        let hostiles = request
             .report
             .rosters
             .hostiles
             .iter()
             .map(|entry| report_roster_choice(entry, packaged))
             .collect();
-        state.rules = Some(request.report.profile.clone());
-        state.preserved_deployment = Some(request.report.deployment.clone());
-        state.frozen_overlay = request.overlay;
-        state.notice =
-            "Frozen map, rosters, profile, and exact deployment copied to Sandbox.".to_owned();
-        state.creator_origin = false;
+        state.restore_sandbox(SandboxRestore {
+            map: request.report.map.catalog_id.clone(),
+            players,
+            hostiles,
+            rules: request.report.profile.clone(),
+            deployment: request.report.deployment.clone(),
+        });
+        frozen_overlay.0 = request.overlay;
         commands.remove_resource::<CombatLabSandboxRequest>();
+        return;
     } else if let Some(request) = creator_request {
         state.tab = LabTab::Sandbox;
         state.sandbox_step = SandboxStep::Rosters;
         state.players = vec![RosterChoice::Custom(request.character)];
         state.notice = "Creator character prefilled; choose the rest of the test.".to_owned();
         state.creator_origin = true;
+        frozen_overlay.0 = None;
         commands.remove_resource::<CreatorTestRequest>();
     } else {
         state.creator_origin = false;
+        frozen_overlay.0 = None;
     }
     state.bump();
 }
@@ -2277,6 +2219,7 @@ fn handle_lab_actions(
     map_catalog: Option<Res<CombatLabMapCatalog>>,
     combat: Option<Res<CombatSettings>>,
     mut reports: ResMut<CombatLabReportStore>,
+    frozen_overlay: Res<FrozenSandboxOverlay>,
     paths: Res<StoragePaths>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
@@ -2287,57 +2230,53 @@ fn handle_lab_actions(
         }
         match action {
             LabAction::Tab(tab) => {
-                state.tab = *tab;
-                state.pending_report_delete = None;
+                state.apply(CombatLabEdit::Tab(*tab));
+                continue;
             }
             LabAction::Back => next.set(Screen::Title),
             LabAction::ShowSandboxStep(step) => {
-                state.sandbox_step = *step;
-                state.notice.clear();
+                state.apply(CombatLabEdit::SandboxStep(*step));
+                continue;
             }
             LabAction::SelectMap(map) => {
-                state.map = map.clone();
-                state.preserved_deployment = None;
+                state.apply(CombatLabEdit::SelectMap(map.clone()));
+                continue;
             }
             LabAction::AddPlayerTemplate(name) => {
-                if state.players.len() < MAX_ROSTER {
-                    state.players.push(RosterChoice::Template(name.clone()));
-                    state.preserved_deployment = None;
-                }
+                state.apply(CombatLabEdit::AddPlayer(RosterChoice::Template(
+                    name.clone(),
+                )));
+                continue;
             }
             LabAction::AddHostileTemplate(name) => {
-                if state.hostiles.len() < MAX_ROSTER {
-                    state.hostiles.push(RosterChoice::Template(name.clone()));
-                    state.preserved_deployment = None;
-                }
+                state.apply(CombatLabEdit::AddHostile(RosterChoice::Template(
+                    name.clone(),
+                )));
+                continue;
             }
             LabAction::AddPlayerCustom(id) => {
-                if state.players.len() < MAX_ROSTER {
-                    state.players.push(RosterChoice::Custom(*id));
-                    state.preserved_deployment = None;
-                }
+                state.apply(CombatLabEdit::AddPlayer(RosterChoice::Custom(*id)));
+                continue;
             }
             LabAction::AddHostileCustom(id) => {
-                if state.hostiles.len() < MAX_ROSTER {
-                    state.hostiles.push(RosterChoice::Custom(*id));
-                    state.preserved_deployment = None;
-                }
+                state.apply(CombatLabEdit::AddHostile(RosterChoice::Custom(*id)));
+                continue;
             }
             LabAction::RemovePlayer(index) => {
-                remove_at(&mut state.players, *index);
-                state.preserved_deployment = None;
+                state.apply(CombatLabEdit::RemovePlayer(*index));
+                continue;
             }
             LabAction::RemoveHostile(index) => {
-                remove_at(&mut state.hostiles, *index);
-                state.preserved_deployment = None;
+                state.apply(CombatLabEdit::RemoveHostile(*index));
+                continue;
             }
             LabAction::MovePlayer(index, delta) => {
-                move_at(&mut state.players, *index, *delta);
-                state.preserved_deployment = None;
+                state.apply(CombatLabEdit::MovePlayer(*index, *delta));
+                continue;
             }
             LabAction::MoveHostile(index, delta) => {
-                move_at(&mut state.hostiles, *index, *delta);
-                state.preserved_deployment = None;
+                state.apply(CombatLabEdit::MoveHostile(*index, *delta));
+                continue;
             }
             LabAction::EditCustom(character) => {
                 commands.insert_resource(CreatorEditRequest {
@@ -2430,7 +2369,7 @@ fn handle_lab_actions(
                     state.bump();
                     continue;
                 };
-                let overlay = if let Some(overlay) = state.frozen_overlay.clone() {
+                let overlay = if let Some(overlay) = frozen_overlay.0.clone() {
                     overlay
                 } else {
                     match build_creator_overlay(
@@ -2560,16 +2499,16 @@ fn handle_lab_actions(
                 next.set(Screen::Loading);
             }
             LabAction::SelectCompareLeft(id) => {
-                state.compare_left = Some(*id);
-                state.notice = format!("Report {} selected as the left comparison.", id.0);
+                state.apply(CombatLabEdit::SelectCompareLeft(*id));
+                continue;
             }
             LabAction::SelectCompareRight(id) => {
-                state.compare_right = Some(*id);
-                state.notice = format!("Report {} selected as the right comparison.", id.0);
+                state.apply(CombatLabEdit::SelectCompareRight(*id));
+                continue;
             }
             LabAction::RequestReportDelete(id) => {
-                state.pending_report_delete = Some(*id);
-                state.notice = format!("Confirm deletion of saved report {} or cancel.", id.0);
+                state.apply(CombatLabEdit::RequestReportDelete(*id));
+                continue;
             }
             LabAction::ConfirmReportDelete(id) => {
                 let Some(shipped) = combat.as_deref() else {
@@ -2578,16 +2517,13 @@ fn handle_lab_actions(
                     continue;
                 };
                 match reports.delete(*id, shipped, &paths) {
-                    Ok(()) => {
-                        state.pending_report_delete = None;
-                        state.notice = format!("Saved report {} deleted.", id.0);
-                    }
+                    Ok(()) => state.confirm_report_deleted(*id),
                     Err(error) => state.notice = error,
                 }
             }
             LabAction::CancelReportDelete => {
-                state.pending_report_delete = None;
-                state.notice = "Report deletion cancelled.".to_owned();
+                state.apply(CombatLabEdit::CancelReportDelete);
+                continue;
             }
         }
         state.bump();
@@ -2867,23 +2803,6 @@ fn character_is_map_ready(
             }),
         _ => true,
     })
-}
-
-fn remove_at<T>(items: &mut Vec<T>, index: usize) {
-    if index < items.len() {
-        items.remove(index);
-    }
-}
-
-fn move_at<T>(items: &mut [T], index: usize, delta: i8) {
-    let other = if delta < 0 {
-        index.saturating_sub(1)
-    } else {
-        index.saturating_add(1)
-    };
-    if index < items.len() && other < items.len() {
-        items.swap(index, other);
-    }
 }
 
 fn placements_complete_exact(placements: &[Option<TilePos>], roster_len: usize) -> bool {
@@ -4513,15 +4432,6 @@ mod tests {
     ) {
         restore_shipped_content(&mut commands, overlay.as_deref());
         commands.remove_resource::<RestoreCreatorContent>();
-    }
-
-    #[test]
-    fn roster_ordering_and_cap_helpers_are_deterministic() {
-        let mut roster = vec![1, 2, 3];
-        move_at(&mut roster, 2, -1);
-        assert_eq!(roster, vec![1, 3, 2]);
-        remove_at(&mut roster, 1);
-        assert_eq!(roster, vec![1, 2]);
     }
 
     #[test]
