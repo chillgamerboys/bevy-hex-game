@@ -22,13 +22,13 @@ use hex_gameplay_model::{
     CreatorDestination, CreatorEntry, CreatorNavigation, CreatorSurface as CreatorTab, EditHistory,
 };
 
-use crate::creation_presentation::{CharacterBuildSummary, SpellBuildSummary};
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
 use crate::storage::StoragePaths;
 use hex_ui::{
-    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
-    ACCENT, ACCENT_EDGE, DANGER, EDGE, FUSION_COLOR, LABEL,
+    blurb, display, effect_summary, element_color, fine, heading, label, panel, panel_node,
+    row_button, CharacterBuildSummary, SpellBuildSummary, UiAssets, ACCENT, ACCENT_EDGE, DANGER,
+    EDGE, FUSION_COLOR, LABEL,
 };
 
 use super::{despawn_screen, screen_root};
@@ -1625,7 +1625,7 @@ fn spawn_spell_tab(
             form.spawn(heading(assets, "ordered effects"));
             form.spawn(label(assets, summary.sentence.clone()));
             for (index, effect) in saved.spell.effects.iter().enumerate() {
-                let effect_text = crate::creation_presentation::effect_summary(effect);
+                let effect_text = effect_summary(effect);
                 form.spawn(hex_ui::panel())
                     .insert((
                         Node {

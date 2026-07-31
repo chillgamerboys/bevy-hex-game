@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 mod action_rail;
+mod creation_presentation;
 mod focus;
 mod layout;
 mod model;
@@ -16,6 +17,7 @@ mod shell;
 mod theme;
 mod title;
 
+pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
 pub use layout::{action_rail_clearance, apply_region_layout, UiRegionRole};
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,

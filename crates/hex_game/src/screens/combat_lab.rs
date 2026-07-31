@@ -34,14 +34,13 @@ use crate::combat_reports::{
     CombatLabReportOrigin, CombatLabReportRosterEntry, CombatLabReportRosters,
     CombatLabReportStore,
 };
-use crate::creation_presentation::CharacterBuildSummary;
 use crate::creation_store::CreationStore;
 use crate::menus::lattice_view::short_name;
 use crate::scenarios::{ScenarioContractStatus, ScenarioToLoad};
 use crate::storage::StoragePaths;
 use hex_ui::{
-    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button, UiAssets,
-    DANGER, FUSION_COLOR, LABEL,
+    blurb, display, element_color, fine, heading, label, panel, panel_node, row_button,
+    CharacterBuildSummary, UiAssets, DANGER, FUSION_COLOR, LABEL,
 };
 
 use super::{despawn_screen, screen_root, screen_root_node};
@@ -361,6 +360,15 @@ enum LabAction {
 struct LabRoot;
 
 #[derive(Component)]
+struct LabResponsiveBody;
+
+#[derive(Component, Debug, Clone, Copy)]
+enum LabBodyPanel {
+    Sidebar(f32),
+    Main,
+}
+
+#[derive(Component)]
 struct SavedReportComparison;
 
 #[derive(Component)]
@@ -559,11 +567,46 @@ pub(super) fn plugin(app: &mut App) {
                 sync_report_annotations,
                 handle_lab_actions,
                 rebuild_lab,
+                apply_lab_screen_layout,
             )
                 .chain()
                 .run_if(in_state(Screen::CombatLab)),
         )
         .add_systems(OnExit(Screen::CombatLab), despawn_screen(Screen::CombatLab));
+}
+
+fn apply_lab_screen_layout(
+    metrics: Res<hex_ui::ResolvedUiMetrics>,
+    added_bodies: Query<(), Added<LabResponsiveBody>>,
+    mut bodies: Query<&mut Node, With<LabResponsiveBody>>,
+    mut panels: Query<(&LabBodyPanel, &mut Node), Without<LabResponsiveBody>>,
+) {
+    if !metrics.is_changed() && added_bodies.is_empty() {
+        return;
+    }
+    let compact = metrics.viewport == hex_ui::UiViewportClass::Compact;
+    for mut node in &mut bodies {
+        node.flex_direction = if compact {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.overflow = if compact {
+            Overflow::scroll_y()
+        } else {
+            Overflow::default()
+        };
+    }
+    for (role, mut node) in &mut panels {
+        node.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            match role {
+                LabBodyPanel::Sidebar(width) => Val::Px(*width),
+                LabBodyPanel::Main => Val::Auto,
+            }
+        };
+    }
 }
 
 pub(crate) fn initialize_lab(
@@ -898,16 +941,20 @@ fn spawn_map_setup(
     maps: Option<&CombatLabMapCatalog>,
     asset_server: &AssetServer,
 ) {
-    root.spawn(Node {
-        width: Val::Percent(96.0),
-        min_height: Val::Px(0.0),
-        flex_grow: 1.0,
-        flex_direction: FlexDirection::Row,
-        column_gap: Val::Px(12.0),
-        ..default()
-    })
+    root.spawn((
+        LabResponsiveBody,
+        ScrollArea,
+        Node {
+            width: Val::Percent(96.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(12.0),
+            ..default()
+        },
+    ))
     .with_children(|body| {
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Sidebar(360.0)))
             .insert(Node {
                 width: Val::Px(360.0),
                 min_height: Val::Px(0.0),
@@ -938,7 +985,7 @@ fn spawn_map_setup(
                     }
                 });
             });
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Main))
             .insert(Node {
                 min_width: Val::Px(0.0),
                 min_height: Val::Px(0.0),
@@ -1004,16 +1051,20 @@ fn spawn_rules_setup(
         .clone()
         .unwrap_or_else(|| CombatRulesProfile::shipped(shipped));
     let changes = profile.changed_from_shipped(shipped);
-    root.spawn(Node {
-        width: Val::Percent(96.0),
-        min_height: Val::Px(0.0),
-        flex_grow: 1.0,
-        flex_direction: FlexDirection::Row,
-        column_gap: Val::Px(12.0),
-        ..default()
-    })
+    root.spawn((
+        LabResponsiveBody,
+        ScrollArea,
+        Node {
+            width: Val::Percent(96.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(12.0),
+            ..default()
+        },
+    ))
     .with_children(|body| {
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Sidebar(285.0)))
             .insert(Node {
                 width: Val::Px(285.0),
                 ..panel_node()
@@ -1052,7 +1103,7 @@ fn spawn_rules_setup(
                     190.0,
                 );
             });
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Main))
             .insert(Node {
                 min_width: Val::Px(0.0),
                 min_height: Val::Px(0.0),
@@ -1194,17 +1245,21 @@ fn spawn_sandbox_setup(
     maps: Option<&CombatLabMapCatalog>,
     asset_server: &AssetServer,
 ) {
-    root.spawn(Node {
-        width: Val::Percent(96.0),
-        height: Val::Px(0.0),
-        min_height: Val::Px(0.0),
-        flex_grow: 1.0,
-        flex_direction: FlexDirection::Row,
-        column_gap: Val::Px(12.0),
-        ..default()
-    })
+    root.spawn((
+        LabResponsiveBody,
+        ScrollArea,
+        Node {
+            width: Val::Percent(96.0),
+            height: Val::Px(0.0),
+            min_height: Val::Px(0.0),
+            flex_grow: 1.0,
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(12.0),
+            ..default()
+        },
+    ))
     .with_children(|body| {
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Sidebar(320.0)))
             .insert(Node {
                 width: Val::Px(320.0),
                 min_height: Val::Px(0.0),
@@ -1249,7 +1304,7 @@ fn spawn_sandbox_setup(
                 );
             });
 
-        body.spawn(panel())
+        body.spawn((panel(), LabBodyPanel::Main))
             .insert(Node {
                 min_width: Val::Px(0.0),
                 min_height: Val::Px(0.0),
