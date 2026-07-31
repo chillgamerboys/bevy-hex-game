@@ -1,6 +1,6 @@
 //! Renderer-free state and transition models for gameplay-owned screens.
 //!
-//! This crate owns decisions that can be tested without a Bevy [`App`]. The game
+//! This crate owns decisions that can be tested without a Bevy `App`. The game
 //! package adapts button interactions, persistence, loaded catalogs, and navigation
 //! into these typed transitions; it does not reconstruct their results.
 
