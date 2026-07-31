@@ -10,6 +10,7 @@ hex_core → hex_assets → {hex_map, hex_world, hex_units → hex_combat} → h
 hex_core → hex_assets → hex_objects ───────────────────────────────→ hex_game
 hex_core → hex_ai → {hex_assets, hex_units, hex_combat}   (contracts, controllers, host)
 {hex_core, hex_lattice} → hex_combat_core → hex_combat   (pure combat authority)
+{bevy_ecs, hex_core} → hex_gameplay_model → hex_game  (pure screen behavior)
 hex_core → {hex_assets, hex_units} → hex_perception → {hex_combat, hex_game}
 hex_core → hex_lattice → {hex_assets, hex_units, hex_combat}   (the pure rules engine)
 hex_core → hex_anim ─────────────────────→ hex_units
@@ -32,6 +33,7 @@ will, and no amount of documentation prevents it. A compiler error does.
 | `hex_lattice` | **The lattice**: gems, fusions, spells, mana, disables, enchantments — the game's core rules, as a pure engine | `hex_core` | gameplay |
 | `hex_ai` | Authorized observations, canonical legal-action requests, profile/controller identities, and replaceable algorithm traits; no legality or simulation mutation | `hex_core`, Bevy sub-crates | gameplay |
 | `hex_combat_core` | Frozen combat inputs, serializable state, the command reducer, typed outcomes, canonical snapshots and bounded simulation | `hex_core`, `hex_lattice`, `bevy_ecs` derive support only | gameplay |
+| `hex_gameplay_model` | Pure Combat Lab and Creator state transitions, report selection, launch routing, navigation, and edit history | `hex_core`, `bevy_ecs` derive support only | gameplay |
 | `hex_assets` | Generic asset loading plus domain-owned RON schema and settings modules | `hex_core`, `hex_lattice` | loader infrastructure: gameplay; each schema/settings module and its content: that domain's owner |
 | `hex_objects` | Palette-backed rendering of static authored voxel objects | `hex_core`, `hex_assets` | shared presentation |
 | `hex_map` | **The map**: voxel storage, terrain generation, tile spawning, map settings | `hex_core`, `hex_assets` | world |
@@ -470,6 +472,14 @@ directly to verify mesh geometry.
 **Composition** has one `hex_combat_core` simulation target and one `hex_game` headless
 app/UI target. A simulation compares complete canonical snapshots from two fresh runs.
 Rendered frames review presentation only; they are not a combat oracle.
+
+Gameplay screen behavior that does not need a widget tree lives in
+`hex_gameplay_model`. `hex_game` translates clicks and Bevy state changes into typed
+model actions, then performs the resulting filesystem, resource, and navigation
+effects. Combat Lab roster/order rules, report selection (including id zero), exact
+Retry/Tune/Copy routing, Creator return identity, and bounded undo/redo therefore run
+without `App`, assets, renderer, viewport, or screen internals. The headless app target
+retains only wiring and lifecycle claims that require Bevy.
 
 Together the focused contracts cover tile counts, that a tile's transform agrees with its `HexSpan`, headroom
 under open sky and beneath platforms, clean teardown and re-entry, and three specific

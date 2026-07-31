@@ -3321,6 +3321,7 @@ dependencies = [
  "hex_combat",
  "hex_core",
  "hex_dev",
+ "hex_gameplay_model",
  "hex_lattice",
  "hex_map",
  "hex_objects",
@@ -3332,6 +3333,15 @@ dependencies = [
  "serde",
  "serde_json",
  "xxhash-rust",
+]
+
+[[package]]
+name = "hex_gameplay_model"
+version = "0.4.0"
+dependencies = [
+ "bevy_ecs",
+ "hex_core",
+ "serde",
 ]
 
 [[package]]
