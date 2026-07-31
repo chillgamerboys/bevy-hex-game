@@ -64,6 +64,7 @@
         "run",
         "--package",
         "hex_combat_core",
+        "--lib",
         "--test",
         "simulation",
         "--cargo-profile",
@@ -81,9 +82,12 @@
         "nextest",
         "run",
         "--package",
+        "hex_gameplay_model",
+        "--package",
         "hex_game",
         "--features",
-        "test-support",
+        "hex_game/test-support",
+        "--lib",
         "--test",
         "gameplay_app",
         "--cargo-profile",
@@ -105,7 +109,7 @@
         "--profile",
         "ci",
         "-E",
-        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))"
+        "not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat_core) | package(hex_combat) | package(hex_test_support) | package(hex_gameplay_model) | (package(hex_game) & binary(gameplay_app)))"
       ]
     },
     "clippy": {
@@ -211,6 +215,12 @@
       "patterns": ["crates/hex_units/**"],
       "concerns": ["contracts", "simulation", "app", "clippy", "docs", "shipping"],
       "reason": "Unit movement and state feed combat simulation and deployment/application seams."
+    },
+    {
+      "name": "gameplay-screen-model",
+      "patterns": ["crates/hex_gameplay_model/**"],
+      "concerns": ["app", "clippy", "docs", "shipping"],
+      "reason": "Pure gameplay screen models are consumed by headless UI behavior and the shipping application."
     },
     {
       "name": "combat-authority",
