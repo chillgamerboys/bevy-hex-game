@@ -7,6 +7,7 @@
 use bevy::prelude::*;
 
 mod action_rail;
+mod combat_log;
 mod creation_presentation;
 mod focus;
 mod gameplay_frame;
@@ -30,9 +31,10 @@ pub use layout::{
     READ_ONLY_HUD,
 };
 pub use model::{
-    ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayChromeView,
-    GameplayHudView, InitiativeEntryView, InitiativeSide, InitiativeView, PauseView, ResumeView,
-    TitleIntent, TitleScenarioView, TitleView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
+    ActionAffordance, ActionAvailability, ActionPriority, CombatLogLineView, CombatLogView,
+    GameplayAction, GameplayChromeView, GameplayHudView, InitiativeEntryView, InitiativeSide,
+    InitiativeView, PauseView, ResumeView, TitleIntent, TitleScenarioView, TitleView, UiIntent,
+    UiSetting, UiSettingRow, UiSettingsView,
 };
 pub use scale::{
     resolve_auto_scale, resolve_ui_metrics, resolve_viewport_class, ResolvedUiMetrics, UiScaleMode,
@@ -73,6 +75,7 @@ impl Plugin for UiPlugin {
             (UiHudSetup::Frame, UiHudSetup::Panels).chain(),
         )
         .add_message::<UiIntent>()
+        .init_resource::<CombatLogView>()
         .init_resource::<GameplayChromeView>()
         .init_resource::<GameplayHudView>()
         .init_resource::<UiSettingsView>()
@@ -82,6 +85,7 @@ impl Plugin for UiPlugin {
         .init_resource::<ResumeView>()
         .add_plugins((
             theme::plugin,
+            combat_log::plugin,
             scale::plugin,
             focus::plugin,
             gameplay_frame::plugin,

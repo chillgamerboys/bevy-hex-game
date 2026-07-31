@@ -97,6 +97,24 @@ impl Default for GameplayChromeView {
     }
 }
 
+/// One disclosure-frozen combat history line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CombatLogLineView {
+    /// Player-facing event description.
+    pub text: String,
+    /// Whether the line receives danger emphasis in addition to its wording.
+    pub danger: bool,
+}
+
+/// Immutable visible portion of the combat history.
+#[derive(Resource, Debug, Default, Clone, PartialEq, Eq)]
+pub struct CombatLogView {
+    /// Drawer/feed heading including its keyboard affordance.
+    pub heading: String,
+    /// Already-filtered visible lines in chronological order.
+    pub lines: Vec<CombatLogLineView>,
+}
+
 /// Disclosed side label used by the initiative renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InitiativeSide {
