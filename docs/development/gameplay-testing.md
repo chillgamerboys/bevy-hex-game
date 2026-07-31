@@ -121,6 +121,11 @@ structured PR fields together with the full final head SHA, reviewer, date, and 
 route exercised. A later push makes that evidence stale and the required
 `Current-head manual runtime sign-off` check fails until the new head is played.
 
+Source-lane PRs targeting `wave/*` defer this gate because they are not independently
+shippable runtime candidates. The combined wave PR targeting `dev` must carry the
+named human sign-off for its exact final head; merging a lane into a wave never
+inherits, substitutes for, or weakens that release gate.
+
 Draft PRs may omit the sign-off while implementation is moving. A gameplay PR may not
 be marked ready or merged with a placeholder, a blocked result, a different commit,
 or an agent named as the human reviewer. A maintainer waiver describes an
