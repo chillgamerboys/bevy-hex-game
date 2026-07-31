@@ -28,6 +28,8 @@ pub mod combat_reports;
 #[cfg(feature = "dev")]
 mod content_debug;
 mod creation_store;
+#[cfg(feature = "dev")]
+mod dev_time_controls;
 mod menus;
 mod preferences;
 mod readouts;
@@ -234,7 +236,11 @@ impl Plugin for AppPlugin {
         app.add_plugins(walk::plugin);
 
         #[cfg(feature = "dev")]
-        app.add_plugins((hex_dev::plugin, content_debug::plugin));
+        app.add_plugins((
+            hex_dev::plugin,
+            content_debug::plugin,
+            dev_time_controls::plugin,
+        ));
     }
 }
 
