@@ -159,7 +159,7 @@ jobs:
               --all-features \
               --cargo-profile ci \
               --profile ci \
-              -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | (package(hex_game) & binary(gameplay_app)))'
+              -E 'not (package(hex_core) | package(hex_lattice) | package(hex_ai) | package(hex_units) | package(hex_combat) | package(hex_test_support) | package(hex_map) | (package(hex_game) & binary(gameplay_app)))'
             # Nextest deliberately does not execute doctests.
             time cargo test --workspace --all-features --profile ci --doc
           } 2>&1 | tee test-timing.log
@@ -170,6 +170,52 @@ jobs:
           name: workspace-test-timings
           path: |
             test-timing.log
+            target/nextest/ci/junit.xml
+          if-no-files-found: error
+
+  # Fixed-seed generation corpora dominate ordinary-test runtime. Run the map
+  # package separately so both shards retain meaningful headroom beneath the
+  # 30-minute ceiling while preserving every PR seed.
+  map_tests:
+    name: Map tests
+    needs: changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+      - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.code == 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.code == 'true'
+      - uses: taiki-e/install-action@nextest
+        if: needs.changes.outputs.code == 'true'
+      - name: Install Linux dependencies
+        if: needs.changes.outputs.code == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Run map tests with per-test timing
+        if: needs.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            time cargo nextest run \
+              --workspace \
+              --all-features \
+              --cargo-profile ci \
+              --profile ci \
+              -E 'package(hex_map)'
+          } 2>&1 | tee map-test-timing.log
+      - name: Upload map-test timing artifacts
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: map-test-timings
+          path: |
+            map-test-timing.log
             target/nextest/ci/junit.xml
           if-no-files-found: error
 
