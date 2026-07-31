@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use std::io;
 
 use bevy::prelude::*;
-use hex_assets::{CombatRulesProfile, CombatSettings};
+use hex_assets::{CombatRulesProfile, CombatSettings, COMBAT_RULES_PROFILE_VERSION};
 use hex_combat::{CombatSummary, EncounterOutcome, MAX_COMBAT_SUMMARY_DETAILS};
 use ron::ser::PrettyConfig;
 use serde::{Deserialize, Serialize};
@@ -15,12 +15,13 @@ use crate::storage::{read, write_atomic, StoragePaths};
 pub use hex_gameplay_model::{CombatLabReportDeployment, CombatLabReportId};
 
 /// Current serialized report schema.
-pub const COMBAT_LAB_REPORT_VERSION: u16 = 1;
+pub const COMBAT_LAB_REPORT_VERSION: u16 = 2;
 /// Current local report-history schema.
-pub const COMBAT_LAB_REPORT_HISTORY_VERSION: u16 = 1;
+pub const COMBAT_LAB_REPORT_HISTORY_VERSION: u16 = 2;
 /// Maximum explicitly saved reports retained locally.
 pub const MAX_COMBAT_LAB_REPORTS: usize = 64;
 const MAX_REPORT_TEXT: usize = 128;
+const MAX_REPORT_NOTES: usize = 2_048;
 const MAX_REPORT_ROSTER: usize = 6;
 
 /// Whether a frozen report came from a human Sandbox or immutable fixture.
@@ -82,6 +83,33 @@ pub struct CombatLabReportRosters {
     pub hostiles: Vec<CombatLabReportRosterEntry>,
 }
 
+/// Why one Combat Lab experiment stopped.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CombatLabReportTermination {
+    /// A retained-world combat outcome was reached.
+    Outcome(EncounterOutcome),
+    /// The accepted-command ceiling was reached.
+    CommandBound {
+        /// Accepted commands when the bound fired.
+        commands: u32,
+    },
+    /// The completed-turn ceiling was reached.
+    TurnBound {
+        /// Completed turns when the bound fired.
+        turns: u32,
+    },
+    /// The consecutive no-progress ceiling was reached.
+    NoProgressBound {
+        /// Completed turns when the bound fired.
+        turns: u32,
+        /// Consecutive no-progress turns.
+        streak: u32,
+    },
+    /// A human explicitly ended the experiment.
+    #[default]
+    ManualStop,
+}
+
 /// Complete deterministic result of one Combat Lab run.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -100,8 +128,12 @@ pub struct CombatLabReport {
     pub rosters: CombatLabReportRosters,
     /// Exact deployment, including stacked-surface level.
     pub deployment: CombatLabReportDeployment,
-    /// Final retained-world result.
-    pub outcome: EncounterOutcome,
+    /// Explicit outcome or bounded/manual stop.
+    #[serde(default)]
+    pub termination: CombatLabReportTermination,
+    /// Compatibility projection for reports written before termination was typed.
+    #[serde(default)]
+    pub outcome: Option<EncounterOutcome>,
     /// Deterministic identity of `summary`.
     pub summary_fingerprint: u64,
     /// Gameplay-owned bounded statistics and structured event source.
@@ -121,11 +153,15 @@ impl CombatLabReport {
         content_revision: u64,
         rosters: CombatLabReportRosters,
         deployment: CombatLabReportDeployment,
-        outcome: EncounterOutcome,
+        termination: CombatLabReportTermination,
         summary: CombatSummary,
-    ) -> Self {
-        let summary_fingerprint = summary.fingerprint();
-        Self {
+    ) -> Result<Self, String> {
+        let summary_fingerprint = summary.fingerprint()?;
+        let outcome = match termination {
+            CombatLabReportTermination::Outcome(outcome) => Some(outcome),
+            _ => None,
+        };
+        Ok(Self {
             version: COMBAT_LAB_REPORT_VERSION,
             profile,
             origin,
@@ -133,10 +169,11 @@ impl CombatLabReport {
             content_revision,
             rosters,
             deployment,
+            termination,
             outcome,
             summary_fingerprint,
             summary,
-        }
+        })
     }
 
     /// Validates the complete frozen report without consulting mutable local state.
@@ -188,29 +225,40 @@ impl CombatLabReport {
                 ));
             }
         }
-        if self.summary.outcome != Some(self.outcome) {
-            return Err("report outcome disagrees with the gameplay summary".to_owned());
+        match self.termination {
+            CombatLabReportTermination::Outcome(outcome) => {
+                if self.outcome != Some(outcome) || self.summary.outcome != Some(outcome) {
+                    return Err(
+                        "report outcome disagrees with its termination or summary".to_owned()
+                    );
+                }
+            }
+            _ => {
+                if self.outcome.is_some() || self.summary.outcome.is_some() {
+                    return Err(
+                        "bounded or manually stopped reports cannot claim an outcome".to_owned(),
+                    );
+                }
+            }
         }
         if self.summary.events.len() > MAX_COMBAT_SUMMARY_DETAILS
             || self.summary.ai_selections.len() > MAX_COMBAT_SUMMARY_DETAILS
         {
             return Err("report summary detail window exceeds its gameplay bound".to_owned());
         }
-        if self.summary_fingerprint != self.summary.fingerprint() {
+        if self.summary_fingerprint != self.summary.fingerprint()? {
             return Err("report summary fingerprint does not match its statistics".to_owned());
         }
         Ok(())
     }
 
     /// Deterministic identity of all frozen inputs and gameplay-owned results.
-    #[must_use]
-    pub fn fingerprint(&self) -> u64 {
+    pub fn fingerprint(&self) -> Result<u64, String> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"hex-combat-lab-report-v1");
-        if serde_json::to_writer(&mut bytes, self).is_err() {
-            bytes.extend_from_slice(b"<serialization-error>");
-        }
-        xxh3_64(&bytes)
+        bytes.extend_from_slice(b"hex-combat-lab-report-v2");
+        serde_json::to_writer(&mut bytes, self)
+            .map_err(|error| format!("combat report fingerprint serialization failed: {error}"))?;
+        Ok(xxh3_64(&bytes))
     }
 }
 
@@ -250,6 +298,12 @@ fn validate_roster(side: &str, roster: &[CombatLabReportRosterEntry]) -> Result<
 pub struct SavedCombatLabReport {
     /// Stable local id.
     pub id: CombatLabReportId,
+    /// Short operator-owned comparison label.
+    #[serde(default)]
+    pub label: String,
+    /// Bounded operator notes retained with the saved experiment.
+    #[serde(default)]
+    pub notes: String,
     /// Frozen deterministic report.
     pub report: CombatLabReport,
 }
@@ -266,6 +320,83 @@ pub struct CombatLabReportHistory {
     pub reports: Vec<SavedCombatLabReport>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct CombatLabReportV1 {
+    version: u16,
+    profile: CombatRulesProfile,
+    origin: CombatLabReportOrigin,
+    map: CombatLabReportMap,
+    content_revision: u64,
+    rosters: CombatLabReportRosters,
+    deployment: CombatLabReportDeployment,
+    outcome: EncounterOutcome,
+    #[serde(rename = "summary_fingerprint")]
+    _summary_fingerprint: u64,
+    summary: CombatSummary,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SavedCombatLabReportV1 {
+    id: CombatLabReportId,
+    report: CombatLabReportV1,
+}
+
+#[derive(Serialize, Deserialize)]
+struct CombatLabReportHistoryV1 {
+    version: u16,
+    next_id: u64,
+    reports: Vec<SavedCombatLabReportV1>,
+}
+
+impl CombatLabReportHistoryV1 {
+    fn migrate(self) -> Result<CombatLabReportHistory, String> {
+        if self.version != 1 {
+            return Err(format!(
+                "legacy combat report history version {} is unsupported",
+                self.version
+            ));
+        }
+        let reports = self
+            .reports
+            .into_iter()
+            .map(|saved| {
+                if saved.report.version != 1 {
+                    return Err(format!(
+                        "legacy combat report version {} is unsupported",
+                        saved.report.version
+                    ));
+                }
+                let mut profile = saved.report.profile;
+                profile.version = COMBAT_RULES_PROFILE_VERSION;
+                let summary_fingerprint = saved.report.summary.fingerprint()?;
+                Ok(SavedCombatLabReport {
+                    id: saved.id,
+                    label: String::new(),
+                    notes: String::new(),
+                    report: CombatLabReport {
+                        version: COMBAT_LAB_REPORT_VERSION,
+                        profile,
+                        origin: saved.report.origin,
+                        map: saved.report.map,
+                        content_revision: saved.report.content_revision,
+                        rosters: saved.report.rosters,
+                        deployment: saved.report.deployment,
+                        termination: CombatLabReportTermination::Outcome(saved.report.outcome),
+                        outcome: Some(saved.report.outcome),
+                        summary_fingerprint,
+                        summary: saved.report.summary,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(CombatLabReportHistory {
+            version: COMBAT_LAB_REPORT_HISTORY_VERSION,
+            next_id: self.next_id,
+            reports,
+        })
+    }
+}
+
 impl Default for CombatLabReportHistory {
     fn default() -> Self {
         Self {
@@ -277,6 +408,25 @@ impl Default for CombatLabReportHistory {
 }
 
 impl CombatLabReportHistory {
+    /// Upgrades the shipped v1 report/history shape without consulting live content.
+    pub fn migrate(mut self) -> Result<Self, String> {
+        if self.version == 1 {
+            self.version = COMBAT_LAB_REPORT_HISTORY_VERSION;
+        }
+        for saved in &mut self.reports {
+            if saved.report.version == 1 {
+                saved.report.version = COMBAT_LAB_REPORT_VERSION;
+                saved.report.profile.version = COMBAT_RULES_PROFILE_VERSION;
+                saved.report.termination = saved.report.outcome.map_or(
+                    CombatLabReportTermination::ManualStop,
+                    CombatLabReportTermination::Outcome,
+                );
+                saved.report.summary_fingerprint = saved.report.summary.fingerprint()?;
+            }
+        }
+        Ok(self)
+    }
+
     /// Validates bounds, ids, and every contained report.
     pub fn validate(&self, shipped: &CombatSettings) -> Result<(), String> {
         if self.version != COMBAT_LAB_REPORT_HISTORY_VERSION {
@@ -298,6 +448,14 @@ impl CombatLabReportHistory {
             if saved.id.0 >= self.next_id {
                 return Err("combat report history next id is not monotonic".to_owned());
             }
+            if !saved.label.is_empty() {
+                validate_text("saved report label", &saved.label)?;
+            }
+            if saved.notes.chars().count() > MAX_REPORT_NOTES {
+                return Err(format!(
+                    "saved report notes exceed the {MAX_REPORT_NOTES}-character bound"
+                ));
+            }
             saved.report.validate(shipped)?;
         }
         Ok(())
@@ -314,6 +472,35 @@ pub(crate) struct CombatLabReportStore {
 }
 
 impl CombatLabReportStore {
+    /// Updates bounded operator metadata without changing frozen run evidence.
+    pub(crate) fn annotate(
+        &mut self,
+        id: CombatLabReportId,
+        label: String,
+        notes: String,
+        shipped: &CombatSettings,
+        paths: &StoragePaths,
+    ) -> Result<(), String> {
+        if !label.is_empty() {
+            validate_text("saved report label", &label)?;
+        }
+        if notes.chars().count() > MAX_REPORT_NOTES {
+            return Err(format!(
+                "saved report notes exceed the {MAX_REPORT_NOTES}-character bound"
+            ));
+        }
+        let before = self.history.clone();
+        let saved = self
+            .history
+            .reports
+            .iter_mut()
+            .find(|saved| saved.id == id)
+            .ok_or_else(|| format!("saved report {} does not exist", id.0))?;
+        saved.label = label;
+        saved.notes = notes;
+        self.persist_or_restore(before, shipped, paths)
+    }
+
     /// Explicitly saves one validated report and returns its monotonic local id.
     pub(crate) fn save(
         &mut self,
@@ -330,9 +517,12 @@ impl CombatLabReportStore {
         let before = self.history.clone();
         let id = CombatLabReportId(self.history.next_id);
         self.history.next_id = self.history.next_id.saturating_add(1);
-        self.history
-            .reports
-            .push(SavedCombatLabReport { id, report });
+        self.history.reports.push(SavedCombatLabReport {
+            id,
+            label: String::new(),
+            notes: String::new(),
+            report,
+        });
         self.persist_or_restore(before, shipped, paths)?;
         Ok(id)
     }
@@ -389,9 +579,9 @@ fn load_report_history(
         return;
     };
     match read(&paths.combat_reports) {
-        Ok(contents) => match ron::from_str::<CombatLabReportHistory>(&contents) {
-            Ok(history) => match history.validate(shipped) {
-                Ok(()) => {
+        Ok(contents) => match parse_report_history(&contents) {
+            Ok(history) => match history.validate(shipped).map(|()| history) {
+                Ok(history) => {
                     store.history = history;
                     store.error = None;
                 }
@@ -414,6 +604,19 @@ fn load_report_history(
         Err(error) => {
             store.error = Some(format!("could not read combat-reports.ron: {error}"));
         }
+    }
+}
+
+fn parse_report_history(contents: &str) -> Result<CombatLabReportHistory, String> {
+    match ron::from_str::<CombatLabReportHistory>(contents) {
+        Ok(history) => history.migrate(),
+        Err(current_error) => ron::from_str::<CombatLabReportHistoryV1>(contents)
+            .map_err(|legacy_error| {
+                format!(
+                    "current schema parse failed: {current_error}; legacy v1 parse failed: {legacy_error}"
+                )
+            })?
+            .migrate(),
     }
 }
 
@@ -473,9 +676,10 @@ mod tests {
                 players: vec![TilePos::new(HexCoord::ORIGIN, 1)],
                 hostiles: vec![TilePos::new(HexCoord::from_axial(1, 0), 1)],
             },
-            EncounterOutcome::Victory,
+            CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
             summary,
         )
+        .expect("fixture report has serializable evidence")
     }
 
     fn paths(root: PathBuf) -> StoragePaths {
@@ -492,11 +696,11 @@ mod tests {
         let settings = CombatSettings::default();
         let report = complete_report();
         assert_eq!(report.validate(&settings), Ok(()));
-        let fingerprint = report.fingerprint();
+        let fingerprint = report.fingerprint().expect("fingerprint");
         let encoded = ron::to_string(&report).expect("serialize");
         let decoded: CombatLabReport = ron::from_str(&encoded).expect("deserialize");
         assert_eq!(decoded, report);
-        assert_eq!(decoded.fingerprint(), fingerprint);
+        assert_eq!(decoded.fingerprint(), Ok(fingerprint));
     }
 
     #[test]
@@ -516,12 +720,120 @@ mod tests {
     }
 
     #[test]
+    fn bounded_and_manual_stops_do_not_require_an_outcome() {
+        let settings = CombatSettings::default();
+        for termination in [
+            CombatLabReportTermination::ManualStop,
+            CombatLabReportTermination::NoProgressBound {
+                turns: 12,
+                streak: 6,
+            },
+        ] {
+            let mut report = complete_report();
+            report.termination = termination;
+            report.outcome = None;
+            report.summary.outcome = None;
+            report.summary_fingerprint = report.summary.fingerprint().expect("fingerprint");
+            assert_eq!(report.validate(&settings), Ok(()));
+        }
+    }
+
+    #[test]
+    fn v1_history_migrates_outcome_and_rules_profile() {
+        let settings = CombatSettings::default();
+        let mut report = complete_report();
+        report.version = 1;
+        report.profile.version = 1;
+        report.termination = CombatLabReportTermination::ManualStop;
+        let history = CombatLabReportHistory {
+            version: 1,
+            next_id: 2,
+            reports: vec![SavedCombatLabReport {
+                id: CombatLabReportId(1),
+                label: String::new(),
+                notes: String::new(),
+                report,
+            }],
+        };
+        let migrated = history.migrate().expect("v1 migration");
+        assert_eq!(migrated.version, COMBAT_LAB_REPORT_HISTORY_VERSION);
+        assert_eq!(
+            migrated
+                .reports
+                .first()
+                .expect("migrated report")
+                .report
+                .termination,
+            CombatLabReportTermination::Outcome(EncounterOutcome::Victory)
+        );
+        assert_eq!(migrated.validate(&settings), Ok(()));
+    }
+
+    #[test]
+    fn serialized_v1_shape_parses_through_the_legacy_migrator() {
+        let settings = CombatSettings::default();
+        let report = complete_report();
+        let legacy = CombatLabReportHistoryV1 {
+            version: 1,
+            next_id: 2,
+            reports: vec![SavedCombatLabReportV1 {
+                id: CombatLabReportId(1),
+                report: CombatLabReportV1 {
+                    version: 1,
+                    profile: report.profile,
+                    origin: report.origin,
+                    map: report.map,
+                    content_revision: report.content_revision,
+                    rosters: report.rosters,
+                    deployment: report.deployment,
+                    outcome: EncounterOutcome::Victory,
+                    _summary_fingerprint: report.summary_fingerprint,
+                    summary: report.summary,
+                },
+            }],
+        };
+        let encoded = ron::to_string(&legacy).expect("legacy serialization");
+        let migrated = parse_report_history(&encoded).expect("legacy parse and migration");
+        assert_eq!(migrated.validate(&settings), Ok(()));
+        assert_eq!(
+            migrated
+                .reports
+                .first()
+                .expect("migrated report")
+                .report
+                .termination,
+            CombatLabReportTermination::Outcome(EncounterOutcome::Victory)
+        );
+    }
+
+    #[test]
+    fn summary_evidence_error_prevents_report_creation() {
+        let settings = CombatSettings::default();
+        let complete = complete_report();
+        let mut summary = complete.summary;
+        summary.evidence_error = Some("synthetic encoder failure".to_owned());
+        assert!(CombatLabReport::new(
+            CombatRulesProfile::shipped(&settings),
+            CombatLabReportOrigin::Sandbox,
+            complete.map,
+            complete.content_revision,
+            complete.rosters,
+            complete.deployment,
+            CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
+            summary,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn history_is_bounded_and_separate_by_schema() {
         let settings = CombatSettings::default();
         let report = complete_report();
         let history = CombatLabReportHistory {
             reports: vec![SavedCombatLabReport {
                 id: CombatLabReportId(1),
+                label: "baseline".to_owned(),
+                notes: String::new(),
                 report,
             }],
             next_id: 2,

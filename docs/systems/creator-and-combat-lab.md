@@ -15,19 +15,23 @@ the fail-closed deployability decision, and `hex_game` owns persistence and UI.
 
 Wave 7 adds a versioned `CombatRulesProfile` without changing that ownership. Shipped
 values are copied from validated `combat.ron`; Tactical two-step changes only movement
-per turn; Custom edits remain inside published numeric bounds. The profile exposes
-only movement per turn, strike disables, engage range, disengage margin, levels per
-bonus range, and Reveal duration. Loading validates and installs an effective
+per turn; Custom edits remain inside published numeric bounds. Version 2 mirrors every
+shipping authority input: seven bounded numeric fields plus typed initiative,
+action-economy, channelling, and rout policies. Those policies preserve the
+implemented fixed initiative, movement-plus-one-action, burst-only, and
+fight-to-the-end algorithms. Loading validates and installs an effective
 session-local copy before gameplay, Retry retains it exactly, and leaving the Lab
 restores the authored settings. Invalid profiles fail closed and never edit
 `combat.ron`.
 
 One versioned `CombatLabReport` combines that frozen profile with map and resolved
 seed, accepted content fingerprint, ordered rosters, exact `TilePos` deployment,
-Sandbox or stable fixture origin, final outcome, and the gameplay-owned
-`CombatSummary`. Its deterministic summary fingerprint is validated on read. Local
-report history is a separate bounded schema from Creator creations and Continue;
-fixed fixtures never consult it.
+Sandbox or stable fixture origin, an outcome or explicit command/turn/no-progress/manual
+stop, and the gameplay-owned `CombatSummary`. Version 2 migrates version 1 outcome
+reports. Summary and report fingerprinting fail closed on serialization error rather
+than emitting a plausible sentinel hash. Saved entries add bounded editable labels
+and notes. Local report history is a separate bounded schema from Creator creations
+and Continue; fixed fixtures never consult it.
 
 ## Saved creation library
 
@@ -93,6 +97,17 @@ disable, restore, enchantment breakage, and reset without entering map gameplay.
 
 Combat Lab has three tabs: Sandbox, Fixed Fixtures, and Saved Reports.
 
+Its unattended workbench uses `hex_combat_core`, the same serializable reducer hosted
+by live combat. A case freezes arena/observation facts, roster and lattices, active
+single-target spell content, and the complete rules projection. Controllers are
+either exact per-unit command scripts (including defender/restoration choices) or the
+stable non-random baseline policy. Independent typed command, turn, and no-progress
+bounds always produce an explicit termination. Cast payment, direct damage,
+restoration, Burn ticks, downing, revival scheduling, and annihilation outcomes reduce
+without a Bevy `App`, ECS schedule, renderer, clock, asset server, or map generator.
+Exploration and unsupported terrain/area verbs remain named host adapters and cannot
+silently count as simulation evidence.
+
 ### Sandbox
 
 Sandbox offers all sixteen distinct shipped maps through the versioned
@@ -109,7 +124,7 @@ templates or saved Map-ready characters. Player units are human controlled; host
 units use the shipped `baseline-v1` AI. The setup and deployment are transient.
 
 Sandbox setup is an explicit `Map → Rosters → Rules → Deploy` flow. The Rules step
-offers Shipped, Tactical two-step, and Custom profiles. Its six labelled steppers
+offers Shipped, Tactical two-step, and Custom profiles. Its seven labelled steppers
 consume the profile contract's descriptions and inclusive bounds, and every numeric
 difference is also written as `CHANGED shipped → selected`; color is supplementary.
 Reset restores the exact shipped profile. Loading validates and freezes the selected
@@ -148,7 +163,9 @@ successful/refused commands, AI choices, movement distance/budget, casts, Channe
 mana restored by element, strikes, idle turns, disable flow, restorations, downings,
 and revivals. The same projection carries per-unit command, movement, spell, Channel,
 disable, recovery, condition, idle, and AI totals; presentation never reconstructs
-them from live entities.
+them from live entities. `End Experiment` freezes a manual-stop report and explicitly
+saves it before returning to the Lab; serialization or storage failure leaves the
+encounter in place and surfaces the error.
 
 At combat start, the Lab freezes the accepted content revision, stable map and seed,
 ordered roster/controller headers, and exact initial `TilePos` deployment. Outcome
@@ -161,10 +178,11 @@ saved report and shows signed numeric deltas against the current run. Tune retur
 Rules with the frozen map, ordered rosters, profile, and every still-valid exact
 deployment surface retained.
 
-Saved Reports lists only explicitly saved local reports. The user selects the left
+Saved Reports lists only explicitly saved local reports and exposes a bounded label
+and notes editor on each entry. The user selects the left
 and right report independently; when they differ, the view shows frozen
-profile/roster headers and signed numeric deltas for rounds, successful and refused
-commands, movement, Channel, and applied disables. Deletion is a two-step
+rules/map/seed/content/roster/deployment headers, both stop reasons, and signed
+aggregate, per-unit, spell, effect, and no-progress deltas. Deletion is a two-step
 request/confirm action and affects only the selected local report.
 
 ### Fixed fixtures

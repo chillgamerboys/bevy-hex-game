@@ -13,7 +13,7 @@
 
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
-use hex_assets::FormationCatalog;
+use hex_assets::{CombatSettings, FormationCatalog};
 use hex_combat::{
     CombatSummary, EncounterOutcome, EncounterResolution, Turn, TurnOrder, UnitCombatSummary,
 };
@@ -30,7 +30,9 @@ use super::combat_lab::{
     CreatorDisplayName,
 };
 use super::{despawn_screen, DespawnOnExit};
-use crate::combat_reports::{CombatLabReport, CombatLabReportStore, CurrentCombatLabReport};
+use crate::combat_reports::{
+    CombatLabReport, CombatLabReportStore, CombatLabReportTermination, CurrentCombatLabReport,
+};
 use crate::menus::widgets::{
     blurb, fine, heading, row_button, UiAssets, ACCENT, ACCENT_EDGE, EDGE, LABEL, PANEL_BG,
 };
@@ -83,7 +85,11 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        (toggle_lab_statistics, update_lab_statistics)
+        (
+            toggle_lab_statistics,
+            update_lab_statistics,
+            end_lab_experiment,
+        )
             .chain()
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
@@ -164,6 +170,9 @@ struct LabStatisticsToggle;
 #[derive(Component)]
 struct LabStatisticsToggleText;
 
+#[derive(Component)]
+struct LabEndExperiment;
+
 pub(crate) use hex_gameplay_model::ReportMode as OutcomeReportMode;
 use hex_gameplay_model::{
     resolve_lab_run, LabRunAction, LabRunFailure, LabRunTransition, ReportViewModel,
@@ -219,7 +228,7 @@ fn spawn_lab_statistics(
                 right: Val::Px(320.0),
                 top: Val::Px(200.0),
                 width: Val::Px(480.0),
-                max_height: Val::Px(300.0),
+                max_height: Val::Px(340.0),
                 padding: UiRect::all(Val::Px(10.0)),
                 flex_direction: FlexDirection::Column,
                 row_gap: Val::Px(7.0),
@@ -269,8 +278,68 @@ fn spawn_lab_statistics(
                         &assets,
                         "Totals are gameplay-owned · per-unit and timeline details open in the outcome report.",
                     ));
+                    panel
+                        .spawn((
+                            row_button("End Experiment", 190.0),
+                            LabEndExperiment,
+                        ))
+                        .with_child(blurb(&assets, "End Experiment"));
                 });
         });
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "manual stop freezes the same independent launch facts as outcome reporting"
+)]
+fn end_lab_experiment(
+    clicked: Query<&Interaction, (Changed<Interaction>, With<LabEndExperiment>)>,
+    mut commands: Commands,
+    lab: Option<Res<CombatLabSession>>,
+    launch: Option<Res<CombatLabReportLaunch>>,
+    summary: Option<Res<CombatSummary>>,
+    shipped: Option<Res<CombatSettings>>,
+    paths: Res<StoragePaths>,
+    mut reports: ResMut<CombatLabReportStore>,
+    mut next_screen: ResMut<NextState<Screen>>,
+) {
+    if !clicked
+        .iter()
+        .any(|interaction| *interaction == Interaction::Pressed)
+    {
+        return;
+    }
+    let (Some(lab), Some(launch), Some(summary), Some(shipped)) = (
+        lab.as_deref(),
+        launch.as_deref(),
+        summary.as_deref(),
+        shipped.as_deref(),
+    ) else {
+        error!("Combat Lab manual stop is missing frozen launch or summary facts");
+        return;
+    };
+    let report = match CombatLabReport::new(
+        lab.profile.clone(),
+        launch.origin.clone(),
+        launch.map.clone(),
+        launch.content_revision,
+        launch.rosters.clone(),
+        launch.deployment.clone(),
+        CombatLabReportTermination::ManualStop,
+        summary.clone(),
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            reports.error = Some(format!("manual-stop report failed closed: {error}"));
+            return;
+        }
+    };
+    commands.insert_resource(CurrentCombatLabReport(report.clone()));
+    if let Err(error) = reports.save(report, shipped, &paths) {
+        reports.error = Some(error);
+        return;
+    }
+    next_screen.set(Screen::CombatLab);
 }
 
 pub(crate) fn lab_statistics_should_be_visible(
@@ -985,17 +1054,23 @@ fn sync_outcome_modal(
         .as_deref()
         .zip(launch.as_deref())
         .zip(summary.as_deref())
-        .map(|((lab, launch), summary)| {
-            CombatLabReport::new(
+        .and_then(|((lab, launch), summary)| {
+            match CombatLabReport::new(
                 lab.profile.clone(),
                 launch.origin.clone(),
                 launch.map.clone(),
                 launch.content_revision,
                 launch.rosters.clone(),
                 launch.deployment.clone(),
-                outcome,
+                CombatLabReportTermination::Outcome(outcome),
                 summary.clone(),
-            )
+            ) {
+                Ok(report) => Some(report),
+                Err(error) => {
+                    error!("Combat Lab report evidence failed closed: {error}");
+                    None
+                }
+            }
         });
     if let Some(report) = &report {
         commands.insert_resource(CurrentCombatLabReport(report.clone()));
@@ -1819,9 +1894,10 @@ mod tests {
                 players: vec![TilePos::new(HexCoord::ORIGIN, 1)],
                 hostiles: vec![TilePos::new(HexCoord::from_axial(1, 0), 1)],
             },
-            EncounterOutcome::Victory,
+            CombatLabReportTermination::Outcome(EncounterOutcome::Victory),
             summary,
         )
+        .expect("fixture report evidence")
     }
 
     /// Every layer of the full-width HUD must let world picks pass through.

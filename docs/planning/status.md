@@ -226,18 +226,25 @@ deployment, and profile through re-entry. The bounded tempo audit retained the
 shipped four-hex movement default; its measurements and limits are recorded in the
 [Wave 7 decision audit](../development/wave-7-tempo-decision.md).
 
-The **Wave 8 gameplay foundation is live**. `hex_combat_core` is the sole
+The **Combat Lab strategy-workbench completion is live on the Wave 8 foundation**.
+`hex_combat_core` is the sole
 renderer-free, serializable authority for the commands it reduces, exact positions,
 turns, lattices, and transcripts. Bevy combat resources, unit movement, animation,
 and UI are projections or validated content adapters over that authority rather than
-parallel mutation paths. Cast, restoration, Rest, and party-movement resolution still
-enter through those ECS/content adapters and are then adopted back into the authority;
-the pure reducer does not yet execute a complete content-driven fight.
+parallel mutation paths. Supported active-combat single-target Cast, restoration,
+Burn, downing, revival, and annihilation outcomes now reduce there; unsupported
+terrain/area spells, exploration Rest, and party movement remain explicit adapters.
 
 The bounded deterministic simulation target proves canonical state, occupancy,
-turn/action accounting, profile propagation, fingerprints, and typed no-progress
-termination. Its current scripted controller deliberately emits only `EndTurn`, so it
-is not tactical AI, a balance oracle, or evidence for fight length. Pure
+turn/action accounting, profile propagation, fingerprints, spell/effect composition,
+and typed command, turn, no-progress, or outcome termination. It consumes exact
+per-unit scripts or a deterministic non-random baseline controller. This is a
+regression workbench, not a claim that the baseline is optimal or that balance is fun.
+Combat Rules and report schemas are version 2: the rules projection mirrors shipping
+numeric and typed policy inputs, reports migrate version 1 outcomes, manual/bounded
+stops no longer invent an outcome, and fingerprint errors fail closed. Saved reports
+carry editable labels/notes and compare frozen inputs plus aggregate, per-unit, spell,
+effect, and no-progress facts. Pure
 `hex_gameplay_model` transitions own Combat Lab and Creator navigation, report
 selection, Retry/Tune/Copy, re-entry identity, and edit history without exposing
 mutable widget state.
