@@ -3,10 +3,16 @@
     objects: [
         "plant/old-growth",
         "plant/small-broadleaf",
+        "plant/snowy-old-growth",
+        "plant/snowy-small-broadleaf",
+        "plant/snowy-tall-narrow",
         "plant/tall-narrow",
+        "prop/cave-lichen",
+        "prop/cave-moss",
         "prop/crystal-branched",
         "prop/crystal-low-cluster",
         "prop/crystal-spire",
         "prop/grass-tuft",
+        "prop/snowy-grass-tuft",
     ],
 )

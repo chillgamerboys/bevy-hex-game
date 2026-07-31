@@ -38,6 +38,17 @@ pub struct CameraSettings {
     pub character_focus_height: f32,
     /// Initial orbit radius when entering the close character view.
     pub character_radius: f32,
+    /// Clearance kept between the close camera and the first obstructing terrain run.
+    pub character_collision_margin: f32,
+    /// Preferred smallest usable radius while avoiding terrain.
+    ///
+    /// Character-camera collision first searches nearby yaw directions that can
+    /// retain this radius. A complete enclosure may require a smaller radius so
+    /// the camera never crosses an actual terrain hit.
+    pub character_min_effective_radius: f32,
+    /// World units per second used when restoring the close camera after an
+    /// obstruction clears.
+    pub character_restoration_speed: f32,
     /// Initial close-view pitch as a fraction from the horizon toward straight down.
     pub character_pitch: f32,
     /// Closest the close view may tilt toward the horizon, 0.0–1.0.
@@ -85,6 +96,27 @@ impl CameraSettings {
         if !self.character_radius.is_finite() || self.character_radius <= 0.0 {
             return Err("character_radius must be positive and finite".to_owned());
         }
+        validate_nonnegative(
+            "character_collision_margin",
+            self.character_collision_margin,
+        )?;
+        if self.character_collision_margin >= self.character_radius {
+            return Err("character_collision_margin must be less than character_radius".to_owned());
+        }
+        if !self.character_min_effective_radius.is_finite()
+            || self.character_min_effective_radius <= 0.0
+        {
+            return Err("character_min_effective_radius must be positive and finite".to_owned());
+        }
+        if self.character_min_effective_radius > self.character_radius {
+            return Err(
+                "character_min_effective_radius must not exceed character_radius".to_owned(),
+            );
+        }
+        if !self.character_restoration_speed.is_finite() || self.character_restoration_speed <= 0.0
+        {
+            return Err("character_restoration_speed must be positive and finite".to_owned());
+        }
         validate_unit_interval("character_pitch", self.character_pitch)?;
         validate_unit_interval("character_min_pitch", self.character_min_pitch)?;
         validate_unit_interval("character_max_pitch", self.character_max_pitch)?;
@@ -130,6 +162,9 @@ struct UnvalidatedCameraSettings {
     gameplay_focus: (f32, f32, f32),
     character_focus_height: f32,
     character_radius: f32,
+    character_collision_margin: f32,
+    character_min_effective_radius: f32,
+    character_restoration_speed: f32,
     character_pitch: f32,
     character_min_pitch: f32,
     character_max_pitch: f32,
@@ -153,6 +188,9 @@ impl<'de> Deserialize<'de> for CameraSettings {
             gameplay_focus: raw.gameplay_focus,
             character_focus_height: raw.character_focus_height,
             character_radius: raw.character_radius,
+            character_collision_margin: raw.character_collision_margin,
+            character_min_effective_radius: raw.character_min_effective_radius,
+            character_restoration_speed: raw.character_restoration_speed,
             character_pitch: raw.character_pitch,
             character_min_pitch: raw.character_min_pitch,
             character_max_pitch: raw.character_max_pitch,
@@ -1423,6 +1461,9 @@ mod tests {
         );
         assert!((camera.character_focus_height - 0.4).abs() < f32::EPSILON);
         assert!((camera.character_radius - 7.0).abs() < f32::EPSILON);
+        assert!((camera.character_collision_margin - 0.35).abs() < f32::EPSILON);
+        assert!((camera.character_min_effective_radius - 1.5).abs() < f32::EPSILON);
+        assert!((camera.character_restoration_speed - 8.0).abs() < f32::EPSILON);
         assert!((camera.character_pitch - 0.3).abs() < f32::EPSILON);
         assert!((camera.character_min_pitch - 0.05).abs() < f32::EPSILON);
         assert!((camera.character_max_pitch - 0.95).abs() < f32::EPSILON);
@@ -1460,6 +1501,31 @@ mod tests {
                 "character_radius: 7.0",
                 "character_radius: 4.0",
                 "character_radius",
+            ),
+            (
+                "character_collision_margin: 0.35",
+                "character_collision_margin: -0.1",
+                "character_collision_margin",
+            ),
+            (
+                "character_collision_margin: 0.35",
+                "character_collision_margin: 7.0",
+                "character_collision_margin",
+            ),
+            (
+                "character_min_effective_radius: 1.5",
+                "character_min_effective_radius: 0.0",
+                "character_min_effective_radius",
+            ),
+            (
+                "character_min_effective_radius: 1.5",
+                "character_min_effective_radius: 8.0",
+                "character_min_effective_radius",
+            ),
+            (
+                "character_restoration_speed: 8.0",
+                "character_restoration_speed: 0.0",
+                "character_restoration_speed",
             ),
             (
                 "character_pitch: 0.3",

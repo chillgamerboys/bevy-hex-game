@@ -11,13 +11,14 @@ use xxhash_rust::xxh3::xxh3_64;
 
 use crate::settings::{
     EdgeLiquidSettings, NamedOverlaySettings, PatchEdgeContractSettings, PatchEdgesSettings,
-    PatchMaskSettings, PatchSpec, ProceduralV3Settings, SharedEdgeSettings, V3EnvironmentSettings,
-    V3LayoutSettings, V3OverlaySettings, V3RecipeSettings, V3Ring7Settings,
+    PatchMaskSettings, PatchSpec, ProceduralV3Settings, Ring19BoundarySide, Ring19RegionSettings,
+    SharedEdgeSettings, V3EnvironmentSettings, V3LayoutSettings, V3OverlaySettings,
+    V3RecipeSettings, V3Ring19Settings, V3Ring7Settings,
 };
 
 use super::layout::{
     HexSide, LayoutKind, PatchId, ResolvedEdgeContract, ResolvedEdgeReference, ResolvedLayoutPlan,
-    ResolvedLiquidPort, ResolvedPort,
+    ResolvedLiquidElevation, ResolvedLiquidPort, ResolvedPort,
 };
 use super::liquid::{LiquidFlowState, LiquidPlan};
 use super::volume::{
@@ -193,6 +194,10 @@ pub(crate) fn settings_fingerprint(
             encoder.tag(1);
             encode_ring_settings(&mut encoder, ring)?;
         }
+        V3LayoutSettings::Ring19(ring) => {
+            encoder.tag(2);
+            encode_ring19_settings(&mut encoder, ring)?;
+        }
     }
     Ok(encoder.finish_settings())
 }
@@ -245,6 +250,49 @@ fn encode_ring_settings(
     Ok(())
 }
 
+fn encode_ring19_settings(
+    encoder: &mut FingerprintEncoder,
+    ring: &V3Ring19Settings,
+) -> Result<(), String> {
+    encoder.collection_count(ring.regions.len())?;
+    for region in &ring.regions {
+        encode_ring19_region(encoder, region)?;
+    }
+    encode_shared_edge_settings(encoder, &ring.seam_defaults);
+
+    let mut connections = ring.liquid_connections.clone();
+    connections.sort_unstable();
+    encoder.collection_count(connections.len())?;
+    for connection in connections {
+        encoder.u8(connection.source_region);
+        encoder.u8(connection.sink_region);
+        encoder.u32(connection.width);
+        encoder.i32(connection.level);
+    }
+
+    let mut outlets = ring.boundary_outlets.clone();
+    outlets.sort_unstable();
+    encoder.collection_count(outlets.len())?;
+    for outlet in outlets {
+        encoder.u8(outlet.source_region);
+        encoder.tag(ring19_boundary_side_tag(outlet.side));
+        encoder.u32(outlet.width);
+        encoder.i32(outlet.level);
+    }
+    Ok(())
+}
+
+fn encode_ring19_region(
+    encoder: &mut FingerprintEncoder,
+    region: &Ring19RegionSettings,
+) -> Result<(), String> {
+    encoder.tag(environment_tag(region.environment));
+    encode_recipe_settings(encoder, &region.recipe);
+    encode_overlays(encoder, &region.overlays)?;
+    encoder.u8(region.rotation_turns);
+    Ok(())
+}
+
 fn encode_patch_settings(
     encoder: &mut FingerprintEncoder,
     patch: &PatchSpec,
@@ -252,12 +300,7 @@ fn encode_patch_settings(
     encoder.tag(environment_tag(patch.environment));
     encode_recipe_settings(encoder, &patch.recipe);
 
-    let mut overlays: Vec<_> = patch.overlays.iter().collect();
-    overlays.sort_by_key(|overlay| (overlay.name.as_str(), overlay_tag(overlay.kind)));
-    encoder.collection_count(overlays.len())?;
-    for overlay in overlays {
-        encode_overlay_settings(encoder, overlay)?;
-    }
+    encode_overlays(encoder, &patch.overlays)?;
 
     match &patch.mask {
         PatchMaskSettings::WholeWorld => encoder.tag(0),
@@ -278,6 +321,19 @@ fn encode_patch_settings(
         }
     }
     encode_edge_settings(encoder, &patch.edges);
+    Ok(())
+}
+
+fn encode_overlays(
+    encoder: &mut FingerprintEncoder,
+    overlays: &[NamedOverlaySettings],
+) -> Result<(), String> {
+    let mut overlays: Vec<_> = overlays.iter().collect();
+    overlays.sort_by_key(|overlay| (overlay.name.as_str(), overlay_tag(overlay.kind)));
+    encoder.collection_count(overlays.len())?;
+    for overlay in overlays {
+        encode_overlay_settings(encoder, overlay)?;
+    }
     Ok(())
 }
 
@@ -318,6 +374,26 @@ fn encode_recipe_settings(encoder: &mut FingerprintEncoder, recipe: &V3RecipeSet
         V3RecipeSettings::Waterfall(_) => encoder.tag(4),
         V3RecipeSettings::Forest(_) => encoder.tag(5),
         V3RecipeSettings::Fort(_) => encoder.tag(6),
+        V3RecipeSettings::Volcano(settings) => {
+            encoder.tag(7);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.summit_relief);
+            encoder.u8(settings.massif_coverage_percent);
+            encoder.i32(settings.bridge_clearance);
+        }
+        V3RecipeSettings::DeepForest(settings) => {
+            encoder.tag(8);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.blocker_coverage_percent);
+            encoder.u8(settings.clearing_count);
+        }
+        V3RecipeSettings::Prairie(settings) => {
+            encoder.tag(9);
+            encoder.i32(settings.base_level);
+            encoder.i32(settings.max_relief);
+            encoder.u8(settings.grass_coverage_percent);
+        }
     }
 }
 
@@ -356,6 +432,17 @@ const fn overlay_tag(overlay: V3OverlaySettings) -> u8 {
         V3OverlaySettings::Vegetation => 1,
         V3OverlaySettings::Structure => 2,
         V3OverlaySettings::Lighting => 3,
+    }
+}
+
+const fn ring19_boundary_side_tag(side: Ring19BoundarySide) -> u8 {
+    match side {
+        Ring19BoundarySide::East => 0,
+        Ring19BoundarySide::SouthEast => 1,
+        Ring19BoundarySide::SouthWest => 2,
+        Ring19BoundarySide::West => 3,
+        Ring19BoundarySide::NorthWest => 4,
+        Ring19BoundarySide::NorthEast => 5,
     }
 }
 
@@ -405,6 +492,7 @@ fn encode_layout_plan(
     encoder.tag(match layout.kind {
         LayoutKind::Single => 0,
         LayoutKind::Ring7 => 1,
+        LayoutKind::Ring19 => 2,
     });
     encoder.u32(layout.grid_radius);
     encode_coord_set(encoder, &layout.footprint)?;
@@ -412,6 +500,9 @@ fn encode_layout_plan(
     for (id, patch) in &layout.patches {
         encoder.u32(id.0);
         encoder.u32(patch.biome_region.0);
+        if layout.kind == LayoutKind::Ring19 {
+            encoder.u8(patch.rotation_turns);
+        }
         encode_coord_set(encoder, &patch.mask)?;
         encoder.collection_count(patch.edges.len())?;
         for (side, reference) in &patch.edges {
@@ -429,6 +520,23 @@ fn encode_layout_plan(
     for (id, edge) in &layout.shared_edges {
         encoder.u32(id.0);
         encode_resolved_edge(encoder, edge)?;
+    }
+    if layout.kind == LayoutKind::Ring19 {
+        encoder.collection_count(layout.boundary_liquid_outlets.len())?;
+        for ((source, side), outlet) in &layout.boundary_liquid_outlets {
+            encoder.u32(source.0);
+            encoder.tag(hex_side_tag(*side));
+            encoder.u32(outlet.source.0);
+            encoder.tag(hex_side_tag(outlet.side));
+            encoder.collection_count(outlet.lanes.len())?;
+            for (inside, outside) in &outlet.lanes {
+                encoder.hex_coord(*inside);
+                encoder.hex_coord(*outside);
+            }
+            encode_coord_set(encoder, &outlet.inward_approach)?;
+            encoder.u32(outlet.approach_depth);
+            encoder.i32(outlet.level);
+        }
     }
     Ok(())
 }
@@ -450,11 +558,28 @@ fn encode_resolved_edge(
     }
     match &edge.liquid {
         ResolvedLiquidPort::Dry => encoder.tag(0),
-        ResolvedLiquidPort::Directed { source, sink, port } => {
+        ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation: ResolvedLiquidElevation::EdgeBand,
+        } => {
             encoder.tag(1);
             encoder.u32(source.0);
             encoder.u32(sink.0);
             encode_resolved_port(encoder, port)?;
+        }
+        ResolvedLiquidPort::Directed {
+            source,
+            sink,
+            port,
+            elevation: ResolvedLiquidElevation::Exact(level),
+        } => {
+            encoder.tag(2);
+            encoder.u32(source.0);
+            encoder.u32(sink.0);
+            encode_resolved_port(encoder, port)?;
+            encoder.i32(*level);
         }
     }
     encoder.u32(edge.approach_depth);
@@ -611,6 +736,7 @@ fn encode_features(encoder: &mut FingerprintEncoder, features: &FeaturePlan) -> 
         encoder.tag(match feature.kind {
             FeatureKind::Tree => 0,
             FeatureKind::TallGrass => 1,
+            FeatureKind::CaveVegetation => 2,
         });
         encoder.str(feature.object_id.as_str())?;
         encoder.u8(feature.rotation.steps());
@@ -778,7 +904,8 @@ mod tests {
 
     use super::*;
     use crate::procedural_v3::layout::{
-        ResolvedEdgeReference, ResolvedElevationBand, ResolvedPatch, ResolvedWalkerPorts,
+        ResolvedBoundaryLiquidOutlet, ResolvedEdgeReference, ResolvedElevationBand, ResolvedPatch,
+        ResolvedWalkerPorts,
     };
     use crate::procedural_v3::liquid::{LiquidBodyId, LiquidBodyPlan, LiquidNode};
     use crate::procedural_v3::volume::{LevelInterval, SolidMass, SurfaceMetadata, VolumeColumn};
@@ -787,8 +914,9 @@ mod tests {
         StructureId, StructurePlan,
     };
     use crate::settings::{
-        CubeCoord, NamedOverlaySettings, PatchEdgeContractSettings, PatchEdgesSettings,
-        PatchMaskSettings, PatchSpec, V3HillsSettings, V3Ring7Settings,
+        CubeCoord, EdgeElevationSettings, Ring19BoundaryOutletSettings,
+        Ring19LiquidConnectionSettings, SharedEdgeSettings, V3HillsSettings, V3PrairieSettings,
+        WalkerPortSettings,
     };
 
     fn world_edges() -> PatchEdgesSettings {
@@ -832,11 +960,13 @@ mod tests {
                 PatchId(0),
                 ResolvedPatch {
                     biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
                     mask: mask.clone(),
                     edges,
                 },
             )]),
             shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::new(),
         };
         let volume = VolumePlan {
             mask,
@@ -1117,6 +1247,118 @@ mod tests {
     }
 
     #[test]
+    fn ring19_identity_fixes_region_order_and_canonicalizes_graph_lists() {
+        let region = Ring19RegionSettings {
+            environment: V3EnvironmentSettings::TemperateGrassland,
+            recipe: V3RecipeSettings::Prairie(V3PrairieSettings {
+                base_level: 12,
+                max_relief: 5,
+                grass_coverage_percent: 70,
+            }),
+            overlays: Vec::new(),
+            rotation_turns: 0,
+        };
+        let original = ProceduralV3Settings {
+            layout: V3LayoutSettings::Ring19(V3Ring19Settings {
+                regions: vec![region; 19],
+                seam_defaults: SharedEdgeSettings {
+                    elevation: EdgeElevationSettings {
+                        preferred: 15,
+                        min: 14,
+                        max: 16,
+                    },
+                    walker: WalkerPortSettings { count: 2, width: 2 },
+                    liquid: EdgeLiquidSettings::Dry,
+                    approach_depth: 3,
+                },
+                liquid_connections: vec![
+                    Ring19LiquidConnectionSettings {
+                        source_region: 0,
+                        sink_region: 1,
+                        width: 3,
+                        level: 16,
+                    },
+                    Ring19LiquidConnectionSettings {
+                        source_region: 1,
+                        sink_region: 7,
+                        width: 3,
+                        level: 16,
+                    },
+                ],
+                boundary_outlets: vec![
+                    Ring19BoundaryOutletSettings {
+                        source_region: 7,
+                        side: Ring19BoundarySide::NorthEast,
+                        width: 3,
+                        level: 16,
+                    },
+                    Ring19BoundaryOutletSettings {
+                        source_region: 9,
+                        side: Ring19BoundarySide::East,
+                        width: 2,
+                        level: 16,
+                    },
+                ],
+            }),
+        };
+        let mut reordered = original.clone();
+        {
+            let V3LayoutSettings::Ring19(ring) = &mut reordered.layout else {
+                unreachable!("the fixture is Ring19");
+            };
+            ring.liquid_connections.reverse();
+            ring.boundary_outlets.reverse();
+        }
+        assert_eq!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &reordered).expect("the settings encode"),
+            "connection and outlet declaration order is not semantic"
+        );
+
+        let mut changed_connection_level = original.clone();
+        let V3LayoutSettings::Ring19(ring) = &mut changed_connection_level.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        ring.liquid_connections
+            .first_mut()
+            .expect("the fixture has internal liquid")
+            .level += 1;
+        assert_ne!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &changed_connection_level).expect("the settings encode"),
+            "exact internal liquid levels are semantic"
+        );
+
+        let mut changed_outlet_level = original.clone();
+        let V3LayoutSettings::Ring19(ring) = &mut changed_outlet_level.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        ring.boundary_outlets
+            .first_mut()
+            .expect("the fixture has a boundary outlet")
+            .level += 1;
+        assert_ne!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &changed_outlet_level).expect("the settings encode"),
+            "exact boundary liquid levels are semantic"
+        );
+
+        let V3LayoutSettings::Ring19(ring) = &mut reordered.layout else {
+            unreachable!("the fixture is Ring19");
+        };
+        ring.regions.swap(0, 1);
+        ring.regions
+            .first_mut()
+            .expect("the fixture has nineteen regions")
+            .rotation_turns = 1;
+        assert_ne!(
+            settings_fingerprint(55, 0.4, &original).expect("the settings encode"),
+            settings_fingerprint(55, 0.4, &reordered).expect("the settings encode"),
+            "fixed slot order and rotation are semantic"
+        );
+    }
+
+    #[test]
     fn resolved_port_identity_covers_exact_lanes_and_approaches() {
         fn fingerprint_port(port: &ResolvedPort) -> u64 {
             let mut encoder = FingerprintEncoder::new();
@@ -1206,15 +1448,136 @@ mod tests {
             source: PatchId(0),
             sink: PatchId(1),
             port: port.clone(),
+            elevation: ResolvedLiquidElevation::EdgeBand,
         };
         let directed_fingerprint = fingerprint_edge(&baseline);
         assert_ne!(directed_fingerprint, dry_fingerprint);
+
+        let mut exact = baseline.clone();
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut exact.liquid else {
+            unreachable!("the fixture has a directed port");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(16);
+        let exact_fingerprint = fingerprint_edge(&exact);
+        assert_ne!(exact_fingerprint, directed_fingerprint);
+        let ResolvedLiquidPort::Directed { elevation, .. } = &mut exact.liquid else {
+            unreachable!("the fixture has a directed port");
+        };
+        *elevation = ResolvedLiquidElevation::Exact(17);
+        assert_ne!(fingerprint_edge(&exact), exact_fingerprint);
 
         let ResolvedLiquidPort::Directed { port, .. } = &mut baseline.liquid else {
             unreachable!("the fixture has a directed port");
         };
         port.first_approach.insert(HexCoord::from_axial(-1, 0));
         assert_ne!(fingerprint_edge(&baseline), directed_fingerprint);
+    }
+
+    #[test]
+    fn ring19_boundary_outlet_identity_covers_exact_geometry_and_level() {
+        fn fingerprint_layout(layout: &ResolvedLayoutPlan) -> u64 {
+            let mut encoder = FingerprintEncoder::new();
+            encode_layout_plan(&mut encoder, layout).expect("the layout encodes");
+            encoder.finish_semantic_plan()
+        }
+
+        let inside_a = HexCoord::from_axial(2, -1);
+        let inside_b = HexCoord::from_axial(2, 0);
+        let outside_a = HexSide::East.neighbor(inside_a);
+        let outside_b = HexSide::East.neighbor(inside_b);
+        let mask = HexCoord::ORIGIN
+            .within_radius(2)
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let edges = HexSide::ALL
+            .into_iter()
+            .map(|side| (side, ResolvedEdgeReference::WorldBoundary))
+            .collect();
+        let mut layout = ResolvedLayoutPlan {
+            kind: LayoutKind::Ring19,
+            grid_radius: 55,
+            footprint: mask.clone(),
+            patches: BTreeMap::from([(
+                PatchId(0),
+                ResolvedPatch {
+                    biome_region: BiomeRegionId(0),
+                    rotation_turns: 0,
+                    mask,
+                    edges,
+                },
+            )]),
+            shared_edges: BTreeMap::new(),
+            boundary_liquid_outlets: BTreeMap::from([(
+                (PatchId(0), HexSide::East),
+                ResolvedBoundaryLiquidOutlet {
+                    source: PatchId(0),
+                    side: HexSide::East,
+                    lanes: BTreeSet::from([(inside_a, outside_a), (inside_b, outside_b)]),
+                    inward_approach: BTreeSet::from([
+                        inside_a,
+                        inside_b,
+                        HexSide::West.neighbor(inside_a),
+                        HexSide::West.neighbor(inside_b),
+                    ]),
+                    approach_depth: 2,
+                    level: 16,
+                },
+            )]),
+        };
+        let baseline = fingerprint_layout(&layout);
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .level += 1;
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .level -= 1;
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .approach_depth += 1;
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .approach_depth -= 1;
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .inward_approach
+            .insert(HexCoord::from_axial(0, 1));
+        assert_ne!(fingerprint_layout(&layout), baseline);
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .inward_approach
+            .remove(&HexCoord::from_axial(0, 1));
+
+        layout
+            .boundary_liquid_outlets
+            .values_mut()
+            .next()
+            .expect("the fixture has one outlet")
+            .lanes
+            .remove(&(inside_b, outside_b));
+        assert_ne!(fingerprint_layout(&layout), baseline);
     }
 
     #[test]

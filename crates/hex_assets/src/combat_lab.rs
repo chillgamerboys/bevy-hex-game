@@ -169,9 +169,27 @@ mod tests {
         assert!(catalog.get("the-crossing").is_some());
         assert!(catalog.get("procedural-hills").is_some());
         assert!(catalog.get("forest").is_some());
+        let prairie = catalog
+            .get("prairie")
+            .expect("Prairie should remain selectable in Combat Lab");
+        assert_eq!(prairie.scenario, "Prairie");
+        assert_eq!(prairie.fixed_seed, Some(1_592_598_566));
+        assert_eq!(prairie.preview, "ui/combat-lab/prairie.png");
+        let deep_forest = catalog
+            .get("deep-forest")
+            .expect("Deep Forest should remain selectable in Combat Lab");
+        assert_eq!(deep_forest.scenario, "Deep Forest");
+        assert_eq!(deep_forest.fixed_seed, Some(1_592_598_566));
+        assert_eq!(deep_forest.preview, "ui/combat-lab/deep-forest.png");
         assert!(catalog.get("fort").is_some());
         assert!(catalog.get("seven-regions").is_some());
-        assert_eq!(catalog.maps.len(), 13);
+        let two_rings = catalog
+            .get("two-rings")
+            .expect("Two Rings should be selectable in Combat Lab");
+        assert_eq!(two_rings.scenario, "Two Rings");
+        assert_eq!(two_rings.fixed_seed, Some(1_592_598_566));
+        assert_eq!(two_rings.preview, "ui/combat-lab/two-rings.png");
+        assert_eq!(catalog.maps.len(), 16);
 
         let scenarios: crate::ScenarioLibrary =
             ron::from_str(include_str!("../../../assets/config/scenarios.ron"))

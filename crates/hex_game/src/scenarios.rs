@@ -458,7 +458,9 @@ mod tests {
         TraversalBlockers, Turn, UnitId,
     };
     use hex_lattice::{LatticeSpec, LatticeState};
-    use hex_map::{GenerationReport, MapSettings, TerrainSettings, VoxelMap};
+    use hex_map::{
+        GenerationReport, MapSettings, ProceduralRecipeMetrics, TerrainSettings, VoxelMap,
+    };
     use hex_perception::{FactionMapKnowledge, ResolvedIllumination};
     use hex_units::{
         either_in_reach, plan_formation_move, Body, Downed, Enemy, Faction, Footing,
@@ -2346,9 +2348,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
-        let mut app = procedural_gameplay_app("Forest");
+    fn assert_vegetation_scenario_reenters_with_the_same_art(scenario_name: &str) {
+        fn object_snapshot(app: &mut App) -> Vec<(String, TilePos, u32, u8)> {
+            let world = app.world_mut();
+            let mut objects = world.query::<&ObjectInstance>();
+            let mut snapshot = objects
+                .iter(world)
+                .map(|instance| {
+                    (
+                        instance.object_id().as_str().to_owned(),
+                        instance.origin(),
+                        instance.level_height().to_bits(),
+                        instance.rotation().steps(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            snapshot.sort_unstable();
+            snapshot
+        }
+
+        let mut app = procedural_gameplay_app(scenario_name);
         let art_fingerprint = app
             .world()
             .resource::<RuntimeArtCatalog>()
@@ -2361,20 +2380,16 @@ mod tests {
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("party_start"))
-            .expect("Forest should publish party_start");
+            .unwrap_or_else(|| panic!("{scenario_name} should publish party_start"));
         let first_hostile = app
             .world()
             .resource::<MapAnchors>()
             .get(&MapAnchorId::from("hostile_start"))
-            .expect("Forest should publish hostile_start");
-        let first_features = app
-            .world_mut()
-            .query_filtered::<Entity, With<ObjectInstance>>()
-            .iter(app.world())
-            .count();
+            .unwrap_or_else(|| panic!("{scenario_name} should publish hostile_start"));
+        let first_features = object_snapshot(&mut app);
         assert!(
-            first_features > 0,
-            "Forest should publish authored object instances"
+            !first_features.is_empty(),
+            "{scenario_name} should publish authored object instances"
         );
 
         enter_screen(&mut app, Screen::Title);
@@ -2387,12 +2402,9 @@ mod tests {
             "gameplay teardown should retain the accepted global art graph"
         );
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
-            0,
-            "Forest teardown left authored feature instances alive"
+            object_snapshot(&mut app),
+            Vec::new(),
+            "{scenario_name} teardown left authored feature instances alive"
         );
 
         enter_screen(&mut app, Screen::Gameplay);
@@ -2404,13 +2416,25 @@ mod tests {
         assert_eq!(standing_pos::<Player>(&mut app), Some(first_party));
         assert_eq!(standing_pos::<Enemy>(&mut app), Some(first_hostile));
         assert_eq!(
-            app.world_mut()
-                .query_filtered::<Entity, With<ObjectInstance>>()
-                .iter(app.world())
-                .count(),
+            object_snapshot(&mut app),
             first_features,
-            "Forest re-entry changed its authored feature instance count"
+            "{scenario_name} re-entry changed its exact authored feature placement"
         );
+    }
+
+    #[test]
+    fn forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Forest");
+    }
+
+    #[test]
+    fn deep_forest_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Deep Forest");
+    }
+
+    #[test]
+    fn prairie_reenters_with_the_same_authored_features_and_art_graph() {
+        assert_vegetation_scenario_reenters_with_the_same_art("Prairie");
     }
 
     #[test]
@@ -2457,6 +2481,9 @@ mod tests {
             "Caves",
             "Waterfall",
             "Forest",
+            "Deep Forest",
+            "Prairie",
+            "Two Rings",
         ] {
             let scenario = library()
                 .scenarios
@@ -2471,7 +2498,10 @@ mod tests {
 
             assert!(
                 app.world().contains_resource::<TerrainReady>(),
-                "{scenario_name} did not finish terrain generation"
+                "{scenario_name} did not finish terrain generation: {:?}",
+                app.world()
+                    .get_resource::<GameplaySetupFailure>()
+                    .map(|failure| failure.reason.as_str())
             );
             let report = app.world().resource::<GenerationReport>();
             assert_eq!(report.seed, configured_seed);
@@ -2488,6 +2518,35 @@ mod tests {
                 !report.used_fallback,
                 "{scenario_name} unexpectedly used its canonical fallback"
             );
+            match (scenario_name, report.recipe_metrics.as_ref()) {
+                ("Deep Forest", Some(ProceduralRecipeMetrics::DeepForest(metrics))) => {
+                    assert!(metrics.tree_roots > 0, "Deep Forest did not publish trees");
+                    assert_eq!(metrics.clearing_count, 3);
+                    assert!(
+                        (28..=32).contains(&metrics.blocker_coverage_percent),
+                        "Deep Forest blocker coverage left its approved band: {}%",
+                        metrics.blocker_coverage_percent
+                    );
+                }
+                ("Prairie", Some(ProceduralRecipeMetrics::Prairie(metrics))) => {
+                    assert!(metrics.grass_roots > 0, "Prairie did not publish grass");
+                    assert!(
+                        (65..=75).contains(&metrics.grass_coverage_percent),
+                        "Prairie grass coverage left its approved band: {}%",
+                        metrics.grass_coverage_percent
+                    );
+                }
+                ("Two Rings", Some(ProceduralRecipeMetrics::Ring19(metrics))) => {
+                    assert_eq!(metrics.world_columns, 9_241);
+                    assert_eq!(metrics.biome_regions, 19);
+                    assert_eq!(metrics.reciprocal_seams, 42);
+                    assert_eq!(metrics.redundant_regions, 19);
+                }
+                ("Deep Forest" | "Prairie" | "Two Rings", metrics) => {
+                    panic!("{scenario_name} published unexpected metrics: {metrics:?}");
+                }
+                _ => {}
+            }
             let encounter = encounter_of(&scenario);
             let anchors = app.world().resource::<MapAnchors>();
             for required in encounter
@@ -2500,10 +2559,22 @@ mod tests {
                 );
             }
             let recipe_anchors: &[&str] = match scenario_name {
+                "Volcanic Hills" => &["conflict_center", "bridge", "crater_overlook"],
                 "Mountains" => &["conflict_center", "high_pass", "low_bypass"],
                 "Caves" => &["conflict_center", "cave_entrance", "deep_chamber"],
                 "Waterfall" => &["fall_overlook", "basin_overlook"],
                 "Forest" => &["forest_clearing", "prairie_overlook"],
+                "Deep Forest" => &["deep_forest_clearing"],
+                "Prairie" => &["prairie_overlook"],
+                "Two Rings" => &[
+                    "center_conflict_center",
+                    "mountains_a_stream_source_overlook",
+                    "caves_deep_chamber",
+                    "mountain_waterfall_overlook",
+                    "confluence_overlook",
+                    "vegetation_gradient_overlook",
+                    "fort_outlet_overlook",
+                ],
                 _ => &["conflict_center", "bridge", "alternate_crossing"],
             };
             for required in recipe_anchors {
@@ -2514,9 +2585,9 @@ mod tests {
             }
             let special_regions = app.world().resource::<SpecialMovementRegions>();
             match scenario_name {
-                "Sky Islands" => assert!(
+                "Sky Islands" | "Two Rings" => assert!(
                     !special_regions.is_empty(),
-                    "Sky Islands dropped its flight-gated upper layer"
+                    "{scenario_name} dropped its flight-gated upper layer"
                 ),
                 "Mountains" => {}
                 "Waterfall" => {
@@ -2538,14 +2609,14 @@ mod tests {
                 ),
             }
             let interiors = app.world().resource::<InteriorRegions>();
-            if scenario_name == "Caves" {
+            if matches!(scenario_name, "Caves" | "Two Rings") {
                 assert!(
                     interiors.surfaces().next().is_some(),
-                    "Caves dropped its exact interior floors"
+                    "{scenario_name} dropped its exact interior floors"
                 );
                 assert!(
                     interiors.roof_voxels().next().is_some(),
-                    "Caves dropped its exact cutaway roofs"
+                    "{scenario_name} dropped its exact cutaway roofs"
                 );
             } else {
                 assert!(
@@ -2564,6 +2635,51 @@ mod tests {
                 "{scenario_name} did not spawn exactly one rendered grid"
             );
         }
+    }
+
+    #[test]
+    fn volcanic_hills_scenario_uses_the_native_volcano_contract() {
+        let mut app = procedural_gameplay_app("Volcanic Hills");
+        enter_screen(&mut app, Screen::Gameplay);
+
+        assert!(app.world().contains_resource::<TerrainReady>());
+        let report = app.world().resource::<GenerationReport>();
+        assert_eq!(
+            report.semantic_plan_fingerprint,
+            Some(6_901_546_631_227_104_688)
+        );
+        assert_eq!(report.map_fingerprint, 7_940_527_797_927_330_083);
+        assert_eq!(report.valid_candidates, 8);
+        let Some(ProceduralRecipeMetrics::Volcano(metrics)) = &report.recipe_metrics else {
+            panic!(
+                "Volcanic Hills published the wrong recipe metrics: {:?}",
+                report.recipe_metrics
+            );
+        };
+        assert_eq!(metrics.summit_relief, 20);
+        assert_eq!(metrics.bridge_clearance, 4);
+
+        let anchors = app.world().resource::<MapAnchors>();
+        for required in [
+            "party_start",
+            "hostile_start",
+            "conflict_center",
+            "bridge",
+            "crater_overlook",
+        ] {
+            assert!(
+                anchors.get(&MapAnchorId::from(required)).is_some(),
+                "Volcanic Hills omitted {required}"
+            );
+        }
+        assert!(
+            anchors
+                .get(&MapAnchorId::from("alternate_crossing"))
+                .is_none(),
+            "the native Volcano resurrected the removed cooled crossing"
+        );
+        assert!(standing_pos::<Player>(&mut app).is_some());
+        assert!(standing_pos::<Enemy>(&mut app).is_some());
     }
 
     #[test]
