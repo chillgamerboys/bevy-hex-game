@@ -57,6 +57,7 @@ use crate::turns::TurnOrder;
 pub(crate) mod cast;
 pub use cast::{delivers_anything, UNDELIVERABLE};
 mod channel;
+pub use channel::{channel_refusal, ChannelReadiness};
 mod choose_disables;
 mod choose_restores;
 mod end_turn;

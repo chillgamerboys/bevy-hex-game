@@ -3,8 +3,8 @@ use hex_core::Screen;
 
 use crate::{
     blurb, fine, heading, layout::is_ultra_constrained, row_button, ActionAvailability,
-    DespawnOnExit, GameplayHudView, ResolvedUiMetrics, UiAssets, UiIntent, UiViewportClass, ACCENT,
-    EDGE, PANEL_BG,
+    DespawnOnExit, GameplayAction, GameplayHudView, LatticeIntent, ResolvedUiMetrics, UiAssets,
+    UiIntent, UiViewportClass, ACCENT, EDGE, PANEL_BG,
 };
 
 #[derive(Component)]
@@ -27,7 +27,11 @@ pub(super) fn plugin(app: &mut App) {
     app.add_systems(OnEnter(Screen::Gameplay), spawn_action_rail)
         .add_systems(
             Update,
-            (refresh_action_rail, handle_action_rail).run_if(in_state(Screen::Gameplay)),
+            (
+                refresh_action_rail.in_set(crate::UiSystems::Render),
+                handle_action_rail.in_set(crate::UiSystems::EmitIntents),
+            )
+                .run_if(in_state(Screen::Gameplay)),
         );
 }
 
@@ -214,8 +218,15 @@ fn handle_action_rail(
 ) {
     for (interaction, action) in &clicks {
         if *interaction == Interaction::Pressed {
-            intents.write(UiIntent::Gameplay(action.0));
+            intents.write(action_intent(action.0));
         }
+    }
+}
+
+fn action_intent(action: GameplayAction) -> UiIntent {
+    match action {
+        GameplayAction::ConfirmDecision => UiIntent::Lattice(LatticeIntent::ConfirmDecision),
+        action => UiIntent::Gameplay(action),
     }
 }
 
@@ -230,6 +241,18 @@ mod tests {
     #[test]
     fn required_priority_is_reserved_for_blocking_choices() {
         assert!(crate::ActionPriority::Required > crate::ActionPriority::Primary);
+    }
+
+    #[test]
+    fn rail_confirmation_uses_the_canonical_lattice_intent() {
+        assert!(matches!(
+            action_intent(GameplayAction::ConfirmDecision),
+            UiIntent::Lattice(LatticeIntent::ConfirmDecision)
+        ));
+        assert!(matches!(
+            action_intent(GameplayAction::EndTurn),
+            UiIntent::Gameplay(GameplayAction::EndTurn)
+        ));
     }
 
     #[test]
