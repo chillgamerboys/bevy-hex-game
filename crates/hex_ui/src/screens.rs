@@ -140,7 +140,7 @@ fn refresh_settings(
     mut commands: Commands,
     surfaces: Query<Entity, With<SettingsSurface>>,
     controls: Query<(&SettingControl, &Children)>,
-    mut labels: Query<&mut Text>,
+    mut labels: Query<&mut Text, Without<SettingNotice>>,
     mut notices: Query<&mut Text, (With<SettingNotice>, Without<SettingControl>)>,
 ) {
     if !view.is_changed() {

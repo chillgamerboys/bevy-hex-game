@@ -12,12 +12,31 @@ pub(super) fn plugin(app: &mut App) {
         .add_systems(Update, (prepare_buttons, paint_keyboard_focus));
 }
 
-fn prepare_buttons(buttons: Query<(Entity, Option<&Name>), Added<Button>>, mut commands: Commands) {
-    for (entity, name) in &buttons {
-        let label = name.map_or_else(|| "Button".to_owned(), |name| name.as_str().to_owned());
-        commands
-            .entity(entity)
-            .insert((TabIndex(0), AccessibleLabel::new(label)));
+fn prepare_buttons(world: &mut World) {
+    // Apply these components immediately. Screen transitions may despawn a freshly
+    // added button later in this frame; queuing an EntityCommand here would then try
+    // to mutate the stale entity when deferred commands flush.
+    let buttons = {
+        let mut query = world.query_filtered::<(Entity, Option<&Name>), Added<Button>>();
+        query
+            .iter(world)
+            .map(|(entity, name)| {
+                let label =
+                    name.map_or_else(|| "Button".to_owned(), |name| name.as_str().to_owned());
+                (entity, label)
+            })
+            .collect::<Vec<_>>()
+    };
+    for (entity, label) in buttons {
+        let Ok(mut entity) = world.get_entity_mut(entity) else {
+            continue;
+        };
+        if !entity.contains::<TabIndex>() {
+            entity.insert(TabIndex(0));
+        }
+        if !entity.contains::<AccessibleLabel>() {
+            entity.insert(AccessibleLabel::new(label));
+        }
     }
 }
 

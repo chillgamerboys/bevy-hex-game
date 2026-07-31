@@ -1,7 +1,7 @@
 //! Gameplay readouts: lattices, initiative, and the disclosed combat history.
 
 use bevy::prelude::*;
-use hex_combat::CombatSystems;
+use hex_combat::{CombatSystems, EncounterResolution};
 use hex_core::{AppSystems, GameplayPhase, GameplaySetup, GameplaySystems, Screen};
 
 mod badges;
@@ -97,69 +97,21 @@ pub(crate) fn plugin(app: &mut App) {
 
 fn apply_responsive_hud(
     metrics: Res<hex_ui::ResolvedUiMetrics>,
+    added_regions: Query<(), Added<HudRegion>>,
     mut regions: Query<(&HudRegion, &mut Node)>,
 ) {
-    if !metrics.is_changed() {
+    if !metrics.is_changed() && added_regions.is_empty() {
         return;
     }
     for (region, mut node) in &mut regions {
-        match (metrics.viewport, region) {
-            (hex_ui::UiViewportClass::Compact, HudRegion::Party) => {
-                node.left = Val::Px(8.0);
-                node.width = Val::Px(180.0);
-            }
-            (hex_ui::UiViewportClass::Compact, HudRegion::Turn) => {
-                node.left = Val::Px(196.0);
-                node.right = Val::Px(268.0);
-            }
-            (hex_ui::UiViewportClass::Compact, HudRegion::Inspector) => {
-                node.right = Val::Px(8.0);
-                node.width = Val::Px(252.0);
-                node.bottom = Val::Px(144.0);
-            }
-            (hex_ui::UiViewportClass::Compact, HudRegion::Actions) => {
-                node.left = Val::Px(196.0);
-                node.right = Val::Px(268.0);
-                node.bottom = Val::Px(144.0);
-                node.height = Val::Auto;
-            }
-            (hex_ui::UiViewportClass::Compact, HudRegion::Events) => {
-                node.left = Val::Px(196.0);
-                node.right = Val::Px(268.0);
-                node.bottom = Val::Px(390.0);
-            }
-            (hex_ui::UiViewportClass::Standard, HudRegion::Actions) => {
-                node.bottom = Val::Px(140.0);
-                node.height = Val::Auto;
-            }
-            (hex_ui::UiViewportClass::Standard, HudRegion::Events) => {
-                node.bottom = Val::Px(390.0);
-            }
-            (hex_ui::UiViewportClass::Wide, HudRegion::Party) => {
-                node.left = Val::Px(16.0);
-                node.width = Val::Px(260.0);
-            }
-            (hex_ui::UiViewportClass::Wide, HudRegion::Turn) => {
-                node.left = Val::Px(288.0);
-                node.right = Val::Px(360.0);
-            }
-            (hex_ui::UiViewportClass::Wide, HudRegion::Inspector) => {
-                node.right = Val::Px(16.0);
-                node.width = Val::Px(332.0);
-            }
-            (hex_ui::UiViewportClass::Wide, HudRegion::Actions) => {
-                node.left = Val::Px(288.0);
-                node.right = Val::Px(360.0);
-                node.bottom = Val::Px(144.0);
-                node.height = Val::Auto;
-            }
-            (hex_ui::UiViewportClass::Wide, HudRegion::Events) => {
-                node.left = Val::Px(288.0);
-                node.right = Val::Px(360.0);
-                node.bottom = Val::Px(400.0);
-            }
-            _ => {}
-        }
+        let role = match region {
+            HudRegion::Party => hex_ui::UiRegionRole::Party,
+            HudRegion::Turn => hex_ui::UiRegionRole::Turn,
+            HudRegion::Inspector => hex_ui::UiRegionRole::Inspector,
+            HudRegion::Actions => hex_ui::UiRegionRole::Actions,
+            HudRegion::Events => hex_ui::UiRegionRole::Events,
+        };
+        hex_ui::apply_region_layout(metrics.viewport, role, &mut node);
     }
 }
 
@@ -278,10 +230,16 @@ fn toggle_hud(
 fn apply_hud_visibility(
     hud: Res<HudVisibility>,
     selection: Res<lattice::DisableSelection>,
+    resolution: Option<Res<EncounterResolution>>,
     mut roots: Query<(&mut Visibility, Has<DecisionHud>), With<HudElement>>,
 ) {
     for (mut visibility, decision_lattice) in &mut roots {
-        let wanted = if hud.shown || (decision_lattice && selection.is_active()) {
+        let encounter_complete = resolution
+            .as_deref()
+            .is_some_and(|value| value.is_resolved());
+        let wanted = if encounter_complete && decision_lattice {
+            Visibility::Hidden
+        } else if hud.shown || (decision_lattice && selection.is_active()) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -359,6 +317,29 @@ mod tests {
         assert_eq!(
             app.world().get::<Visibility>(decision),
             Some(&Visibility::Inherited)
+        );
+    }
+
+    #[test]
+    fn a_resolved_encounter_hides_stale_decision_surfaces() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<HudVisibility>()
+            .init_resource::<lattice::DisableSelection>()
+            .insert_resource(EncounterResolution(Some(
+                hex_combat::EncounterOutcome::Victory,
+            )))
+            .add_systems(Update, apply_hud_visibility);
+        let decision = app
+            .world_mut()
+            .spawn((HudElement, DecisionHud, Visibility::Inherited))
+            .id();
+
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Visibility>(decision),
+            Some(&Visibility::Hidden)
         );
     }
 }

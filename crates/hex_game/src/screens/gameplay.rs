@@ -60,9 +60,14 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        (publish_hud_view, handle_gameplay_ui_intents)
-            .chain()
+        publish_hud_view
             .after(GameplaySystems::UiContext)
+            .run_if(in_state(Screen::Gameplay)),
+    );
+    app.add_systems(
+        Update,
+        handle_gameplay_ui_intents
+            .after(publish_hud_view)
             .run_if(in_state(Screen::Gameplay))
             .run_if(resource_equals(GameplayPhase::Active)),
     );
@@ -98,7 +103,8 @@ pub(crate) fn plugin(app: &mut App) {
     );
     app.add_systems(
         Update,
-        sync_lab_statistics_visibility.run_if(in_state(Screen::Gameplay)),
+        (sync_lab_statistics_visibility, apply_lab_statistics_layout)
+            .run_if(in_state(Screen::Gameplay)),
     );
     // Pausable, because the system that acts on the flag is. `mirror_truth` runs in
     // `PausableSystems`, so a toggle that kept firing while paused would set the
@@ -408,6 +414,47 @@ fn sync_lab_statistics_visibility(
         .then_some(Visibility::Inherited);
     for mut drawer in &mut drawers {
         *drawer = visibility.unwrap_or(Visibility::Hidden);
+    }
+}
+
+fn apply_lab_statistics_layout(
+    metrics: Res<hex_ui::ResolvedUiMetrics>,
+    added_drawers: Query<(), Added<LabStatisticsDrawer>>,
+    mut drawers: Query<&mut Node, With<LabStatisticsDrawer>>,
+) {
+    if !metrics.is_changed() && added_drawers.is_empty() {
+        return;
+    }
+    for mut node in &mut drawers {
+        match metrics.viewport {
+            hex_ui::UiViewportClass::Compact => {
+                node.display = Display::None;
+                node.left = Val::Px(12.0);
+                node.right = Val::Px(12.0);
+                node.top = Val::Px(92.0);
+                node.bottom = Val::Px(hex_ui::action_rail_clearance(metrics.viewport));
+                node.width = Val::Auto;
+                node.max_height = Val::Auto;
+            }
+            hex_ui::UiViewportClass::Standard => {
+                node.display = Display::Flex;
+                node.left = Val::Auto;
+                node.right = Val::Px(320.0);
+                node.top = Val::Px(200.0);
+                node.bottom = Val::Auto;
+                node.width = Val::Px(480.0);
+                node.max_height = Val::Px(340.0);
+            }
+            hex_ui::UiViewportClass::Wide => {
+                node.display = Display::Flex;
+                node.left = Val::Auto;
+                node.right = Val::Px(360.0);
+                node.top = Val::Px(160.0);
+                node.bottom = Val::Auto;
+                node.width = Val::Px(520.0);
+                node.max_height = Val::Px(440.0);
+            }
+        }
     }
 }
 
@@ -1660,6 +1707,8 @@ fn handle_outcome_actions(
 
 /// Publishes authoritative game facts to the presentation-only action rail.
 fn publish_hud_view(
+    phase: Res<GameplayPhase>,
+    resolution: Res<EncounterResolution>,
     mode: Res<State<Mode>>,
     order: Res<TurnOrder>,
     pending: Res<PendingDecision>,
@@ -1667,6 +1716,45 @@ fn publish_hud_view(
     acting: Query<(Has<Player>, &Turn)>,
     mut view: ResMut<GameplayHudView>,
 ) {
+    if *phase == GameplayPhase::Deployment {
+        let next = GameplayHudView {
+            phase: GameplayPhase::Deployment,
+            actor: None,
+            actor_label: "Combat Lab deployment".to_owned(),
+            round: "Setup".to_owned(),
+            movement_remaining: 0,
+            action_remaining: false,
+            required_prompt: Some(
+                "Choose each roster entry, place it on a matching surface, then confirm Start Combat."
+                    .to_owned(),
+            ),
+            actions: Vec::new(),
+        };
+        if *view != next {
+            *view = next;
+        }
+        return;
+    }
+    if let Some(outcome) = resolution.outcome() {
+        let outcome = format!("{outcome:?}");
+        let next = GameplayHudView {
+            phase: GameplayPhase::Active,
+            actor: None,
+            actor_label: "Encounter complete".to_owned(),
+            round: outcome,
+            movement_remaining: 0,
+            action_remaining: false,
+            required_prompt: Some(
+                "Review the encounter report, then retry, tune, copy, or return to Combat Lab."
+                    .to_owned(),
+            ),
+            actions: Vec::new(),
+        };
+        if *view != next {
+            *view = next;
+        }
+        return;
+    }
     let next = match mode.get() {
         Mode::Exploring => GameplayHudView {
             phase: GameplayPhase::Active,

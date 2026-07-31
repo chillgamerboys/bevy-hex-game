@@ -46,6 +46,7 @@ pub(super) fn plugin(app: &mut App) {
         Update,
         (
             rebuild_scenario_list,
+            apply_title_layout,
             reroll_scenario_seed,
             start_chosen_scenario,
             start_new_game,
@@ -60,6 +61,51 @@ pub(super) fn plugin(app: &mut App) {
             .run_if(in_state(Screen::Title)),
     );
     app.add_systems(OnExit(Screen::Title), despawn_screen(Screen::Title));
+}
+
+fn apply_title_layout(
+    metrics: Res<hex_ui::ResolvedUiMetrics>,
+    added_decks: Query<(), Added<CategoryDeck>>,
+    added_columns: Query<(), Or<(Added<ScenarioColumn>, Added<ActionColumn>)>>,
+    mut decks: Query<&mut Node, With<CategoryDeck>>,
+    mut columns: Query<
+        &mut Node,
+        (
+            Or<(With<ScenarioColumn>, With<ActionColumn>)>,
+            Without<CategoryDeck>,
+        ),
+    >,
+) {
+    if !metrics.is_changed() && added_decks.is_empty() && added_columns.is_empty() {
+        return;
+    }
+    let compact = metrics.viewport == hex_ui::UiViewportClass::Compact;
+    for mut node in &mut decks {
+        node.flex_direction = if compact {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.overflow = if compact {
+            Overflow::scroll_y()
+        } else {
+            Overflow::default()
+        };
+    }
+    for mut node in &mut columns {
+        node.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Auto
+        };
+        node.height = if compact {
+            Val::Auto
+        } else {
+            Val::Percent(100.0)
+        };
+        node.flex_basis = if compact { Val::Auto } else { Val::Px(0.0) };
+        node.flex_grow = if compact { 0.0 } else { 1.0 };
+    }
 }
 
 /// The node the three framed category lanes hang off.

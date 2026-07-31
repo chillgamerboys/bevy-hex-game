@@ -310,6 +310,15 @@ struct DeploymentHidden;
 #[derive(Component)]
 struct DeploymentHud;
 
+#[derive(Component)]
+struct DeploymentSummary;
+
+#[derive(Component)]
+struct DeploymentSide;
+
+#[derive(Component)]
+struct DeploymentActions;
+
 #[derive(Component, Debug, Clone, Copy)]
 enum DeploymentAction {
     Select { player: bool, index: usize },
@@ -534,7 +543,7 @@ pub(super) fn plugin(app: &mut App) {
         )
         .add_systems(
             Update,
-            handle_deployment_actions.run_if(in_state(Screen::Gameplay)),
+            (handle_deployment_actions, apply_deployment_layout).run_if(in_state(Screen::Gameplay)),
         )
         .add_observer(on_deployment_surface_clicked)
         .add_systems(OnExit(Screen::Gameplay), clear_deployment_world)
@@ -3183,12 +3192,15 @@ fn spawn_deployment_hud(
             BorderColor::all(Color::srgba(0.93, 0.79, 0.46, 0.52)),
         ))
         .with_children(|hud| {
-            hud.spawn(Node {
-                width: Val::Px(300.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(3.0),
-                ..default()
-            })
+            hud.spawn((
+                DeploymentSummary,
+                Node {
+                    width: Val::Px(300.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(3.0),
+                    ..default()
+                },
+            ))
             .with_children(|summary| {
                 summary.spawn(heading(
                     assets,
@@ -3214,12 +3226,15 @@ fn spawn_deployment_hud(
                     session.hostile_placements.as_slice(),
                 ),
             ] {
-                hud.spawn(Node {
-                    width: Val::Px(245.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(2.0),
-                    ..default()
-                })
+                hud.spawn((
+                    DeploymentSide,
+                    Node {
+                        width: Val::Px(245.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(2.0),
+                        ..default()
+                    },
+                ))
                 .with_children(|side| {
                     side.spawn(fine(assets, title));
                     for (index, choice) in roster.iter().enumerate() {
@@ -3256,15 +3271,18 @@ fn spawn_deployment_hud(
                     }
                 });
             }
-            hud.spawn(Node {
-                width: Val::Px(340.0),
-                flex_direction: FlexDirection::Row,
-                flex_wrap: FlexWrap::Wrap,
-                align_content: AlignContent::FlexStart,
-                column_gap: Val::Px(5.0),
-                row_gap: Val::Px(5.0),
-                ..default()
-            })
+            hud.spawn((
+                DeploymentActions,
+                Node {
+                    width: Val::Px(340.0),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    align_content: AlignContent::FlexStart,
+                    column_gap: Val::Px(5.0),
+                    row_gap: Val::Px(5.0),
+                    ..default()
+                },
+            ))
             .with_children(|actions| {
                 deployment_button(actions, assets, "Undo", DeploymentAction::Undo);
                 deployment_button(
@@ -3303,6 +3321,90 @@ fn spawn_deployment_hud(
                 }
             });
         });
+}
+
+fn apply_deployment_layout(
+    metrics: Res<hex_ui::ResolvedUiMetrics>,
+    added_roots: Query<(), Added<DeploymentHud>>,
+    mut roots: Query<&mut Node, With<DeploymentHud>>,
+    mut summary: Query<
+        &mut Node,
+        (
+            With<DeploymentSummary>,
+            Without<DeploymentHud>,
+            Without<DeploymentSide>,
+            Without<DeploymentActions>,
+        ),
+    >,
+    mut sides: Query<
+        &mut Node,
+        (
+            With<DeploymentSide>,
+            Without<DeploymentHud>,
+            Without<DeploymentSummary>,
+            Without<DeploymentActions>,
+        ),
+    >,
+    mut actions: Query<
+        &mut Node,
+        (
+            With<DeploymentActions>,
+            Without<DeploymentHud>,
+            Without<DeploymentSummary>,
+            Without<DeploymentSide>,
+        ),
+    >,
+) {
+    if !metrics.is_changed() && added_roots.is_empty() {
+        return;
+    }
+    let compact = metrics.viewport == hex_ui::UiViewportClass::Compact;
+    for mut node in &mut roots {
+        node.left = Val::Px(if compact { 12.0 } else { 22.0 });
+        node.right = Val::Px(if compact { 12.0 } else { 22.0 });
+        node.top = Val::Px(if compact { 12.0 } else { 18.0 });
+        node.bottom = if compact {
+            Val::Px(hex_ui::action_rail_clearance(metrics.viewport))
+        } else {
+            Val::Auto
+        };
+        node.min_height = if compact {
+            Val::Px(0.0)
+        } else {
+            Val::Px(126.0)
+        };
+        node.flex_direction = if compact {
+            FlexDirection::Column
+        } else {
+            FlexDirection::Row
+        };
+        node.overflow = if compact {
+            Overflow::scroll_y()
+        } else {
+            Overflow::default()
+        };
+    }
+    for mut node in &mut summary {
+        node.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(300.0)
+        };
+    }
+    for mut node in &mut sides {
+        node.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(245.0)
+        };
+    }
+    for mut node in &mut actions {
+        node.width = if compact {
+            Val::Percent(100.0)
+        } else {
+            Val::Px(340.0)
+        };
+    }
 }
 
 fn deployment_button(

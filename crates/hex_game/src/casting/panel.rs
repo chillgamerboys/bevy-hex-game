@@ -109,7 +109,7 @@ pub(super) fn spawn_panel(
             FRAME,
         ))
         .with_children(|panel| {
-            panel.spawn((heading(&assets, "actions"), Pickable::IGNORE));
+            panel.spawn(heading(&assets, "actions"));
             panel.spawn((
                 Name::new("Casting Body"),
                 PanelBody,

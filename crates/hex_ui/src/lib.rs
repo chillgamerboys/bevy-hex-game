@@ -8,12 +8,14 @@ use bevy::prelude::*;
 
 mod action_rail;
 mod focus;
+mod layout;
 mod model;
 mod scale;
 mod screens;
 mod shell;
 mod theme;
 
+pub use layout::{action_rail_clearance, apply_region_layout, UiRegionRole};
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
     PauseView, UiIntent, UiSetting, UiSettingRow, UiSettingsView,
