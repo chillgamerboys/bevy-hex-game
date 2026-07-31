@@ -9,6 +9,7 @@ use bevy::prelude::*;
 mod action_rail;
 mod creation_presentation;
 mod focus;
+mod lattice;
 mod layout;
 mod model;
 mod scale;
@@ -18,6 +19,10 @@ mod theme;
 mod title;
 
 pub use creation_presentation::{effect_summary, CharacterBuildSummary, SpellBuildSummary};
+pub use lattice::{
+    paint_interactions as paint_lattice_interactions, short_name, spawn_lattice_cells,
+    CellInteraction, LatticeCellView, LatticeScale,
+};
 pub use layout::{action_rail_clearance, apply_region_layout, UiRegionRole};
 pub use model::{
     ActionAffordance, ActionAvailability, ActionPriority, GameplayAction, GameplayHudView,
